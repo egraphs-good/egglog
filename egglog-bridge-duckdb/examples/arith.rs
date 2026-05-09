@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     // (rule ((src x) (< x 3)) ((set (dest x) (+ x 100))))
     eg.add_rule(Rule {
         name: "shift".to_string(),
+        ruleset: String::new(),
         body: vec![
             Atom::Func {
                 name: "src".to_string(),

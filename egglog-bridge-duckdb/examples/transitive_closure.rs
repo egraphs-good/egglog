@@ -20,6 +20,7 @@ fn main() -> Result<()> {
     // (rule ((edge a b)) ((path a b)) :name "base")
     eg.add_rule(Rule {
         name: "base".to_string(),
+        ruleset: String::new(),
         body: vec![Atom::Func {
             name: "edge".to_string(),
             args: vec![Term::var("a"), Term::var("b")],
@@ -33,6 +34,7 @@ fn main() -> Result<()> {
     // (rule ((path a b) (edge b c)) ((path a c)) :name "step")
     eg.add_rule(Rule {
         name: "step".to_string(),
+        ruleset: String::new(),
         body: vec![
             Atom::Func {
                 name: "path".to_string(),

@@ -108,10 +108,14 @@ pub enum Atom {
     /// with outputs).
     Func { name: String, args: Vec<Term> },
     /// A pure-primitive constraint: the term must evaluate to true.
-    /// Examples: `(< x 5)`, `(!= a b)`, `(= z (+ x y))`. The last
-    /// form is treated as a filter, not a binding — we don't yet
-    /// support computed-variable bindings in the body.
+    /// Examples: `(< x 5)`, `(!= a b)`. Compiles to a SQL WHERE
+    /// constraint.
     Filter(Term),
+    /// Bind `var` to the value of `expr` for the rest of the body
+    /// and any subsequent actions. Used for `(= var (primitive ...))`
+    /// patterns in egglog rule bodies. Compiles to nothing on its
+    /// own — it just extends the body's variable→SQL binding.
+    Bind { var: String, expr: Term },
 }
 
 /// A rule action.
@@ -124,12 +128,32 @@ pub enum Action {
     /// args are the input columns only (output is ignored). For
     /// relations, args are all the columns.
     Delete { name: String, key_args: Vec<Term> },
+    /// Allocate a fresh EqSort ID via the constructor table `name`,
+    /// inserting `(args..., fresh_id)`, and bind `var` to the
+    /// allocated ID for use in subsequent actions of the same rule.
+    /// Compiles into a `nextval('seq')` column in the rule's
+    /// materialized match table; subsequent actions reference `var`
+    /// as a regular term.
+    LetCtor {
+        var: String,
+        name: String,
+        args: Vec<Term>,
+    },
+    /// Bind `var` to a pure expression (no constructor allocation,
+    /// no insert). Compiles into a non-side-effecting column of the
+    /// rule's materialized match table. Subsequent actions reference
+    /// `var` as a regular term.
+    LetExpr { var: String, expr: Term },
 }
 
 /// A whole rule.
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: String,
+    /// Ruleset the rule lives in. Empty string for the default
+    /// ruleset. `run_iteration_for(ruleset)` runs only rules whose
+    /// ruleset matches.
+    pub ruleset: String,
     pub body: Vec<Atom>,
     pub actions: Vec<Action>,
 }
@@ -173,10 +197,20 @@ pub struct EGraph {
 
 struct CompiledRule {
     name: String,
-    /// Each variant is one or more SQL statements (one per action).
-    /// Inner Vec lets multi-action rules execute their actions in
-    /// order from a single firing of the variant.
-    variants: Vec<Vec<String>>,
+    ruleset: String,
+    variants: Vec<CompiledVariant>,
+}
+
+/// One seminaive variant of a rule, ready to execute.
+pub(crate) struct CompiledVariant {
+    /// Optional CREATE TEMP TABLE SQL that materializes the body
+    /// matches (with any `nextval()`-allocated ids per LetCtor).
+    /// `None` for variants whose actions are all simple inserts/
+    /// deletes — those just run directly.
+    pub(crate) materialize: Option<String>,
+    /// Action SQLs to run in order. When `materialize` is Some, each
+    /// action SELECTs from the temp table; otherwise from the body.
+    pub(crate) actions: Vec<String>,
 }
 
 impl EGraph {
@@ -194,6 +228,12 @@ impl EGraph {
             next_ts: 0,
             last_run_at: HashMap::new(),
         })
+    }
+
+    fn debug_sql(&self, label: &str, sql: &str) {
+        if std::env::var("DUCK_TRACE_SQL").is_ok() {
+            eprintln!("[duck/{label}] {sql}");
+        }
     }
 
     /// Allocate a fresh EqSort ID, insert a row into a constructor
@@ -229,6 +269,7 @@ impl EGraph {
             placeholders.join(", "),
         );
         let params: Vec<&dyn ToSql> = inputs.iter().map(|a| a as &dyn ToSql).collect();
+        self.debug_sql("alloc", &sql);
         let id: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
         Ok(id)
     }
@@ -366,6 +407,7 @@ impl EGraph {
             placeholders.join(", "),
         );
         let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
+        self.debug_sql("insert", &sql);
         self.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
@@ -398,23 +440,57 @@ impl EGraph {
             cols.join(", "),
             arg_sqls.join(", "),
         );
+        self.debug_sql("insert_terms", &sql);
         self.conn.execute(&sql, [])?;
         Ok(())
     }
 
-    /// Run all rules once. Returns total rows inserted across rules
-    /// and variants.
-    pub fn run_iteration(&mut self) -> Result<usize> {
+    /// Run rules in `ruleset` once (or all rules when `ruleset` is
+    /// `None`). Returns total rows inserted across rules and
+    /// variants.
+    pub fn run_iteration_in(&mut self, ruleset: Option<&str>) -> Result<usize> {
         self.next_ts += 1;
         let cur = self.next_ts;
         let mut total: usize = 0;
         let last_run_ats: HashMap<String, i64> = self.last_run_at.clone();
         for rule in &self.rules {
+            if let Some(rs) = ruleset
+                && rule.ruleset != rs
+            {
+                continue;
+            }
             let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
             for variant in &rule.variants {
-                for sql in variant {
-                    let mut stmt = self.conn.prepare_cached(sql)?;
-                    total += stmt.execute(duckdb::params![last, cur])?;
+                if let Some(mat_sql_template) = &variant.materialize {
+                    // CREATE OR REPLACE TEMP TABLE AS SELECT doesn't
+                    // support bound parameters in DuckDB, so we inline
+                    // the last_run_at threshold by string substitution.
+                    // It's an i64 so this is safe.
+                    let mat_sql = mat_sql_template.replace("?1", &last.to_string());
+                    self.debug_sql("mat", &mat_sql);
+                    self.conn.execute(&mat_sql, [])?;
+                }
+                for sql in &variant.actions {
+                    // Inline params via string substitution to side-step
+                    // per-action `?1` vs `?2` mismatch (DELETEs use only
+                    // `?1`, INSERTs use both). All params are i64s so
+                    // inlining is safe.
+                    let bound_sql = if variant.materialize.is_some() {
+                        // Materialized actions reference `?1` for `cur`.
+                        sql.replace("?1", &cur.to_string())
+                    } else {
+                        sql.replace("?1", &last.to_string())
+                            .replace("?2", &cur.to_string())
+                    };
+                    self.debug_sql(
+                        if variant.materialize.is_some() {
+                            "mat-act"
+                        } else {
+                            "act"
+                        },
+                        &bound_sql,
+                    );
+                    total += self.conn.execute(&bound_sql, [])?;
                 }
             }
             self.last_run_at.insert(rule.name.clone(), cur);
@@ -422,15 +498,27 @@ impl EGraph {
         Ok(total)
     }
 
-    /// Run iterations until no rule adds any rows.
-    pub fn run_to_saturation(&mut self) -> Result<(usize, i64)> {
+    /// Run all rules (any ruleset) once. Convenience over
+    /// `run_iteration_in(None)`.
+    pub fn run_iteration(&mut self) -> Result<usize> {
+        self.run_iteration_in(None)
+    }
+
+    /// Run rules in `ruleset` until no iteration adds any rows.
+    pub fn run_to_saturation_in(&mut self, ruleset: Option<&str>) -> Result<(usize, i64)> {
         let mut iters = 0;
         loop {
             iters += 1;
-            if self.run_iteration()? == 0 {
+            if self.run_iteration_in(ruleset)? == 0 {
                 return Ok((iters, self.next_ts));
             }
         }
+    }
+
+    /// Run all rules to saturation. Convenience over
+    /// `run_to_saturation_in(None)`.
+    pub fn run_to_saturation(&mut self) -> Result<(usize, i64)> {
+        self.run_to_saturation_in(None)
     }
 
     /// Whether a row matching the given args exists. For functions
@@ -502,6 +590,27 @@ impl EGraph {
         }
     }
 
+    /// The number of columns of a registered table, or `None` if
+    /// the name isn't registered.
+    pub fn function_arity(&self, name: &str) -> Option<usize> {
+        self.functions.get(name).map(|f| f.cols.len())
+    }
+
+    /// Whether any row in `name` matches the given pre-built WHERE
+    /// fragments. Each fragment is a `cN = literal` constraint;
+    /// the caller must have already validated arity. Used for
+    /// existential checks on relations.
+    pub fn relation_exists_raw(&self, name: &str, where_parts: &[String]) -> Result<bool> {
+        let where_clause = if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_parts.join(" AND "))
+        };
+        let sql = format!("SELECT COUNT(*) FROM {}{}", q(name), where_clause);
+        let n: i64 = self.conn.query_row(&sql, [], |r| r.get(0))?;
+        Ok(n > 0)
+    }
+
     pub fn count(&self, name: &str) -> Result<i64> {
         Ok(self.conn.query_row(
             &format!("SELECT COUNT(*) FROM {}", q(name)),
@@ -515,6 +624,22 @@ impl EGraph {
 /// table. Used by both seeding (`EGraph::insert`) and rule-action
 /// codegen (`compile.rs`).
 pub(crate) fn conflict_clause(info: &FunctionInfo) -> String {
+    // `declare` emits an empty PK clause iff the PK width is 0.
+    // Without a PK, DuckDB rejects `ON CONFLICT` entirely. For
+    // these tables (nullary functions with output) we just emit
+    // plain INSERTs; second-write semantics are then "duplicate
+    // rows accumulate", which matches `:no-merge` if the user
+    // never re-sets, and is wrong otherwise. Term encoding's use
+    // of nullary `:no-merge` functions is for `let`-binding
+    // globals, and those are set exactly once at declaration time,
+    // so this is safe in practice.
+    let pk_width = match (&info.merge, info.eq_sort_ctor) {
+        (Some(_), false) => info.inputs_len,
+        _ => info.cols.len(),
+    };
+    if pk_width == 0 {
+        return String::new();
+    }
     if info.eq_sort_ctor {
         // EqSort constructor inserts come with a freshly-allocated
         // ID column, so collisions on the all-cols PK shouldn't

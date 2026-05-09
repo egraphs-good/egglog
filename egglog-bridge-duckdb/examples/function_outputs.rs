@@ -44,6 +44,7 @@ fn main() -> Result<()> {
     //        (set (copy_new x) x)))
     eg.add_rule(Rule {
         name: "copy".to_string(),
+        ruleset: String::new(),
         body: vec![Atom::Func {
             name: "src".to_string(),
             args: vec![Term::var("x")],
@@ -65,6 +66,7 @@ fn main() -> Result<()> {
     // iteration: each row re-set to itself, no change.
     eg.add_rule(Rule {
         name: "id_old".to_string(),
+        ruleset: String::new(),
         body: vec![Atom::Func {
             name: "copy_old".to_string(),
             args: vec![Term::var("x"), Term::var("v")],

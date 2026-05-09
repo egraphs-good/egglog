@@ -156,23 +156,20 @@ impl DuckdbBackend {
 
         let mut as_relation = false;
 
-        // A constructor is treated as a relation here when its
-        // output sort is presence-only:
-        //   - non-unionable sorts (the `(relation foo)` desugar),
-        //   - `:internal-hidden` constructors (term encoding's
-        //     `to_delete_X`, `to_subsume_X`, cleanup helpers, etc.,
-        //     whose output IDs are never read — only their rows'
-        //     existence matters).
-        // A constructor that's neither — e.g. `(constructor Add
-        // (i64 i64) Math)` returning a real, unionable EqSort —
-        // requires UF tables to model. Term encoding has emitted
-        // `Add`'s UF and view tables alongside, so for our backend
-        // the term table itself is also presence-only: it stores
-        // (i64, i64, Math) tuples without any `set` semantics on
-        // the output column.
+        // Distinguish two kinds of `:internal-hidden` constructors
+        // emitted by term encoding:
+        //   - helper constructors (to_delete_X, to_subsume_X,
+        //     cleanup helpers) — output IDs are never read; only
+        //     row existence matters. Detected by
+        //     `internal_hidden && !unextractable`.
+        //   - user-level constructors (path, edge, Add, etc.) —
+        //     marked `:internal-hidden :unextractable` by term
+        //     encoding so the user-facing IDs aren't reused. These
+        //     still need real EqSort allocation because the emitted
+        //     view/UF tables key on the IDs.
         if decl.subtype == FunctionSubtype::Constructor {
-            let unionable = self.sorts.get(output_sort).copied().unwrap_or(true);
-            if !unionable || decl.internal_hidden {
+            let is_helper = decl.internal_hidden && !decl.unextractable;
+            if is_helper {
                 as_relation = true;
             } else {
                 // Real EqSort constructor. The bridge crate emits a
@@ -254,6 +251,7 @@ impl DuckdbBackend {
         self.db
             .add_rule(duck::Rule {
                 name: rule.name.clone(),
+                ruleset: rule.ruleset.clone(),
                 body,
                 actions,
             })
@@ -276,6 +274,46 @@ impl DuckdbBackend {
     /// regular functions.
     fn eq_sort_constructor(&self, name: &str) -> bool {
         self.eq_sort_ctor.contains(name)
+    }
+
+    /// The full arity of a registered table from the duckdb side
+    /// (i.e. how many cols its body atoms have, ignoring the `ts`).
+    /// Returns None for unregistered names.
+    fn db_function_arity(&self, name: &str) -> Option<usize> {
+        self.db.function_arity(name)
+    }
+
+    /// Existential check: any row exists matching the literal-arg
+    /// positions, with variables left unconstrained. Used for
+    /// `(check (= var (relation literals)))` where var is just an
+    /// existential placeholder.
+    fn relation_exists(
+        &self,
+        name: &str,
+        args: &[GenericExpr<ResolvedCall, ResolvedVar>],
+    ) -> Result<bool, DuckdbBackendError> {
+        let mut where_parts: Vec<String> = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            match arg {
+                GenericExpr::Var(_, _) => {} // existential — no constraint
+                GenericExpr::Lit(_, l) => {
+                    let lit = literal_to_duck(l)?;
+                    let val_sql = match &lit {
+                        duck::Literal::I64(i) => i.to_string(),
+                        duck::Literal::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+                    };
+                    where_parts.push(format!("c{i} = {val_sql}"));
+                }
+                _ => {
+                    return Err(DuckdbBackendError::Unsupported(format!(
+                        "check arg form (only var/literal): {arg}"
+                    )));
+                }
+            }
+        }
+        self.db
+            .relation_exists_raw(name, &where_parts)
+            .map_err(DuckdbBackendError::Backend)
     }
 
     fn run_top_action(
@@ -365,12 +403,16 @@ impl DuckdbBackend {
     ) -> Result<(), DuckdbBackendError> {
         match sched {
             GenericSchedule::Run(_, cfg) => {
-                // Phase 1.3: ignore `:until` and the ruleset name —
-                // run all rules to saturation. Behaves like `(run N)`
-                // with saturation when N is large enough.
-                let _ = cfg;
+                // Run only the rules in the requested ruleset. We
+                // ignore `:until` and run to saturation regardless;
+                // it's a superset of `(run N)`'s semantics.
+                let rs = if cfg.ruleset.is_empty() {
+                    None
+                } else {
+                    Some(cfg.ruleset.as_str())
+                };
                 self.db
-                    .run_to_saturation()
+                    .run_to_saturation_in(rs)
                     .map_err(DuckdbBackendError::Backend)?;
                 Ok(())
             }
@@ -415,16 +457,21 @@ impl DuckdbBackend {
                 }
                 Ok(())
             }
-            // `(check (= (f args) value))` — the function's output
-            // for these args must equal `value`. Same with sides
-            // swapped. We currently only support i64 outputs.
+            // `(check (= side1 side2))`. Several shapes to handle:
+            // - `(= (f args) val)` for a function `f`: the function's
+            //   stored output for these args must equal `val`.
+            // - `(= var (relation a b c))` (term encoding emits this
+            //   for `(check (edge a b))` after wrapping): existential
+            //   over `var` — check a row exists matching any literal
+            //   args; variables on either side are existentially
+            //   bound and ignored.
             GenericFact::Eq(_, lhs, rhs) => {
                 let (call_side, val_side) = match (lhs, rhs) {
                     (GenericExpr::Call(_, ResolvedCall::Func(_), _), other) => (lhs, other),
                     (other, GenericExpr::Call(_, ResolvedCall::Func(_), _)) => (rhs, other),
                     _ => {
                         return Err(DuckdbBackendError::Unsupported(format!(
-                            "check fact form (only `(= (f args) val)` supported): {fact}"
+                            "check fact form: {fact}"
                         )));
                     }
                 };
@@ -432,10 +479,27 @@ impl DuckdbBackend {
                     unreachable!()
                 };
                 if self.name_is_relation(&f.name) {
-                    return Err(DuckdbBackendError::Unsupported(format!(
-                        "check on relation output (`{}` has no value): {fact}",
-                        f.name
-                    )));
+                    // Existential check over a relation. Build a
+                    // SELECT 1 with literal args constrained and any
+                    // variables left free.
+                    let arity = self
+                        .db_function_arity(&f.name)
+                        .ok_or_else(|| {
+                            DuckdbBackendError::Unsupported(format!("unknown function {}", f.name))
+                        })?;
+                    if args.len() != arity {
+                        return Err(DuckdbBackendError::Unsupported(format!(
+                            "check arity for {}: got {}, expected {}",
+                            f.name,
+                            args.len(),
+                            arity,
+                        )));
+                    }
+                    let exists = self.relation_exists(&f.name, args)?;
+                    if !exists {
+                        return Err(DuckdbBackendError::CheckFailed(format!("{fact}")));
+                    }
+                    return Ok(());
                 }
                 let arg_lits: Vec<duck::Literal> = args
                     .iter()
@@ -474,16 +538,38 @@ impl DuckdbBackend {
                 println!("({n}: {count})");
             }
             None => {
-                // Print all registered tables, sorted by name for
-                // determinism. Match egglog's bracket placement:
-                // `((name1 N1)\n (name2 N2))` — open paren on the
-                // first entry's line, close paren on the last.
-                let mut names: Vec<&str> = self.registered.iter().map(|s| s.as_str()).collect();
-                names.sort();
-                for (i, n) in names.iter().enumerate() {
-                    let count = self.db.count(n).map_err(DuckdbBackendError::Backend)?;
+                // Match egglog's behavior: report sizes of
+                // user-visible functions only. After term encoding,
+                // user names map to their view tables; internal
+                // tables (UF, term, deferred-action helpers, fresh
+                // sym names, etc.) carry the `@` prefix and are
+                // hidden. For each user-level name `foo`, report the
+                // size of `@fooView` instead of `foo` itself, since
+                // the view has the canonicalized count.
+                let user_names: Vec<&str> = self
+                    .registered
+                    .iter()
+                    .map(|s| s.as_str())
+                    .filter(|n| !n.starts_with('@'))
+                    .collect();
+                let mut sorted: Vec<&str> = user_names.clone();
+                sorted.sort();
+                for (i, n) in sorted.iter().enumerate() {
+                    // Prefer the view-table count if it exists.
+                    let view_name = format!("@{n}View");
+                    let count_name: &str = if self.registered.contains(&view_name) {
+                        // Owned String; we'll need an owned variant.
+                        // (small allocation, fine for print-size.)
+                        Box::leak(view_name.into_boxed_str())
+                    } else {
+                        n
+                    };
+                    let count = self
+                        .db
+                        .count(count_name)
+                        .map_err(DuckdbBackendError::Backend)?;
                     let prefix = if i == 0 { "(" } else { " " };
-                    let suffix = if i + 1 == names.len() { ")" } else { "" };
+                    let suffix = if i + 1 == sorted.len() { ")" } else { "" };
                     println!("{prefix}({n} {count}){suffix}");
                 }
             }
@@ -577,6 +663,20 @@ impl DuckdbBackend {
         lhs: &GenericExpr<ResolvedCall, ResolvedVar>,
         rhs: &GenericExpr<ResolvedCall, ResolvedVar>,
     ) -> Result<Vec<duck::Atom>, DuckdbBackendError> {
+        // `(= var (primitive_call args))` — bind var to the result
+        // of the primitive expression. Used by term encoding to
+        // hoist subexpressions out of the body atoms.
+        for (var_side, expr_side) in [(lhs, rhs), (rhs, lhs)] {
+            if let GenericExpr::Var(_, v) = var_side
+                && let GenericExpr::Call(_, ResolvedCall::Primitive(_), _) = expr_side
+            {
+                let expr = self.translate_expr(expr_side)?;
+                return Ok(vec![duck::Atom::Bind {
+                    var: v.name.clone(),
+                    expr,
+                }]);
+            }
+        }
         // `(= var (f args))` where f is a function-with-output:
         // bind var to f's output via Atom::Func with var as the
         // last arg.
@@ -721,15 +821,33 @@ impl DuckdbBackend {
             GenericAction::Change(_, egglog_ast::generic_ast::Change::Subsume, _, _) => {
                 Ok(Vec::new())
             }
-            // Let bindings in actions: bind a fresh value-typed
-            // variable for use later in the same action sequence.
-            // We don't currently support this — the term-encoded
-            // examples mostly use `let v (Add a b)` which, after our
-            // term-encoding-friendly translation, becomes a function
-            // call we can already insert. For now, error.
-            GenericAction::Let(_, _, _) => Err(DuckdbBackendError::Unsupported(format!(
-                "(let ...) in rule actions: {action}"
-            ))),
+            // (let v (C a b)) where C is an EqSort constructor:
+            // allocate a fresh ID via C, bind v.
+            GenericAction::Let(
+                _,
+                v,
+                GenericExpr::Call(_, ResolvedCall::Func(f), ctor_args),
+            ) if self.eq_sort_constructor(&f.name) => {
+                let tr_args: Vec<duck::Term> = ctor_args
+                    .iter()
+                    .map(|e| self.translate_expr(e))
+                    .collect::<Result<_, _>>()?;
+                Ok(vec![duck::Action::LetCtor {
+                    var: v.name.clone(),
+                    name: f.name.clone(),
+                    args: tr_args,
+                }])
+            }
+            // (let v <pure expr>) — bind v to a primitive/literal/
+            // function-output expression. No allocation, just a
+            // computed column in the materialized match table.
+            GenericAction::Let(_, v, rhs) => {
+                let expr = self.translate_expr(rhs)?;
+                Ok(vec![duck::Action::LetExpr {
+                    var: v.name.clone(),
+                    expr,
+                }])
+            }
             other => Err(DuckdbBackendError::Unsupported(format!(
                 "rule action: {other}"
             ))),

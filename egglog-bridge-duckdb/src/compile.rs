@@ -1,22 +1,35 @@
-//! Compile a high-level `Rule` into one SQL string per (variant ×
-//! action).
+//! Compile a high-level `Rule` into a `CompiledVariant` per
+//! seminaive variant.
 //!
 //! A rule with N function-table atoms produces N variants. Variant i
 //! adds `WHERE alias_i.ts >= ?1` on the focused atom and reads the
 //! current epoch as `?2`. Both come in as bind parameters at run
 //! time. Each variant runs all its actions in order on every match.
+//!
+//! When a rule has any `Action::LetCtor` (allocate a fresh EqSort
+//! ID and bind it for use in later actions), the compiler switches
+//! to the *materialized* path:
+//!   1. CREATE OR REPLACE TEMP TABLE __m_<rule>_<variant> AS
+//!      SELECT <body cols>, nextval('seq') AS v1, … FROM <body
+//!      atoms> WHERE focus.ts >= ?1.
+//!   2. Each subsequent action runs as INSERT/DELETE FROM __m,
+//!      referencing both body bindings and let-allocated ids by
+//!      column.
+//! The materialize SQL has `?1` baked in (the focus ts threshold);
+//! the action SQLs only need `?2` (the current epoch).
 
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
-use crate::{Action, Atom, CompiledRule, FunctionInfo, Rule, Term, conflict_clause, q};
+use crate::{
+    Action, Atom, CompiledRule, CompiledVariant, FunctionInfo, Rule, Term, conflict_clause, q,
+};
 
 pub(crate) fn compile_rule(
     rule: &Rule,
     functions: &HashMap<String, FunctionInfo>,
 ) -> Result<CompiledRule> {
-    // Validate function-table atoms (filters are typed implicitly
-    // via SQL).
+    // Validate function-table atoms.
     for atom in &rule.body {
         if let Atom::Func { name, args } = atom {
             let info = functions
@@ -32,33 +45,58 @@ pub(crate) fn compile_rule(
             }
         }
     }
+    // Validate actions.
     for action in &rule.actions {
-        let (name, expected_args) = match action {
-            Action::Insert { name, args } => (name, args.len()),
-            // Delete provides input columns only; the function's
-            // arity for Delete validation is just the inputs.
-            Action::Delete { name, key_args } => (name, key_args.len()),
-        };
-        let info = functions
-            .get(name)
-            .ok_or_else(|| anyhow!("rule {}: unknown action target {name}", rule.name))?;
-        let allowed = match action {
-            Action::Insert { .. } => info.arity(),
-            Action::Delete { .. } => info.inputs_len,
-        };
-        if expected_args != allowed {
-            return Err(anyhow!(
-                "rule {}: action target {name} has {} args, expected {}",
-                rule.name,
-                expected_args,
-                allowed,
-            ));
+        match action {
+            Action::Insert { name, args } => {
+                let info = functions
+                    .get(name)
+                    .ok_or_else(|| anyhow!("rule {}: unknown action target {name}", rule.name))?;
+                if args.len() != info.arity() {
+                    return Err(anyhow!(
+                        "rule {}: action target {name} has {} args, expected {}",
+                        rule.name,
+                        args.len(),
+                        info.arity()
+                    ));
+                }
+            }
+            Action::Delete { name, key_args } => {
+                let info = functions
+                    .get(name)
+                    .ok_or_else(|| anyhow!("rule {}: unknown action target {name}", rule.name))?;
+                if key_args.len() != info.inputs_len {
+                    return Err(anyhow!(
+                        "rule {}: delete on {name} has {} args, expected {} (input cols)",
+                        rule.name,
+                        key_args.len(),
+                        info.inputs_len
+                    ));
+                }
+            }
+            Action::LetCtor { name, args, .. } => {
+                let info = functions
+                    .get(name)
+                    .ok_or_else(|| anyhow!("rule {}: unknown LetCtor target {name}", rule.name))?;
+                if !info.eq_sort_ctor {
+                    return Err(anyhow!(
+                        "rule {}: LetCtor target {name} is not an EqSort constructor",
+                        rule.name
+                    ));
+                }
+                if args.len() != info.inputs_len {
+                    return Err(anyhow!(
+                        "rule {}: LetCtor {name} has {} args, expected {}",
+                        rule.name,
+                        args.len(),
+                        info.inputs_len
+                    ));
+                }
+            }
+            Action::LetExpr { .. } => { /* no validation needed */ }
         }
     }
 
-    // Count function-table atoms — each gets a seminaive variant.
-    // Filter atoms don't get variants (they're not "fresh source"
-    // candidates for new matches).
     let func_atom_indices: Vec<usize> = rule
         .body
         .iter()
@@ -68,7 +106,7 @@ pub(crate) fn compile_rule(
 
     if func_atom_indices.is_empty() {
         return Err(anyhow!(
-            "rule {}: at least one function-table atom required in body",
+            "rule {}: at least one function-table atom required",
             rule.name
         ));
     }
@@ -77,78 +115,126 @@ pub(crate) fn compile_rule(
     }
 
     let mut variants = Vec::with_capacity(func_atom_indices.len());
-    for &focus in &func_atom_indices {
-        variants.push(compile_variant(rule, focus, functions)?);
+    for (variant_idx, &focus) in func_atom_indices.iter().enumerate() {
+        variants.push(compile_variant(rule, variant_idx, focus, functions)?);
     }
     Ok(CompiledRule {
         name: rule.name.clone(),
+        ruleset: rule.ruleset.clone(),
         variants,
     })
 }
 
-/// Build one SQL string per action in the rule, all sharing the
-/// FROM/WHERE derived from the body atoms with focus on `focus_idx`.
 fn compile_variant(
     rule: &Rule,
+    variant_idx: usize,
     focus: usize,
     functions: &HashMap<String, FunctionInfo>,
-) -> Result<Vec<String>> {
-    let (from, where_clause, binding) = build_query(rule, focus)?;
+) -> Result<CompiledVariant> {
+    // 1) Build the body's FROM/WHERE and a binding for body vars.
+    let (from, where_clause, mut binding) = build_query(rule, focus)?;
 
-    let mut sqls = Vec::with_capacity(rule.actions.len());
+    // 2) Decide whether we need the materialized path.
+    let has_let = rule
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::LetCtor { .. } | Action::LetExpr { .. }));
+
+    if !has_let {
+        // Simple path: each action becomes its own INSERT/DELETE
+        // FROM <body>.
+        let actions = rule
+            .actions
+            .iter()
+            .map(|a| compile_simple_action(a, &binding, &from, &where_clause, &rule.name, functions))
+            .collect::<Result<_>>()?;
+        return Ok(CompiledVariant {
+            materialize: None,
+            actions,
+        });
+    }
+
+    // 3) Materialized path. Determine the columns of the temp table:
+    // - one column per body-bound variable (so subsequent actions can
+    //   reference body vars).
+    // - one nextval column per LetCtor.
+    let temp_table = format!(
+        "__m_{}_{}",
+        sanitize(&rule.name),
+        variant_idx + 1
+    );
+
+    let mut select_cols: Vec<String> = Vec::new();
+    // body vars: take their stable binding location and assign an
+    // alias matching the var name. Sort to make codegen
+    // deterministic (binding is a HashMap).
+    let mut body_vars: Vec<(String, String)> = binding
+        .iter()
+        .map(|(v, expr)| (v.clone(), expr.clone()))
+        .collect();
+    body_vars.sort_by(|a, b| a.0.cmp(&b.0));
+    for (v, expr) in &body_vars {
+        select_cols.push(format!("{expr} AS {}", q(v)));
+    }
+    // After materialization, body vars are accessed via their alias.
+    let mut mat_binding: HashMap<String, String> = HashMap::new();
+    for (v, _) in &body_vars {
+        mat_binding.insert(v.clone(), q(v));
+    }
+    // Let allocations: each adds a column to the temp table.
+    // LetCtor uses nextval() (and the action issues an INSERT to
+    // the constructor table at run-time); LetExpr is just an alias
+    // for an expression evaluated against the body bindings.
     for action in &rule.actions {
         match action {
-            Action::Insert {
-                name: target,
-                args: targs,
-            } => {
-                let info = &functions[target];
-                let select_cols: Vec<String> = targs
-                    .iter()
-                    .map(|t| term_sql(t, &binding, &rule.name))
-                    .collect::<Result<_>>()?;
-                let target_cols: Vec<String> =
-                    (0..targs.len()).map(|i| format!("c{i}")).collect();
-                let select_list = format!("{}, ?2", select_cols.join(", "));
-                let insert_cols = format!("{}, ts", target_cols.join(", "));
-                let conflict = conflict_clause(info);
-                sqls.push(format!(
-                    "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}",
-                    q(target),
+            Action::LetCtor { var, .. } => {
+                select_cols.push(format!(
+                    "nextval('__egglog_eqsort_seq') AS {}",
+                    q(var)
                 ));
+                mat_binding.insert(var.clone(), q(var));
             }
-            Action::Delete {
-                name: target,
-                key_args,
-            } => {
-                // DELETE FROM t WHERE EXISTS (matching body) AND
-                // key columns equal the rule's key bindings. Use a
-                // correlated subquery so the rule's joins still apply.
-                // Emit as `DELETE FROM t WHERE (c0, c1, ...) IN
-                // (SELECT key_cols FROM <body>)`.
-                let key_cols: Vec<String> =
-                    (0..key_args.len()).map(|i| format!("c{i}")).collect();
-                let key_select: Vec<String> = key_args
-                    .iter()
-                    .map(|t| term_sql(t, &binding, &rule.name))
-                    .collect::<Result<_>>()?;
-                sqls.push(format!(
-                    "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {from}{where_clause})",
-                    q(target),
-                    key_cols.join(", "),
-                    key_select.join(", "),
-                ));
+            Action::LetExpr { var, expr } => {
+                let expr_sql = term_sql(expr, &binding, &rule.name)?;
+                select_cols.push(format!("{expr_sql} AS {}", q(var)));
+                mat_binding.insert(var.clone(), q(var));
             }
+            _ => {}
         }
     }
-    Ok(sqls)
+    // Build the materialize SQL.
+    let materialize = format!(
+        "CREATE OR REPLACE TEMP TABLE {} AS SELECT {} FROM {}{}",
+        q(&temp_table),
+        select_cols.join(", "),
+        from,
+        where_clause,
+    );
+
+    // 4) Build per-action SQLs that select FROM the temp table.
+    let mut action_sqls: Vec<String> = Vec::new();
+    for action in &rule.actions {
+        action_sqls.push(compile_materialized_action(
+            action,
+            &mat_binding,
+            &temp_table,
+            &rule.name,
+            functions,
+        )?);
+    }
+
+    // Suppress `binding` unused warnings; it's only relevant on the
+    // simple path above.
+    let _ = &mut binding;
+
+    Ok(CompiledVariant {
+        materialize: Some(materialize),
+        actions: action_sqls,
+    })
 }
 
 /// Walk the body atoms, returning `(from_clause, where_clause,
-/// var_binding)`.  Function-table atoms become FROM aliases and
-/// either bind variables or contribute equality constraints; filter
-/// atoms become WHERE constraints. The focused atom contributes a
-/// `tFOCUS.ts >= ?1` predicate.
+/// var_binding)`.
 fn build_query(
     rule: &Rule,
     focus: usize,
@@ -181,8 +267,11 @@ fn build_query(
                 }
             }
             Atom::Filter(t) => {
-                let s = term_sql(t, &binding, &rule.name)?;
-                where_parts.push(s);
+                where_parts.push(term_sql(t, &binding, &rule.name)?);
+            }
+            Atom::Bind { var, expr } => {
+                let s = term_sql(expr, &binding, &rule.name)?;
+                binding.insert(var.clone(), s);
             }
         }
     }
@@ -193,16 +282,153 @@ fn build_query(
     Ok((from, where_clause, binding))
 }
 
-/// Compile a `Term` to SQL with an empty variable binding. Used for
-/// top-level (non-rule) contexts where `Term::Var` shouldn't appear.
+/// Compile a single action under the *simple* path: INSERT/DELETE
+/// FROM <body>.
+fn compile_simple_action(
+    action: &Action,
+    binding: &HashMap<String, String>,
+    from: &str,
+    where_clause: &str,
+    rule_name: &str,
+    functions: &HashMap<String, FunctionInfo>,
+) -> Result<String> {
+    match action {
+        Action::Insert {
+            name: target,
+            args: targs,
+        } => {
+            let info = &functions[target];
+            let select_cols: Vec<String> = targs
+                .iter()
+                .map(|t| term_sql(t, binding, rule_name))
+                .collect::<Result<_>>()?;
+            let target_cols: Vec<String> =
+                (0..targs.len()).map(|i| format!("c{i}")).collect();
+            let select_list = format!("{}, ?2", select_cols.join(", "));
+            let insert_cols = format!("{}, ts", target_cols.join(", "));
+            let conflict = conflict_clause(info);
+            Ok(format!(
+                "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}",
+                q(target),
+            ))
+        }
+        Action::Delete {
+            name: target,
+            key_args,
+        } => {
+            let key_cols: Vec<String> =
+                (0..key_args.len()).map(|i| format!("c{i}")).collect();
+            let key_select: Vec<String> = key_args
+                .iter()
+                .map(|t| term_sql(t, binding, rule_name))
+                .collect::<Result<_>>()?;
+            Ok(format!(
+                "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {from}{where_clause})",
+                q(target),
+                key_cols.join(", "),
+                key_select.join(", "),
+            ))
+        }
+        Action::LetCtor { .. } | Action::LetExpr { .. } => {
+            // Unreachable: presence of any Let switches us to the
+            // materialized path before we reach this point.
+            Err(anyhow!(
+                "rule {rule_name}: internal: Let reached simple-action codegen"
+            ))
+        }
+    }
+}
+
+/// Compile a single action under the *materialized* path: INSERT/
+/// DELETE FROM the temp table.
+fn compile_materialized_action(
+    action: &Action,
+    mat_binding: &HashMap<String, String>,
+    temp_table: &str,
+    rule_name: &str,
+    functions: &HashMap<String, FunctionInfo>,
+) -> Result<String> {
+    let from = q(temp_table);
+    match action {
+        Action::Insert {
+            name: target,
+            args: targs,
+        } => {
+            let info = &functions[target];
+            let select_cols: Vec<String> = targs
+                .iter()
+                .map(|t| term_sql(t, mat_binding, rule_name))
+                .collect::<Result<_>>()?;
+            let target_cols: Vec<String> =
+                (0..targs.len()).map(|i| format!("c{i}")).collect();
+            let select_list = format!("{}, ?1", select_cols.join(", "));
+            let insert_cols = format!("{}, ts", target_cols.join(", "));
+            let conflict = conflict_clause(info);
+            Ok(format!(
+                "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from} {conflict}",
+                q(target),
+            ))
+        }
+        Action::Delete {
+            name: target,
+            key_args,
+        } => {
+            let key_cols: Vec<String> =
+                (0..key_args.len()).map(|i| format!("c{i}")).collect();
+            let key_select: Vec<String> = key_args
+                .iter()
+                .map(|t| term_sql(t, mat_binding, rule_name))
+                .collect::<Result<_>>()?;
+            Ok(format!(
+                "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {from})",
+                q(target),
+                key_cols.join(", "),
+                key_select.join(", "),
+            ))
+        }
+        Action::LetExpr { .. } => {
+            // The expression's value is already in the temp table
+            // column corresponding to `var`; nothing to insert.
+            // Return a no-op SELECT so we have *something* in the
+            // action list (the runner expects a SQL string).
+            Ok("SELECT 1 WHERE FALSE".to_string())
+        }
+        Action::LetCtor {
+            var,
+            name: target,
+            args,
+        } => {
+            // Insert into the constructor table using the
+            // pre-allocated id from the temp table column.
+            let info = &functions[target];
+            let arg_sqls: Vec<String> = args
+                .iter()
+                .map(|t| term_sql(t, mat_binding, rule_name))
+                .collect::<Result<_>>()?;
+            // The let var was given a column in the temp table.
+            let id_col = mat_binding
+                .get(var)
+                .cloned()
+                .ok_or_else(|| anyhow!("rule {rule_name}: internal: LetCtor var {var} not in mat binding"))?;
+            let target_cols: Vec<String> =
+                (0..info.cols.len()).map(|i| format!("c{i}")).collect();
+            let select_list = format!("{}, {id_col}, ?1", arg_sqls.join(", "));
+            let insert_cols = format!("{}, ts", target_cols.join(", "));
+            let conflict = conflict_clause(info);
+            Ok(format!(
+                "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from} {conflict}",
+                q(target),
+            ))
+        }
+    }
+}
+
+/// Compile a `Term` to SQL with an empty variable binding.
 pub(crate) fn term_sql_no_binding(t: &Term, ctx: &str) -> Result<String> {
     let empty = HashMap::new();
     term_sql(t, &empty, ctx)
 }
 
-/// Compile a `Term` to its SQL text given the current variable
-/// binding. Variables must already be bound (introduced by an
-/// earlier function-table atom).
 fn term_sql(t: &Term, binding: &HashMap<String, String>, rule_name: &str) -> Result<String> {
     match t {
         Term::Var(v) => binding
@@ -222,9 +448,6 @@ fn term_sql(t: &Term, binding: &HashMap<String, String>, rule_name: &str) -> Res
                 .iter()
                 .map(|a| term_sql(a, binding, rule_name))
                 .collect::<Result<_>>()?;
-            // Output column is c<inputs.len()>. Without function
-            // metadata in this layer, we conservatively assume the
-            // output column is c<args.len()>.
             let out_col = args.len();
             let where_clause = if arg_sqls.is_empty() {
                 String::new()
@@ -244,9 +467,6 @@ fn term_sql(t: &Term, binding: &HashMap<String, String>, rule_name: &str) -> Res
     }
 }
 
-/// Map a primitive op name + its already-compiled arg SQLs into a
-/// SQL expression. Wraps in parens to preserve precedence at the
-/// surrounding context.
 fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
     let binop = |sql_op: &str| -> Result<String> {
         if args.len() != 2 {
@@ -280,21 +500,13 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
         "<" | "<=" | ">" | ">=" => binop(op),
         "=" => binop("="),
         "!=" | "<>" | "bool-!=" => binop("<>"),
-        // `and` is binary in egglog; `or` is variadic.
         "and" => binop("AND"),
         "or" => variadic_join("OR", "FALSE"),
         "not" => unop("NOT"),
-        // Term encoding uses ordering-max/-min to deterministically
-        // pick a parent in UF maintenance. SQL has direct primitives.
         "ordering-max" => func("GREATEST"),
         "ordering-min" => func("LEAST"),
-        // `guard(b)` as a body atom means "rule fires only if b is
-        // true". Inline its argument; the surrounding Atom::Filter
-        // already enforces truthy semantics.
         "guard" => unop(""),
-        _ => Err(anyhow!(
-            "rule {rule_name}: unknown primitive `{op}`"
-        )),
+        _ => Err(anyhow!("rule {rule_name}: unknown primitive `{op}`")),
     }
 }
 
@@ -303,4 +515,17 @@ fn lit_sql(l: &crate::Literal) -> String {
         crate::Literal::I64(i) => i.to_string(),
         crate::Literal::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
     }
+}
+
+/// Make a string safe to embed in a SQL identifier (temp table name).
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
