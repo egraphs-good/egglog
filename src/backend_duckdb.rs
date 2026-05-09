@@ -277,6 +277,94 @@ impl DuckdbBackend {
         self.eq_sort_ctor.contains(name)
     }
 
+    /// Translate a top-level expression to a `duck::Term`, eagerly
+    /// running side-effects: for an EqSort constructor call, this
+    /// allocates a fresh id and returns it as a literal Term. For
+    /// other function calls, it returns a `Term::FuncCall` (compiled
+    /// to a SQL subquery). Literals and primitive expressions stay
+    /// as ordinary Terms.
+    fn top_arg_term(
+        &mut self,
+        e: &GenericExpr<ResolvedCall, ResolvedVar>,
+    ) -> Result<duck::Term, DuckdbBackendError> {
+        match e {
+            GenericExpr::Call(_, ResolvedCall::Func(f), args)
+                if self.eq_sort_constructor(&f.name) =>
+            {
+                let lits = args
+                    .iter()
+                    .map(|a| self.eval_top_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let id = self
+                    .db
+                    .allocate_and_insert(&f.name, &lits)
+                    .map_err(DuckdbBackendError::Backend)?;
+                Ok(duck::Term::Lit(duck::Literal::I64(id)))
+            }
+            _ => self.translate_expr(e),
+        }
+    }
+
+    /// Evaluate a top-level expression to a literal value, eagerly
+    /// allocating EqSort ids for any nested constructor calls and
+    /// reading global function values via SQL subquery.  Used to
+    /// reduce things like `(L 0)` or `(Prog (L 0))` to a concrete
+    /// `Literal::I64(<id>)` so they can flow into a top-level Set.
+    fn eval_top_expr(
+        &mut self,
+        e: &GenericExpr<ResolvedCall, ResolvedVar>,
+    ) -> Result<duck::Literal, DuckdbBackendError> {
+        match e {
+            GenericExpr::Lit(_, l) => literal_to_duck(l),
+            GenericExpr::Var(_, v) => Err(DuckdbBackendError::Unsupported(format!(
+                "unbound variable in top-level expression: {}",
+                v.name
+            ))),
+            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+                if self.eq_sort_constructor(&f.name) {
+                    let lits = args
+                        .iter()
+                        .map(|a| self.eval_top_expr(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let id = self
+                        .db
+                        .allocate_and_insert(&f.name, &lits)
+                        .map_err(DuckdbBackendError::Backend)?;
+                    Ok(duck::Literal::I64(id))
+                } else if self.name_is_relation(&f.name) {
+                    Err(DuckdbBackendError::Unsupported(format!(
+                        "relation `{}` read in top-level expression position",
+                        f.name
+                    )))
+                } else {
+                    // A regular function (with a real output value).
+                    // Read its current output via lookup. We only
+                    // support i64 output here.
+                    let lits = args
+                        .iter()
+                        .map(|a| self.eval_top_expr(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let v = self
+                        .db
+                        .lookup_i64(&f.name, &lits)
+                        .map_err(DuckdbBackendError::Backend)?
+                        .ok_or_else(|| {
+                            DuckdbBackendError::Unsupported(format!(
+                                "no row found for {}({:?})",
+                                f.name, lits
+                            ))
+                        })?;
+                    Ok(duck::Literal::I64(v))
+                }
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(_), _) => {
+                Err(DuckdbBackendError::Unsupported(format!(
+                    "primitive call in top-level expression: {e}"
+                )))
+            }
+        }
+    }
+
     fn run_top_action(
         &mut self,
         action: &GenericAction<ResolvedCall, ResolvedVar>,
@@ -293,56 +381,36 @@ impl DuckdbBackend {
                         head.name()
                     )));
                 };
-                let mut tr_args: Vec<duck::Term> = args
-                    .iter()
-                    .map(|e| self.translate_expr(e))
-                    .collect::<Result<_, _>>()?;
+                // Args: each becomes a Term. For constructor calls
+                // we recurse via eval_top_expr to get a Lit id, then
+                // wrap as Term::Lit; for everything else, use
+                // translate_expr (subquery for global reads).
+                let mut tr_args: Vec<duck::Term> = Vec::with_capacity(args.len() + 1);
+                for a in args {
+                    tr_args.push(self.top_arg_term(a)?);
+                }
                 if !self.name_is_relation(&f.name) {
-                    // If val is a constructor call (term encoding's
-                    // `(let v (C a b))` desugar), allocate a fresh
-                    // EqSort ID, insert into C's term table, and use
-                    // the returned ID as v's value. Per egglog's
-                    // semantics under term encoding, duplicate IDs
-                    // for the same key get unified by the congruence
-                    // and rebuild rules later.
-                    if let GenericExpr::Call(_, ResolvedCall::Func(ctor), ctor_args) = val
-                        && self.eq_sort_constructor(&ctor.name)
-                    {
-                        let lits = ctor_args
-                            .iter()
-                            .map(expr_to_literal)
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let id = self
-                            .db
-                            .allocate_and_insert(&ctor.name, &lits)
-                            .map_err(DuckdbBackendError::Backend)?;
-                        tr_args.push(duck::Term::Lit(duck::Literal::I64(id)));
-                    } else {
-                        tr_args.push(self.translate_expr(val)?);
-                    }
+                    tr_args.push(self.top_arg_term(val)?);
                 }
                 self.db
                     .insert_terms(&f.name, &tr_args)
                     .map_err(DuckdbBackendError::Backend)
             }
             GenericAction::Expr(_, GenericExpr::Call(_, ResolvedCall::Func(f), args)) => {
-                // Top-level expression of a constructor call (e.g.
-                // `(edge 1 2)` after term encoding) — same idea as
-                // above but no surrounding Set: just allocate.
                 if self.eq_sort_constructor(&f.name) {
-                    let lits = args
-                        .iter()
-                        .map(expr_to_literal)
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut lits = Vec::with_capacity(args.len());
+                    for a in args {
+                        lits.push(self.eval_top_expr(a)?);
+                    }
                     self.db
                         .allocate_and_insert(&f.name, &lits)
                         .map(|_| ())
                         .map_err(DuckdbBackendError::Backend)
                 } else {
-                    let tr_args: Vec<duck::Term> = args
-                        .iter()
-                        .map(|e| self.translate_expr(e))
-                        .collect::<Result<_, _>>()?;
+                    let mut tr_args: Vec<duck::Term> = Vec::with_capacity(args.len());
+                    for a in args {
+                        tr_args.push(self.top_arg_term(a)?);
+                    }
                     self.db
                         .insert_terms(&f.name, &tr_args)
                         .map_err(DuckdbBackendError::Backend)
@@ -469,16 +537,17 @@ fn sort_to_column_ty(sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
     match sort {
         "i64" => Ok(duck::ColumnTy::I64),
         "bool" => Ok(duck::ColumnTy::Bool),
+        "f64" => Ok(duck::ColumnTy::F64),
+        "String" => Ok(duck::ColumnTy::Str),
         // Unit shouldn't reach this function (it's filtered upstream
         // when deciding relation-vs-function), but if it does we'd
         // be storing a constant — treat as i64 placeholder.
         "Unit" => Ok(duck::ColumnTy::I64),
-        // All other sort names are user EqSorts. Term encoding has
-        // already lowered any ad-hoc structure into rule operations
-        // over IDs, so we can safely store them as BIGINT.
-        // Primitive types we don't support yet (f64, String, etc.)
-        // would also fall here and produce wrong results — we'll
-        // need to add them as we hit them.
+        // Other sort names are user EqSorts. Term encoding has
+        // lowered any ad-hoc structure into rule operations over
+        // IDs, so we can safely store them as BIGINT. Sorts we don't
+        // know fall here too; if a program turns out to need them
+        // typed differently, we'll see test failures.
         _ => Ok(duck::ColumnTy::I64),
     }
 }
@@ -766,13 +835,12 @@ fn literal_to_duck(l: &EgLit) -> Result<duck::Literal, DuckdbBackendError> {
     match l {
         EgLit::Int(i) => Ok(duck::Literal::I64(*i)),
         EgLit::Bool(b) => Ok(duck::Literal::Bool(*b)),
+        EgLit::Float(f) => Ok(duck::Literal::F64(f.into_inner())),
+        EgLit::String(s) => Ok(duck::Literal::Str(s.clone())),
         // Unit is the "value" for relations. We shouldn't reach here
         // for inserts (those skip the value column for relations) but
         // if some context forces a Unit-typed value, encode it as 0.
         EgLit::Unit => Ok(duck::Literal::I64(0)),
-        other => Err(DuckdbBackendError::Unsupported(format!(
-            "literal type: {other:?}"
-        ))),
     }
 }
 

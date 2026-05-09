@@ -22,7 +22,8 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
 use crate::{
-    Action, Atom, CompiledRule, CompiledVariant, FunctionInfo, Rule, Term, conflict_clause, q,
+    Action, Atom, CompiledRule, CompiledVariant, FunctionInfo, Rule, Term, conflict_clause,
+    prefix_with_comma, q,
 };
 
 pub(crate) fn compile_rule(
@@ -354,8 +355,8 @@ fn compile_simple_action(
                 .collect::<Result<_>>()?;
             let target_cols: Vec<String> =
                 (0..targs.len()).map(|i| format!("c{i}")).collect();
-            let select_list = format!("{}, ?2", select_cols.join(", "));
-            let insert_cols = format!("{}, ts", target_cols.join(", "));
+            let select_list = format!("{}?2", prefix_with_comma(&select_cols));
+            let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));
             let conflict = conflict_clause(info);
             Ok(format!(
                 "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}",
@@ -366,6 +367,15 @@ fn compile_simple_action(
             name: target,
             key_args,
         } => {
+            // 0-key deletes: SQL `()` and an empty SELECT are
+            // invalid. Use `EXISTS (SELECT 1 FROM body)` instead —
+            // delete every row of the target iff the body matches.
+            if key_args.is_empty() {
+                return Ok(format!(
+                    "DELETE FROM {} WHERE EXISTS (SELECT 1 FROM {from}{where_clause})",
+                    q(target)
+                ));
+            }
             let key_cols: Vec<String> =
                 (0..key_args.len()).map(|i| format!("c{i}")).collect();
             let key_select: Vec<String> = key_args
@@ -411,8 +421,8 @@ fn compile_materialized_action(
                 .collect::<Result<_>>()?;
             let target_cols: Vec<String> =
                 (0..targs.len()).map(|i| format!("c{i}")).collect();
-            let select_list = format!("{}, ?1", select_cols.join(", "));
-            let insert_cols = format!("{}, ts", target_cols.join(", "));
+            let select_list = format!("{}?1", prefix_with_comma(&select_cols));
+            let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));
             let conflict = conflict_clause(info);
             Ok(format!(
                 "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from} {conflict}",
@@ -423,6 +433,12 @@ fn compile_materialized_action(
             name: target,
             key_args,
         } => {
+            if key_args.is_empty() {
+                return Ok(format!(
+                    "DELETE FROM {} WHERE EXISTS (SELECT 1 FROM {from})",
+                    q(target)
+                ));
+            }
             let key_cols: Vec<String> =
                 (0..key_args.len()).map(|i| format!("c{i}")).collect();
             let key_select: Vec<String> = key_args
@@ -462,8 +478,11 @@ fn compile_materialized_action(
                 .ok_or_else(|| anyhow!("rule {rule_name}: internal: LetCtor var {var} not in mat binding"))?;
             let target_cols: Vec<String> =
                 (0..info.cols.len()).map(|i| format!("c{i}")).collect();
-            let select_list = format!("{}, {id_col}, ?1", arg_sqls.join(", "));
-            let insert_cols = format!("{}, ts", target_cols.join(", "));
+            let select_list = format!(
+                "{}{id_col}, ?1",
+                prefix_with_comma(&arg_sqls)
+            );
+            let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));
             let conflict = conflict_clause(info);
             Ok(format!(
                 "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from} {conflict}",
@@ -547,23 +566,35 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
     };
     match op {
         "+" | "-" | "*" | "/" => binop(op),
+        // Bitwise integer ops (DuckDB uses C-style operators).
+        "&" | "|" | "^" => binop(op),
+        "<<" | ">>" => binop(op),
         "<" | "<=" | ">" | ">=" => binop(op),
         "=" => binop("="),
         "!=" | "<>" | "bool-!=" => binop("<>"),
         "and" => binop("AND"),
         "or" => variadic_join("OR", "FALSE"),
         "not" => unop("NOT"),
-        "ordering-max" => func("GREATEST"),
-        "ordering-min" => func("LEAST"),
+        "ordering-max" | "max" => func("GREATEST"),
+        "ordering-min" | "min" => func("LEAST"),
+        "abs" => func("ABS"),
+        "%" => binop("%"),
         "guard" => unop(""),
         _ => Err(anyhow!("rule {rule_name}: unknown primitive `{op}`")),
     }
+}
+
+/// Public version of lit_sql for use by the bridge's seed inserts.
+pub(crate) fn lit_sql_pub(l: &crate::Literal) -> String {
+    lit_sql(l)
 }
 
 fn lit_sql(l: &crate::Literal) -> String {
     match l {
         crate::Literal::I64(i) => i.to_string(),
         crate::Literal::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        crate::Literal::F64(f) => format!("CAST({} AS DOUBLE)", f),
+        crate::Literal::Str(s) => format!("'{}'", s.replace('\'', "''")),
     }
 }
 

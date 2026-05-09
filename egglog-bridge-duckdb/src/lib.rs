@@ -27,11 +27,26 @@ pub(crate) fn q(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// Format a list of comma-separated SQL fragments as a prefix that
+/// is followed by something else, with a trailing comma when the
+/// list is non-empty and an empty string otherwise. Used to safely
+/// concatenate column lists with the always-present trailing `ts`
+/// column without producing `(, ts)` when there are no other cols.
+pub(crate) fn prefix_with_comma(parts: &[String]) -> String {
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("{}, ", parts.join(", "))
+    }
+}
+
 /// The (very small) set of column types we currently understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnTy {
     I64,
     Bool,
+    F64,
+    Str,
 }
 
 impl ColumnTy {
@@ -39,6 +54,8 @@ impl ColumnTy {
         match self {
             ColumnTy::I64 => "BIGINT",
             ColumnTy::Bool => "BOOLEAN",
+            ColumnTy::F64 => "DOUBLE",
+            ColumnTy::Str => "VARCHAR",
         }
     }
 }
@@ -58,6 +75,8 @@ pub enum MergeMode {
 pub enum Literal {
     I64(i64),
     Bool(bool),
+    F64(f64),
+    Str(String),
 }
 
 impl ToSql for Literal {
@@ -65,6 +84,8 @@ impl ToSql for Literal {
         match self {
             Literal::I64(i) => i.to_sql(),
             Literal::Bool(b) => b.to_sql(),
+            Literal::F64(f) => f.to_sql(),
+            Literal::Str(s) => s.as_str().to_sql(),
         }
     }
 }
@@ -259,18 +280,26 @@ impl EGraph {
                 "`{name}` is not registered as an EqSort constructor"
             ));
         }
-        let placeholders: Vec<String> = (1..=inputs.len()).map(|i| format!("?{i}")).collect();
         let in_cols: Vec<String> = (0..info.inputs_len).map(|i| format!("c{i}")).collect();
         let out_col = info.inputs_len;
+        let in_cols_prefix = prefix_with_comma(&in_cols);
+        let arg_sqls: Vec<String> = inputs.iter().map(crate::compile::lit_sql_pub).collect();
+        let arg_prefix = prefix_with_comma(&arg_sqls);
         let sql = format!(
-            "INSERT INTO {} ({}, c{out_col}, ts) VALUES ({}, nextval('__egglog_eqsort_seq'), 0) RETURNING c{out_col}",
+            "INSERT INTO {} ({in_cols_prefix}c{out_col}, ts) VALUES ({arg_prefix}nextval('__egglog_eqsort_seq'), 0) RETURNING c{out_col}",
             q(name),
-            in_cols.join(", "),
-            placeholders.join(", "),
         );
-        let params: Vec<&dyn ToSql> = inputs.iter().map(|a| a as &dyn ToSql).collect();
         self.debug_sql("alloc", &sql);
-        let id: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
+        // Drain the RETURNING result fully before dropping the
+        // prepared statement; helps avoid leaving stale state on
+        // the connection for the next exec.
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        let row = rows
+            .next()?
+            .ok_or_else(|| anyhow!("alloc returned no row"))?;
+        let id: i64 = row.get(0)?;
+        while rows.next()?.is_some() {}
         Ok(id)
     }
 
@@ -363,11 +392,16 @@ impl EGraph {
         } else {
             format!(", PRIMARY KEY ({})", pk.join(", "))
         };
-        let sql = format!(
-            "CREATE TABLE {} ({}, ts BIGINT NOT NULL{pk_clause})",
-            q(name),
-            col_decls.join(", "),
-        );
+        // For 0-column tables (nullary relations / nullary
+        // constructor helpers from term encoding), DuckDB rejects
+        // an empty leading list — skip the leading comma.
+        let col_list = if col_decls.is_empty() {
+            "ts BIGINT NOT NULL".to_string()
+        } else {
+            format!("{}, ts BIGINT NOT NULL", col_decls.join(", "))
+        };
+        let sql = format!("CREATE TABLE {} ({col_list}{pk_clause})", q(name));
+        self.debug_sql("create", &sql);
         self.conn.execute(&sql, [])?;
         self.functions.insert(name.to_string(), info);
         Ok(())
@@ -397,18 +431,22 @@ impl EGraph {
                 info.arity()
             ));
         }
-        let placeholders: Vec<String> = (1..=args.len()).map(|i| format!("?{i}")).collect();
+        // Inline literal values directly; `?N`-style binding through
+        // `&[&dyn ToSql]` slices has been flaky in our context. All
+        // values are i64/bool/f64/string literals with safe SQL
+        // representations.
         let cols: Vec<String> = (0..args.len()).map(|i| format!("c{i}")).collect();
         let conflict = conflict_clause(info);
-        let sql = format!(
-            "INSERT INTO {} ({}, ts) VALUES ({}, 0) {conflict}",
+        let cols_prefix = prefix_with_comma(&cols);
+        let arg_sqls: Vec<String> = args.iter().map(crate::compile::lit_sql_pub).collect();
+        let arg_prefix = prefix_with_comma(&arg_sqls);
+        let sql_unfiltered = format!(
+            "INSERT INTO {} ({cols_prefix}ts) VALUES ({arg_prefix}0) {conflict}",
             q(name),
-            cols.join(", "),
-            placeholders.join(", "),
         );
-        let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
-        self.debug_sql("insert", &sql);
-        self.conn.execute(&sql, params.as_slice())?;
+        let sql = sql_unfiltered.trim_end();
+        self.debug_sql("insert", sql);
+        self.conn.execute(sql, [])?;
         Ok(())
     }
 
@@ -434,11 +472,11 @@ impl EGraph {
             .map(|t| compile::term_sql_no_binding(t, "<top-level>"))
             .collect::<Result<_>>()?;
         let conflict = conflict_clause(info);
+        let cols_prefix = prefix_with_comma(&cols);
+        let arg_prefix = prefix_with_comma(&arg_sqls);
         let sql = format!(
-            "INSERT INTO {} ({}, ts) SELECT {}, 0 {conflict}",
+            "INSERT INTO {} ({cols_prefix}ts) SELECT {arg_prefix}0 {conflict}",
             q(name),
-            cols.join(", "),
-            arg_sqls.join(", "),
         );
         self.debug_sql("insert_terms", &sql);
         self.conn.execute(&sql, [])?;
