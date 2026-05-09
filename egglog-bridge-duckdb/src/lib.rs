@@ -137,14 +137,19 @@ pub struct Rule {
 /// Internal: schema for a single registered function.
 #[derive(Debug, Clone)]
 pub(crate) struct FunctionInfo {
-    /// All schema columns (inputs followed by output, if any).
+    /// All schema columns (inputs followed by output/ID, if any).
     pub(crate) cols: Vec<ColumnTy>,
-    /// Number of input columns. Output column, if present, is at
-    /// index `inputs_len`.
+    /// Number of "input" columns from the user perspective. For
+    /// relations this is `cols.len()`; for functions and EqSort
+    /// constructors it's `cols.len() - 1`.
     pub(crate) inputs_len: usize,
     /// `Some` if this is a function with an output column; `None`
-    /// for relations.
+    /// for relations and EqSort constructors.
     pub(crate) merge: Option<MergeMode>,
+    /// True iff this is an EqSort constructor: PK covers all cols
+    /// (so multiple distinct IDs per input set are allowed) and
+    /// `allocate_and_insert` is the intended insertion path.
+    pub(crate) eq_sort_ctor: bool,
 }
 
 impl FunctionInfo {
@@ -176,13 +181,56 @@ struct CompiledRule {
 
 impl EGraph {
     pub fn new() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        // Sequence for fresh EqSort IDs. Term-encoded constructors
+        // call `nextval` once per allocation; collisions across
+        // rows with the same inputs are intentional — congruence
+        // rules will unify them later.
+        conn.execute("CREATE SEQUENCE __egglog_eqsort_seq START 1", [])?;
         Ok(Self {
-            conn: Connection::open_in_memory()?,
+            conn,
             functions: HashMap::new(),
             rules: Vec::new(),
             next_ts: 0,
             last_run_at: HashMap::new(),
         })
+    }
+
+    /// Allocate a fresh EqSort ID, insert a row into a constructor
+    /// table with that ID, and return the ID. Used by term encoding
+    /// for `(let v (C a b))` patterns at top level.  May produce
+    /// rows with duplicate input keys but distinct IDs; the
+    /// term-encoding-generated congruence rule will unify those
+    /// IDs in UF and the rebuild rule will clean up.
+    pub fn allocate_and_insert(&mut self, name: &str, inputs: &[Literal]) -> Result<i64> {
+        let info = self
+            .functions
+            .get(name)
+            .ok_or_else(|| anyhow!("no such function {name}"))?;
+        if inputs.len() != info.inputs_len {
+            return Err(anyhow!(
+                "wrong input arity for `{name}`: got {}, expected {}",
+                inputs.len(),
+                info.inputs_len
+            ));
+        }
+        if !info.eq_sort_ctor {
+            return Err(anyhow!(
+                "`{name}` is not registered as an EqSort constructor"
+            ));
+        }
+        let placeholders: Vec<String> = (1..=inputs.len()).map(|i| format!("?{i}")).collect();
+        let in_cols: Vec<String> = (0..info.inputs_len).map(|i| format!("c{i}")).collect();
+        let out_col = info.inputs_len;
+        let sql = format!(
+            "INSERT INTO {} ({}, c{out_col}, ts) VALUES ({}, nextval('__egglog_eqsort_seq'), 0) RETURNING c{out_col}",
+            q(name),
+            in_cols.join(", "),
+            placeholders.join(", "),
+        );
+        let params: Vec<&dyn ToSql> = inputs.iter().map(|a| a as &dyn ToSql).collect();
+        let id: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
+        Ok(id)
     }
 
     /// Register a relation (no output column). Inserts use
@@ -194,6 +242,7 @@ impl EGraph {
                 cols: inputs.to_vec(),
                 inputs_len: inputs.len(),
                 merge: None,
+                eq_sort_ctor: false,
             },
         )
     }
@@ -216,8 +265,35 @@ impl EGraph {
                 cols,
                 inputs_len: inputs.len(),
                 merge: Some(merge),
+                eq_sort_ctor: false,
             },
         )
+    }
+
+    /// Register an EqSort constructor — a table whose last column is
+    /// an EqSort ID allocated by `allocate_and_insert` from a global
+    /// sequence. The PRIMARY KEY covers ALL columns (including the
+    /// ID), so calling the constructor with the same inputs but a
+    /// fresh ID never conflicts. Multiple rows per input key are the
+    /// expected, intentional state — congruence rules emitted by
+    /// term encoding unify the resulting IDs in UF later.
+    pub fn add_eq_sort_constructor(
+        &mut self,
+        name: &str,
+        inputs: &[ColumnTy],
+    ) -> Result<()> {
+        let mut cols = inputs.to_vec();
+        cols.push(ColumnTy::I64); // the EqSort ID column
+        self.declare(
+            name,
+            FunctionInfo {
+                cols,
+                inputs_len: inputs.len(),
+                merge: None,
+                eq_sort_ctor: true,
+            },
+        )?;
+        Ok(())
     }
 
     fn declare(&mut self, name: &str, info: FunctionInfo) -> Result<()> {
@@ -230,12 +306,18 @@ impl EGraph {
             .enumerate()
             .map(|(i, ty)| format!("c{i} {} NOT NULL", ty.sql()))
             .collect();
-        let pk: Vec<String> = (0..info.inputs_len).map(|i| format!("c{i}")).collect();
+        // PK width:
+        // - relations and eq-sort constructors: cover ALL columns
+        //   (eq-sort ctors expect duplicate input keys with distinct
+        //   IDs; relations have no output to exclude).
+        // - functions with merge mode: cover input columns only, so
+        //   ON CONFLICT can update the output.
+        let pk_width = match (&info.merge, info.eq_sort_ctor) {
+            (Some(_), false) => info.inputs_len,
+            _ => info.cols.len(),
+        };
+        let pk: Vec<String> = (0..pk_width).map(|i| format!("c{i}")).collect();
         let pk_clause = if pk.is_empty() {
-            // 0-input nullary function: PRIMARY KEY () isn't a thing
-            // in DuckDB. Skip the clause; we'll enforce via UNIQUE
-            // not-supported workaround later. For now, accept duplicates
-            // for nullary tables (which we don't yet generate).
             String::new()
         } else {
             format!(", PRIMARY KEY ({})", pk.join(", "))
@@ -433,12 +515,17 @@ impl EGraph {
 /// table. Used by both seeding (`EGraph::insert`) and rule-action
 /// codegen (`compile.rs`).
 pub(crate) fn conflict_clause(info: &FunctionInfo) -> String {
+    if info.eq_sort_ctor {
+        // EqSort constructor inserts come with a freshly-allocated
+        // ID column, so collisions on the all-cols PK shouldn't
+        // happen in practice. If they do (caller passed a literal
+        // ID), drop quietly.
+        return "ON CONFLICT DO NOTHING".to_string();
+    }
     match info.merge {
-        // Relation: presence-only, conflicts are no-ops.
         None => "ON CONFLICT DO NOTHING".to_string(),
         Some(MergeMode::Old) => "ON CONFLICT DO NOTHING".to_string(),
         Some(MergeMode::New) => {
-            // Update the output and ts on conflict.
             let out_col = info.inputs_len;
             format!(
                 "ON CONFLICT DO UPDATE SET c{out_col} = EXCLUDED.c{out_col}, ts = EXCLUDED.ts"

@@ -39,6 +39,10 @@ pub struct DuckdbBackend {
     /// translator to decide whether a body atom needs a wildcard
     /// output variable.
     is_relation: hashbrown::HashMap<String, bool>,
+    /// Names of EqSort constructors — those whose calls allocate
+    /// fresh IDs via the duckdb sequence. Distinct from regular
+    /// functions: those are read-back via subqueries.
+    eq_sort_ctor: hashbrown::HashSet<String>,
 }
 
 impl DuckdbBackend {
@@ -56,6 +60,7 @@ impl DuckdbBackend {
             registered: hashbrown::HashSet::default(),
             sorts: hashbrown::HashMap::default(),
             is_relation: hashbrown::HashMap::default(),
+            eq_sort_ctor: hashbrown::HashSet::default(),
         })
     }
 
@@ -170,19 +175,21 @@ impl DuckdbBackend {
             if !unionable || decl.internal_hidden {
                 as_relation = true;
             } else {
-                // Real EqSort constructor (e.g. `Add`). Term encoding
-                // has lowered all "interesting" semantics (UF, view,
-                // congruence) into companion tables and rules. The
-                // term table itself stores (inputs..., id) tuples
-                // with no merge semantics — model as a relation
-                // whose key columns are inputs + output, all stored,
-                // with no `set` operations.
-                let mut full_inputs = inputs.clone();
-                full_inputs.push(duck::ColumnTy::I64); // the EqSort ID
+                // Real EqSort constructor. The bridge crate emits a
+                // table with (input..., id) cols and a PK over all
+                // of them, plus an `allocate_and_insert` path that
+                // appends a fresh ID per call. Multiple rows per
+                // input with distinct IDs are allowed; the
+                // congruence + rebuild rules emitted by term
+                // encoding unify them later.
                 self.db
-                    .add_relation(&decl.name, &full_inputs)
+                    .add_eq_sort_constructor(&decl.name, &inputs)
                     .map_err(DuckdbBackendError::Backend)?;
+                // is_relation = false so body atoms `(Add a b)` add
+                // a wildcard for the ID column to match the table
+                // schema.
                 self.is_relation.insert(decl.name.clone(), false);
+                self.eq_sort_ctor.insert(decl.name.clone());
                 self.registered.insert(decl.name.clone());
                 return Ok(());
             }
@@ -237,6 +244,13 @@ impl DuckdbBackend {
             .into_iter()
             .flatten()
             .collect();
+        // If every action translated to a no-op (e.g. subsume-only
+        // rules that we silently skip), there's nothing to emit. The
+        // bridge crate would error on the empty list; skip the rule
+        // entirely.
+        if actions.is_empty() {
+            return Ok(());
+        }
         self.db
             .add_rule(duck::Rule {
                 name: rule.name.clone(),
@@ -252,6 +266,16 @@ impl DuckdbBackend {
     /// atom in compile.rs anyway.
     fn name_is_relation(&self, name: &str) -> bool {
         *self.is_relation.get(name).unwrap_or(&false)
+    }
+
+    /// Whether `name` is a constructor whose call should allocate a
+    /// fresh EqSort ID via the duckdb backend's sequence. True for
+    /// constructors we registered with an output column (real
+    /// EqSort), false for constructors we registered as relations
+    /// (deferred-action helpers, the (relation foo) desugar) or for
+    /// regular functions.
+    fn eq_sort_constructor(&self, name: &str) -> bool {
+        self.eq_sort_ctor.contains(name)
     }
 
     fn run_top_action(
@@ -275,20 +299,55 @@ impl DuckdbBackend {
                     .map(|e| self.translate_expr(e))
                     .collect::<Result<_, _>>()?;
                 if !self.name_is_relation(&f.name) {
-                    tr_args.push(self.translate_expr(val)?);
+                    // If val is a constructor call (term encoding's
+                    // `(let v (C a b))` desugar), allocate a fresh
+                    // EqSort ID, insert into C's term table, and use
+                    // the returned ID as v's value. Per egglog's
+                    // semantics under term encoding, duplicate IDs
+                    // for the same key get unified by the congruence
+                    // and rebuild rules later.
+                    if let GenericExpr::Call(_, ResolvedCall::Func(ctor), ctor_args) = val
+                        && self.eq_sort_constructor(&ctor.name)
+                    {
+                        let lits = ctor_args
+                            .iter()
+                            .map(expr_to_literal)
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let id = self
+                            .db
+                            .allocate_and_insert(&ctor.name, &lits)
+                            .map_err(DuckdbBackendError::Backend)?;
+                        tr_args.push(duck::Term::Lit(duck::Literal::I64(id)));
+                    } else {
+                        tr_args.push(self.translate_expr(val)?);
+                    }
                 }
                 self.db
                     .insert_terms(&f.name, &tr_args)
                     .map_err(DuckdbBackendError::Backend)
             }
             GenericAction::Expr(_, GenericExpr::Call(_, ResolvedCall::Func(f), args)) => {
-                let tr_args: Vec<duck::Term> = args
-                    .iter()
-                    .map(|e| self.translate_expr(e))
-                    .collect::<Result<_, _>>()?;
-                self.db
-                    .insert_terms(&f.name, &tr_args)
-                    .map_err(DuckdbBackendError::Backend)
+                // Top-level expression of a constructor call (e.g.
+                // `(edge 1 2)` after term encoding) — same idea as
+                // above but no surrounding Set: just allocate.
+                if self.eq_sort_constructor(&f.name) {
+                    let lits = args
+                        .iter()
+                        .map(expr_to_literal)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    self.db
+                        .allocate_and_insert(&f.name, &lits)
+                        .map(|_| ())
+                        .map_err(DuckdbBackendError::Backend)
+                } else {
+                    let tr_args: Vec<duck::Term> = args
+                        .iter()
+                        .map(|e| self.translate_expr(e))
+                        .collect::<Result<_, _>>()?;
+                    self.db
+                        .insert_terms(&f.name, &tr_args)
+                        .map_err(DuckdbBackendError::Backend)
+                }
             }
             // No-op: a primitive expression at top level (e.g. a
             // standalone `(check-fact)` desugaring artifact) doesn't
@@ -518,37 +577,38 @@ impl DuckdbBackend {
         lhs: &GenericExpr<ResolvedCall, ResolvedVar>,
         rhs: &GenericExpr<ResolvedCall, ResolvedVar>,
     ) -> Result<Vec<duck::Atom>, DuckdbBackendError> {
-        // `(= var (f args))` where f is a function: bind var to f's
-        // output via Atom::Func with var as the last arg. Same on
-        // the other side. For relations we'd be binding to Unit,
-        // which doesn't work — fall through to a Filter `=`.
-        if let (GenericExpr::Var(_, v), GenericExpr::Call(_, ResolvedCall::Func(f), args)) =
-            (lhs, rhs)
-            && !self.name_is_relation(&f.name)
-        {
-            let mut tr_args: Vec<duck::Term> = args
-                .iter()
-                .map(|e| self.translate_expr(e))
-                .collect::<Result<_, _>>()?;
-            tr_args.push(duck::Term::var(v.name.clone()));
-            return Ok(vec![duck::Atom::Func {
-                name: f.name.clone(),
-                args: tr_args,
-            }]);
-        }
-        if let (GenericExpr::Call(_, ResolvedCall::Func(f), args), GenericExpr::Var(_, v)) =
-            (lhs, rhs)
-            && !self.name_is_relation(&f.name)
-        {
-            let mut tr_args: Vec<duck::Term> = args
-                .iter()
-                .map(|e| self.translate_expr(e))
-                .collect::<Result<_, _>>()?;
-            tr_args.push(duck::Term::var(v.name.clone()));
-            return Ok(vec![duck::Atom::Func {
-                name: f.name.clone(),
-                args: tr_args,
-            }]);
+        // `(= var (f args))` where f is a function-with-output:
+        // bind var to f's output via Atom::Func with var as the
+        // last arg.
+        // `(= var (relation args))`: relations don't have a value,
+        // so the binding is to Unit. We model this as a bare body
+        // atom on the relation; the surrounding rule won't actually
+        // use `var` for anything meaningful (and if it does, the
+        // resulting SQL will fail loudly rather than silently — fine).
+        for (var_side, call_side) in [(lhs, rhs), (rhs, lhs)] {
+            if let GenericExpr::Var(_, _) = var_side
+                && let GenericExpr::Call(_, ResolvedCall::Func(f), args) = call_side
+            {
+                let tr_args: Vec<duck::Term> = args
+                    .iter()
+                    .map(|e| self.translate_expr(e))
+                    .collect::<Result<_, _>>()?;
+                if self.name_is_relation(&f.name) {
+                    return Ok(vec![duck::Atom::Func {
+                        name: f.name.clone(),
+                        args: tr_args,
+                    }]);
+                }
+                let GenericExpr::Var(_, v) = var_side else {
+                    unreachable!()
+                };
+                let mut tr_args = tr_args;
+                tr_args.push(duck::Term::var(v.name.clone()));
+                return Ok(vec![duck::Atom::Func {
+                    name: f.name.clone(),
+                    args: tr_args,
+                }]);
+            }
         }
         let lhs_t = self.translate_expr(lhs)?;
         let rhs_t = self.translate_expr(rhs)?;
