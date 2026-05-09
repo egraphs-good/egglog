@@ -1,5 +1,24 @@
 # Experiment Journal
 
+## E3: Downcast bypass for for_each_col in SparseColumnIndex::new (2026-05-09)
+
+**Hypothesis:** The E1 size==1 fast path still calls `for_each_col` through 6 dispatch layers (vtable → downcast → scan_generic → SubsetRef::offsets → RowId::range iterator → dyn FnMut). A direct downcast to `SortedWritesTable` with an inherent `read_value_at_row_unchecked` method eliminates most of this overhead without adding new trait methods (the narrower approach the E2 reviewer recommended).
+
+**Approach:** Added `read_value_at_row_unchecked` inherent method on `SortedWritesTable` (mirrors scan_generic stale-row logic), added `inner_as_any` forwarder on `WrappedTableRef`, downcast at the call site in `SparseColumnIndex::new` with fallback to `for_each_col` for other Table impls.
+
+**Results:**
+- hardboiled_conv1d_32: 0.321s → 0.314s (-2.2%)
+- hardboiled_conv1d_128: 0.863s → 0.832s (-3.5%)
+- luminal-llama: 0.212s → 0.217s (+2.4%, noise on 0.21s)
+- python_array_optimize: 0.519s → 0.512s (-1.3%)
+- cykjson: 0.107s → 0.106s (-1.4%)
+- eggcc-extraction: 0.460s → 0.458s (-0.5%)
+- Overall average: -1.07%
+
+**VERDICT: IMPROVEMENT** — Reviewer ACCEPTED. hardboiled_128 cleared ≥3% threshold. luminal-llama +2.4% is within noise. Reviewer confirmed this is the project-preferred pattern (inherent method + downcast at call site) vs. expanding the Table trait.
+
+**Commit:** 16c83f12 — KEPT.
+
 ## E2: Direct read_value_at_row (rejected) (2026-05-09)
 
 **Hypothesis:** The size==1 fast path in `SparseColumnIndex::new` (E1) still calls `for_each_col` through 6 layers of dispatch. A dedicated `read_value_at_row` trait method with a direct-array-index override on `SortedWritesTable` would cut this to 3 layers.
