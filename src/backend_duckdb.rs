@@ -225,6 +225,17 @@ impl DuckdbBackend {
         &mut self,
         rule: &GenericRule<ResolvedCall, ResolvedVar>,
     ) -> Result<(), DuckdbBackendError> {
+        if std::env::var("DUCK_TRACE_RULES").is_ok() {
+            eprintln!("[duck] rule {}", rule.name);
+            eprintln!("       body:");
+            for f in &rule.body {
+                eprintln!("         {f}");
+            }
+            eprintln!("       actions:");
+            for a in &rule.head.0 {
+                eprintln!("         {a}");
+            }
+        }
         let body = rule
             .body
             .iter()
@@ -614,6 +625,18 @@ impl DuckdbBackend {
         lhs: &GenericExpr<ResolvedCall, ResolvedVar>,
         rhs: &GenericExpr<ResolvedCall, ResolvedVar>,
     ) -> Result<Vec<duck::Atom>, DuckdbBackendError> {
+        // `(= var1 var2)` — egglog rule semantics is unification:
+        // both vars name the same value. Emit a Bind so the second
+        // var resolves to whatever the first one is already bound
+        // to. (If neither is bound by a prior atom, walk_body will
+        // error when it tries to resolve the expr — fine, since
+        // such a rule is ill-formed.)
+        if let (GenericExpr::Var(_, v1), GenericExpr::Var(_, v2)) = (lhs, rhs) {
+            return Ok(vec![duck::Atom::Bind {
+                var: v1.name.clone(),
+                expr: duck::Term::var(v2.name.clone()),
+            }]);
+        }
         // `(= var (primitive_call args))` — bind var to the
         // primitive's result AND require the result to be truthy
         // (since term encoding rewrites the original `(prim args)`
