@@ -233,17 +233,55 @@ fn compile_variant(
     })
 }
 
-/// Walk the body atoms, returning `(from_clause, where_clause,
-/// var_binding)`.
-fn build_query(
-    rule: &Rule,
-    focus: usize,
+/// Compile a list of body atoms (as in a rule body or a `(check ...)`)
+/// into a SQL `SELECT 1 FROM <body> [WHERE …] LIMIT 1` returning a
+/// row iff the conjunction has any match. No seminaive focus
+/// predicate; that's only for rules.
+pub(crate) fn compile_body_select(
+    atoms: &[Atom],
+    functions: &std::collections::HashMap<String, crate::FunctionInfo>,
+) -> Result<String> {
+    // Validate.
+    for atom in atoms {
+        if let Atom::Func { name, args } = atom {
+            let info = functions
+                .get(name)
+                .ok_or_else(|| anyhow!("body atom: unknown function {name}"))?;
+            if args.len() != info.arity() {
+                return Err(anyhow!(
+                    "body atom {name} has {} args, expected {}",
+                    args.len(),
+                    info.arity()
+                ));
+            }
+        }
+    }
+    let (from, where_clause, _binding) = walk_body(atoms, None, "<check>")?;
+    if from.is_empty() {
+        // No function atoms: a pure-primitive `(check (= 1 1))`-style
+        // assertion. Evaluate the WHERE clause as a constant.
+        return Ok(format!(
+            "SELECT COUNT(*) FROM (SELECT 1{}) LIMIT 1",
+            where_clause
+        ));
+    }
+    Ok(format!(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM {from}{where_clause} LIMIT 1)"
+    ))
+}
+
+/// Shared body walker used by both rule compilation (via
+/// `build_query`) and check compilation (via `compile_body_select`).
+fn walk_body(
+    atoms: &[Atom],
+    focus: Option<usize>,
+    rule_name: &str,
 ) -> Result<(String, String, HashMap<String, String>)> {
     let mut binding: HashMap<String, String> = HashMap::new();
     let mut from_parts: Vec<String> = Vec::new();
     let mut where_parts: Vec<String> = Vec::new();
 
-    for (i, atom) in rule.body.iter().enumerate() {
+    for (i, atom) in atoms.iter().enumerate() {
         match atom {
             Atom::Func { name, args } => {
                 let alias = format!("t{i}");
@@ -260,26 +298,38 @@ fn build_query(
                             }
                         },
                         Term::Lit(_) | Term::Prim(_, _) | Term::FuncCall { .. } => {
-                            let rhs = term_sql(term, &binding, &rule.name)?;
+                            let rhs = term_sql(term, &binding, rule_name)?;
                             where_parts.push(format!("{lhs} = {rhs}"));
                         }
                     }
                 }
             }
             Atom::Filter(t) => {
-                where_parts.push(term_sql(t, &binding, &rule.name)?);
+                where_parts.push(term_sql(t, &binding, rule_name)?);
             }
             Atom::Bind { var, expr } => {
-                let s = term_sql(expr, &binding, &rule.name)?;
+                let s = term_sql(expr, &binding, rule_name)?;
                 binding.insert(var.clone(), s);
             }
         }
     }
-    where_parts.push(format!("t{focus}.ts >= ?1"));
-
+    if let Some(focus_idx) = focus {
+        where_parts.push(format!("t{focus_idx}.ts >= ?1"));
+    }
     let from = from_parts.join(", ");
-    let where_clause = format!(" WHERE {}", where_parts.join(" AND "));
+    let where_clause = if where_parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_parts.join(" AND "))
+    };
     Ok((from, where_clause, binding))
+}
+
+fn build_query(
+    rule: &Rule,
+    focus: usize,
+) -> Result<(String, String, HashMap<String, String>)> {
+    walk_body(&rule.body, Some(focus), &rule.name)
 }
 
 /// Compile a single action under the *simple* path: INSERT/DELETE

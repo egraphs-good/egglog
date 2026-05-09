@@ -596,6 +596,16 @@ impl EGraph {
         self.functions.get(name).map(|f| f.cols.len())
     }
 
+    /// Whether at least one row matches the given body atoms,
+    /// interpreted as a conjunctive query. This is the same query
+    /// machinery rules use, minus the seminaive focus predicate —
+    /// the check passes iff the body would have any match.
+    pub fn body_exists(&self, atoms: &[Atom]) -> Result<bool> {
+        let sql = compile::compile_body_select(atoms, &self.functions)?;
+        let n: i64 = self.conn.query_row(&sql, [], |r| r.get(0))?;
+        Ok(n > 0)
+    }
+
     /// Whether any row in `name` matches the given pre-built WHERE
     /// fragments. Each fragment is a `cN = literal` constraint;
     /// the caller must have already validated arity. Used for

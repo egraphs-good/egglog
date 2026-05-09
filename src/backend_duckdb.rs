@@ -17,6 +17,7 @@ use crate::core::ResolvedCall;
 use crate::{EGraph, Error, ResolvedNCommand};
 
 use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericFact, Literal as EgLit};
+use egglog_ast::util::ListDisplay;
 use egglog_bridge_duckdb as duck;
 
 /// Programs run via this backend report tuple counts for these
@@ -276,46 +277,6 @@ impl DuckdbBackend {
         self.eq_sort_ctor.contains(name)
     }
 
-    /// The full arity of a registered table from the duckdb side
-    /// (i.e. how many cols its body atoms have, ignoring the `ts`).
-    /// Returns None for unregistered names.
-    fn db_function_arity(&self, name: &str) -> Option<usize> {
-        self.db.function_arity(name)
-    }
-
-    /// Existential check: any row exists matching the literal-arg
-    /// positions, with variables left unconstrained. Used for
-    /// `(check (= var (relation literals)))` where var is just an
-    /// existential placeholder.
-    fn relation_exists(
-        &self,
-        name: &str,
-        args: &[GenericExpr<ResolvedCall, ResolvedVar>],
-    ) -> Result<bool, DuckdbBackendError> {
-        let mut where_parts: Vec<String> = Vec::new();
-        for (i, arg) in args.iter().enumerate() {
-            match arg {
-                GenericExpr::Var(_, _) => {} // existential — no constraint
-                GenericExpr::Lit(_, l) => {
-                    let lit = literal_to_duck(l)?;
-                    let val_sql = match &lit {
-                        duck::Literal::I64(i) => i.to_string(),
-                        duck::Literal::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
-                    };
-                    where_parts.push(format!("c{i} = {val_sql}"));
-                }
-                _ => {
-                    return Err(DuckdbBackendError::Unsupported(format!(
-                        "check arg form (only var/literal): {arg}"
-                    )));
-                }
-            }
-        }
-        self.db
-            .relation_exists_raw(name, &where_parts)
-            .map_err(DuckdbBackendError::Backend)
-    }
-
     fn run_top_action(
         &mut self,
         action: &GenericAction<ResolvedCall, ResolvedVar>,
@@ -431,104 +392,25 @@ impl DuckdbBackend {
         &mut self,
         facts: &[GenericFact<ResolvedCall, ResolvedVar>],
     ) -> Result<(), DuckdbBackendError> {
-        for fact in facts {
-            self.run_check_fact(fact)?;
+        // A `(check fact ...)` is the same query as a rule body —
+        // a conjunctive query that passes iff there's any matching
+        // assignment. Reuse the body compiler instead of pattern-
+        // matching on individual fact shapes.
+        let atoms: Vec<duck::Atom> = facts
+            .iter()
+            .map(|f| self.translate_fact(f))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        let exists = self.db.body_exists(&atoms).map_err(DuckdbBackendError::Backend)?;
+        if !exists {
+            return Err(DuckdbBackendError::CheckFailed(format!(
+                "{}",
+                ListDisplay(facts, " ")
+            )));
         }
         Ok(())
-    }
-
-    fn run_check_fact(
-        &mut self,
-        fact: &GenericFact<ResolvedCall, ResolvedVar>,
-    ) -> Result<(), DuckdbBackendError> {
-        match fact {
-            // `(check (f a b))` — a row matching the args must exist.
-            GenericFact::Fact(GenericExpr::Call(_, ResolvedCall::Func(f), args)) => {
-                let lits: Vec<duck::Literal> = args
-                    .iter()
-                    .map(expr_to_literal)
-                    .collect::<Result<Vec<_>, _>>()?;
-                let exists = self
-                    .db
-                    .check_exists(&f.name, &lits)
-                    .map_err(DuckdbBackendError::Backend)?;
-                if !exists {
-                    return Err(DuckdbBackendError::CheckFailed(format!("{fact}")));
-                }
-                Ok(())
-            }
-            // `(check (= side1 side2))`. Several shapes to handle:
-            // - `(= (f args) val)` for a function `f`: the function's
-            //   stored output for these args must equal `val`.
-            // - `(= var (relation a b c))` (term encoding emits this
-            //   for `(check (edge a b))` after wrapping): existential
-            //   over `var` — check a row exists matching any literal
-            //   args; variables on either side are existentially
-            //   bound and ignored.
-            GenericFact::Eq(_, lhs, rhs) => {
-                let (call_side, val_side) = match (lhs, rhs) {
-                    (GenericExpr::Call(_, ResolvedCall::Func(_), _), other) => (lhs, other),
-                    (other, GenericExpr::Call(_, ResolvedCall::Func(_), _)) => (rhs, other),
-                    _ => {
-                        return Err(DuckdbBackendError::Unsupported(format!(
-                            "check fact form: {fact}"
-                        )));
-                    }
-                };
-                let GenericExpr::Call(_, ResolvedCall::Func(f), args) = call_side else {
-                    unreachable!()
-                };
-                if self.name_is_relation(&f.name) {
-                    // Existential check over a relation. Build a
-                    // SELECT 1 with literal args constrained and any
-                    // variables left free.
-                    let arity = self
-                        .db_function_arity(&f.name)
-                        .ok_or_else(|| {
-                            DuckdbBackendError::Unsupported(format!("unknown function {}", f.name))
-                        })?;
-                    if args.len() != arity {
-                        return Err(DuckdbBackendError::Unsupported(format!(
-                            "check arity for {}: got {}, expected {}",
-                            f.name,
-                            args.len(),
-                            arity,
-                        )));
-                    }
-                    let exists = self.relation_exists(&f.name, args)?;
-                    if !exists {
-                        return Err(DuckdbBackendError::CheckFailed(format!("{fact}")));
-                    }
-                    return Ok(());
-                }
-                let arg_lits: Vec<duck::Literal> = args
-                    .iter()
-                    .map(expr_to_literal)
-                    .collect::<Result<Vec<_>, _>>()?;
-                let want = expr_to_literal(val_side)?;
-                let actual = self
-                    .db
-                    .lookup_i64(&f.name, &arg_lits)
-                    .map_err(DuckdbBackendError::Backend)?;
-                let want_i64 = match want {
-                    duck::Literal::I64(i) => i,
-                    duck::Literal::Bool(_) => {
-                        return Err(DuckdbBackendError::Unsupported(format!(
-                            "check (= ...) on non-i64 expected value: {fact}"
-                        )));
-                    }
-                };
-                if actual != Some(want_i64) {
-                    return Err(DuckdbBackendError::CheckFailed(format!(
-                        "{fact}: got {actual:?}, want Some({want_i64})"
-                    )));
-                }
-                Ok(())
-            }
-            _ => Err(DuckdbBackendError::Unsupported(format!(
-                "check fact form: {fact}"
-            ))),
-        }
     }
 
     fn run_print_size(&mut self, name: Option<&str>) -> Result<(), DuckdbBackendError> {
@@ -663,18 +545,31 @@ impl DuckdbBackend {
         lhs: &GenericExpr<ResolvedCall, ResolvedVar>,
         rhs: &GenericExpr<ResolvedCall, ResolvedVar>,
     ) -> Result<Vec<duck::Atom>, DuckdbBackendError> {
-        // `(= var (primitive_call args))` — bind var to the result
-        // of the primitive expression. Used by term encoding to
-        // hoist subexpressions out of the body atoms.
+        // `(= var (primitive_call args))` — bind var to the
+        // primitive's result AND require the result to be truthy
+        // (since term encoding rewrites the original `(prim args)`
+        // filter into this form to satisfy proof normal form).
+        // Comparison/boolean primitives in egglog return `Unit` on
+        // success and fail on no-result; in SQL we model that as a
+        // WHERE constraint on the same expression. Arithmetic
+        // primitives return values, but for those `(= var (+ x y))`
+        // is a pure binding — and our `Atom::Filter` over an
+        // arithmetic SQL expression evaluates non-zero as truthy,
+        // which is conservatively safe (rules in practice don't use
+        // `(= var (+ x y))` as a filter).
         for (var_side, expr_side) in [(lhs, rhs), (rhs, lhs)] {
             if let GenericExpr::Var(_, v) = var_side
-                && let GenericExpr::Call(_, ResolvedCall::Primitive(_), _) = expr_side
+                && let GenericExpr::Call(_, ResolvedCall::Primitive(p), _) = expr_side
             {
                 let expr = self.translate_expr(expr_side)?;
-                return Ok(vec![duck::Atom::Bind {
+                let mut out = vec![duck::Atom::Bind {
                     var: v.name.clone(),
-                    expr,
-                }]);
+                    expr: expr.clone(),
+                }];
+                if is_filter_primitive(p.name()) {
+                    out.push(duck::Atom::Filter(expr));
+                }
+                return Ok(out);
             }
         }
         // `(= var (f args))` where f is a function-with-output:
@@ -853,6 +748,18 @@ impl DuckdbBackend {
             ))),
         }
     }
+}
+
+/// Whether a primitive's "success" value should be interpreted as a
+/// filter constraint (returns Unit-on-success in egglog). Term
+/// encoding wraps these in `(= var (prim ...))` to satisfy proof
+/// normal form, and the rule semantics is "filter on the
+/// primitive holding".
+fn is_filter_primitive(name: &str) -> bool {
+    matches!(
+        name,
+        "<" | "<=" | ">" | ">=" | "=" | "!=" | "bool-!=" | "guard" | "and" | "or" | "not"
+    )
 }
 
 fn literal_to_duck(l: &EgLit) -> Result<duck::Literal, DuckdbBackendError> {
