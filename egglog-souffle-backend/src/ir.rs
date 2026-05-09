@@ -17,13 +17,13 @@ pub struct Program {
 }
 
 /// A Souffle type. v0 supports atomic numeric types and recursive records.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDecl {
     pub name: String,
     pub kind: TypeKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeKind {
     /// `.type T = [field1: T1, field2: T2, ...]` — recursive record. Used to
     /// represent term IDs in our Skolemization-via-records scheme.
@@ -31,7 +31,7 @@ pub enum TypeKind {
 }
 
 /// A relation declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationDecl {
     pub name: String,
     /// (column name, column type)
@@ -39,7 +39,7 @@ pub struct RelationDecl {
 }
 
 /// A clause: a fact, a rule, or a subsumption rule.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Clause {
     /// `head :- body.` (or `head.` if body is empty — a fact).
     Rule { head: Atom, body: Vec<Literal> },
@@ -65,14 +65,14 @@ impl Clause {
 }
 
 /// An atom: relation name applied to a list of expressions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Atom {
     pub relation: String,
     pub args: Vec<Expr>,
 }
 
 /// Body literal: an atom, a binary constraint, or a built-in predicate.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Literal {
     Atom(Atom),
     Constraint(BinaryOp, Expr, Expr),
@@ -80,7 +80,7 @@ pub enum Literal {
     Neg(Atom),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Eq,
     Ne,
@@ -93,7 +93,7 @@ pub enum BinaryOp {
 /// An expression in head/body. We keep this small — the encoded program's
 /// expressions are mostly literals, variables, record constructors, and
 /// `ord()` calls (to replace egglog's `ordering-min/max`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Var(String),
     /// Wildcard `_`.
@@ -109,7 +109,7 @@ pub enum Expr {
 }
 
 /// Top-level directives that apply to a relation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Directive {
     PrintSize(String),
     Output { relation: String, params: Vec<(String, String)> },
