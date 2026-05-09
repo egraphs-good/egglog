@@ -92,6 +92,9 @@ impl DuckdbBackend {
     }
 
     fn dispatch(&mut self, ncmd: &ResolvedNCommand) -> Result<(), DuckdbBackendError> {
+        if std::env::var("DUCK_TRACE_CMDS").is_ok() {
+            eprintln!("[duck/cmd] {}", ncmd.to_command());
+        }
         match ncmd {
             // Sorts: track the `unionable` flag so we can recognize
             // relation-desugar patterns. Sorts themselves don't need
@@ -442,22 +445,52 @@ impl DuckdbBackend {
         sched: &GenericSchedule<ResolvedCall, ResolvedVar>,
     ) -> Result<(), DuckdbBackendError> {
         match sched {
+            // `(run rs)` is a *single* iteration. The wrapping
+            // schedule (Repeat/Saturate) decides how many times.
             GenericSchedule::Run(_, cfg) => {
-                // Run only the rules in the requested ruleset. We
-                // ignore `:until` and run to saturation regardless;
-                // it's a superset of `(run N)`'s semantics.
                 let rs = if cfg.ruleset.is_empty() {
                     None
                 } else {
                     Some(cfg.ruleset.as_str())
                 };
                 self.db
-                    .run_to_saturation_in(rs)
+                    .run_iteration_in(rs)
                     .map_err(DuckdbBackendError::Backend)?;
                 Ok(())
             }
-            GenericSchedule::Saturate(_, inner) => self.run_schedule(inner),
-            GenericSchedule::Repeat(_, _, inner) => self.run_schedule(inner),
+            // `(saturate inner)` — run inner repeatedly until none
+            // of its rules' SQL statements affect any rows. We
+            // detect that by snapshotting `rules_affected_total`
+            // (the sum of rows affected by any DML executed inside
+            // run_iteration_in) before/after one execution; equal
+            // counters → no rule fired → stop. This is more reliable
+            // than comparing total tuple counts, which can balance
+            // out (deletes equal inserts within a rule).
+            GenericSchedule::Saturate(_, inner) => {
+                loop {
+                    let before = self.db.rules_affected_total();
+                    self.run_schedule(inner)?;
+                    let after = self.db.rules_affected_total();
+                    if before == after {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+            // `(repeat N inner)` — run inner up to N times, stopping
+            // early on a fixpoint (matches egglog: `(repeat 100
+            // (run))` saturates earlier if it can).
+            GenericSchedule::Repeat(_, limit, inner) => {
+                for _ in 0..*limit {
+                    let before = self.db.rules_affected_total();
+                    self.run_schedule(inner)?;
+                    let after = self.db.rules_affected_total();
+                    if before == after {
+                        break;
+                    }
+                }
+                Ok(())
+            }
             GenericSchedule::Sequence(_, scheds) => {
                 for s in scheds {
                     self.run_schedule(s)?;
@@ -465,6 +498,16 @@ impl DuckdbBackend {
                 Ok(())
             }
         }
+    }
+
+    /// Total number of rows across every registered table. Used as
+    /// a coarse fixpoint detector for Saturate / Repeat.
+    fn total_tuples(&self) -> Result<i64, DuckdbBackendError> {
+        let mut total: i64 = 0;
+        for name in &self.registered {
+            total += self.db.count(name).map_err(DuckdbBackendError::Backend)?;
+        }
+        Ok(total)
     }
 
     fn run_check(
@@ -507,11 +550,15 @@ impl DuckdbBackend {
                 // hidden. For each user-level name `foo`, report the
                 // size of `@fooView` instead of `foo` itself, since
                 // the view has the canonicalized count.
+                // Hide internal tables: `@`-prefixed (term encoding's
+                // helpers, view tables, etc.) and `$`-prefixed
+                // (user globals, lifted to nullary constructors —
+                // egglog hides these from print-size too).
                 let user_names: Vec<&str> = self
                     .registered
                     .iter()
                     .map(|s| s.as_str())
-                    .filter(|n| !n.starts_with('@'))
+                    .filter(|n| !n.starts_with('@') && !n.starts_with('$'))
                     .collect();
                 let mut sorted: Vec<&str> = user_names.clone();
                 sorted.sort();

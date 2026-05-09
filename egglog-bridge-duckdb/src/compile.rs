@@ -315,7 +315,23 @@ fn walk_body(
         }
     }
     if let Some(focus_idx) = focus {
-        where_parts.push(format!("t{focus_idx}.ts >= ?1"));
+        // Standard seminaive semantics: the focused atom is in
+        // `[last_run_at, cur_iter_ts)`; every other (non-focused)
+        // function-table atom is in `[0, cur_iter_ts)` — that is,
+        // sees only rows that existed at the start of the iteration.
+        // Without the upper bound on non-focused atoms, two variants
+        // of the same rule firing in one iteration would see each
+        // other's just-inserted rows, leading to over-derivation.
+        // ?1 = last_run_at, ?2 = cur_iter_ts.
+        for (i, atom) in atoms.iter().enumerate() {
+            if !matches!(atom, Atom::Func { .. }) {
+                continue;
+            }
+            if i == focus_idx {
+                where_parts.push(format!("t{i}.ts >= ?1"));
+            }
+            where_parts.push(format!("t{i}.ts < ?2"));
+        }
     }
     let from = from_parts.join(", ");
     let where_clause = if where_parts.is_empty() {
@@ -421,7 +437,7 @@ fn compile_materialized_action(
                 .collect::<Result<_>>()?;
             let target_cols: Vec<String> =
                 (0..targs.len()).map(|i| format!("c{i}")).collect();
-            let select_list = format!("{}?1", prefix_with_comma(&select_cols));
+            let select_list = format!("{}?2", prefix_with_comma(&select_cols));
             let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));
             let conflict = conflict_clause(info);
             Ok(format!(
@@ -479,7 +495,7 @@ fn compile_materialized_action(
             let target_cols: Vec<String> =
                 (0..info.cols.len()).map(|i| format!("c{i}")).collect();
             let select_list = format!(
-                "{}{id_col}, ?1",
+                "{}{id_col}, ?2",
                 prefix_with_comma(&arg_sqls)
             );
             let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));

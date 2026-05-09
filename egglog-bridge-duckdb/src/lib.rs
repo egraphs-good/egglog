@@ -214,6 +214,11 @@ pub struct EGraph {
     next_ts: i64,
     /// Per source-rule "last run at" — the ts at which it last ran.
     last_run_at: HashMap<String, i64>,
+    /// Cumulative count of rows affected by every rule action's SQL
+    /// across all iterations. The frontend uses snapshots of this
+    /// counter to detect saturation precisely (vs total tuple count,
+    /// which can balance to zero when deletes match inserts).
+    rules_affected: u64,
 }
 
 struct CompiledRule {
@@ -248,7 +253,15 @@ impl EGraph {
             rules: Vec::new(),
             next_ts: 0,
             last_run_at: HashMap::new(),
+            rules_affected: 0,
         })
+    }
+
+    /// Cumulative count of rows affected by rule action SQLs across
+    /// all iterations so far. Frontend snapshots this around its
+    /// schedule loops to detect saturation precisely.
+    pub fn rules_affected_total(&self) -> u64 {
+        self.rules_affected
     }
 
     fn debug_sql(&self, label: &str, sql: &str) {
@@ -499,27 +512,23 @@ impl EGraph {
             }
             let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
             for variant in &rule.variants {
+                // Unified bind convention across the whole rule:
+                //   ?1 = last_run_at, ?2 = cur_iter_ts.
+                // Inline both via string substitution (DuckDB doesn't
+                // accept bound params in CREATE OR REPLACE TEMP TABLE
+                // AS SELECT, and per-action statements have varying
+                // ?-counts). Values are i64s; safe to interpolate.
+                let bind = |sql: &str| -> String {
+                    sql.replace("?1", &last.to_string())
+                        .replace("?2", &cur.to_string())
+                };
                 if let Some(mat_sql_template) = &variant.materialize {
-                    // CREATE OR REPLACE TEMP TABLE AS SELECT doesn't
-                    // support bound parameters in DuckDB, so we inline
-                    // the last_run_at threshold by string substitution.
-                    // It's an i64 so this is safe.
-                    let mat_sql = mat_sql_template.replace("?1", &last.to_string());
+                    let mat_sql = bind(mat_sql_template);
                     self.debug_sql("mat", &mat_sql);
                     self.conn.execute(&mat_sql, [])?;
                 }
                 for sql in &variant.actions {
-                    // Inline params via string substitution to side-step
-                    // per-action `?1` vs `?2` mismatch (DELETEs use only
-                    // `?1`, INSERTs use both). All params are i64s so
-                    // inlining is safe.
-                    let bound_sql = if variant.materialize.is_some() {
-                        // Materialized actions reference `?1` for `cur`.
-                        sql.replace("?1", &cur.to_string())
-                    } else {
-                        sql.replace("?1", &last.to_string())
-                            .replace("?2", &cur.to_string())
-                    };
+                    let bound_sql = bind(sql);
                     self.debug_sql(
                         if variant.materialize.is_some() {
                             "mat-act"
@@ -528,7 +537,9 @@ impl EGraph {
                         },
                         &bound_sql,
                     );
-                    total += self.conn.execute(&bound_sql, [])?;
+                    let n = self.conn.execute(&bound_sql, [])?;
+                    self.rules_affected = self.rules_affected.wrapping_add(n as u64);
+                    total += n;
                 }
             }
             self.last_run_at.insert(rule.name.clone(), cur);
@@ -579,11 +590,12 @@ impl EGraph {
         let where_parts: Vec<String> = (0..args.len())
             .map(|i| format!("c{i} = ?{}", i + 1))
             .collect();
-        let sql = format!(
-            "SELECT COUNT(*) FROM {} WHERE {}",
-            q(name),
-            where_parts.join(" AND "),
-        );
+        let where_clause = if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_parts.join(" AND "))
+        };
+        let sql = format!("SELECT COUNT(*) FROM {}{where_clause}", q(name));
         let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
         let n: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
         Ok(n > 0)
@@ -613,10 +625,14 @@ impl EGraph {
             .map(|i| format!("c{i} = ?{}", i + 1))
             .collect();
         let out_col = info.inputs_len;
+        let where_clause = if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_parts.join(" AND "))
+        };
         let sql = format!(
-            "SELECT c{out_col} FROM {} WHERE {}",
+            "SELECT c{out_col} FROM {}{where_clause}",
             q(name),
-            where_parts.join(" AND "),
         );
         let params: Vec<&dyn ToSql> = inputs.iter().map(|a| a as &dyn ToSql).collect();
         let mut stmt = self.conn.prepare(&sql)?;
