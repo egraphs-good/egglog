@@ -32,7 +32,9 @@ use std::collections::HashMap;
 
 use crate::ast::*;
 use crate::core::ResolvedCall;
-use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericFact, Literal as AstLit};
+use egglog_ast::generic_ast::{
+    Change, GenericAction, GenericExpr, GenericFact, Literal as AstLit,
+};
 
 /// Translation errors. v0 returns Unsupported for cases we haven't covered
 /// yet — refusing rather than silently dropping keeps the contract clear.
@@ -67,6 +69,26 @@ pub struct Ctx {
     /// 0-arg function declarations seen — needed so we know to look up
     /// their values when we see them in expressions.
     pub zero_arg_funcs: std::collections::HashSet<String>,
+    /// Drain entries: target_relation → list of (helper_relation, arity).
+    /// Each helper acts as a filter for the live view: the live view excludes
+    /// rows whose key is in any of the helper relations. Two patterns are
+    /// detected:
+    ///
+    ///   (rule ((Helper a..) (Target a.. out..))               // delete drain
+    ///         ((delete (Target a.. out..))
+    ///          (delete (Helper a..))))
+    ///
+    ///   (rule ((Helper a..) (Target a.. out..))               // subsume drain
+    ///         ((subsume (Target a.. out..))))
+    ///
+    /// In both cases we DON'T translate the rule itself. Instead:
+    ///   - Body atoms on Target in OTHER rules are rewritten to Target_live.
+    ///   - At the end of translation we emit `.decl Target_live` and one or
+    ///     more rules of the form
+    ///         Target_live(args) :- Target(args), !Helper1(prefix1), !Helper2(prefix2), ...
+    /// helper_arity is the prefix length — the leading args of Target that
+    /// match Helper's args.
+    pub drains: HashMap<String, Vec<(String, usize)>>,
     /// Whether the `Math` type and Term/UF helper relations have been emitted.
     emitted_helpers: bool,
 }
@@ -81,7 +103,39 @@ pub fn translate(commands: &[ResolvedCommand]) -> Result<Program, TranslateError
     for cmd in commands {
         translate_command(cmd, &mut ctx, &mut p)?;
     }
+    emit_live_views(&ctx, &mut p);
     Ok(p)
+}
+
+/// For each drained target, emit:
+///   - `.decl target_live(...)` with the same columns as `target`
+///   - rule `target_live(...) :- target(...), !h1(prefix1), !h2(prefix2), ...`
+/// where the negations cover every helper relation that's been recorded
+/// against this target.
+fn emit_live_views(ctx: &Ctx, p: &mut Program) {
+    for (target, helpers) in &ctx.drains {
+        let Some(target_decl) = p.relations.iter().find(|r| &r.name == target) else {
+            continue;
+        };
+        let cols = target_decl.columns.clone();
+        let live_name = format!("{target}_live");
+        p.relations.push(RelationDecl { name: live_name.clone(), columns: cols.clone() });
+        let head_args: Vec<Expr> = (0..cols.len())
+            .map(|i| Expr::Var(format!("c{i}")))
+            .collect();
+        let mut body = vec![IrLit::Atom(Atom {
+            relation: target.clone(),
+            args: head_args.clone(),
+        })];
+        for (helper, arity) in helpers {
+            let helper_args: Vec<Expr> = (0..*arity).map(|i| Expr::Var(format!("c{i}"))).collect();
+            body.push(IrLit::Neg(Atom { relation: helper.clone(), args: helper_args }));
+        }
+        p.clauses.push(Clause::rule(
+            Atom { relation: live_name, args: head_args },
+            body,
+        ));
+    }
 }
 
 fn ensure_helpers(ctx: &mut Ctx, p: &mut Program) {
@@ -223,6 +277,15 @@ fn translate_rule(
     ctx: &mut Ctx,
     p: &mut Program,
 ) -> Result<(), TranslateError> {
+    // Drain-pattern detection: a rule whose body contains atoms on two
+    // relations T (with N args) and H (with M args, M < N), and whose head
+    // contains exactly two Delete actions on T and H, is the deferred-
+    // deletion drain pattern. We record (T, H, M) and skip emitting the
+    // rule; later we emit a `T_live` view that filters T against H.
+    if let Some((target, helper, helper_arity)) = detect_drain_rule(rule) {
+        ctx.drains.entry(target).or_default().push((helper, helper_arity));
+        return Ok(());
+    }
     let body = translate_body(&rule.body, ctx)?;
 
     // First pass: walk actions in order, building lets + collecting buckets.
@@ -457,6 +520,80 @@ fn first_ordering_pair_in_args(
     first_ordering_pair(val)
 }
 
+/// Detect the deferred-deletion drain patterns. Two shapes are recognized:
+///
+///   delete drain:
+///       (rule ((Helper a..) (Target a.. out..))
+///             ((delete (Target a.. out..))
+///              (delete (Helper a..))))
+///
+///   subsume drain:
+///       (rule ((Helper a..) (Target a.. out..))
+///             ((subsume (Target a.. out..))))
+///
+/// Returns `(target_name, helper_name, helper_arity)` if matched.
+fn detect_drain_rule(rule: &ResolvedRule) -> Option<(String, String, usize)> {
+    if rule.body.len() != 2 {
+        return None;
+    }
+    // Both body literals must be plain Fact atoms on a Func.
+    let body_atoms: Vec<(&ResolvedCall, &Vec<ResolvedExpr>)> = rule
+        .body
+        .iter()
+        .filter_map(|f| match f {
+            GenericFact::Fact(GenericExpr::Call(_, head, args))
+                if matches!(head, ResolvedCall::Func(_)) =>
+            {
+                Some((head, args))
+            }
+            _ => None,
+        })
+        .collect();
+    if body_atoms.len() != 2 {
+        return None;
+    }
+    // Determine target/helper by arity.
+    let (a_call, a_args) = body_atoms[0];
+    let (b_call, b_args) = body_atoms[1];
+    let (target_name, helper_name, helper_arity) = if a_args.len() > b_args.len() {
+        (a_call.name(), b_call.name(), b_args.len())
+    } else if b_args.len() > a_args.len() {
+        (b_call.name(), a_call.name(), a_args.len())
+    } else {
+        return None;
+    };
+
+    // Match either delete-drain (two Deletes on target+helper) or
+    // subsume-drain (one Subsume on target).
+    let head_changes: Vec<(Change, &ResolvedCall, &Vec<ResolvedExpr>)> = rule
+        .head
+        .0
+        .iter()
+        .filter_map(|a| match a {
+            GenericAction::Change(_, k, head, args) => Some((*k, head, args)),
+            _ => None,
+        })
+        .collect();
+    let is_delete_drain = head_changes.len() == 2
+        && head_changes.iter().all(|(k, _, _)| *k == Change::Delete)
+        && {
+            let head_names: std::collections::HashSet<&str> =
+                head_changes.iter().map(|(_, c, _)| c.name()).collect();
+            head_names.contains(target_name) && head_names.contains(helper_name)
+        };
+    let is_subsume_drain = head_changes.len() == 1
+        && head_changes[0].0 == Change::Subsume
+        && head_changes[0].1.name() == target_name;
+    if !is_delete_drain && !is_subsume_drain {
+        return None;
+    }
+    Some((
+        target_name.to_string(),
+        helper_name.to_string(),
+        helper_arity,
+    ))
+}
+
 /// A `(R args)` body fact becomes a Souffle relation match. A `(prim args)`
 /// body fact becomes a constraint or function call (v0 handles only `!=`).
 fn translate_fact_expr(
@@ -467,7 +604,9 @@ fn translate_fact_expr(
     if let GenericExpr::Call(_, head, args) = expr {
         match head {
             ResolvedCall::Func(_) => {
-                let atom = build_atom(head.name(), args, ctx)?;
+                // Drained relations are read via their _live view.
+                let rel = drained_view_name(ctx, head.name());
+                let atom = build_atom(&rel, args, ctx)?;
                 out.push(IrLit::Atom(atom));
                 Ok(())
             }
@@ -583,8 +722,10 @@ fn translate_eq_fact(
             .map(|a| translate_value_expr(a, ctx))
             .collect::<Result<_, _>>()?;
         souffle_args.push(Expr::Var(var_name));
+        // Drained relations are read via their _live view.
+        let rel = drained_view_name(ctx, head.name());
         out.push(IrLit::Atom(Atom {
-            relation: head.name().to_string(),
+            relation: rel,
             args: souffle_args,
         }));
         return Ok(());
@@ -608,6 +749,16 @@ fn build_atom(
         souffle_args.push(translate_value_expr(a, ctx)?);
     }
     Ok(Atom { relation: relation.to_string(), args: souffle_args })
+}
+
+/// If `rel` is a drained relation, return the live-view name; else
+/// return `rel` unchanged.
+fn drained_view_name(ctx: &Ctx, rel: &str) -> String {
+    if ctx.drains.contains_key(rel) {
+        format!("{rel}_live")
+    } else {
+        rel.to_string()
+    }
 }
 
 /// Translate an expression that produces a value (variable, literal, or
