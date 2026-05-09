@@ -103,6 +103,41 @@ mod tests {
     }
 
     #[test]
+    fn souffle_compat_strata_emits_buffer_and_snap() {
+        let mut egraph = crate::EGraph::new_with_term_encoding().with_souffle_compat_strata();
+        let commands = egraph
+            .resolve_program(
+                None,
+                r#"
+(sort Math)
+(constructor Add (i64 i64) Math)
+            "#,
+            )
+            .unwrap();
+
+        let snapshot = sanitize_internal_names(&commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Phase 1: buffer + snap declarations exist.
+        assert!(
+            snapshot.contains("__AddView_buffer"),
+            "expected __AddView_buffer in:\n{snapshot}"
+        );
+        assert!(
+            snapshot.contains("__AddView_snap"),
+            "expected __AddView_snap in:\n{snapshot}"
+        );
+        // Sanity: canonical view still there.
+        assert!(
+            snapshot.contains("(function __AddView "),
+            "expected canonical __AddView still declared in:\n{snapshot}"
+        );
+    }
+
+    #[test]
     fn dump_souffle_compat_proofs() {
         let mut egraph = crate::EGraph::new_with_proofs().with_souffle_compat();
         let commands = egraph

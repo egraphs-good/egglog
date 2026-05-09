@@ -495,12 +495,32 @@ impl<'a> ProofInstrumentor<'a> {
         let view_decl = format!(
             "(function {view_name} ({view_sorts}) {proof_type} :merge old :internal-term-constructor {name}{view_flags})"
         );
+
+        // When souffle_compat_strata is enabled, also declare the user-write
+        // buffer and the rebuild-snapshot relation. The buffer holds pending
+        // user writes; the snap is populated by the Souffle runtime via
+        // .snapshot at outer-loop boundaries (translator picks up the _snap
+        // suffix). Both share the same shape as the canonical view. No
+        // rules touch these yet — phase 1 just declares the relations so
+        // later phases can wire them in incrementally.
+        let strata_decls = if self.egraph.proof_state.souffle_compat_strata {
+            let buffer_name = self.view_buffer_name(&fdecl.name);
+            let snap_name = self.view_snap_name(&fdecl.name);
+            format!(
+                "(function {buffer_name} ({view_sorts}) {proof_type} :merge old{view_flags})
+                 (function {snap_name} ({view_sorts}) {proof_type} :merge old{view_flags})"
+            )
+        } else {
+            String::new()
+        };
+
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
             (constructor {name} ({term_sorts}) {view_sort}{term_flags} :internal-hidden :unextractable)
             {view_decl}
+            {strata_decls}
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             {proof_constructors}

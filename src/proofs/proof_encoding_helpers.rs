@@ -229,6 +229,24 @@ impl ProofInstrumentor<'_> {
         }
     }
 
+    /// `__<C>View_buffer` — when souffle_compat_strata is enabled, user
+    /// rules' WRITES to a view go here instead of the canonical view. A
+    /// drain rule in the rebuilding stratum then copies entries over
+    /// (see souffle-strata-design.md).
+    pub(crate) fn view_buffer_name(&mut self, name: &str) -> String {
+        let view = self.view_name(name);
+        format!("{view}_buffer")
+    }
+
+    /// `__<C>View_snap` — when souffle_compat_strata is enabled, user
+    /// rules' READS of a view go here. The relation is populated by the
+    /// runtime (Souffle's `.snapshot` directive); the translator picks up
+    /// the `_snap` suffix convention to emit the directive.
+    pub(crate) fn view_snap_name(&mut self, name: &str) -> String {
+        let view = self.view_name(name);
+        format!("{view}_snap")
+    }
+
     pub(crate) fn subsumed_name(&mut self, name: &str) -> String {
         if let Some(n) = self.egraph.proof_state.proof_names.subsumed_name.get(name) {
             n.clone()
