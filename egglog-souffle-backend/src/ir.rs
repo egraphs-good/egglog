@@ -38,19 +38,29 @@ pub struct RelationDecl {
     pub columns: Vec<(String, String)>,
 }
 
-/// A clause: a fact or a rule.
+/// A clause: a fact, a rule, or a subsumption rule.
 #[derive(Debug, Clone)]
-pub struct Clause {
-    pub head: Atom,
-    pub body: Vec<Literal>,
+pub enum Clause {
+    /// `head :- body.` (or `head.` if body is empty — a fact).
+    Rule { head: Atom, body: Vec<Literal> },
+    /// `dominated <= dominating :- body.` — Souffle subsumption rule.
+    /// Deletes `dominated` when `dominating` exists and `body` is satisfied.
+    Subsumption {
+        dominated: Atom,
+        dominating: Atom,
+        body: Vec<Literal>,
+    },
 }
 
 impl Clause {
     pub fn fact(head: Atom) -> Self {
-        Self { head, body: vec![] }
+        Clause::Rule { head, body: vec![] }
     }
     pub fn rule(head: Atom, body: Vec<Literal>) -> Self {
-        Self { head, body }
+        Clause::Rule { head, body }
+    }
+    pub fn subsume(dominated: Atom, dominating: Atom, body: Vec<Literal>) -> Self {
+        Clause::Subsumption { dominated, dominating, body }
     }
 }
 

@@ -106,15 +106,29 @@ fn emit_directive(out: &mut String, d: &Directive) -> std::fmt::Result {
 }
 
 fn emit_clause(out: &mut String, c: &Clause) -> std::fmt::Result {
-    emit_atom(out, &c.head)?;
-    if c.body.is_empty() {
+    match c {
+        Clause::Rule { head, body } => {
+            emit_atom(out, head)?;
+            emit_body(out, body)
+        }
+        Clause::Subsumption { dominated, dominating, body } => {
+            emit_atom(out, dominated)?;
+            write!(out, " <= ")?;
+            emit_atom(out, dominating)?;
+            emit_body(out, body)
+        }
+    }
+}
+
+fn emit_body(out: &mut String, body: &[Literal]) -> std::fmt::Result {
+    if body.is_empty() {
         writeln!(out, ".")?;
     } else {
         writeln!(out, " :-")?;
-        for (i, lit) in c.body.iter().enumerate() {
+        for (i, lit) in body.iter().enumerate() {
             write!(out, "  ")?;
             emit_literal(out, lit)?;
-            if i + 1 < c.body.len() {
+            if i + 1 < body.len() {
                 writeln!(out, ",")?;
             } else {
                 writeln!(out, ".")?;
