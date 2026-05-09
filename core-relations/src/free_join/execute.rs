@@ -88,6 +88,34 @@ impl SparseColumnIndex {
     }
 
     fn new(table: WrappedTableRef<'_>, subset: SubsetRef<'_>, col: ColumnId) -> Self {
+        // Fast path: single-row subset. Common after AA1 (Dense(r..r+1)) and GG1.
+        // Skips the 8-pair zero-init, sort_unstable, and grouping-loop overhead.
+        if subset.size() == 1 {
+            let row = match subset {
+                SubsetRef::Dense(r) => r.start,
+                SubsetRef::Sparse(s) => s.inner()[0],
+            };
+            let mut val = Value::new_const(0);
+            let single = SubsetRef::Dense(OffsetRange::new(row, row.inc()));
+            table.for_each_col(single, col, &mut |_row_id, v| {
+                val = v;
+            });
+            let mut keys = [Value::new_const(0); SMALL_RESIDUAL];
+            let mut offsets = [0; SMALL_RESIDUAL];
+            let mut subset_ids = [RowId::new_const(0); SMALL_RESIDUAL];
+            keys[0] = val;
+            offsets[0] = 0;
+            subset_ids[0] = row;
+            return SparseColumnIndex {
+                n_keys: 1,
+                n_subsets: 1,
+                keys,
+                offsets,
+                subset_ids,
+            };
+        }
+
+        // General path (unchanged below this point)
         let mut rows = [(Value::new_const(0), RowId::new_const(0)); SMALL_RESIDUAL];
         let mut pos = 0;
         table.for_each_col(subset, col, &mut |row_id, val| {
@@ -114,13 +142,7 @@ impl SparseColumnIndex {
             subset_ids[i] = row_id;
         }
 
-        SparseColumnIndex {
-            n_keys,
-            n_subsets,
-            keys,
-            offsets,
-            subset_ids,
-        }
+        SparseColumnIndex { n_keys, n_subsets, keys, offsets, subset_ids }
     }
 
     fn get_subset(&self, key: Value) -> Option<SubsetRef<'_>> {
