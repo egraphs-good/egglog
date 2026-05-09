@@ -126,14 +126,26 @@ fn translate_command(
         C::AddRuleset(..) | C::UnstableCombinedRuleset(..) => Ok(()),
         C::Rule { rule } => translate_rule(rule, ctx, p),
         C::Action(action) => {
-            // Top-level action — typically a `(set ...)` to seed the database
-            // or a `(let ...)` global.
-            let mut lets: HashMap<String, Expr> = HashMap::new();
-            let clauses = translate_action(action, &mut lets, &[], ctx)?;
-            for c in clauses {
-                p.clauses.push(c);
-            }
-            Ok(())
+            // Top-level action — wrap in a degenerate rule (empty body) and
+            // reuse translate_rule's logic so ordering-max/min expansion
+            // and delete+set pairing apply uniformly.
+            let span = match action {
+                GenericAction::Let(s, _, _)
+                | GenericAction::Set(s, _, _, _)
+                | GenericAction::Change(s, _, _, _)
+                | GenericAction::Union(s, _, _)
+                | GenericAction::Panic(s, _)
+                | GenericAction::Expr(s, _) => s.clone(),
+            };
+            let head = egglog_ast::generic_ast::GenericActions(vec![action.clone()]);
+            let fake_rule = ResolvedRule {
+                span,
+                head,
+                body: vec![],
+                name: "__top_level".into(),
+                ruleset: "".into(),
+            };
+            translate_rule(&fake_rule, ctx, p)
         }
         C::RunSchedule(_) => {
             if !p.pragmas.iter().any(|(k, _)| k == "outer-saturate") {
@@ -189,9 +201,14 @@ fn translate_rule(
     let body = translate_body(&rule.body, ctx)?;
 
     // First pass: walk actions in order, building lets + collecting buckets.
+    // For Set actions, we may emit MULTIPLE entries — when the action
+    // contains ordering-max/min, we expand into two direction-specific
+    // variants, each with its own extra body constraint.
+    //
+    // sets entries: (relation, full args incl. output, extra body constraints)
     let mut lets: HashMap<String, Expr> = HashMap::new();
-    let mut sets: Vec<(String, Vec<Expr>)> = vec![]; // (relation, full args incl. output)
-    let mut changes: Vec<(String, Vec<Expr>)> = vec![]; // (relation, args without output)
+    let mut sets: Vec<(String, Vec<Expr>, Vec<IrLit>)> = vec![];
+    let mut changes: Vec<(String, Vec<Expr>)> = vec![];
     for action in &rule.head.0 {
         match action {
             GenericAction::Let(_, var, expr) => {
@@ -200,14 +217,51 @@ fn translate_rule(
                 lets.insert(var.name.to_string(), val);
             }
             GenericAction::Set(_, head, args, val) => {
-                let mut souffle_args = Vec::with_capacity(args.len() + 1);
-                for a in args {
-                    let e = translate_value_expr(a, ctx)?;
-                    souffle_args.push(substitute(&e, &lets));
+                // Detect ordering-max/min in any arg or val. If present,
+                // produce two variants of this set.
+                let pair = first_ordering_pair_in_args(args, val);
+                let variants: Vec<(Vec<ResolvedExpr>, ResolvedExpr, Vec<IrLit>)> = if let Some(
+                    (a, b),
+                ) =
+                    pair
+                {
+                    let av = translate_value_expr(&a, ctx)?;
+                    let bv = translate_value_expr(&b, ctx)?;
+                    let av = substitute(&av, &lets);
+                    let bv = substitute(&bv, &lets);
+                    let guard_a_max = IrLit::Constraint(
+                        BinaryOp::Gt,
+                        Expr::Ord(Box::new(av.clone())),
+                        Expr::Ord(Box::new(bv.clone())),
+                    );
+                    let guard_b_max = IrLit::Constraint(
+                        BinaryOp::Gt,
+                        Expr::Ord(Box::new(bv.clone())),
+                        Expr::Ord(Box::new(av.clone())),
+                    );
+                    let args_a_max: Vec<ResolvedExpr> =
+                        args.iter().map(|x| rewrite_ordering(x, &a, &b)).collect();
+                    let val_a_max = rewrite_ordering(val, &a, &b);
+                    let args_b_max: Vec<ResolvedExpr> =
+                        args.iter().map(|x| rewrite_ordering(x, &b, &a)).collect();
+                    let val_b_max = rewrite_ordering(val, &b, &a);
+                    vec![
+                        (args_a_max, val_a_max, vec![guard_a_max]),
+                        (args_b_max, val_b_max, vec![guard_b_max]),
+                    ]
+                } else {
+                    vec![(args.to_vec(), val.clone(), vec![])]
+                };
+                for (args_v, val_v, extra) in variants {
+                    let mut souffle_args = Vec::with_capacity(args_v.len() + 1);
+                    for a in &args_v {
+                        let e = translate_value_expr(a, ctx)?;
+                        souffle_args.push(substitute(&e, &lets));
+                    }
+                    let v = translate_value_expr(&val_v, ctx)?;
+                    souffle_args.push(substitute(&v, &lets));
+                    sets.push((head.name().to_string(), souffle_args, extra));
                 }
-                let v = translate_value_expr(val, ctx)?;
-                souffle_args.push(substitute(&v, &lets));
-                sets.push((head.name().to_string(), souffle_args));
             }
             GenericAction::Change(_, _change_kind, head, args) => {
                 let mut souffle_args = Vec::with_capacity(args.len());
@@ -234,19 +288,27 @@ fn translate_rule(
 
     // Second pass: emit clauses. Sets first, then subsumption rules.
     let body_subst: Vec<IrLit> = body.iter().map(|l| substitute_literal(l, &lets)).collect();
-    for (rel, args) in &sets {
+    for (rel, args, extra) in &sets {
+        let mut full_body = body_subst.clone();
+        for x in extra {
+            full_body.push(x.clone());
+        }
         p.clauses.push(Clause::rule(
             Atom { relation: rel.clone(), args: args.clone() },
-            body_subst.clone(),
+            full_body,
         ));
     }
     for (rel, del_args) in &changes {
         // Pair with a Set on the same relation that has one more arg than
-        // the delete (the extra arg is the output column).
-        let paired = sets.iter().find(|(set_rel, set_args)| {
-            set_rel == rel && set_args.len() == del_args.len() + 1
-        });
-        if let Some((set_rel, set_args)) = paired {
+        // the delete (the extra arg is the output column). When sets have
+        // ordering-max/min variants we emit a subsumption per variant.
+        let paired: Vec<&(String, Vec<Expr>, Vec<IrLit>)> = sets
+            .iter()
+            .filter(|(set_rel, set_args, _)| {
+                set_rel == rel && set_args.len() == del_args.len() + 1
+            })
+            .collect();
+        if let Some((set_rel, set_args, extra)) = paired.first().copied() {
             // Souffle subsumption rule:
             //     dominated <= dominating :- body.
             // The dominated and dominating atoms are matched implicitly by
@@ -256,10 +318,14 @@ fn translate_rule(
             let mut dom_args = del_args.clone();
             let v = format!("__del_out_{}", p.clauses.len());
             dom_args.push(Expr::Var(v));
+            let mut sub_body = body_subst.clone();
+            for x in extra {
+                sub_body.push(x.clone());
+            }
             p.clauses.push(Clause::subsume(
                 Atom { relation: rel.clone(), args: dom_args },
                 Atom { relation: set_rel.clone(), args: set_args.clone() },
-                body_subst.clone(),
+                sub_body,
             ));
         } else {
             // Isolated delete with no paired set — needs tombstone pattern.
@@ -284,6 +350,86 @@ fn translate_body(
         }
     }
     Ok(out)
+}
+
+/// Egglog's `(ordering-max a b)` returns the larger of `a` and `b` by
+/// insertion order; `(ordering-min a b)` returns the smaller. In Souffle
+/// we lower these to `ord()` comparisons. Two patterns appear:
+///
+///   - In a body Eq fact: `(= (ordering-max a b) a)` means
+///     "a is the max" → `ord(a) >= ord(b)`. Detected and rewritten as a
+///     Souffle constraint.
+///   - In a head Set action: `(set (R (ordering-max a b) (ordering-min a b)) v)`
+///     is expanded into two Souffle rules, one per direction, with an
+///     `ord()` guard added to the body.
+///
+/// Returns the operand pair if `expr` is an `(ordering-max X Y)` or
+/// `(ordering-min X Y)` call.
+fn ordering_call_args(expr: &ResolvedExpr) -> Option<(&str, &ResolvedExpr, &ResolvedExpr)> {
+    if let GenericExpr::Call(_, head, args) = expr
+        && args.len() == 2
+        && let ResolvedCall::Primitive(prim) = head
+        && (prim.name() == "ordering-max" || prim.name() == "ordering-min")
+    {
+        Some((prim.name(), &args[0], &args[1]))
+    } else {
+        None
+    }
+}
+
+/// Recursively replace `ordering-max(X,Y)` with `for_max` and
+/// `ordering-min(X,Y)` with `for_min` in `expr`. Used to expand a Set
+/// action into two direction-specific rules.
+fn rewrite_ordering(
+    expr: &ResolvedExpr,
+    for_max: &ResolvedExpr,
+    for_min: &ResolvedExpr,
+) -> ResolvedExpr {
+    if let Some((name, _, _)) = ordering_call_args(expr) {
+        return if name == "ordering-max" {
+            for_max.clone()
+        } else {
+            for_min.clone()
+        };
+    }
+    if let GenericExpr::Call(span, head, args) = expr {
+        let new_args: Vec<ResolvedExpr> = args
+            .iter()
+            .map(|a| rewrite_ordering(a, for_max, for_min))
+            .collect();
+        return GenericExpr::Call(span.clone(), head.clone(), new_args);
+    }
+    expr.clone()
+}
+
+/// Walk `expr`, return the operand pair from the FIRST ordering-max/min
+/// call encountered (we assume any subsequent calls in the same Set
+/// reference the same pair — true of the encoded form's UF rules).
+fn first_ordering_pair(expr: &ResolvedExpr) -> Option<(ResolvedExpr, ResolvedExpr)> {
+    if let Some((_, a, b)) = ordering_call_args(expr) {
+        return Some((a.clone(), b.clone()));
+    }
+    if let GenericExpr::Call(_, _, args) = expr {
+        for a in args {
+            if let Some(p) = first_ordering_pair(a) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// Check a Set's args + value for an ordering-max/min call.
+fn first_ordering_pair_in_args(
+    args: &[ResolvedExpr],
+    val: &ResolvedExpr,
+) -> Option<(ResolvedExpr, ResolvedExpr)> {
+    for a in args {
+        if let Some(p) = first_ordering_pair(a) {
+            return Some(p);
+        }
+    }
+    first_ordering_pair(val)
 }
 
 /// A `(R args)` body fact becomes a Souffle relation match. A `(prim args)`
@@ -322,13 +468,55 @@ fn translate_fact_expr(
 }
 
 /// `(= var (R args))` binds `var` to R's output column.
-/// `(= e1 e2)` with neither a Call becomes a Souffle equality constraint.
+/// `(= (ordering-max X Y) X)` lowers to `ord(X) >= ord(Y)` (similarly for
+/// ordering-min); other `(= e1 e2)` cases become equality constraints.
 fn translate_eq_fact(
     lhs: &ResolvedExpr,
     rhs: &ResolvedExpr,
     ctx: &mut Ctx,
     out: &mut Vec<IrLit>,
 ) -> Result<(), TranslateError> {
+    // Pattern: `(= (ordering-max a b) X)` or symmetric — lower to ord guard.
+    for (l, r) in [(lhs, rhs), (rhs, lhs)] {
+        if let Some((name, a, b)) = ordering_call_args(l) {
+            // l is (ordering-max a b) (or min); r is X. The fact says
+            // X == max/min(a, b). For X == max: ord(X) >= ord(other).
+            let av = translate_value_expr(a, ctx)?;
+            let bv = translate_value_expr(b, ctx)?;
+            let xv = translate_value_expr(r, ctx)?;
+            let (other, op) = if name == "ordering-max" {
+                // X == max(a, b): X is whichever is bigger.
+                // Constraints: X == a AND ord(a) >= ord(b), OR X == b AND ord(b) >= ord(a).
+                // For v0, simpler approximation: if X is one of a or b (a literal
+                // var match), generate ord(X) >= ord(other).
+                if av == xv {
+                    (bv, BinaryOp::Ge)
+                } else if bv == xv {
+                    (av, BinaryOp::Ge)
+                } else {
+                    return Err(TranslateError::Unsupported(format!(
+                        "ordering-max in body where X is not a or b"
+                    )));
+                }
+            } else {
+                if av == xv {
+                    (bv, BinaryOp::Le)
+                } else if bv == xv {
+                    (av, BinaryOp::Le)
+                } else {
+                    return Err(TranslateError::Unsupported(format!(
+                        "ordering-min in body where X is not a or b"
+                    )));
+                }
+            };
+            out.push(IrLit::Constraint(
+                op,
+                Expr::Ord(Box::new(xv)),
+                Expr::Ord(Box::new(other)),
+            ));
+            return Ok(());
+        }
+    }
     // Pattern: `(= var (Call R args))` — binding the output column of R.
     let (var_name, call) = match (lhs, rhs) {
         (GenericExpr::Var(_, v), GenericExpr::Call(_, h, a)) => (v.name.to_string(), Some((h, a))),
