@@ -21,7 +21,7 @@ use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
-    Constraint, OffsetRange, Pool, SubsetRef,
+    Constraint, OffsetRange, Pool, SortedWritesTable, SubsetRef,
     action::{Bindings, ExecutionState},
     common::{DashMap, Value},
     free_join::{
@@ -95,11 +95,27 @@ impl SparseColumnIndex {
                 SubsetRef::Dense(r) => r.start,
                 SubsetRef::Sparse(s) => s.inner()[0],
             };
-            let mut val = Value::new_const(0);
-            let single = SubsetRef::Dense(OffsetRange::new(row, row.inc()));
-            table.for_each_col(single, col, &mut |_row_id, v| {
-                val = v;
-            });
+            // Optimized path: downcast to SortedWritesTable and read the column
+            // directly, bypassing the vtable → downcast → scan_generic → iterator
+            // → dyn-closure chain that for_each_col goes through.
+            // SAFETY: `row` came from `subset`, which is bounded by the table's row count.
+            let val_opt = table
+                .inner_as_any()
+                .downcast_ref::<SortedWritesTable>()
+                .and_then(|t| unsafe { t.read_value_at_row_unchecked(row, col) });
+            let val = match val_opt {
+                Some(v) => v,
+                None => {
+                    // Either not a SortedWritesTable (other Table impl) or the row is stale.
+                    // Fall back to the general for_each_col path.
+                    let mut v = Value::new_const(0);
+                    let single = SubsetRef::Dense(OffsetRange::new(row, row.inc()));
+                    table.for_each_col(single, col, &mut |_row_id, x| {
+                        v = x;
+                    });
+                    v
+                }
+            };
             let mut keys = [Value::new_const(0); SMALL_RESIDUAL];
             let mut offsets = [0; SMALL_RESIDUAL];
             let mut subset_ids = [RowId::new_const(0); SMALL_RESIDUAL];

@@ -785,6 +785,12 @@ impl WrappedTableRef<'_> {
         self.wrapper.group_by_key(self.inner, subset, cols)
     }
 
+    /// Expose the inner table as `&dyn Any` so callers can downcast to a
+    /// concrete type (e.g. `SortedWritesTable`) without adding a new trait method.
+    pub(crate) fn inner_as_any(&self) -> &dyn std::any::Any {
+        self.inner.as_any()
+    }
+
     /// Scan each row in `subset` and call `f(row_id, col_value)` for each.
     /// This is a zero-copy alternative to `scan_project` for single-column
     /// scans over small subsets where an intermediate buffer is wasteful.
