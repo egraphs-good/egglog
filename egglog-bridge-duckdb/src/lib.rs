@@ -179,22 +179,24 @@ pub struct Rule {
     pub actions: Vec<Action>,
 }
 
-/// Internal: schema for a single registered function.
+/// Internal: schema for a single registered function. Public so
+/// frontend diagnostic dumps can read it; not part of the stable
+/// API.
 #[derive(Debug, Clone)]
-pub(crate) struct FunctionInfo {
+pub struct FunctionInfo {
     /// All schema columns (inputs followed by output/ID, if any).
-    pub(crate) cols: Vec<ColumnTy>,
+    pub cols: Vec<ColumnTy>,
     /// Number of "input" columns from the user perspective. For
     /// relations this is `cols.len()`; for functions and EqSort
     /// constructors it's `cols.len() - 1`.
-    pub(crate) inputs_len: usize,
+    pub inputs_len: usize,
     /// `Some` if this is a function with an output column; `None`
     /// for relations and EqSort constructors.
-    pub(crate) merge: Option<MergeMode>,
+    pub merge: Option<MergeMode>,
     /// True iff this is an EqSort constructor: PK covers all cols
     /// (so multiple distinct IDs per input set are allowed) and
     /// `allocate_and_insert` is the intended insertion path.
-    pub(crate) eq_sort_ctor: bool,
+    pub eq_sort_ctor: bool,
 }
 
 impl FunctionInfo {
@@ -209,7 +211,7 @@ impl FunctionInfo {
 /// The executor.
 pub struct EGraph {
     conn: Connection,
-    pub(crate) functions: HashMap<String, FunctionInfo>,
+    pub functions: HashMap<String, FunctionInfo>,
     rules: Vec<CompiledRule>,
     next_ts: i64,
     /// Per source-rule "last run at" — the ts at which it last ran.
@@ -264,6 +266,12 @@ impl EGraph {
         self.rules_affected
     }
 
+    /// Diagnostic-only access to the underlying DuckDB connection,
+    /// used by the frontend's `dump_tables`. Not for general use.
+    pub fn conn_for_dump(&self) -> &Connection {
+        &self.conn
+    }
+
     fn debug_sql(&self, label: &str, sql: &str) {
         if std::env::var("DUCK_TRACE_SQL").is_ok() {
             eprintln!("[duck/{label}] {sql}");
@@ -298,8 +306,9 @@ impl EGraph {
         let in_cols_prefix = prefix_with_comma(&in_cols);
         let arg_sqls: Vec<String> = inputs.iter().map(crate::compile::lit_sql_pub).collect();
         let arg_prefix = prefix_with_comma(&arg_sqls);
+        let cur_ts = self.next_ts;
         let sql = format!(
-            "INSERT INTO {} ({in_cols_prefix}c{out_col}, ts) VALUES ({arg_prefix}nextval('__egglog_eqsort_seq'), 0) RETURNING c{out_col}",
+            "INSERT INTO {} ({in_cols_prefix}c{out_col}, ts) VALUES ({arg_prefix}nextval('__egglog_eqsort_seq'), {cur_ts}) RETURNING c{out_col}",
             q(name),
         );
         self.debug_sql("alloc", &sql);
@@ -453,8 +462,9 @@ impl EGraph {
         let cols_prefix = prefix_with_comma(&cols);
         let arg_sqls: Vec<String> = args.iter().map(crate::compile::lit_sql_pub).collect();
         let arg_prefix = prefix_with_comma(&arg_sqls);
+        let cur_ts = self.next_ts;
         let sql_unfiltered = format!(
-            "INSERT INTO {} ({cols_prefix}ts) VALUES ({arg_prefix}0) {conflict}",
+            "INSERT INTO {} ({cols_prefix}ts) VALUES ({arg_prefix}{cur_ts}) {conflict}",
             q(name),
         );
         let sql = sql_unfiltered.trim_end();
@@ -487,8 +497,9 @@ impl EGraph {
         let conflict = conflict_clause(info);
         let cols_prefix = prefix_with_comma(&cols);
         let arg_prefix = prefix_with_comma(&arg_sqls);
+        let cur_ts = self.next_ts;
         let sql = format!(
-            "INSERT INTO {} ({cols_prefix}ts) SELECT {arg_prefix}0 {conflict}",
+            "INSERT INTO {} ({cols_prefix}ts) SELECT {arg_prefix}{cur_ts} {conflict}",
             q(name),
         );
         self.debug_sql("insert_terms", &sql);

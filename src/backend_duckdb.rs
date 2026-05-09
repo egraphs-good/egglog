@@ -78,6 +78,9 @@ impl DuckdbBackend {
         for ncmd in resolved {
             self.dispatch(&ncmd)?;
         }
+        if std::env::var("DUCK_DUMP_TABLES").is_ok() {
+            self.dump_tables()?;
+        }
         Ok(())
     }
 
@@ -500,15 +503,6 @@ impl DuckdbBackend {
         }
     }
 
-    /// Total number of rows across every registered table. Used as
-    /// a coarse fixpoint detector for Saturate / Repeat.
-    fn total_tuples(&self) -> Result<i64, DuckdbBackendError> {
-        let mut total: i64 = 0;
-        for name in &self.registered {
-            total += self.db.count(name).map_err(DuckdbBackendError::Backend)?;
-        }
-        Ok(total)
-    }
 
     fn run_check(
         &mut self,
@@ -531,6 +525,53 @@ impl DuckdbBackend {
                 "{}",
                 ListDisplay(facts, " ")
             )));
+        }
+        Ok(())
+    }
+
+    /// Diagnostic dump: print the contents of every registered
+    /// table, sorted. Triggered by `DUCK_DUMP_TABLES=1` env var.
+    fn dump_tables(&self) -> Result<(), DuckdbBackendError> {
+        let mut names: Vec<&str> = self.registered.iter().map(|s| s.as_str()).collect();
+        names.sort();
+        for n in names {
+            let count = self.db.count(n).map_err(DuckdbBackendError::Backend)?;
+            if count == 0 {
+                continue;
+            }
+            eprintln!("[duck/dump] {} ({} rows)", n, count);
+            let info = self.db.functions.get(n).cloned();
+            if let Some(info) = info {
+                let cols: Vec<String> =
+                    (0..info.cols.len()).map(|i| format!("c{i}")).collect();
+                let sql = format!(
+                    "SELECT {}, ts FROM \"{}\" ORDER BY {}, ts",
+                    cols.join(", "),
+                    n.replace('"', "\"\""),
+                    cols.join(", ")
+                );
+                let mut stmt = self
+                    .db
+                    .conn_for_dump()
+                    .prepare(&sql)
+                    .map_err(|e| DuckdbBackendError::Backend(e.into()))?;
+                let mut rows = stmt
+                    .query([])
+                    .map_err(|e| DuckdbBackendError::Backend(e.into()))?;
+                while let Some(r) = rows
+                    .next()
+                    .map_err(|e| DuckdbBackendError::Backend(e.into()))?
+                {
+                    let mut vals = Vec::new();
+                    for i in 0..=info.cols.len() {
+                        let v: i64 = r
+                            .get(i)
+                            .map_err(|e| DuckdbBackendError::Backend(e.into()))?;
+                        vals.push(v.to_string());
+                    }
+                    eprintln!("            {}", vals.join(" | "));
+                }
+            }
         }
         Ok(())
     }
@@ -911,17 +952,6 @@ fn literal_to_duck(l: &EgLit) -> Result<duck::Literal, DuckdbBackendError> {
         // for inserts (those skip the value column for relations) but
         // if some context forces a Unit-typed value, encode it as 0.
         EgLit::Unit => Ok(duck::Literal::I64(0)),
-    }
-}
-
-fn expr_to_literal(
-    e: &GenericExpr<ResolvedCall, ResolvedVar>,
-) -> Result<duck::Literal, DuckdbBackendError> {
-    match e {
-        GenericExpr::Lit(_, l) => literal_to_duck(l),
-        other => Err(DuckdbBackendError::Unsupported(format!(
-            "expected literal, got: {other}"
-        ))),
     }
 }
 
