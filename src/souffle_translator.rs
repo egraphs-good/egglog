@@ -26,7 +26,8 @@
 //! incremental.
 
 use egglog_souffle_backend::ir::{
-    Atom, BinaryOp, Clause, Expr, Literal as IrLit, Program, RelationDecl, TypeDecl, TypeKind,
+    Atom, BinaryOp, Clause, Directive, Expr, Literal as IrLit, Program, RelationDecl, TypeDecl,
+    TypeKind,
 };
 use std::collections::HashMap;
 
@@ -115,7 +116,28 @@ pub fn translate(commands: &[ResolvedCommand]) -> Result<Program, TranslateError
         translate_command(cmd, &mut ctx, &mut p)?;
     }
     emit_live_views(&ctx, &mut p);
+    emit_snapshot_directives(&mut p);
     Ok(p)
+}
+
+/// For each declared relation whose name ends in `_snap`, emit a
+/// `.snapshot R_snap(of = "R")` directive — convention adopted by the
+/// souffle_compat_strata encoder. The translator detects the suffix and
+/// emits the directive that the Souffle fork's runtime understands.
+fn emit_snapshot_directives(p: &mut Program) {
+    let snap_pairs: Vec<(String, String)> = p
+        .relations
+        .iter()
+        .filter_map(|r| {
+            r.name
+                .strip_suffix("_snap")
+                .filter(|src| p.relations.iter().any(|other| other.name == *src))
+                .map(|src| (r.name.clone(), src.to_string()))
+        })
+        .collect();
+    for (snap, source) in snap_pairs {
+        p.directives.push(Directive::Snapshot { snap, source });
+    }
 }
 
 /// For each drained target, emit:
