@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## F2: Pool pairs scratch Vec in ColumnIndex::rebuild_full (2026-05-09) — REVERTED
+
+**Hypothesis:** `Vec::with_capacity(n)` at the start of every `ColumnIndex::rebuild_full` call (and its drop at the end) costs ~1–2% on hardboiled_128 via mi_heap alloc/free pairs. Replacing with a thread-local reused scratch Vec should remove that cost. Targets `_mi_heap_realloc_zero` (2.1%) + `mi_heap_malloc_aligned_at` (1.3%) in the post-D3 profile.
+
+**Approach:** Wrap `rebuild_full`'s body in a `RADIX_PAIRS_SCRATCH.with(|cell| { ... })` closure backed by `thread_local! { static RADIX_PAIRS_SCRATCH: RefCell<Vec<(Value, RowId)>> }`. `pairs.clear(); pairs.reserve(n);` reuses prior capacity. Sort/dedup branches and grouping loop preserved exactly.
+
+**Build/tests:** Clean build, all `make test` suites pass.
+
+**Results (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.308 → 0.310 (+0.6%)
+- hardboiled_conv1d_128: 0.817 → 0.826 (+1.0%)
+- luminal-llama: 0.213 → 0.219 (+2.7%)
+- python_array_optimize: 0.515 → 0.523 (+1.5%)
+- cykjson: 0.107 → 0.105 (-1.9%)
+- eggcc-extraction: 0.462 → 0.461 (-0.3%)
+- Overall average: +0.60%
+
+**VERDICT: REGRESSION** — 4 benchmarks slower, no benchmark improved ≥3%. Reverted via `git reset --hard HEAD~1`. Reviewer step skipped because verdict is unambiguous.
+
+**Lesson:** Thread-local indirection (`thread_local!.with()` + `RefCell::borrow_mut`) is not free. The savings from avoiding one `Vec::with_capacity` per call were dominated by the per-call TLS access + RefCell borrow tracking + closure overhead. A scratch buffer that lives across calls is also less cache-friendly than a fresh allocation when the next caller wanted a smaller size — the warm scratch may force the data through L2/L3 round trips. If we want to revisit this, candidate fixes: (a) put the scratch on `&mut self` (per-ColumnIndex) so no TLS, or (b) thread an explicit `&mut Vec` arg through the call chain. Both are more invasive and may not pay off — the F1 finding (rebuild_full alloc rarely shows up) suggests this hotspot is overstated by the profile.
+
 ## Bugfix: Stale-row correctness in SparseColumnIndex::new size==1 fast path (2026-05-09)
 
 **Bug:** E1's fast path unconditionally returned `n_keys: 1` even when no value was found (stale row where `for_each_col` / `read_value_at_row_unchecked` produces nothing). `keys[0]` stayed at `Value::new_const(0)`, making stale rows appear as valid join matches. Tests `fusion` (panics in set-union primitive) and `fail_wrong_assertion` (deleted row still matched) were broken since E1.
