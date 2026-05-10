@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q1: Cleanup — delete dead FrameUpdates::with_capacity (2026-05-09) — KEPT
+
+**Hypothesis:** None — pure cleanup. `FrameUpdates::with_capacity` has been unused since G3 introduced `from_pooled_vec` at every call site. Pre-existing dead_code warning had been cluttering build output for several iterations.
+
+**Approach:** Deleted the 7-LOC method.
+
+**Build/tests:** Clean release build (no more dead_code warning), all `make test` suites pass.
+
+**Results vs P3 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.296 → 0.290 (-1.9%)
+- hardboiled_conv1d_128: 0.761 → 0.761 (-0.0%)
+- luminal-llama: 0.217 → 0.214 (-1.3%)
+- python_array_optimize: 0.522 → 0.523 (+0.2%, noise)
+- cykjson: 0.104 → 0.103 (-1.0%)
+- eggcc-extraction: 0.442 → 0.446 (+0.9%, noise)
+- Overall average: −0.53%
+
+**VERDICT: MODEST GAIN** — Accepted (this isn't a perf change, the deltas are within noise of P3's baseline; the build cleanup justifies it). The dice rolled favorably.
+
+**Commit:** 0fe115b8 — KEPT.
+
 ## P3: Remove PotentiallyStale<T> wrapper, hoist refine_live decision (2026-05-09) — KEPT
 
 **Hypothesis:** `struct PotentiallyStale<T> { inner: T, can_be_stale: bool }` wraps every value returned by `Prober::get_subset`/`for_each`. The `can_be_stale` field is **purely a function of which `DynamicIndex` variant produced it** (`Cached*` → always true; `Dynamic*`/`SparseColumn` → always false). So the per-value bool is redundant metadata, and `refine_subset`'s `sub.can_be_stale && has_stale` AND can be hoisted to a single `must_refine_live` constant per Prober.
