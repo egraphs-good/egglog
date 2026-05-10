@@ -218,12 +218,25 @@ fn compile_variant(
                     Term::Var(v) => binding.contains_key(v),
                     _ => true,
                 });
-                let col_expr = if body_resolvable {
+                let view = format!("@{name}View");
+                // Hash-cons is only meaningful when the constructor's
+                // view actually stores the output ID (i.e., it has
+                // args.len() + 1 columns: inputs + id). For
+                // constructors whose original return type was a
+                // primitive (e.g., a `(function foo () i64 :merge …)`
+                // gets rewritten by term encoding into a 1-arg
+                // constructor backed by a 1-column @fooView relation
+                // that only tracks existence, no id), there's no id
+                // to look up — fall back to plain nextval.
+                let view_has_id = functions
+                    .get(&view)
+                    .map(|i| i.cols.len() > args.len())
+                    .unwrap_or(false);
+                let col_expr = if body_resolvable && view_has_id {
                     let arg_sqls: Vec<String> = args
                         .iter()
                         .map(|t| term_sql(t, &binding, &rule.name))
                         .collect::<Result<_>>()?;
-                    let view = format!("@{name}View");
                     let hc_alias = format!("hc{}", hc_joins.len());
                     let id_col_idx = arg_sqls.len();
                     let in_cols: Vec<String> =
