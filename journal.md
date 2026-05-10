@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q2: Replace Prober::can_be_stale field with method (2026-05-09) — REVERTED
+
+**Hypothesis (P3 vein):** `Prober::can_be_stale: bool` is pure derived state from `self.ix`'s variant. Replace the field with an `#[inline] fn can_be_stale(&self) -> bool` that reads the discriminant via `matches!(self.ix, DynamicIndex::Cached{..} | DynamicIndex::CachedColumn{..})`. Removes the field, the two construction-site computations, and may shrink Prober.
+
+**Approach:** Deleted the `can_be_stale: bool` field, added the inline method, removed the two `let can_be_stale = matches!(...)` blocks at construction, updated 7 read sites to call `.can_be_stale()`. Net -3 LOC.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q1 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.292 → 0.290 (-0.7%)
+- hardboiled_conv1d_128: 0.761 → 0.753 (-1.0%)
+- luminal-llama: 0.213 → 0.217 (+1.9%)
+- python_array_optimize: 0.522 → 0.518 (-0.8%)
+- cykjson: 0.102 → 0.104 (+2.5%)
+- eggcc-extraction: 0.444 → 0.439 (-1.1%)
+- Overall average: +0.13%
+
+**VERDICT: REGRESSION** — Just barely (4 faster, 2 slower). Reverted via `git reset --hard HEAD~1`.
+
+**Lesson:** Field-read vs discriminant-check tradeoff went the wrong way. The bool field was a single byte load (already in cache from the Arc<TrieNode> deref + variant payload). The new `matches!` does a discriminant load + compare-with-immediate, which is at minimum the same cost and at worst slightly more — and at 7 hot read sites, even a tiny per-site delta accumulates. **Lesson: when the field-vs-method tradeoff has equal per-call cost, the FIELD wins because the field-write happens once at construction (cold) while the method-call cost is paid on every read.** P3's win came from removing per-VALUE state (every PotentiallyStale instance had the bool); this would have removed per-PROBER state (much rarer write/read ratio is unfavorable).
+
 ## Q1: Cleanup — delete dead FrameUpdates::with_capacity (2026-05-09) — KEPT
 
 **Hypothesis:** None — pure cleanup. `FrameUpdates::with_capacity` has been unused since G3 introduced `from_pooled_vec` at every call site. Pre-existing dead_code warning had been cluttering build output for several iterations.
