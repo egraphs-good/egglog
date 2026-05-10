@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q13: Cache existing-header doom check across seminaive variants (2026-05-09) — REVERTED
+
+**Hypothesis (structural):** Q12-revert noted that *sharing pooled state* across variants regresses python_array_optimize. Q13 instead caches only a *boolean fast-fail*: when one variant's `add_rule_from_cached_plan` returns `None` because an existing-header subset is empty, set a sticky local flag and short-circuit subsequent variants in the seminaive loop without redoing the existing-header walk. No `JoinHeader`/`Subset` is shared.
+
+**Approach:** New `RuleSetBuilder::existing_headers_have_empty(&CachedPlan) -> bool` (read-only probe; produces no `JoinHeader`s, allocates a fresh transient `Pooled<Vec<Constraint>>` per header, drops on scope exit). In `add_rules_from_cached`'s seminaive `'outer` loop, lazy probe is invoked only after the first `None` return, then the flag short-circuits all later iterations. `+62 / -1` lines across `core-relations/src/query.rs` and `egglog-bridge/src/rule.rs`. No changes to `RuleSetBuilder` state — the flag is a function-local.
+
+**Build/tests:** Clean release build, all 891 `make test` cases pass.
+
+**Results vs Q12-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.294 → 0.293 (-0.4%, noise)
+- hardboiled_conv1d_128: 0.763 → 0.765 (+0.3%, noise)
+- luminal-llama: 0.213 → 0.215 (+1.0%)
+- python_array_optimize: 0.514 → 0.566 (**+10.1% regression**)
+- cykjson: 0.104 → 0.104 (-0.2%, noise)
+- eggcc-extraction: 0.441 → 0.441 (+0.1%, noise)
+- Overall average: **+1.81%**
+
+**VERDICT: REGRESSION** — Reverted. python_array_optimize +10.1%; net +1.81%.
+
+**Lesson — strong:** Q12 and Q13 BOTH regressed python_array_optimize by ~10% with completely different mechanisms (Q12 shared pooled state; Q13 short-circuited an unconditionally-empty rule set). This pattern strongly suggests **`Database::process_constraints` has *side effects* that python_array depends on for downstream timing** — specifically, lazy column-index construction triggered via `Arc<ResettableOnceLock>`. Skipping or coalescing those calls (Q13's approach) and time-shifting those calls (Q12's approach) both perturb when lazy indexes are first materialized. python_array's timing of index construction matters because some indexes are reused by *other* rules later in the same iteration; Q12/Q13 either pre-warm or delay them, and the resulting cache/branch behavior differs from baseline. **Implication: any change to `add_rules_from_cached`'s seminaive variant emission flow — even purely structural ones with bit-identical emitted rule sets — risks regressing python_array_optimize via lazy-index timing. This egglog-bridge code path is effectively as off-limits as run_plan.** Future structural work should target paths that don't run during `add_rule_from_cached_plan`'s constraint walk: **table rebuild paths, hash-index maintenance, planner-side computations**.
+
 ## Q12: Hoist existing-header reprocessing across seminaive variants (2026-05-09) — REVERTED
 
 **Hypothesis (structural / cross-crate):** In `egglog-bridge::Query::add_rules_from_cached`, every seminaive variant rebuilds the *same* set of `JoinHeader`s for the cached plan's existing constraints. With M variants × N existing headers, that's M-fold redundant `process_constraints` (each allocating two pooled `Vec<Constraint>`, walking `split_fast_slow`, intersecting subsets). Hoist the preprocessing to once per `add_rules_from_cached` call and share the resulting `Vec<JoinHeader>` across all variants. Outside `run_plan`, so cykjson should be neutral; structural change rather than micro-tweak.
