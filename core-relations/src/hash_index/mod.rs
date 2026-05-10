@@ -666,6 +666,70 @@ impl IndexBase for TupleIndex {
             .sum()
     }
 
+    /// Bulk-rebuild override: read values directly from SortedWritesTable, bypassing
+    /// the scan_project → TaggedRowBuffer → merge_rows chain (multiple indirection layers
+    /// per row). Falls back to the default scan_project+merge_rows loop for other table types.
+    ///
+    /// Stale-row semantics: if ANY column read returns None, the ENTIRE row is skipped,
+    /// matching scan_generic's behaviour. The scratch vec is cleared at the start of each row,
+    /// so a partial fill from an early-return is harmless.
+    fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
+        if let Some(swt) = table.inner_as_any().downcast_ref::<SortedWritesTable>() {
+            // Inline the per-row logic in each arm to avoid borrow-checker conflicts
+            // that arise when a closure captures both `&mut self` and `swt`.
+            let mut scratch: Vec<Value> = Vec::with_capacity(cols.len());
+            match subset {
+                SubsetRef::Dense(r) => {
+                    for row_idx in r.start.index()..r.end.index() {
+                        let row = RowId::from_usize(row_idx);
+                        scratch.clear();
+                        let mut stale = false;
+                        for &col in cols {
+                            // SAFETY: row is within the table-bounded Dense range.
+                            match unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                Some(v) => scratch.push(v),
+                                None => { stale = true; break; }
+                            }
+                        }
+                        if !stale {
+                            self.add_row(&scratch, row);
+                        }
+                    }
+                }
+                SubsetRef::Sparse(s) => {
+                    for &row in s.inner() {
+                        scratch.clear();
+                        let mut stale = false;
+                        for &col in cols {
+                            // SAFETY: rows in a SubsetRef are bounded by the table's row count.
+                            match unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                Some(v) => scratch.push(v),
+                                None => { stale = true; break; }
+                            }
+                        }
+                        if !stale {
+                            self.add_row(&scratch, row);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Default: batch via scan_project + merge_rows (verbatim from IndexBase::rebuild_full).
+            let mut buf = TaggedRowBuffer::new(cols.len());
+            let mut cur = Offset::new(0);
+            loop {
+                buf.clear();
+                if let Some(next) = table.scan_project(subset, cols, cur, 1024, &[], &mut buf) {
+                    cur = next;
+                    self.merge_rows(&buf);
+                } else {
+                    self.merge_rows(&buf);
+                    break;
+                }
+            }
+        }
+    }
+
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
         // The structure here is similar to the implementation for ColumnIndex, with
         // slightly more bookkeeping needed to handle arbitrary-arity keys.
