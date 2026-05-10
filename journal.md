@@ -1,5 +1,35 @@
 # Experiment Journal
 
+## G3: Pool FrameUpdates backing Vec on JoinState (2026-05-09) — KEPT
+
+**Hypothesis:** Repeated `Vec::with_capacity(cmp::min(chunk_size, cur_size))` allocation/deallocation for `FrameUpdates.updates` at the 6 `Intersect`/`UnboundCover`/`BoundCover`/`MaterializedIntersect` call sites in `run_plan` accounts for ~3–5% on hardboiled_128 (FrameUpdates::drain 3.3% + Drain drop 1.2% + Vec drop 1.2% + part of mi_heap_malloc 1.3%). Pooling backing Vecs across recursive `run_plan` invocations should let the drained-empty Vecs drop become a true no-op.
+
+**Approach:** Per-`JoinState` `update_buf_pool: Vec<Vec<UpdateInstr>>` stack. New `FrameUpdates::from_pooled_vec(buf, cap)` (clears + reserves) and `into_inner()` return the backing Vec. JoinState helpers `take_update_buf(cap)` (pop or alloc fresh) and `return_update_buf(v)` (debug_assert empty, drop if cap > 4096 or pool depth ≥ 16). Required `&self` → `&mut self` on `run_plan` and `run_join_stages`, plus `let pool = self.pool.clone()` (cheap Rc::clone) to release the borrow on `self` for the take/return calls.
+
+This applies the F2 lesson explicitly: scratch on `&mut self`, not TLS+RefCell. Parallel `JoinState`s spawned in `drain_updates_parallel` get a fresh empty pool.
+
+**Build/tests:** Clean release build (one `dead_code` warning on the now-unused `with_capacity`), all `make test` suites pass.
+
+**Results (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.314 → 0.303 (-3.7%)
+- hardboiled_conv1d_128: 0.832 → 0.786 (**-5.6%**)
+- luminal-llama: 0.214 → 0.215 (+0.3%, noise)
+- python_array_optimize: 0.517 → 0.520 (+0.7%, noise)
+- cykjson: 0.108 → 0.114 (**+5.9% regression**)
+- eggcc-extraction: 0.461 → 0.445 (-3.5%)
+- Overall average: −0.97%
+
+**VERDICT: IMPROVEMENT** — Reviewer ACCEPTED. Hardboiled wins (primary benchmark) outweigh cykjson regression. cykjson is shallow-recursion: pool overhead (Rc::clone of self.pool, branch + push/pop) likely outweighs the saved alloc on small `cap`. Reviewer noted a follow-up could add a small-`cap` bypass to recover cykjson.
+
+**Commit:** e5fbe944 — KEPT.
+
+**Lessons:**
+- Apply the F2 lesson — scratch on `&mut self` over TLS+RefCell — and the same hot-path saving pays off.
+- One-bench regression of comparable magnitude to the primary-bench win is acceptable when the primary is the heavier workload.
+- The `&self` → `&mut self` propagation cost was just one `Rc::clone` and a few `&pool` substitutions — not invasive enough to fail the simplicity test.
+
+**Follow-up idea:** Skip pooling when `cap < 32` (use a fresh `Vec::with_capacity`). Should recover cykjson.
+
 ## F2: Pool pairs scratch Vec in ColumnIndex::rebuild_full (2026-05-09) — REVERTED
 
 **Hypothesis:** `Vec::with_capacity(n)` at the start of every `ColumnIndex::rebuild_full` call (and its drop at the end) costs ~1–2% on hardboiled_128 via mi_heap alloc/free pairs. Replacing with a thread-local reused scratch Vec should remove that cost. Targets `_mi_heap_realloc_zero` (2.1%) + `mi_heap_malloc_aligned_at` (1.3%) in the post-D3 profile.
