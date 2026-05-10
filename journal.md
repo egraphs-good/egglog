@@ -1,5 +1,24 @@
 # Experiment Journal
 
+## E4: Direct-read loop for SparseColumnIndex::new general path (2026-05-09)
+
+**Hypothesis:** E3 applied the `SortedWritesTable` downcast trick only to the size==1 fast path. The 2..=8-row general path still uses `for_each_col` (vtable → downcast → scan_generic → iterator → dyn-FnMut per row). Applying the same direct-read pattern there should save the same per-row overhead.
+
+**Approach:** In the general path, try `inner_as_any().downcast_ref::<SortedWritesTable>()` and loop directly over Dense/Sparse rows calling `read_value_at_row_unchecked`. Fallback to `for_each_col` for other Table impls.
+
+**Results:**
+- hardboiled_conv1d_32: 0.314s → 0.310s (-1.4%)
+- hardboiled_conv1d_128: 0.830s → 0.818s (-1.5%)
+- luminal-llama: unchanged (-0.1%)
+- python_array_optimize: +0.5% (noise)
+- cykjson: 0.110s → 0.103s (-6.3%)
+- eggcc-extraction: 0.458s → 0.464s (+1.4%, likely noise)
+- Overall average: -1.25%
+
+**VERDICT: IMPROVEMENT** — Reviewer ACCEPTED. cykjson cleared ≥3% threshold. eggcc-extraction +1.4% within noise. Pattern mirrors E3 exactly — no new infrastructure.
+
+**Commit:** c173a8cf — KEPT.
+
 ## E3: Downcast bypass for for_each_col in SparseColumnIndex::new (2026-05-09)
 
 **Hypothesis:** The E1 size==1 fast path still calls `for_each_col` through 6 dispatch layers (vtable → downcast → scan_generic → SubsetRef::offsets → RowId::range iterator → dyn FnMut). A direct downcast to `SortedWritesTable` with an inherent `read_value_at_row_unchecked` method eliminates most of this overhead without adding new trait methods (the narrower approach the E2 reviewer recommended).
