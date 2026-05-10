@@ -99,22 +99,30 @@ impl SparseColumnIndex {
             // directly, bypassing the vtable → downcast → scan_generic → iterator
             // → dyn-closure chain that for_each_col goes through.
             // SAFETY: `row` came from `subset`, which is bounded by the table's row count.
-            let val_opt = table
-                .inner_as_any()
-                .downcast_ref::<SortedWritesTable>()
-                .and_then(|t| unsafe { t.read_value_at_row_unchecked(row, col) });
-            let val = match val_opt {
-                Some(v) => v,
-                None => {
-                    // Either not a SortedWritesTable (other Table impl) or the row is stale.
-                    // Fall back to the general for_each_col path.
-                    let mut v = Value::new_const(0);
-                    let single = SubsetRef::Dense(OffsetRange::new(row, row.inc()));
-                    table.for_each_col(single, col, &mut |_row_id, x| {
-                        v = x;
-                    });
-                    v
-                }
+            let val_opt = if let Some(swt) =
+                table.inner_as_any().downcast_ref::<SortedWritesTable>()
+            {
+                unsafe { swt.read_value_at_row_unchecked(row, col) }
+            } else {
+                // Non-SortedWritesTable fallback: track whether for_each_col fires so
+                // we can detect stale rows (where the closure is never called).
+                let mut v = None;
+                let single = SubsetRef::Dense(OffsetRange::new(row, row.inc()));
+                table.for_each_col(single, col, &mut |_row_id, x| {
+                    v = Some(x);
+                });
+                v
+            };
+            let Some(val) = val_opt else {
+                // Row is stale: for_each_col / read_value_at_row_unchecked produced no
+                // value. Return an empty index rather than a spurious entry with key=0.
+                return SparseColumnIndex {
+                    n_keys: 0,
+                    n_subsets: 0,
+                    keys: [Value::new_const(0); SMALL_RESIDUAL],
+                    offsets: [0; SMALL_RESIDUAL],
+                    subset_ids: [RowId::new_const(0); SMALL_RESIDUAL],
+                };
             };
             let mut keys = [Value::new_const(0); SMALL_RESIDUAL];
             let mut offsets = [0; SMALL_RESIDUAL];
