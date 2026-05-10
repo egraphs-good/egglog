@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q6: extend_from_slice in SortedOffsetVector (2026-05-09) — REVERTED
+
+**Hypothesis:** `SortedOffsetVector::extend_nonoverlapping` calls `self.0.extend(other.iter())` where `iter()` returns `Copied<slice::Iter<RowId>>` wrapped in opaque impl-trait. The opaque return type may block Vec::extend's memcpy specialization. Switching to `extend_from_slice(other.inner())` should give direct memcpy.
+
+**Approach:** Two-line change in `core-relations/src/offsets/mod.rs::extend_nonoverlapping`.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q5-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.295 → 0.295 (-0.0%, noise)
+- hardboiled_conv1d_128: 0.758 → 0.758 (-0.1%, noise)
+- luminal-llama: 0.214 → 0.213 (-0.2%, noise)
+- python_array_optimize: 0.514 → 0.513 (-0.2%, noise)
+- cykjson: 0.103 → 0.108 (**+4.7% regression**)
+- eggcc-extraction: 0.443 → 0.440 (-0.7%)
+- Overall average: +0.58%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`. cykjson again.
+
+**Lesson:** `extend_from_slice` calls `ptr::copy_nonoverlapping` (an out-of-line memcpy via libc). For the small slices that cykjson processes in `to_owned`, the function-call overhead exceeds the iteration cost. The opaque-impl-trait `iter().copied()` path was likely fully inlined and unrolled by LLVM for these tiny lengths. **General rule: `extend_from_slice` is faster for medium/large slices but slower for tiny ones because of the libc-call overhead.** Cykjson's hot path uses this on consistently-small slices.
+
 ## Q5: In-place Arc::get_mut for plan-header intersect (2026-05-09) — REVERTED
 
 **Hypothesis:** The header-intersect loop in `core_run_impl` (sequential at ~line 551, parallel at ~line 413) does `Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap()` then `binding_info.move_back_node(*atom, Arc::new(cur))` per atom per rule eval. The `try_unwrap.unwrap()` proves unique ownership; `Arc::get_mut` would let us mutate in place, eliminating one alloc + free per call.
