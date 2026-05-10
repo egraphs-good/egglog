@@ -264,11 +264,21 @@ pub(crate) struct CompiledVariant {
     /// Action SQLs to run in order. When `materialize` is Some, each
     /// action SELECTs from the temp table; otherwise from the body.
     pub(crate) actions: Vec<String>,
+    /// Optional cleanup SQL run after the variant's actions. Used to
+    /// drop the materialized temp table so DuckDB can release its
+    /// in-memory buffers between iterations.
+    pub(crate) cleanup: Option<String>,
 }
 
 impl EGraph {
     pub fn new() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        // Tuning: DuckDB defaults to row-order preservation, which
+        // uses extra memory to track insertion order through joins.
+        // We don't care about row order — egglog is set-semantics.
+        // Disabling drops a sizeable chunk of per-iteration overhead
+        // on workloads that do many INSERT…SELECT.
+        conn.execute("SET preserve_insertion_order = false", [])?;
         // Sequence for fresh EqSort IDs. Term-encoded constructors
         // call `nextval` once per allocation; collisions across
         // rows with the same inputs are intentional — congruence
@@ -326,27 +336,15 @@ impl EGraph {
                 "`{name}` is not registered as an EqSort constructor"
             ));
         }
-        let in_cols: Vec<String> = (0..info.inputs_len).map(|i| format!("c{i}")).collect();
-        let out_col = info.inputs_len;
-        let in_cols_prefix = prefix_with_comma(&in_cols);
-        let arg_sqls: Vec<String> = inputs.iter().map(crate::compile::lit_sql_pub).collect();
-        let arg_prefix = prefix_with_comma(&arg_sqls);
-        let cur_ts = self.next_ts;
-        let sql = format!(
-            "INSERT INTO {} ({in_cols_prefix}c{out_col}, ts) VALUES ({arg_prefix}nextval('__egglog_eqsort_seq'), {cur_ts}) RETURNING c{out_col}",
-            q(name),
-        );
-        self.debug_sql("alloc", &sql);
-        // Drain the RETURNING result fully before dropping the
-        // prepared statement; helps avoid leaving stale state on
-        // the connection for the next exec.
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query([])?;
-        let row = rows
-            .next()?
-            .ok_or_else(|| anyhow!("alloc returned no row"))?;
-        let id: i64 = row.get(0)?;
-        while rows.next()?.is_some() {}
+        // Allocate a fresh ID. The raw constructor table is never
+        // queried (term encoding routes all reads through
+        // `@<name>View`) so we skip the INSERT and just take the next
+        // sequence value. The caller's subsequent `(set @<name>View
+        // args fresh_id) ()` writes the canonical row.
+        let _ = inputs; // arity validated above; values flow through the view.
+        let id: i64 = self
+            .conn
+            .query_row("SELECT nextval('__egglog_eqsort_seq')", [], |r| r.get(0))?;
         Ok(id)
     }
 
@@ -567,6 +565,9 @@ impl EGraph {
                     let n = self.conn.execute(&bound_sql, [])?;
                     self.rules_affected = self.rules_affected.wrapping_add(n as u64);
                     total += n;
+                }
+                if let Some(cleanup) = &variant.cleanup {
+                    self.conn.execute(cleanup, [])?;
                 }
             }
             self.last_run_at.insert(rule.name.clone(), cur);

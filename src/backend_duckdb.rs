@@ -91,6 +91,9 @@ impl DuckdbBackend {
         if std::env::var("DUCK_DUMP_TABLES").is_ok() {
             self.dump_tables()?;
         }
+        if std::env::var("DUCK_TABLE_SIZES").is_ok() {
+            self.dump_table_sizes()?;
+        }
         Ok(())
     }
 
@@ -489,6 +492,9 @@ impl DuckdbBackend {
         &mut self,
         sched: &GenericSchedule<ResolvedCall, ResolvedVar>,
     ) -> Result<(), DuckdbBackendError> {
+        if std::env::var("DUCK_TRACE_SCHED").is_ok() {
+            eprintln!("[duck/sched] {sched}");
+        }
         match sched {
             // `(run rs)` is a *single* iteration. The wrapping
             // schedule (Repeat/Saturate) decides how many times.
@@ -496,7 +502,11 @@ impl DuckdbBackend {
             // Repeat's fixpoint detector stops the outer loop.
             GenericSchedule::Run(_, cfg) => {
                 if let Some(facts) = &cfg.until {
-                    if self.run_check(facts).is_ok() {
+                    let holds = self.run_check(facts).is_ok();
+                    if std::env::var("DUCK_TRACE_SCHED").is_ok() {
+                        eprintln!("[duck/until] holds={holds} ruleset='{}'", cfg.ruleset);
+                    }
+                    if holds {
                         return Ok(());
                     }
                 }
@@ -582,6 +592,42 @@ impl DuckdbBackend {
             )));
         }
         Ok(())
+    }
+
+    /// Diagnostic: print row counts for every registered table,
+    /// largest first. Triggered by `DUCK_TABLE_SIZES=1`.
+    fn dump_table_sizes(&self) -> Result<(), DuckdbBackendError> {
+        let mut entries: Vec<(i64, String)> = Vec::new();
+        for n in &self.registered {
+            let count = self.db.count(n).map_err(DuckdbBackendError::Backend)?;
+            entries.push((count, n.clone()));
+        }
+        entries.sort_by(|a, b| b.0.cmp(&a.0));
+        let total: i64 = entries.iter().map(|(c, _)| *c).sum();
+        eprintln!("[duck/sizes] total rows: {total}");
+        for (c, n) in &entries {
+            if *c == 0 {
+                continue;
+            }
+            eprintln!("[duck/sizes] {c:>10}  {n}");
+        }
+        // DuckDB self-reported memory.
+        if let Ok(mut stmt) = self
+            .db
+            .conn_for_dump()
+            .prepare("SELECT * FROM duckdb_memory()")
+        {
+            if let Ok(mut rows) = stmt.query([]) {
+                eprintln!("[duck/mem] duckdb_memory():");
+                while let Ok(Some(r)) = rows.next() {
+                    let tag: String = r.get(0).unwrap_or_default();
+                    let used: i64 = r.get(1).unwrap_or_default();
+                    let temp: i64 = r.get(2).unwrap_or_default();
+                    eprintln!("[duck/mem]  {tag:<24}  used={used:>14}  temp={temp:>14}");
+                }
+            }
+        }
+    Ok(())
     }
 
     /// Diagnostic dump: print the contents of every registered

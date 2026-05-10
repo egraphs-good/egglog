@@ -689,3 +689,48 @@ Phase 0**, on real inputs, before committing further.
 *Document drafted as a feasibility sketch. Numbers in §6 are
 order-of-magnitude estimates, not commitments. Phase 0 should be the
 next step before any of this becomes a roadmap.*
+
+---
+
+## 9. Known issues (May 2026)
+
+### Over-derivation in tests with rewrites + UF unifications
+
+`tests/until.egg` and `tests/integer_math.egg` exit 0 and pass all
+`(check ...)` queries, but `(print-size)` reports more tuples than the
+reference egglog backend:
+
+- `until.egg`: `g*` count 131 vs egglog's 21 (~6×).
+- `integer_math.egg`: `Add` count 336 vs 331 (1.5%).
+
+**Cause**: when the `@rebuilding` ruleset canonicalizes a view row
+(delete old + insert at canonical leader positions), the new row
+carries a fresh `ts = cur_iter`. User-rule seminaive at the next
+iteration sees that "new" row and re-fires on it, deriving extra
+tuples that congruence later collapses but doesn't fully remove.
+
+**Tried and reverted**: emitting the rebuild's INSERT with
+`ts = t<focus>.ts` (the matched row's original ts) instead of
+`cur_iter`. This eliminated the re-fire problem in principle but
+broke maintenance convergence catastrophically — `integer_math` went
+from 5.9s / 215 MB to 49s / 4.86 GB and OOMed inside DuckDB. Likely
+cause: the rebuild rule itself uses seminaive on the view's ts;
+preserving the old ts means rebuild's own input never crosses its
+`last_run_at` line, so canonicalization stalls while `@UF_<sort>`
+keeps growing, and the maintenance saturate spins on huge
+intermediate joins.
+
+**Possible directions** (future):
+- Track per-rule `last_user_run_at` separately from
+  `last_rebuild_run_at` so user rules see canonical state at
+  iteration boundaries without breaking the rebuild rule's own
+  seminaive.
+- Match user rules on term-id columns rather than full structural
+  rows, so canonicalizing a row's input columns doesn't look like a
+  "new" body match.
+- Look at how egglog-bridge actually solves this — likely uses
+  per-table generation counters instead of a single monotone ts.
+
+For now the test passes correctness checks; the mismatch is in extra
+residual tuples after rewrite saturation, not in user-visible truth
+values.

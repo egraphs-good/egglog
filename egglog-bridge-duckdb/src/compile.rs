@@ -160,6 +160,7 @@ fn compile_variant(
         return Ok(CompiledVariant {
             materialize: None,
             actions,
+            cleanup: None,
         });
     }
 
@@ -236,9 +237,11 @@ fn compile_variant(
     // simple path above.
     let _ = &mut binding;
 
+    let cleanup = format!("DROP TABLE IF EXISTS {}", q(&temp_table));
     Ok(CompiledVariant {
         materialize: Some(materialize),
         actions: action_sqls,
+        cleanup: Some(cleanup),
     })
 }
 
@@ -527,35 +530,16 @@ fn compile_materialized_action(
             // action list (the runner expects a SQL string).
             Ok("SELECT 1 WHERE FALSE".to_string())
         }
-        Action::LetCtor {
-            var,
-            name: target,
-            args,
-        } => {
-            // Insert into the constructor table using the
-            // pre-allocated id from the temp table column.
-            let info = &functions[target];
-            let arg_sqls: Vec<String> = args
-                .iter()
-                .map(|t| term_sql(t, mat_binding, rule_name))
-                .collect::<Result<_>>()?;
-            // The let var was given a column in the temp table.
-            let id_col = mat_binding
-                .get(var)
-                .cloned()
-                .ok_or_else(|| anyhow!("rule {rule_name}: internal: LetCtor var {var} not in mat binding"))?;
-            let target_cols: Vec<String> =
-                (0..info.cols.len()).map(|i| format!("c{i}")).collect();
-            let select_list = format!(
-                "{}{id_col}, ?2",
-                prefix_with_comma(&arg_sqls)
-            );
-            let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));
-            let conflict = conflict_clause(info);
-            Ok(format!(
-                "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from} {conflict}",
-                q(target),
-            ))
+        Action::LetCtor { var, .. } => {
+            // The fresh ID is already in the materialized temp
+            // table's `var` column (via `nextval`). Subsequent
+            // actions reference that column directly. The raw
+            // constructor table is never queried, so we skip the
+            // write into it — the matching `(set @<name>View …)`
+            // action emits the canonical row. Emit a no-op SQL so
+            // the runner has a statement to execute.
+            let _ = (var, functions);
+            Ok("SELECT 1 WHERE FALSE".to_string())
         }
         Action::Panic { msg } => {
             let safe = msg.replace('\'', "''");
