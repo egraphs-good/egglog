@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q12: Hoist existing-header reprocessing across seminaive variants (2026-05-09) — REVERTED
+
+**Hypothesis (structural / cross-crate):** In `egglog-bridge::Query::add_rules_from_cached`, every seminaive variant rebuilds the *same* set of `JoinHeader`s for the cached plan's existing constraints. With M variants × N existing headers, that's M-fold redundant `process_constraints` (each allocating two pooled `Vec<Constraint>`, walking `split_fast_slow`, intersecting subsets). Hoist the preprocessing to once per `add_rules_from_cached` call and share the resulting `Vec<JoinHeader>` across all variants. Outside `run_plan`, so cykjson should be neutral; structural change rather than micro-tweak.
+
+**Approach:** New `RuleSetBuilder::preprocess_existing_headers(&CachedPlan) -> Option<PreprocessedExistingHeaders>` and `add_rule_from_cached_plan_with_preprocessed_headers(...)`. `add_rules_from_cached` calls the preprocess step once at the top, short-circuits if `None`, and threads the cached headers into all three branches (`!seminaive`, `sole_focus`, generic seminaive loop). `+135 / -7` lines across `core-relations/src/{lib,query}.rs` and `egglog-bridge/src/rule.rs`.
+
+**Build/tests:** Clean release build, all 891 `make test` cases pass.
+
+**Results vs Q11-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.296 → 0.290 (-1.8%)
+- hardboiled_conv1d_128: 0.766 → 0.754 (-1.5%)
+- luminal-llama: 0.214 → 0.217 (+1.4%)
+- python_array_optimize: 0.510 → 0.558 (**+9.4% regression**)
+- cykjson: 0.104 → 0.105 (+1.4%)
+- eggcc-extraction: 0.440 → 0.445 (+1.2%)
+- Overall average: **+1.68%**
+
+**VERDICT: REGRESSION** — Reverted. python_array_optimize +9.4% is the dominant signal; cykjson and eggcc also regressed.
+
+**Lesson:** "Bit-identical headers across variants" is **not** equivalent to "bit-identical execution." Sharing a single `Vec<JoinHeader>` across variants means every variant uses the **same `Subset`** captured from the preprocessing pass, but the *original* per-variant code path called `reprocess_existing_headers` at slightly different times — and python_array_optimize is hyper-sensitive to **rule firing order** (lessons-learned point #1). The shared `Subset` (still a clone of the same pooled state) likely makes downstream HashMap probing order subtly different across variants, changing which rules fire first within an iteration. Even though the headers are *logically* the same, identity-shared `Pooled<Vec<...>>` references can change interior allocation/probing patterns. **Implication:** Even structural setup-phase changes that share state across seminaive variants are risky on python_array_optimize. Hoisting must keep per-variant `JoinHeader` *allocations* independent (the M-fold work) — sharing only the *pre-processed input* is not safe. A safer formulation would have each variant call its own `process_constraints` but with a *cached short-circuit* for the case where existing headers prove the rule empty (the `None` path), without sharing the actual JoinHeader objects.
+
 ## Q11: SmallVec for keys in FusedIntersectMat::Lookup/Value (2026-05-09) — REVERTED
 
 **Hypothesis:** Per-lookup `Vec<Value>` alloc replaced with `SmallVec<[Value; 4]>`. Cykjson doesn't reach FusedIntersectMat (no multi-arg trees), should be safe.
