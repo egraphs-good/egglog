@@ -1,5 +1,32 @@
 # Experiment Journal
 
+## Q15: Defer FD closure to tied candidates in next_var_to_eliminate (2026-05-10) — REVERTED
+
+**Hypothesis (planner-side, structural):** In `core-relations/src/free_join/plan.rs::next_var_to_eliminate`, the per-candidate `fun_deps.closure(...)` allocates a fresh `DenseIdMap<Variable, ()>` for every candidate variable, all but one immediately discarded. Two-pass min-fill: cheap pre-closure pass to find ties, then closure only on the tied set (1-3 of N candidates). The chosen variable was claimed bit-identical to today via "FD closure can only ADD vars to the neighborhood, so closure-count ≥ pre-closure-count."
+
+**Approach:** `+65/-12` lines in `plan.rs::next_var_to_eliminate`. Pass 1 builds `Vec<(usize_var_id, Variable, neighborhood)>` for ties at running min pre-count. Pass 2 runs `fun_deps.closure` on each tied candidate and `min_by_key` selects winner. Same iteration order, same first-min tiebreak.
+
+**Build/tests:** Clean release build, all 891 `make test` cases pass.
+
+**Results vs Q14-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.290 → 0.317 (**+9.2%**)
+- hardboiled_conv1d_128: 0.759 → 0.775 (+2.1%)
+- luminal-llama: 0.213 → 0.215 (+0.7%)
+- python_array_optimize: 0.512 → 0.507 (-0.8%)
+- cykjson: 0.105 → 0.103 (-1.9%)
+- eggcc-extraction: 0.439 → 0.440 (+0.2%)
+- Overall average: **+1.59%**
+
+**VERDICT: REGRESSION** — Reverted. hardboiled_conv1d_32 +9.2% (the planner runs once per cached plan; the regression magnitude indicates the *plan output changed*, not just slower planning).
+
+**Lesson — important:** The proposal's correctness argument is **a false syllogism**. Per-candidate monotonicity (`closure_count[v] ≥ pre_count[v]`) does NOT preserve `argmin` across candidates. Counterexample:
+- Candidate A: pre_count=5, closure_count=5 (no FDs apply, so closure adds nothing)
+- Candidate B: pre_count=4, closure_count=8 (FDs explode the neighborhood)
+
+Original `min_by_key(closure_count)` picks A (5 < 8). New two-pass code finds pre_min=4, retains only B, picks B. **The plan changes.** Hardboiled_32's 9.2% regression is downstream of a *worse* plan being chosen by the new code — not a planner runtime regression.
+
+**Implication for future planner work:** Any short-circuit that uses a *bound* on the optimization metric (instead of computing the metric exactly) breaks bit-identical plan-output preservation. Planner refactors must compute the EXACT `min_by_key` metric for every candidate, OR they must be willing to accept plan-output drift (and risk regressing every benchmark via downstream effects). FD closure work is therefore intrinsic to candidate selection — cannot be hoisted/deferred under a cheaper proxy. **The 9.2% regression on a single tiny benchmark from a planner-only change confirms that downstream codegen/cache effects of plan choice are non-monotonic.**
+
 ## Q14: Shard-bucket pairs in ColumnIndex::rebuild_full (2026-05-10) — REVERTED
 
 **Hypothesis (structural):** In `rebuild_full`'s grouping loop, every distinct key calls `get_shard_mut` which instantiates a fresh `FxHasher::default()`, hashes the Value, computes shard id, and indexes `IdVec<ShardId, _>`. With ~1000 distinct keys per rebuild and 16 shards, that's 16× more hashing than necessary. Shard-bucket the pairs first, then sort and group within each bucket holding `&mut shard` once — eliminates per-key shard lookup.
