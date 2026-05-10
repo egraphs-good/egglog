@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q14: Shard-bucket pairs in ColumnIndex::rebuild_full (2026-05-10) — REVERTED
+
+**Hypothesis (structural):** In `rebuild_full`'s grouping loop, every distinct key calls `get_shard_mut` which instantiates a fresh `FxHasher::default()`, hashes the Value, computes shard id, and indexes `IdVec<ShardId, _>`. With ~1000 distinct keys per rebuild and 16 shards, that's 16× more hashing than necessary. Shard-bucket the pairs first, then sort and group within each bucket holding `&mut shard` once — eliminates per-key shard lookup.
+
+**Approach:** Replace the global `radix_sort_pairs_by_value(pairs)` + grouping while-loop with: (1) allocate `Vec<Vec<(Value, RowId)>>` of `n_shards` empty buckets, each pre-sized to `pairs.len()/n_shards + 4`; (2) drain pairs into buckets by computed shard_id; (3) for each non-empty bucket, sort + dedup as before, then run the grouping loop with `&mut shard = &mut self.shards[shard_idx]`. `+72/-35` lines in `core-relations/src/hash_index/mod.rs`. Per-shard insertion order remains Value-sorted, so HashMap iteration order is unchanged.
+
+**Build/tests:** Clean release build, all 891 `make test` cases pass.
+
+**Results vs Q13-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.299 (+2.0%)
+- hardboiled_conv1d_128: 0.758 → 0.773 (+2.0%)
+- luminal-llama: 0.217 → 0.219 (+1.1%)
+- python_array_optimize: 0.506 → 0.512 (+1.2%)
+- cykjson: 0.101 → 0.106 (**+4.6%**)
+- eggcc-extraction: 0.444 → 0.438 (-1.5%)
+- Overall average: **+1.56%**
+
+**VERDICT: REGRESSION** — Reverted. Cykjson +4.6% (canary fails); 5 of 6 benchmarks regressed.
+
+**Lesson:** The bucket-allocation overhead **exceeds the per-key savings**. For each `rebuild_full` invocation we now allocate 16 fresh `Vec<(Value, RowId)>`s (each ~16-byte Vec header + initial capacity malloc), drain pairs into them with one bounds-check + one push per pair, and iterate 16 buckets later (most likely small/empty for cykjson's modest tables). The original code path: ONE Vec, ONE radix sort, ONE while-loop with N hashbrown lookups. The hashbrown `get_shard_mut` is *cheap* per call (FxHash on a u32 is multiply+xor; the IdVec is bounded-index + a load) — far cheaper than 16 Vec allocations + drain. **The analyst's "1000 distinct keys per rebuild" estimate was likely off by an order of magnitude on most benchmarks; cykjson rebuilds tend to have small N where the per-key overhead is in the tens, not thousands.** Eggcc's -1.5% suggests the optimization could pay off at very large N (>~5K keys), but only one benchmark falls in that regime — not enough to outweigh the regressions on 5 others. **Implication: bucket-then-sort is a worse structural choice than sort-then-group when the number of buckets exceeds a meaningful fraction of N. The crossover N for 16 buckets is somewhere above 1000 keys, which most rebuilds don't hit.**
+
 ## Q13: Cache existing-header doom check across seminaive variants (2026-05-09) — REVERTED
 
 **Hypothesis (structural):** Q12-revert noted that *sharing pooled state* across variants regresses python_array_optimize. Q13 instead caches only a *boolean fast-fail*: when one variant's `add_rule_from_cached_plan` returns `None` because an existing-header subset is empty, set a sticky local flag and short-circuit subsequent variants in the seminaive loop without redoing the existing-header walk. No `JoinHeader`/`Subset` is shared.
