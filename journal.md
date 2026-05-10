@@ -1,5 +1,31 @@
 # Experiment Journal
 
+## Q5: In-place Arc::get_mut for plan-header intersect (2026-05-09) — REVERTED
+
+**Hypothesis:** The header-intersect loop in `core_run_impl` (sequential at ~line 551, parallel at ~line 413) does `Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap()` then `binding_info.move_back_node(*atom, Arc::new(cur))` per atom per rule eval. The `try_unwrap.unwrap()` proves unique ownership; `Arc::get_mut` would let us mutate in place, eliminating one alloc + free per call.
+
+**Approach:** Added `BindingInfo::header_intersect(atom, subset, pool)` that calls `Arc::get_mut(slot).expect(...)`, mutates the TrieNode's subset in place. Replaced both call sites' 5-line block with two lines (`header_intersect` + `has_empty_subset` check).
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q4-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.294 → 0.293 (-0.4%, noise)
+- hardboiled_conv1d_128: 0.759 → 0.762 (+0.4%, noise)
+- luminal-llama: 0.215 → 0.217 (+0.5%, noise)
+- python_array_optimize: 0.511 → 0.512 (+0.1%, noise)
+- cykjson: 0.102 → 0.108 (**+5.3% regression**)
+- eggcc-extraction: 0.445 → 0.439 (-1.2%)
+- Overall average: +0.78%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`. cykjson hit again.
+
+**Lesson:** Same pattern as Q4 — saving an Arc alloc/free pair regressed cykjson. Likely reasons:
+1. The alloc+drop pair via mimalloc's per-thread heap is very fast (~10ns for ArcInner), and the bytes touched serve as cache warmup.
+2. `Arc::get_mut` introduces a refcount load + compare per call; `try_unwrap` may have been better-optimized in mimalloc's hot path.
+3. The function-call boundary of the new helper may have prevented some inlining LLVM was doing on the original.
+
+**General rule for cykjson sensitivity: removing micro-allocations from short-rule benchmarks (cykjson) often regresses because (a) mimalloc's hot path makes them essentially free, (b) the implicit cache warming is real.** Cykjson's hot path is dominated by ColumnIndex's add_row pattern (which Q3 helped) and ColumnIndex's rebuild_full (which H1 helped). Don't optimize Arc churn for cykjson — it isn't the bottleneck and the changes carry hidden costs.
+
 ## Q4: Skip placeholder fill in SubsetBuffer growth (2026-05-09) — REVERTED
 
 **Hypothesis:** `SubsetBuffer`'s 3 growth paths call `Vec::resize(new_len, RowId::new(u32::MAX))`. The placeholders are immediately overwritten by `fill_at` for the prefix, and the slack is never read (verified). Replacing with `reserve` + `unsafe set_len` should skip a wasted memset.
