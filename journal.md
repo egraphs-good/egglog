@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## P2: Bypass to_owned + refine_subset round-trip when refinement is no-op (2026-05-09) — REVERTED
+
+**Hypothesis:** In `JoinStage::Intersect` `[a]` and `[a,b]` arms, when `cs.is_empty() && !has_stale`, `refine_subset` is the identity. The to_owned + Pool alloc + memcpy + Arc<TrieNode>::new round-trip is wasted. Hoisting a `no_refine` flag once and dispatching directly to `refine_atom_dense` for Dense (and 1-row Sparse) subsets should save ~1.5% (combination of `SubsetRef::to_owned` 1.5% and parts of `refine_atom_subset` 2.1%).
+
+**Approach:** Hoist `let no_refine = a.cs.is_empty() && !has_stale;` once per scan. Inside the closure's `if x.size() <= 16` branch, bypass when `no_refine` is true via a 3-way match: `SubsetRef::Dense(r)` → `refine_atom_dense(r)`, `SubsetRef::Sparse(s) if s.inner().len() == 1` → `refine_atom_dense(OffsetRange::new(row, row.inc()))`, multi-row Sparse → still call `to_owned` but skip `refine_subset`. Apply to both `[a]` and `[a,b]` arms.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs P1-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.295 → 0.296 (+0.5%, noise)
+- hardboiled_conv1d_128: 0.767 → 0.763 (-0.5%, noise)
+- luminal-llama: 0.213 → 0.216 (+1.2%)
+- python_array_optimize: 0.520 → 0.518 (-0.4%, noise)
+- cykjson: 0.104 → 0.111 (**+7.6%**)
+- eggcc-extraction: 0.438 → 0.441 (+0.6%, noise)
+- Overall average: +1.50%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`. cykjson took the worst hit again.
+
+**Lesson:** The added branching (`if no_refine` then a 3-way match) in the hot per-iteration loop costs more than the saved alloc. cykjson has small subsets and shallow recursion → more iterations of the closure → branch overhead amortizes badly. Also: `refine_atom_subset(atom, Subset::Dense(r))` is likely already efficient because `Subset::Dense` matches early in `refine_atom_subset`'s switch and the Arc<TrieNode>::new is hot in cache after the prior FrameUpdates push. **General rule: adding branches to a hot inner loop to skip occasional work is a losing trade unless the skip is dramatic AND the branch is very predictable.**
+
 ## P1: #[inline] on Offsets trait impls (2026-05-09) — REVERTED
 
 **Hypothesis:** `SubsetRef::offsets` shows 5.4% self-time in profile despite being a 2-4-instruction loop body, suggesting the compiler is materializing it out-of-line. Adding `#[inline]` to all `Offsets::offsets` and `Offsets::bounds` impls (`OffsetRange`, `SortedOffsetVector`, `SortedOffsetSlice`, `&SortedOffsetSlice`, `SubsetRef`, `Subset` — 12 methods total) should let LLVM fuse the closure body into the per-row loop.
