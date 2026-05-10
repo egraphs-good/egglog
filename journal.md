@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## PP1: Cache subset sizes in BindingInfo (2026-05-09) — REVERTED
+
+**Hypothesis (lessons-learned #7):** `estimate_size` walks Arc<TrieNode> → Subset → Pooled<SortedOffsetVector> → Vec::len for every scan in every `run_plan` recursion frame (~1.2% profile). Caching the size as a parallel `DenseIdMap<AtomId, u32>` next to `subsets` should skip this pointer chain on the hot reduction.
+
+**Approach:** Added `subset_sizes: DenseIdMap<AtomId, u32>` to `BindingInfo`. Maintained sync at all 5 mutation sites: `insert_subset`, `insert_node`, `move_back`, `move_back_node`, `unwrap_val`. Added `BindingInfo::size(atom)` method with `debug_assert_eq!` against the underlying `subsets[atom].size()`. Redirected the two `estimate_size` call sites to `binding_info.size(atom)`.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs H2 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.296 → 0.303 (+2.3%)
+- hardboiled_conv1d_128: 0.768 → 0.781 (+1.7%)
+- luminal-llama: 0.218 → 0.216 (-1.2%)
+- python_array_optimize: 0.523 → 0.519 (-0.6%)
+- cykjson: 0.104 → 0.109 (+4.5%)
+- eggcc-extraction: 0.442 → 0.447 (+1.0%)
+- Overall average: +1.26%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`.
+
+**Lesson:** The extra writes at the 5 mutation sites cost more than the saved reads at `estimate_size`. Mutation sites fire on every binding update (very hot in `run_plan`'s recursion); `estimate_size` fires once per `Intersect` stage entry plus periodically inside the loop. Mutations >> consumer reads, so write-side amortization fails. Also: the just-installed `Arc<TrieNode>` is hot in cache for the next `estimate_size` read, so the "deref chain" wasn't actually paying cache-miss costs in practice. The 1.2% profile attribution was overstated. **General rule: only cache derived values when reads ≫ writes AND the derivation cost is genuine (uncached).**
+
 ## H3: Direct-read SortedWritesTable in rebuild_incremental (2026-05-09) — REVERTED
 
 **Hypothesis (H1/H2 generalization):** Apply the SortedWritesTable downcast pattern to the `table.scan_project(...)` call in `SortedWritesTable::rebuild_incremental` (`core-relations/src/table/rebuild.rs`). Note: an initial proposal mistakenly assumed `table` and `self` were the same SortedWritesTable; the implementer correctly refused that version. The corrected version downcasts the `table` argument (which is a *different* SWT — the upstream relation being scanned during rebuild).
