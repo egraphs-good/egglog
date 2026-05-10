@@ -437,22 +437,40 @@ fn walk_body(
         }
     }
     if let Some(focus_idx) = focus {
-        // Standard seminaive semantics: the focused atom is in
-        // `[last_run_at, cur_iter_ts)`; every other (non-focused)
-        // function-table atom is in `[0, cur_iter_ts)` — that is,
-        // sees only rows that existed at the start of the iteration.
-        // Without the upper bound on non-focused atoms, two variants
-        // of the same rule firing in one iteration would see each
-        // other's just-inserted rows, leading to over-derivation.
+        // Standard seminaive triangulation, mirroring egglog-bridge
+        // (rule.rs add_rules_from_cached). Each variant focuses on
+        // one atom; for the variant with focus=k:
+        //   focus (atom k):      ts >= last_run_at  (must be NEW)
+        //   atoms before focus:  ts < last_run_at  (must be OLD)
+        //   atoms after focus:   no lower bound
+        // This partition guarantees every body match where at least
+        // one atom is new fires in EXACTLY ONE variant — no double-
+        // firing on matches with multiple "new" atoms.
+        //
+        // We additionally add `ts < cur_iter_ts` to all non-focus
+        // atoms because, unlike egglog-bridge (which batches actions
+        // until the iteration ends), we apply each rule's actions
+        // immediately. Without this upper bound, atoms after focus
+        // could see rows just inserted by earlier rules in the same
+        // iteration, leading to a different kind of over-firing.
+        //
         // ?1 = last_run_at, ?2 = cur_iter_ts.
         for (i, atom) in atoms.iter().enumerate() {
             if !matches!(atom, Atom::Func { .. }) {
                 continue;
             }
-            if i == focus_idx {
-                where_parts.push(format!("t{i}.ts >= ?1"));
+            match i.cmp(&focus_idx) {
+                std::cmp::Ordering::Equal => {
+                    where_parts.push(format!("t{i}.ts >= ?1"));
+                    where_parts.push(format!("t{i}.ts < ?2"));
+                }
+                std::cmp::Ordering::Less => {
+                    where_parts.push(format!("t{i}.ts < ?1"));
+                }
+                std::cmp::Ordering::Greater => {
+                    where_parts.push(format!("t{i}.ts < ?2"));
+                }
             }
-            where_parts.push(format!("t{i}.ts < ?2"));
         }
     }
     let from = from_parts.join(", ");
