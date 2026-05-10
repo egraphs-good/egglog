@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q8: Hoist FusedIntersectMat bind partition to per-stage (2026-05-09) — REVERTED
+
+**Hypothesis:** Q7's per-group partition can be done once per stage (group_key_len is invariant within a materialization). Should net a small additional gain.
+
+**Approach:** Peek first group for group_key_len, partition `bind_key`/`bind_nonkey` once before the per-group loop. Added `debug_assert_eq!(group_key.len(), group_key_len)` inside the loop. Teardown unchanged.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q7 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.289 (-1.7%)
+- hardboiled_conv1d_128: 0.763 → 0.758 (-0.5%)
+- luminal-llama: 0.215 → 0.214 (-0.5%, noise)
+- python_array_optimize: 0.511 → 0.513 (+0.4%, noise)
+- cykjson: 0.103 → 0.104 (+1.8%) — small but real regression
+- eggcc-extraction: 0.438 → 0.440 (+0.5%, noise)
+- Overall average: +0.01%
+
+**VERDICT: REGRESSION** — Reverted. Cykjson +1.8% breaks the cykjson-must-not-regress rule despite hardboiled gains.
+
+**Lesson:** Even a code-restructure that doesn't touch cykjson's hot path can regress it via stack frame layout / register pressure / instruction cache effects. The hoist allocates the SmallVecs at a higher scope, slightly perturbing the function's stack frame even when unused. Cykjson's hyper-sensitivity extends to layout-only changes in shared functions. **Implication: stop trying to incrementally improve Q7. Look for completely different code paths.**
+
 ## Q7: Pre-partition bind in FusedIntersectMat (2026-05-09) — KEPT
 
 **Hypothesis:** In `JoinStage::FusedIntersectMat`'s `MatScanMode::Full` block, the per-`non_keys`-row inner loop scanned `bind` TWICE with branch filters (col.index() < group_key_len vs >= group_key_len). For groups with many non_keys rows, this is quadratic in `bind.len()`.
