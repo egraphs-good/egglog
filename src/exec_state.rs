@@ -197,6 +197,17 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
         fc.apply(&mut pure, args)
     }
+
+    /// Dispatch an already type-specialized primitive in the current
+    /// call-site context.
+    fn apply_primitive(
+        &mut self,
+        primitive: &crate::core::SpecializedPrimitive,
+        args: &[Value],
+    ) -> Option<Value> {
+        let id = primitive.external_id(self.ctx());
+        self.es_mut().call_external_func(id, args)
+    }
 }
 
 /// Read-side methods — name-indexed table lookup. Implemented for

@@ -1125,6 +1125,48 @@ impl EGraph {
         Ok((sort, value))
     }
 
+    /// Typecheck an expression with an expected output sort.
+    ///
+    /// `output_sort` constrains overload resolution and output-type inference
+    /// for `expr`.
+    pub fn typecheck_expr_with_output(
+        &mut self,
+        expr: &Expr,
+        output_sort: ArcSort,
+    ) -> Result<ResolvedExpr, TypeError> {
+        self.typecheck_expr_with_bindings_and_output(expr, &[], output_sort)
+    }
+
+    /// Typecheck an expression under explicit local bindings and an expected output sort.
+    ///
+    /// `bindings` contains the local variables in scope while resolving `expr`.
+    /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
+    /// tied to that binding. `output_sort` constrains overload resolution and
+    /// output-type inference for the expression.
+    pub fn typecheck_expr_with_bindings_and_output(
+        &mut self,
+        expr: &Expr,
+        bindings: &[(String, Span, ArcSort)],
+        output_sort: ArcSort,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let mut binding_map = IndexMap::default();
+        binding_map.reserve(bindings.len());
+        for (name, span, sort) in bindings {
+            if binding_map
+                .insert(name.as_str(), (span.clone(), sort.clone()))
+                .is_some()
+            {
+                return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
+            }
+        }
+        self.type_info.typecheck_expr_with_output(
+            &mut self.parser.symbol_gen,
+            expr,
+            &binding_map,
+            output_sort,
+        )
+    }
+
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
         let unit_id = self.backend.base_values().get_ty::<()>();
         let unit_val = self.backend.base_values().get(());
@@ -2374,6 +2416,65 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_output_rejects_mismatch() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(+ 1 2)").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_output(&expr, I64Sort.to_arcsort())
+            .unwrap();
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+
+        let err = egraph
+            .typecheck_expr_with_output(&expr, BoolSort.to_arcsort())
+            .unwrap_err();
+        match err {
+            TypeError::Mismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected.name(), BoolSort.name());
+                assert_eq!(actual.name(), I64Sort.name());
+            }
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_output_uses_explicit_bindings() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(+ x 2)").unwrap();
+        let bindings = vec![("x".to_string(), span!(), I64Sort.to_arcsort())];
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(&expr, &bindings, I64Sort.to_arcsort())
+            .unwrap();
+
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_output_rejects_duplicate_bindings() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "x").unwrap();
+        let bindings = vec![
+            ("x".to_string(), span!(), I64Sort.to_arcsort()),
+            ("x".to_string(), span!(), BoolSort.to_arcsort()),
+        ];
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(&expr, &bindings, I64Sort.to_arcsort())
+            .unwrap_err();
+
+        match err {
+            TypeError::AlreadyDefined(name, _) => assert_eq!(name, "x"),
+            other => panic!("expected duplicate binding, got {other:?}"),
+        }
     }
 
     // Test that an `EGraph` is `Send` & `Sync`
