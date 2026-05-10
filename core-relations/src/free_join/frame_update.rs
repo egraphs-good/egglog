@@ -51,6 +51,27 @@ impl FrameUpdates {
         }
     }
 
+    /// Construct a FrameUpdates from a pooled Vec, avoiding a fresh allocation.
+    /// The caller must have already cleared `buf`; this method will additionally
+    /// ensure capacity >= `capacity * 2` before wrapping.
+    pub(super) fn from_pooled_vec(mut buf: Vec<UpdateInstr>, capacity: usize) -> Self {
+        // buf was cleared by take_update_buf; just ensure sufficient capacity.
+        let needed = capacity * 2;
+        if buf.capacity() < needed {
+            buf.reserve(needed - buf.capacity());
+        }
+        FrameUpdates {
+            updates: buf,
+            frames: 0,
+            last_start: 0,
+        }
+    }
+
+    /// Consume self and return the backing Vec (cleared by drain, ready to pool).
+    pub(super) fn into_inner(self) -> Vec<UpdateInstr> {
+        self.updates
+    }
+
     /// Bind `var` to `val` in the current frame.
     pub(super) fn push_binding(&mut self, var: Variable, val: Value) {
         self.updates.push(UpdateInstr::PushBinding(var, val));

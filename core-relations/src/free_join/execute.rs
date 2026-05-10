@@ -448,7 +448,7 @@ impl Database {
                     let exec_state = exec_state.clone();
                     let match_counter = match_counter.clone();
                     scope.spawn(move |rule_scope| {
-                        let join_state = JoinState::new(db, exec_state.clone());
+                        let mut join_state = JoinState::new(db, exec_state.clone());
                         let mut binding_info = BindingInfo::default();
                         for (id, info) in plan.atoms().iter() {
                             let table = join_state.db.get_table(info.table);
@@ -573,7 +573,7 @@ impl Database {
                 .collect();
         } else {
             rule_reports = HashMap::default();
-            let join_state = JoinState::new(self, exec_state.clone());
+            let mut join_state = JoinState::new(self, exec_state.clone());
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -731,6 +731,9 @@ struct JoinState<'a> {
     /// Cached thread-local pool for SortedOffsetVector allocations.
     /// Stored here to avoid a per-call `with_pool_set` TLS access in `get_index`.
     pool: Pool<SortedOffsetVector>,
+    /// Per-JoinState pool of drained FrameUpdates backing Vecs, to avoid
+    /// repeated allocation/deallocation in the hot run_plan loop.
+    update_buf_pool: Vec<Vec<UpdateInstr>>,
 }
 
 /// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
@@ -884,6 +887,30 @@ impl<'a> JoinState<'a> {
             db,
             exec_state,
             pool: with_pool_set(|ps| ps.get_pool()),
+            update_buf_pool: Vec::new(),
+        }
+    }
+
+    /// Pop a cleared Vec from the pool (or allocate fresh), ensuring capacity >= `cap`.
+    fn take_update_buf(&mut self, cap: usize) -> Vec<UpdateInstr> {
+        if let Some(mut v) = self.update_buf_pool.pop() {
+            // v was cleared before being pushed; just ensure sufficient capacity.
+            if v.capacity() < cap {
+                v.reserve(cap - v.capacity());
+            }
+            v
+        } else {
+            Vec::with_capacity(cap)
+        }
+    }
+
+    /// Return a drained (empty) Vec to the pool for reuse.
+    /// Drops oversized buffers and caps pool depth to avoid unbounded memory growth.
+    fn return_update_buf(&mut self, v: Vec<UpdateInstr>) {
+        debug_assert!(v.is_empty(), "return_update_buf called with non-empty Vec");
+        // Drop oversized buffers (e.g. from anomalously large chunks) and cap depth.
+        if v.capacity() <= 4096 && self.update_buf_pool.len() < 16 {
+            self.update_buf_pool.push(v);
         }
     }
 
@@ -973,7 +1000,7 @@ impl<'a> JoinState<'a> {
     ///
     /// This is also a stepping stone towards supporting fully dynamic variable ordering.
     fn run_join_stages<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
-        &self,
+        &mut self,
         stages: &'buf JoinStages,
         atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
@@ -1013,7 +1040,7 @@ impl<'a> JoinState<'a> {
     /// default.
     #[allow(clippy::too_many_arguments)]
     fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
-        &self,
+        &mut self,
         stages: &'buf JoinStages,
         atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
@@ -1125,6 +1152,8 @@ impl<'a> JoinState<'a> {
                                     // This makes drain_updates_parallel slightly more expensive
                                     // than drain_updates eevn when both are run in single thread
                                     pool: with_pool_set(|ps| ps.get_pool()),
+                                    // Fresh pool per rayon task — JoinState is ephemeral here.
+                                    update_buf_pool: Vec::new(),
                                 }
                                 .run_plan(
                                     stages,
@@ -1161,7 +1190,10 @@ impl<'a> JoinState<'a> {
             }
         }
 
-        let pool = &self.pool;
+        // Clone the pool handle (cheap Rc::clone) so that closures below can
+        // use `pool` without holding a borrow on `self`, which would conflict
+        // with the `&mut self` needed for take_update_buf / return_update_buf.
+        let pool = self.pool.clone();
         match &stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
@@ -1173,11 +1205,12 @@ impl<'a> JoinState<'a> {
                     let info = &self.db.tables[atoms[a.atom].table];
                     let table = info.table.as_ref();
                     let has_stale = table.has_stale_rows();
-                    let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    let cap = cmp::min(chunk_size, cur_size);
+                    let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                     prober.for_each(|val, x| {
                         updates.push_binding(*var, val[0]);
                         if x.size() <= 16 {
-                            let sub = refine_subset(x.to_owned(pool), &a.cs, &table, has_stale);
+                            let sub = refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
@@ -1188,7 +1221,7 @@ impl<'a> JoinState<'a> {
                                 prober
                                     .node
                                     .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(pool), &a.cs, &table, has_stale)
+                                        refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale)
                                     });
                             if node.subset.is_empty() {
                                 updates.rollback();
@@ -1202,6 +1235,7 @@ impl<'a> JoinState<'a> {
                         }
                     });
                     drain_updates!(updates);
+                    self.return_update_buf(updates.into_inner());
                     binding_info.move_back(a.atom, prober);
                 }
                 [a, b] => {
@@ -1223,13 +1257,14 @@ impl<'a> JoinState<'a> {
                     let small_info = &self.db.tables[atoms[smaller_atom].table];
                     let small_table = small_info.table.as_ref();
                     let small_has_stale = small_table.has_stale_rows();
-                    let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    let cap = cmp::min(chunk_size, cur_size);
+                    let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                     smaller.for_each(|val, small_sub| {
                         if let Some(large_sub) = larger.get_subset(val) {
                             updates.push_binding(*var, val[0]);
                             if small_sub.size() <= 16 {
                                 let small_sub = refine_subset(
-                                    small_sub.to_owned(pool),
+                                    small_sub.to_owned(&pool),
                                     &smaller_scan.cs,
                                     &small_table,
                                     small_has_stale,
@@ -1246,7 +1281,7 @@ impl<'a> JoinState<'a> {
                                     small_info,
                                     || {
                                         refine_subset(
-                                            small_sub.to_owned(pool),
+                                            small_sub.to_owned(&pool),
                                             &smaller_scan.cs,
                                             &small_table,
                                             small_has_stale,
@@ -1261,7 +1296,7 @@ impl<'a> JoinState<'a> {
                             }
                             if large_sub.size() <= 16 {
                                 let large_sub = refine_subset(
-                                    large_sub.to_owned(pool),
+                                    large_sub.to_owned(&pool),
                                     &larger_scan.cs,
                                     &large_table,
                                     large_has_stale,
@@ -1278,7 +1313,7 @@ impl<'a> JoinState<'a> {
                                     large_info,
                                     || {
                                         refine_subset(
-                                            large_sub.to_owned(pool),
+                                            large_sub.to_owned(&pool),
                                             &larger_scan.cs,
                                             &large_table,
                                             large_has_stale,
@@ -1298,6 +1333,7 @@ impl<'a> JoinState<'a> {
                         }
                     });
                     drain_updates!(updates);
+                    self.return_update_buf(updates.into_inner());
 
                     binding_info.move_back(a.atom, a_prober);
                     binding_info.move_back(b.atom, b_prober);
@@ -1334,8 +1370,9 @@ impl<'a> JoinState<'a> {
 
                     if smallest_size != 0 {
                         // Smallest leads the scan
+                        let cap = cmp::min(chunk_size, cur_size);
                         let mut updates =
-                            FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                            FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                         probers[smallest].for_each(|key, sub| {
                             updates.push_binding(*var, key[0]);
                             for (i, scan) in rest.iter().enumerate() {
@@ -1347,7 +1384,7 @@ impl<'a> JoinState<'a> {
                                         self.db.tables[atoms[rest[i].atom].table].table.as_ref();
                                     if sub.size() <= 16 {
                                         let sub = refine_subset(
-                                            sub.to_owned(pool),
+                                            sub.to_owned(&pool),
                                             &rest[i].cs,
                                             &table,
                                             rest_has_stale[i],
@@ -1364,7 +1401,7 @@ impl<'a> JoinState<'a> {
                                             &self.db.tables[atoms[scan.atom].table],
                                             || {
                                                 refine_subset(
-                                                    sub.to_owned(pool),
+                                                    sub.to_owned(&pool),
                                                     &rest[i].cs,
                                                     &table,
                                                     rest_has_stale[i],
@@ -1385,7 +1422,7 @@ impl<'a> JoinState<'a> {
                             }
                             if sub.size() <= 16 {
                                 let main_sub = refine_subset(
-                                    sub.to_owned(pool),
+                                    sub.to_owned(&pool),
                                     &main_spec.cs,
                                     &main_spec_table,
                                     main_spec_has_stale,
@@ -1401,7 +1438,7 @@ impl<'a> JoinState<'a> {
                                     key[0],
                                     main_spec_info,
                                     || {
-                                        let sub = sub.to_owned(pool);
+                                        let sub = sub.to_owned(&pool);
                                         refine_subset(
                                             sub,
                                             &main_spec.cs,
@@ -1422,6 +1459,7 @@ impl<'a> JoinState<'a> {
                             }
                         });
                         drain_updates!(updates);
+                        self.return_update_buf(updates.into_inner());
                     }
                     for (spec, prober) in rest.iter().zip(probers.into_iter()) {
                         binding_info.move_back(spec.atom, prober);
@@ -1442,7 +1480,8 @@ impl<'a> JoinState<'a> {
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
                 let mut buffer = TaggedRowBuffer::new(bind.len());
-                let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                let cap = cmp::min(chunk_size, cur_size);
+                let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                 loop {
                     buffer.clear();
                     let table = &self.db.tables[atoms[cover_atom].table].table;
@@ -1472,6 +1511,7 @@ impl<'a> JoinState<'a> {
                     break;
                 }
                 drain_updates!(updates);
+                self.return_update_buf(updates.into_inner());
                 // Restore the subsets we swapped out.
                 binding_info.move_back_node(cover_atom, cover_node);
             }
@@ -1515,7 +1555,8 @@ impl<'a> JoinState<'a> {
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
                 let mut buffer = TaggedRowBuffer::new(bind.len());
-                let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                let cap = cmp::min(chunk_size, cur_size);
+                let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                 loop {
                     buffer.clear();
                     let table = &self.db.tables[atoms[cover_atom].table].table;
@@ -1555,7 +1596,7 @@ impl<'a> JoinState<'a> {
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset.to_owned(&pool),
                                 cs,
                                 &table_info.table.as_ref(),
                                 index_has_stale[prober_idx],
@@ -1583,6 +1624,7 @@ impl<'a> JoinState<'a> {
                 // cover is binding a superset of the primary key for the
                 // table).
                 drain_updates!(updates);
+                self.return_update_buf(updates.into_inner());
                 // Restore the subsets we swapped out.
                 binding_info.move_back_node(cover_atom, cover_node);
                 for (_, atom, prober) in index_probers {
@@ -1596,7 +1638,8 @@ impl<'a> JoinState<'a> {
                 to_intersect,
             } => {
                 let cover_mat = binding_info.materializations[*cover].clone();
-                let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                let cap = cmp::min(chunk_size, cur_size);
+                let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                 let probers = to_intersect
                     .iter()
                     .map(|(spec, _)| {
@@ -1643,7 +1686,7 @@ impl<'a> JoinState<'a> {
                         }
                         if let Some(subset) = prober.get_subset(&key) {
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset.to_owned(&pool),
                                 &spec.constraints,
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table
@@ -1743,6 +1786,7 @@ impl<'a> JoinState<'a> {
                 }
 
                 drain_updates!(updates);
+                self.return_update_buf(updates.into_inner());
                 for (spec, prober) in to_intersect.iter().zip(probers) {
                     binding_info.move_back(spec.0.to_index.atom, prober);
                 }
