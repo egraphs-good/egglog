@@ -43,14 +43,6 @@ pub(super) struct FrameUpdates {
 }
 
 impl FrameUpdates {
-    pub(super) fn with_capacity(capacity: usize) -> FrameUpdates {
-        FrameUpdates {
-            updates: Vec::with_capacity(capacity * 2),
-            frames: 0,
-            last_start: 0,
-        }
-    }
-
     /// Construct a FrameUpdates from a pooled Vec, avoiding a fresh allocation.
     /// The caller must have already cleared `buf`; this method will additionally
     /// ensure capacity >= `capacity * 2` before wrapping.
