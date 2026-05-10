@@ -700,8 +700,36 @@ next step before any of this becomes a roadmap.*
 `(check ...)` queries, but `(print-size)` reports more tuples than the
 reference egglog backend:
 
-- `until.egg`: `g*` count 131 vs egglog's 21 (~6×).
-- `integer_math.egg`: `Add` count 336 vs 331 (1.5%).
+- `until.egg`: `g*` count 84 vs egglog's 21 (4×).
+- `integer_math.egg`: `Add` count 333 vs 331 (0.6%).
+
+**Minimal repro** for until.egg-style over-derivation:
+```
+(datatype G) (constructor IConst () G) (let $I (IConst))
+(constructor AConst () G) (let $A (AConst))
+(constructor g* (G G) G)
+(birewrite (g* (g* a b) c) (g* a (g* b c)))
+(rewrite (g* $I a) a) (rewrite (g* a $I) a)
+(rewrite (g* $A (g* $A (g* $A $A))) $I)   ;; THIS triggers it
+(let $A2 (g* $A $A)) (let $A4 (g* $A2 $A2)) (let $A8 (g* $A4 $A4))
+(run 3)
+(print-size)
+```
+Without the period-4 rewrite, both backends produce 28 g* rows.
+With it, egglog produces 16, --duckdb produces 79.
+
+The triggering pattern: a deep (multi-level nested) LHS that
+unifies with a global. After term encoding, the rule has 7 body
+atoms (4 global lookups + 3 nested g* matches). Our seminaive runs
+7 variants — one of which appears to over-fire, producing extra
+canonical rows that don't get merged within the bounded iteration
+count.
+
+`math-microbenchmark` and other tests *don't* exhibit this pattern,
+suggesting it's specific to rules with deep nested patterns + global
+references. The triangulated seminaive (committed in
+`ccf24774`) handles math-microbenchmark exactly but doesn't close
+this gap.
 
 **Cause**: when the `@rebuilding` ruleset canonicalizes a view row
 (delete old + insert at canonical leader positions), the new row
