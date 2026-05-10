@@ -37,6 +37,8 @@ use egglog_ast::generic_ast::{
     Change, GenericAction, GenericExpr, GenericFact, Literal as AstLit,
 };
 
+use crate::ast::ResolvedSchedule;
+
 /// Translation errors. v0 returns Unsupported for cases we haven't covered
 /// yet — refusing rather than silently dropping keeps the contract clear.
 #[derive(Debug, Clone)]
@@ -81,6 +83,12 @@ pub struct Ctx {
     /// columns (egglog's `(R a b)` body fact doesn't include the output
     /// column, but Souffle requires every column matched explicitly).
     pub relation_arity: HashMap<String, usize>,
+    /// User `(run N)` count, if any. Captured from the first `Repeat`
+    /// found in any RunSchedule; the encoded form wraps each user
+    /// `(run N)` in `Repeat(N, ...)`. Translated to a `.limititerations`
+    /// directive on a representative user-write buffer relation so the
+    /// user-rule SCC is bounded to N iterations under the Souffle backend.
+    pub user_run_count: Option<usize>,
     /// Drain entries: target_relation → list of (helper_relation, arity).
     /// Each helper acts as a filter for the live view: the live view excludes
     /// rows whose key is in any of the helper relations. Two patterns are
@@ -117,6 +125,7 @@ pub fn translate(commands: &[ResolvedCommand]) -> Result<Program, TranslateError
     }
     emit_live_views(&ctx, &mut p);
     emit_snapshot_directives(&mut p);
+    emit_run_limit(&ctx, &mut p);
     Ok(p)
 }
 
@@ -137,6 +146,41 @@ fn emit_snapshot_directives(p: &mut Program) {
         .collect();
     for (snap, source) in snap_pairs {
         p.directives.push(Directive::Snapshot { snap, source });
+    }
+}
+
+/// If a user `(run N)` was captured during translation, emit
+/// `.limititerations` on a representative user-write buffer relation so
+/// the Souffle fork's bounded-iteration mechanism caps that SCC at N.
+/// The buffer relations all live in the same SCC (they're co-written
+/// by user rules), so attaching the bound to any one of them suffices.
+fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
+    let Some(n) = ctx.user_run_count else {
+        return;
+    };
+    if let Some(buffer) = p
+        .relations
+        .iter()
+        .find(|r| r.name.ends_with("_buffer"))
+        .map(|r| r.name.clone())
+    {
+        p.directives.push(Directive::LimitIterations {
+            relation: buffer,
+            n: n as u64,
+        });
+    }
+}
+
+/// Walk a [`ResolvedSchedule`] and return the count of the first
+/// `Repeat(N, ...)` encountered. Used to extract user `(run N)` from the
+/// encoded schedule (which wraps it in `Repeat(N, Sequence(Run, ...))`).
+fn first_repeat_count(s: &ResolvedSchedule) -> Option<usize> {
+    use crate::ast::ResolvedSchedule as RS;
+    match s {
+        RS::Repeat(_, n, _) => Some(*n),
+        RS::Saturate(_, inner) => first_repeat_count(inner),
+        RS::Sequence(_, items) => items.iter().find_map(first_repeat_count),
+        RS::Run(_, _) => None,
     }
 }
 
@@ -289,14 +333,15 @@ fn translate_command(
             };
             translate_rule(&fake_rule, ctx, p)
         }
-        C::RunSchedule(_) => {
-            // v0: drop the schedule. Every encoded program has rebuild
-            // run-schedules; Souffle's natural fixpoint handles them.
-            // Setting `outer-saturate=100` here was causing 100 iterations
-            // of every translated program — the SCC was being run many
-            // times unnecessarily and growing relations fast on anything
-            // non-trivial. Faithful (run N) translation will arrive with
-            // the buffer/canon strata split (souffle-strata-design.md).
+        C::RunSchedule(s) => {
+            // The encoded form wraps every user `(run N)` in a
+            // `Repeat(N, ...)` schedule. Capture the first such N we see
+            // — it's the user's iteration cap. We attach .limititerations
+            // to a representative *_buffer relation later (in
+            // emit_schedule_directives, after all relations are declared).
+            if let Some(n) = first_repeat_count(s) {
+                ctx.user_run_count = ctx.user_run_count.or(Some(n));
+            }
             Ok(())
         }
         // Everything else: silently skip in v0 (driver-side or not yet
