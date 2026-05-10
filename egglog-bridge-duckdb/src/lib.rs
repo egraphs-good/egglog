@@ -279,6 +279,14 @@ impl EGraph {
         // Disabling drops a sizeable chunk of per-iteration overhead
         // on workloads that do many INSERT…SELECT.
         conn.execute("SET preserve_insertion_order = false", [])?;
+        // Determinism: parallel execution can produce rows from a
+        // SELECT in any order. With hash-cons (or any rule action
+        // that side-effects via nextval()), per-row evaluation order
+        // determines which sequence values get burned for which
+        // matches, which affects unification chains and thus tuple
+        // counts at bounded iteration. Force single-threaded so our
+        // output is reproducible run-to-run.
+        conn.execute("SET threads = 1", [])?;
         // Sequence for fresh EqSort IDs. Term-encoded constructors
         // call `nextval` once per allocation; collisions across
         // rows with the same inputs are intentional — congruence

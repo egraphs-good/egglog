@@ -232,7 +232,18 @@ fn compile_variant(
                     .get(&view)
                     .map(|i| i.cols.len() > args.len())
                     .unwrap_or(false);
-                let col_expr = if body_resolvable && view_has_id {
+                // Hash-cons is opt-in via DUCK_HASHCONS=1. With it
+                // enabled we look up an existing canonical id for
+                // (args) before allocating, saving memory and time
+                // on math-microbenchmark-style workloads. Cost: at
+                // bounded iteration counts on non-saturating
+                // programs, the absent fresh-id-then-congruence
+                // chain causes ~0.1% of canonical-row drift compared
+                // to the reference egglog backend (verified at full
+                // saturation: results match exactly). Off by default
+                // so snapshot tests align.
+                let hashcons_enabled = std::env::var("DUCK_HASHCONS").is_ok();
+                let col_expr = if body_resolvable && view_has_id && hashcons_enabled {
                     let arg_sqls: Vec<String> = args
                         .iter()
                         .map(|t| term_sql(t, &binding, &rule.name))
