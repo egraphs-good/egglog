@@ -239,7 +239,18 @@ impl EGraph {
         });
         self.backend.flush_updates();
 
-        // Step 4: run the action rules
+        // Step 4: recheck the chosen keys and run the action rules
+        let validation_rules = rules
+            .iter()
+            .map(|(rule_id, _rule)| {
+                let rule_info = record.rule_info.get(rule_id).unwrap();
+                rule_info.validation_rule
+            })
+            .collect::<Vec<_>>();
+        let validation_iter_report = self
+            .backend
+            .run_rules(&validation_rules)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
         let action_rules = rules
             .iter()
             .map(|(rule_id, _rule)| {
@@ -251,21 +262,41 @@ impl EGraph {
             .backend
             .run_rules(&action_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
+        let cleanup_rules = rules
+            .iter()
+            .map(|(rule_id, _rule)| {
+                let rule_info = record.rule_info.get(rule_id).unwrap();
+                rule_info.cleanup_rule
+            })
+            .collect::<Vec<_>>();
+        let cleanup_iter_report = self
+            .backend
+            .run_rules(&cleanup_rules)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 5: combine the reports
         let mut query_report = RunReport::singleton(ruleset, query_iter_report);
+        let mut validation_report = RunReport::singleton(ruleset, validation_iter_report);
         let mut action_report = RunReport::singleton(ruleset, action_iter_report);
+        let mut cleanup_report = RunReport::singleton(ruleset, cleanup_iter_report);
 
         // query matches don't count
         query_report.updated = false;
         query_report.num_matches_per_rule.clear();
+        // validation and cleanup only touch scheduler-internal tables
+        validation_report.updated = false;
+        validation_report.num_matches_per_rule.clear();
+        cleanup_report.updated = false;
+        cleanup_report.num_matches_per_rule.clear();
         // if the scheduler says it shouldn't stop, then it's considered updated (unsaturated)
         action_report.updated = action_report.updated || {
             let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
             !record.scheduler.can_stop(&rule_ids, ruleset)
         };
 
+        query_report.union(validation_report);
         query_report.union(action_report);
+        query_report.union(cleanup_report);
 
         self.rulesets = rulesets;
         self.schedulers = schedulers;
@@ -280,17 +311,21 @@ pub(crate) struct SchedulerRecord {
     rule_info: HashMap<String, SchedulerRuleInfo>,
 }
 
-/// To enable scheduling without modifying the backend,
-/// we split a rule (rule query action) into a worklist relation
-/// two rules (rule query (worklist vars false)) and
-/// (rule (worklist vars false) (action ... (delete (worklist vars false))))
+/// To enable scheduling without modifying the backend, we split a rule into
+/// scheduler-internal worklist and validation relations plus four rules:
+/// (rule query (worklist vars false)),
+/// (rule (worklist vars false) query (validated vars false)),
+/// (rule (validated vars false) (action ...)), and
+/// (rule (worklist vars false) (delete ...)).
 #[derive(Clone)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
     should_seek: bool,
     decided: FunctionId,
     query_rule: RuleId,
+    validation_rule: RuleId,
     action_rule: RuleId,
+    cleanup_rule: RuleId,
     free_vars: Vec<ResolvedVar>,
 }
 
@@ -334,8 +369,15 @@ impl SchedulerRuleInfo {
             .iter()
             .map(|v| v.sort.column_ty(&egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
-            .collect();
+            .collect::<Vec<_>>();
         let decided = egraph.backend.add_table(FunctionConfig {
+            schema: schema.clone(),
+            default: DefaultVal::Const(unit),
+            merge: MergeFn::AssertEq,
+            name: "backend".to_string(),
+            can_subsume: false,
+        });
+        let validated = egraph.backend.add_table(FunctionConfig {
             schema,
             default: DefaultVal::Const(unit),
             merge: MergeFn::AssertEq,
@@ -350,7 +392,7 @@ impl SchedulerRuleInfo {
             &egraph.type_info,
             true, // seminaive rule context
         );
-        qrule_builder.query(&rule.body, true);
+        qrule_builder.query(&rule.body, false);
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -363,7 +405,29 @@ impl SchedulerRuleInfo {
         );
         let qrule_id = qrule_builder.build();
 
-        // Step 2: build the action rule
+        // Step 2: build the validation rule. This rechecks that the original
+        // body still has some witness for the chosen scheduler key, but writes
+        // only one keyed row even if body-only variables have multiple matches.
+        let mut validation_rule_builder = BackendRule::new(
+            egraph.backend.new_rule(name, false),
+            &egraph.functions,
+            &egraph.type_info,
+            true, // seminaive rule context for rechecking the original body
+        );
+        let mut entries = free_vars
+            .iter()
+            .map(|fv| validation_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .collect::<Vec<_>>();
+        entries.push(unit_entry.clone());
+        validation_rule_builder
+            .rb
+            .query_table(decided, &entries, None)
+            .unwrap();
+        validation_rule_builder.query(&rule.body, false);
+        validation_rule_builder.rb.set(validated, &entries);
+        let validation_rule = validation_rule_builder.build();
+
+        // Step 3: build the action rule
         let mut arule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
@@ -374,21 +438,43 @@ impl SchedulerRuleInfo {
             .iter()
             .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
-        entries.push(unit_entry);
+        entries.push(unit_entry.clone());
         arule_builder
+            .rb
+            .query_table(validated, &entries, None)
+            .unwrap();
+        arule_builder.actions(&rule.head).unwrap();
+        let arule_id = arule_builder.build();
+
+        // Cleanup is intentionally separate from validation and action rules so
+        // stale scheduled matches are removed even when the original rule body
+        // no longer matches after subsumption or deletion.
+        let mut cleanup_rule_builder = BackendRule::new(
+            egraph.backend.new_rule(name, false),
+            &egraph.functions,
+            &egraph.type_info,
+            false, // scheduler maintenance rule with no user body/actions
+        );
+        let mut entries = free_vars
+            .iter()
+            .map(|fv| cleanup_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .collect::<Vec<_>>();
+        entries.push(unit_entry);
+        cleanup_rule_builder
             .rb
             .query_table(decided, &entries, None)
             .unwrap();
-        arule_builder.actions(&rule.head).unwrap();
-        // Remove the entry as it's now done
         entries.pop();
-        arule_builder.rb.remove(decided, &entries);
-        let arule_id = arule_builder.build();
+        cleanup_rule_builder.rb.remove(decided, &entries);
+        cleanup_rule_builder.rb.remove(validated, &entries);
+        let cleanup_rule = cleanup_rule_builder.build();
 
         SchedulerRuleInfo {
             free_vars,
             query_rule: qrule_id,
+            validation_rule,
             action_rule: arule_id,
+            cleanup_rule,
             matches,
             decided,
             should_seek: true,
@@ -398,6 +484,8 @@ impl SchedulerRuleInfo {
 
 #[cfg(test)]
 mod test {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     #[derive(Clone)]
@@ -415,6 +503,53 @@ mod test {
                 }
             }
             matches.match_size() < self.n * 2
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct HoldFirstMatchScheduler {
+        calls: usize,
+        match_sizes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl Scheduler for HoldFirstMatchScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            self.calls += 1;
+            self.match_sizes.lock().unwrap().push(matches.match_size());
+            if self.calls == 1 {
+                false
+            } else {
+                matches.choose_all();
+                true
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct CountingScheduler {
+        match_sizes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl Scheduler for CountingScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            self.match_sizes.lock().unwrap().push(matches.match_size());
+            matches.choose_all();
+            true
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ChooseFirstScheduler {
+        match_sizes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl Scheduler for ChooseFirstScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            self.match_sizes.lock().unwrap().push(matches.match_size());
+            if matches.match_size() > 0 {
+                matches.choose(0);
+            }
+            false
         }
     }
 
@@ -475,5 +610,118 @@ mod test {
         }
 
         assert_eq!(iter, 12);
+    }
+
+    #[test]
+    fn test_scheduler_does_not_match_subsumed_rows() {
+        let mut egraph = EGraph::default();
+        let match_sizes = Arc::new(Mutex::new(Vec::new()));
+        let scheduler_id = egraph.add_scheduler(Box::new(CountingScheduler {
+            match_sizes: match_sizes.clone(),
+        }));
+        let input = r#"
+        (ruleset analysis)
+        (ruleset test)
+        (datatype Math
+          (Add Math Math)
+          (Mul Math Math)
+          (Num i64))
+        (relation Hit (i64))
+        (let expr (Add (Mul (Num 0) (Num 1)) (Num 2)))
+        (rewrite (Mul (Num 0) x) (Num 0) :subsume :ruleset analysis)
+        (rewrite (Add (Num 0) x) x :subsume :ruleset analysis)
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a)) :ruleset test :name "hit-subsumed-affine")
+        (run-schedule (saturate (run analysis)))
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let report = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(*match_sizes.lock().unwrap(), vec![0]);
+        assert_eq!(egraph.get_size("Hit"), 0);
+        assert!(
+            !report.updated,
+            "scheduled rules should not report progress from subsumed-row matches"
+        );
+    }
+
+    #[test]
+    fn test_scheduler_recheck_does_not_duplicate_body_only_witnesses() {
+        let mut egraph = EGraph::default();
+        let match_sizes = Arc::new(Mutex::new(Vec::new()));
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseFirstScheduler {
+            match_sizes: match_sizes.clone(),
+        }));
+        let input = r#"
+        (ruleset test)
+        (relation A (i64 i64))
+        (relation Hit (i64))
+        (A 1 10)
+        (A 1 20)
+        (rule ((A x y)) ((Hit x)) :ruleset test :name "hit")
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let report = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(*match_sizes.lock().unwrap(), vec![2]);
+        assert_eq!(egraph.get_size("Hit"), 1);
+        assert_eq!(report.num_matches_per_rule["hit"], 1);
+        assert_eq!(report.iterations.len(), 4);
+    }
+
+    #[test]
+    fn test_scheduler_drops_held_matches_that_become_subsumed() {
+        let mut egraph = EGraph::default();
+        let match_sizes = Arc::new(Mutex::new(Vec::new()));
+        let scheduler_id = egraph.add_scheduler(Box::new(HoldFirstMatchScheduler {
+            calls: 0,
+            match_sizes: match_sizes.clone(),
+        }));
+        let input = r#"
+        (ruleset analysis)
+        (ruleset test)
+        (datatype Math
+          (Add Math Math)
+          (Mul Math Math)
+          (Num i64))
+        (relation Hit (i64))
+        (let expr (Add (Mul (Num 0) (Num 1)) (Num 2)))
+        (rewrite (Mul (Num 0) x) (Num 0) :subsume :ruleset analysis)
+        (rewrite (Add (Num 0) x) x :subsume :ruleset analysis)
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a)) :ruleset test :name "hit-subsumed-affine")
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let first = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        assert!(!first.updated);
+        assert_eq!(egraph.get_size("Hit"), 0);
+
+        egraph
+            .parse_and_run_program(None, "(run-schedule (saturate (run analysis)))")
+            .unwrap();
+        let after_analysis_size = egraph.num_tuples();
+
+        let second = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(*match_sizes.lock().unwrap(), vec![1, 1]);
+        assert_eq!(egraph.get_size("Hit"), 0);
+        assert!(
+            !second.updated,
+            "stale held matches should be cleaned without running user actions"
+        );
+        assert_eq!(
+            egraph.num_tuples(),
+            after_analysis_size,
+            "stale decided worklist rows should be cleaned"
+        );
     }
 }
