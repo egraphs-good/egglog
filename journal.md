@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## G4: Bypass FrameUpdates pool for cap < 32 (2026-05-09) — REVERTED
+
+**Hypothesis (follow-up to G3):** cykjson's +5.9% under G3 is from the pool overhead (Rc::clone of self.pool, branch + push/pop) being charged on small-`cap` calls where the saved alloc is tiny. Skipping the pool path when `cap < 32` should restore cykjson without losing hardboiled.
+
+**Approach:** Added a `SMALL_CAP_BYPASS = 32` early-return at the top of both `take_update_buf` and `return_update_buf` in `core-relations/src/free_join/execute.rs`. When `cap < 32` (take) or `v.capacity() < 32` (return), the pool is bypassed and we fall back to a fresh `Vec::with_capacity(cap)` / drop.
+
+**Build/tests:** Clean, all `make test` suites pass.
+
+**Results vs G3 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.301 → 0.313 (**+4.2%**)
+- hardboiled_conv1d_128: 0.788 → 0.830 (**+5.4%**)
+- luminal-llama: 0.213 → 0.214 (+0.4%, noise)
+- python_array_optimize: 0.515 → 0.516 (+0.3%, noise)
+- cykjson: 0.116 → 0.108 (**-6.7%**) — fully recovered
+- eggcc-extraction: 0.445 → 0.458 (+2.9%)
+- Overall average: +1.09%
+
+**VERDICT: MIXED** — Reverted via `git reset --hard HEAD~1`. The bypass also kicks in on hardboiled's deep-recursion paths because `cap = cmp::min(chunk_size, cur_size)` is often small there too — the bypass essentially undoes G3 for hardboiled.
+
+**Lesson:** "Small cap" and "shallow recursion" are not the same axis. Hardboiled's deep recursion produces many calls with small `cur_size` (refined-down subsets), so the pool actually does pay off there. To fix cykjson without hurting hardboiled, we'd need to discriminate by recursion depth or by whether previous take/returns observed a non-empty pool — neither is cleanly available in this code path. **G3 stays as-is; cykjson +5.9% is the price of the hardboiled +5.6%.**
+
 ## G3: Pool FrameUpdates backing Vec on JoinState (2026-05-09) — KEPT
 
 **Hypothesis:** Repeated `Vec::with_capacity(cmp::min(chunk_size, cur_size))` allocation/deallocation for `FrameUpdates.updates` at the 6 `Intersect`/`UnboundCover`/`BoundCover`/`MaterializedIntersect` call sites in `run_plan` accounts for ~3–5% on hardboiled_128 (FrameUpdates::drain 3.3% + Drain drop 1.2% + Vec drop 1.2% + part of mi_heap_malloc 1.3%). Pooling backing Vecs across recursive `run_plan` invocations should let the drained-empty Vecs drop become a true no-op.
