@@ -1701,23 +1701,34 @@ impl<'a> JoinState<'a> {
                             let group_key = group.0;
                             let group_val = group.1;
                             let group_key_len = group_key.len();
+                            // Partition bind once per group (group_key_len is constant within a
+                            // group) instead of re-scanning bind twice per non_keys row.
+                            // This reduces the bind scan from O(bind.len() * non_keys.len()) to
+                            // O(bind.len()) per group.
+                            let mut bind_key: SmallVec<[(ColumnId, Variable); 2]> =
+                                SmallVec::new();
+                            let mut bind_nonkey: SmallVec<[(ColumnId, Variable); 2]> =
+                                SmallVec::new();
+                            for &(col, var) in bind.iter() {
+                                if col.index() < group_key_len {
+                                    bind_key.push((col, var));
+                                } else {
+                                    bind_nonkey.push((col, var));
+                                }
+                            }
                             if mode == &MatScanMode::Full {
                                 // enumerate non-keys
                                 for non_keys in group_val.iter() {
-                                    for (col, var) in bind.iter() {
-                                        if col.index() < group_key_len {
-                                            updates.push_binding(*var, group_key[col.index()]);
-                                        }
+                                    for &(col, var) in bind_key.iter() {
+                                        updates.push_binding(var, group_key[col.index()]);
                                     }
 
                                     // TODO: optimization that guaratees all keys come before non-keys
-                                    for (col, var) in bind.iter() {
-                                        if col.index() >= group_key_len {
-                                            updates.push_binding(
-                                                *var,
-                                                non_keys[col.index() - group_key_len],
-                                            );
-                                        }
+                                    for &(col, var) in bind_nonkey.iter() {
+                                        updates.push_binding(
+                                            var,
+                                            non_keys[col.index() - group_key_len],
+                                        );
                                     }
                                     if prune_probers(&mut updates, Some(group_key), Some(non_keys))
                                     {
@@ -1727,9 +1738,8 @@ impl<'a> JoinState<'a> {
                                     }
                                 }
                             } else if mode == &MatScanMode::KeyOnly {
-                                for (col, var) in bind.iter() {
-                                    debug_assert!(col.index() < group_key_len);
-                                    updates.push_binding(*var, group_key[col.index()]);
+                                for &(col, var) in bind_key.iter() {
+                                    updates.push_binding(var, group_key[col.index()]);
                                 }
                                 if prune_probers(&mut updates, Some(group_key), None) {
                                     updates.finish_frame();
