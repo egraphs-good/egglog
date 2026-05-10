@@ -1,5 +1,30 @@
 # Experiment Journal
 
+## H1: Direct-read SortedWritesTable in ColumnIndex::rebuild_full (2026-05-09) — KEPT
+
+**Hypothesis:** The post-D3 9.4% "rebuild_full + closure + for_each_col" cluster is the same per-row dispatch chain (vtable → downcast → scan_generic → SubsetRef::offsets → RowId::range iter → dyn FnMut) that E3 (commit 16c83f12) and E4 (c173a8cf) eliminated for `SparseColumnIndex::new`. Applying the identical SortedWritesTable downcast + `read_value_at_row_unchecked` pattern to `rebuild_full`'s pair-collection loop should win at a hotter call site.
+
+**Approach:** In `core-relations/src/hash_index/mod.rs::ColumnIndex::rebuild_full`, wrap the `for &col in cols { table.for_each_col(...) }` block in an `if let Some(swt) = table.inner_as_any().downcast_ref::<SortedWritesTable>()` fast path. On the SWT branch, iterate `SubsetRef::Dense` (range loop) or `SubsetRef::Sparse` (slice iter via `s.inner()`) and call `swt.read_value_at_row_unchecked(row, col)`, pushing `(val, row)` to `pairs` only when it returns `Some` (stale rows are silently skipped — same semantics as `for_each_col`/`scan_generic`). Fall back to `for_each_col` for non-SWT impls.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs G3 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.300 → 0.297 (-1.2%)
+- hardboiled_conv1d_128: 0.787 → 0.771 (-2.0%)
+- luminal-llama: 0.216 → 0.215 (-0.6%)
+- python_array_optimize: 0.516 → 0.521 (+0.9%, noise)
+- cykjson: 0.114 → 0.110 (**-3.5%**)
+- eggcc-extraction: 0.440 → 0.441 (+0.2%, noise)
+- Overall average: −1.03%
+
+**VERDICT: IMPROVEMENT** — Clean accept (no reviewer needed). cykjson cleared ≥3% threshold. As a bonus, this nearly cancels the G3 cykjson regression (G3 baseline 0.114 → now 0.110, vs pre-G3 0.108).
+
+**Commit:** 9226bd76 — KEPT.
+
+**Lessons:**
+- Mechanical replication of E3/E4 at a hotter call site paid off — pattern is now battle-tested.
+- The downcast-bypass approach is generically applicable wherever `for_each_col` is called on a `SortedWritesTable`. Worth checking if there are other call sites that would benefit (e.g. `SubsetIndex::rebuild_full`, `scan_project` consumers).
+
 ## G4: Bypass FrameUpdates pool for cap < 32 (2026-05-09) — REVERTED
 
 **Hypothesis (follow-up to G3):** cykjson's +5.9% under G3 is from the pool overhead (Rc::clone of self.pool, branch + push/pop) being charged on small-`cap` calls where the saved alloc is tiny. Skipping the pool path when `cap < 32` should restore cykjson without losing hardboiled.
