@@ -1,5 +1,31 @@
 # Experiment Journal
 
+## Q3: Skip Dense→Sparse transition copy in SubsetBuffer (2026-05-09) — KEPT
+
+**Hypothesis:** Investigating the 4.4% `memmove` profile entry by reading code (lessons-learned ruled out the 64–511 group_by_col range), found a concrete source: `SubsetBuffer::push_vec` (`core-relations/src/hash_index/mod.rs`) does `copy_within` on every power-of-2 growth. The hottest call site is `BufferedSubset::add_row_sorted`'s Dense→Sparse transition (`buf.new_vec(range)` then `buf.push_vec(v, row)`). When `range.len()` is a power of 2, the `next_power_of_two` allocation in `new_vec` is already filled, so the immediate `push_vec` triggers a wasted copy.
+
+**Approach:** Added `SubsetBuffer::new_vec_with_extra(rows, extra)` that allocates `(rows.len() + 1).next_power_of_two()` slots in one shot, fills them with `rows`, then writes `extra` to the next slot. Replaced the `new_vec + push_vec` pair in `BufferedSubset::add_row_sorted`'s Dense→Sparse arm with a single call.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q2-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.293 (+0.1%, noise)
+- hardboiled_conv1d_128: 0.759 → 0.760 (+0.1%, noise)
+- luminal-llama: 0.214 → 0.214 (-0.1%, noise)
+- python_array_optimize: 0.518 → 0.507 (**-2.1%**)
+- cykjson: 0.106 → 0.101 (**-5.3%**)
+- eggcc-extraction: 0.440 → 0.444 (+0.8%, noise)
+- Overall average: −1.09%
+
+**VERDICT: IMPROVEMENT** — Clean accept (no reviewer needed). cykjson cleared 3% threshold. Hardboiled essentially unchanged (its add_row_sorted hot path is dominated by other patterns).
+
+**Commit:** 51848939 — KEPT.
+
+**Lessons:**
+- The 4.4% memmove was largely the SubsetBuffer power-of-2 doubling pattern, hit hardest by cykjson and python_array_optimize whose Dense→Sparse transitions happen frequently with power-of-2 range lengths.
+- Direct code reading (no perf profiling needed) successfully identified the bottleneck after lessons-learned mis-diagnosed it as the 64–511 group_by_col range. The actual source was a much narrower transition path.
+- This was a true work-removal change (saves a copy_within) rather than work-hoisting — different from the P3 vein but equally valid.
+
 ## Q2: Replace Prober::can_be_stale field with method (2026-05-09) — REVERTED
 
 **Hypothesis (P3 vein):** `Prober::can_be_stale: bool` is pure derived state from `self.ix`'s variant. Replace the field with an `#[inline] fn can_be_stale(&self) -> bool` that reads the discriminant via `matches!(self.ix, DynamicIndex::Cached{..} | DynamicIndex::CachedColumn{..})`. Removes the field, the two construction-site computations, and may shrink Prober.
