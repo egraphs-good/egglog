@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q11: SmallVec for keys in FusedIntersectMat::Lookup/Value (2026-05-09) — REVERTED
+
+**Hypothesis:** Per-lookup `Vec<Value>` alloc replaced with `SmallVec<[Value; 4]>`. Cykjson doesn't reach FusedIntersectMat (no multi-arg trees), should be safe.
+
+**Approach:** Replace `index_vars.iter().map(...).collect::<Vec<_>>()` with a SmallVec push loop and `cover_mat.get(keys.as_slice())`.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q9-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.291 (-0.5%, noise)
+- hardboiled_conv1d_128: 0.759 → 0.765 (+0.8%)
+- luminal-llama: 0.213 → 0.218 (**+2.4%**)
+- python_array_optimize: 0.508 → 0.509 (+0.1%, noise)
+- cykjson: 0.103 → 0.104 (+1.0%)
+- eggcc-extraction: 0.436 → 0.437 (+0.3%, noise)
+- Overall average: +0.69%
+
+**VERDICT: REGRESSION** — Reverted. luminal-llama +2.4% (uses tree-decomposed plans). Net +0.69%.
+
+**Lesson:** Even this contained micro-alloc-removal in a path that should not affect cykjson regressed multiple benchmarks. **Run_plan's stack frame is so densely packed that ANY new local variable shifts register allocation enough to perturb perf elsewhere.** This effectively confirms we've hit the ceiling on incremental optimization of run_plan via the analyst-driven loop. Future work would need: (a) profile-guided optimization, (b) separating run_plan into smaller specialized functions, or (c) targeting code paths that aren't called from run_plan at all (e.g. setup, planning, action execution).
+
 ## Q9: get_unchecked in UnionFind::find_naive (2026-05-09) — REVERTED
 
 **Hypothesis:** Hoisting bounds checks out of the parent-walk loop in `union-find/src/lib.rs::find_naive` should help rebuild-heavy benchmarks; cykjson doesn't enter rebuild paths so should be untouched. Invariant: every value in `parents[]` is itself a valid index.
