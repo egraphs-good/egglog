@@ -44,6 +44,14 @@ pub struct DuckdbBackend {
     /// fresh IDs via the duckdb sequence. Distinct from regular
     /// functions: those are read-back via subqueries.
     eq_sort_ctor: hashbrown::HashSet<String>,
+    /// Combined ruleset name → list of member ruleset names. Lets us
+    /// expand `(run combined)` to fire all member rules in one
+    /// iteration.
+    combined_rulesets: hashbrown::HashMap<String, Vec<String>>,
+    /// All declared ruleset names (regular + combined). Default ruleset
+    /// `""` is always considered valid. Used to reject rules that
+    /// reference undefined rulesets.
+    known_rulesets: hashbrown::HashSet<String>,
 }
 
 impl DuckdbBackend {
@@ -62,6 +70,8 @@ impl DuckdbBackend {
             sorts: hashbrown::HashMap::default(),
             is_relation: hashbrown::HashMap::default(),
             eq_sort_ctor: hashbrown::HashSet::default(),
+            combined_rulesets: hashbrown::HashMap::default(),
+            known_rulesets: hashbrown::HashSet::default(),
         })
     }
 
@@ -110,8 +120,24 @@ impl DuckdbBackend {
             }
             // A function declaration in the resolved IR.
             GenericNCommand::Function(decl) => self.add_function(decl),
-            // Rulesets: ignore, we run all rules together.
-            GenericNCommand::AddRuleset(_, _) | GenericNCommand::UnstableCombinedRuleset(..) => {
+            GenericNCommand::AddRuleset(_, name) => {
+                self.known_rulesets.insert(name.clone());
+                Ok(())
+            }
+            GenericNCommand::UnstableCombinedRuleset(_, name, members) => {
+                self.known_rulesets.insert(name.clone());
+                // Flatten: any member that's already a combined
+                // ruleset gets replaced with its members. Means a
+                // single lookup suffices at run time.
+                let mut flat: Vec<String> = Vec::new();
+                for m in members {
+                    if let Some(sub) = self.combined_rulesets.get(m) {
+                        flat.extend(sub.iter().cloned());
+                    } else {
+                        flat.push(m.clone());
+                    }
+                }
+                self.combined_rulesets.insert(name.clone(), flat);
                 Ok(())
             }
             GenericNCommand::NormRule { rule } => self.add_rule(rule),
@@ -231,6 +257,22 @@ impl DuckdbBackend {
         &mut self,
         rule: &GenericRule<ResolvedCall, ResolvedVar>,
     ) -> Result<(), DuckdbBackendError> {
+        // Adding a rule to a combined ruleset is illegal in egglog.
+        if self.combined_rulesets.contains_key(&rule.ruleset) {
+            return Err(DuckdbBackendError::Unsupported(format!(
+                "cannot add rule to combined ruleset `{}`",
+                rule.ruleset
+            )));
+        }
+        // Adding a rule to an undefined ruleset is illegal — reject
+        // so `(fail (rule … :ruleset undefined))` tests pass. Empty
+        // ruleset name is the default and always valid.
+        if !rule.ruleset.is_empty() && !self.known_rulesets.contains(&rule.ruleset) {
+            return Err(DuckdbBackendError::Unsupported(format!(
+                "unknown ruleset `{}`",
+                rule.ruleset
+            )));
+        }
         if std::env::var("DUCK_TRACE_RULES").is_ok() {
             eprintln!("[duck] rule {}", rule.name);
             eprintln!("       body:");
@@ -450,15 +492,28 @@ impl DuckdbBackend {
         match sched {
             // `(run rs)` is a *single* iteration. The wrapping
             // schedule (Repeat/Saturate) decides how many times.
+            // If `:until <facts>` is set and already holds, no-op so
+            // Repeat's fixpoint detector stops the outer loop.
             GenericSchedule::Run(_, cfg) => {
-                let rs = if cfg.ruleset.is_empty() {
-                    None
+                if let Some(facts) = &cfg.until {
+                    if self.run_check(facts).is_ok() {
+                        return Ok(());
+                    }
+                }
+                if cfg.ruleset.is_empty() {
+                    self.db
+                        .run_iteration_in(None)
+                        .map_err(DuckdbBackendError::Backend)?;
+                } else if let Some(members) = self.combined_rulesets.get(&cfg.ruleset) {
+                    let refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
+                    self.db
+                        .run_iteration_in_set(&refs)
+                        .map_err(DuckdbBackendError::Backend)?;
                 } else {
-                    Some(cfg.ruleset.as_str())
-                };
-                self.db
-                    .run_iteration_in(rs)
-                    .map_err(DuckdbBackendError::Backend)?;
+                    self.db
+                        .run_iteration_in(Some(cfg.ruleset.as_str()))
+                        .map_err(DuckdbBackendError::Backend)?;
+                }
                 Ok(())
             }
             // `(saturate inner)` — run inner repeatedly until none
@@ -725,6 +780,16 @@ impl DuckdbBackend {
                 expr: duck::Term::var(v2.name.clone()),
             }]);
         }
+        // `(= var lit)` — bind var to the literal.
+        for (var_side, lit_side) in [(lhs, rhs), (rhs, lhs)] {
+            if let (GenericExpr::Var(_, v), GenericExpr::Lit(_, _)) = (var_side, lit_side) {
+                let expr = self.translate_expr(lit_side)?;
+                return Ok(vec![duck::Atom::Bind {
+                    var: v.name.clone(),
+                    expr,
+                }]);
+            }
+        }
         // `(= var (primitive_call args))` — bind var to the
         // primitive's result AND require the result to be truthy
         // (since term encoding rewrites the original `(prim args)`
@@ -806,7 +871,24 @@ impl DuckdbBackend {
                     .iter()
                     .map(|e| self.translate_expr(e))
                     .collect::<Result<_, _>>()?;
-                Ok(duck::Term::prim(p.name(), tr))
+                // Rewrite string-typed `+` to `string-concat` so the
+                // SQL backend emits `||`/`concat`, not numeric `+`.
+                // Rewrite i64-typed `/` to integer division (DuckDB
+                // promotes BIGINT/BIGINT to DOUBLE otherwise).
+                let pname = p.name();
+                let pout = p.output().name();
+                let name = if pname == "+" && pout == "String" {
+                    "string-concat"
+                } else if pname == "/" && pout == "i64" {
+                    "int-div"
+                } else if pname == "^" && pout == "i64" {
+                    // i64 `^` is XOR; f64 `^` is power. DuckDB `^`
+                    // is power for any numeric, so dispatch.
+                    "i64-xor"
+                } else {
+                    pname
+                };
+                Ok(duck::Term::prim(name, tr))
             }
             // Function call in expression position: a read.
             // Compiles to a SQL subquery that fetches the function's
@@ -923,6 +1005,9 @@ impl DuckdbBackend {
                     expr,
                 }])
             }
+            GenericAction::Panic(_, msg) => {
+                Ok(vec![duck::Action::Panic { msg: msg.clone() }])
+            }
             other => Err(DuckdbBackendError::Unsupported(format!(
                 "rule action: {other}"
             ))),
@@ -936,10 +1021,10 @@ impl DuckdbBackend {
 /// normal form, and the rule semantics is "filter on the
 /// primitive holding".
 fn is_filter_primitive(name: &str) -> bool {
-    matches!(
-        name,
-        "<" | "<=" | ">" | ">=" | "=" | "!=" | "bool-!=" | "guard" | "and" | "or" | "not"
-    )
+    // Only the operators that return Unit-on-success and fail-on-no-result
+    // qualify. `bool-!=`/`and`/`or`/`not` return Bool values; `=` is
+    // handled at fact level, not as a primitive call.
+    matches!(name, "<" | "<=" | ">" | ">=" | "!=" | "guard")
 }
 
 fn literal_to_duck(l: &EgLit) -> Result<duck::Literal, DuckdbBackendError> {

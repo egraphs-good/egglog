@@ -165,6 +165,11 @@ pub enum Action {
     /// rule's materialized match table. Subsequent actions reference
     /// `var` as a regular term.
     LetExpr { var: String, expr: Term },
+    /// `(panic msg)` action: raise a runtime error if the rule body
+    /// matches at all. Compiles to `SELECT error('msg') FROM <body>
+    /// LIMIT 1` — DuckDB only evaluates `error()` on returned rows, so
+    /// no match = no error.
+    Panic { msg: String },
 }
 
 /// A whole rule.
@@ -505,6 +510,48 @@ impl EGraph {
         self.debug_sql("insert_terms", &sql);
         self.conn.execute(&sql, [])?;
         Ok(())
+    }
+
+    /// Run rules whose ruleset is in `allowed` once. Empty set means
+    /// "run all rules". Returns total rows inserted.
+    pub fn run_iteration_in_set(&mut self, allowed: &[&str]) -> Result<usize> {
+        let allow_all = allowed.is_empty();
+        // Build the iteration with the existing single-ruleset path
+        // by using a closure on the rule list. Mirrors run_iteration_in
+        // but checks set membership.
+        self.next_ts += 1;
+        let cur = self.next_ts;
+        let mut total: usize = 0;
+        let last_run_ats: HashMap<String, i64> = self.last_run_at.clone();
+        for rule in &self.rules {
+            if !allow_all && !allowed.iter().any(|rs| rule.ruleset == *rs) {
+                continue;
+            }
+            let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
+            for variant in &rule.variants {
+                let bind = |sql: &str| -> String {
+                    sql.replace("?1", &last.to_string())
+                        .replace("?2", &cur.to_string())
+                };
+                if let Some(mat_sql_template) = &variant.materialize {
+                    let mat_sql = bind(mat_sql_template);
+                    self.debug_sql("mat", &mat_sql);
+                    self.conn.execute(&mat_sql, [])?;
+                }
+                for sql in &variant.actions {
+                    let bound_sql = bind(sql);
+                    self.debug_sql(
+                        if variant.materialize.is_some() { "mat-act" } else { "act" },
+                        &bound_sql,
+                    );
+                    let n = self.conn.execute(&bound_sql, [])?;
+                    self.rules_affected = self.rules_affected.wrapping_add(n as u64);
+                    total += n;
+                }
+            }
+            self.last_run_at.insert(rule.name.clone(), cur);
+        }
+        Ok(total)
     }
 
     /// Run rules in `ruleset` once (or all rules when `ruleset` is

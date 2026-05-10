@@ -95,6 +95,7 @@ pub(crate) fn compile_rule(
                 }
             }
             Action::LetExpr { .. } => { /* no validation needed */ }
+            Action::Panic { .. } => { /* no validation needed */ }
         }
     }
 
@@ -105,19 +106,20 @@ pub(crate) fn compile_rule(
         .filter_map(|(i, a)| matches!(a, Atom::Func { .. }).then_some(i))
         .collect();
 
-    if func_atom_indices.is_empty() {
-        return Err(anyhow!(
-            "rule {}: at least one function-table atom required",
-            rule.name
-        ));
-    }
     if rule.actions.is_empty() {
         return Err(anyhow!("rule {}: at least one action required", rule.name));
     }
 
-    let mut variants = Vec::with_capacity(func_atom_indices.len());
-    for (variant_idx, &focus) in func_atom_indices.iter().enumerate() {
-        variants.push(compile_variant(rule, variant_idx, focus, functions)?);
+    let mut variants = Vec::with_capacity(func_atom_indices.len().max(1));
+    if func_atom_indices.is_empty() {
+        // No Func atom — rule fires every iteration. Idempotent
+        // INSERTs make this safe; non-idempotent rules with empty
+        // bodies don't really make sense in egglog.
+        variants.push(compile_variant(rule, 0, None, functions)?);
+    } else {
+        for (variant_idx, &focus) in func_atom_indices.iter().enumerate() {
+            variants.push(compile_variant(rule, variant_idx, Some(focus), functions)?);
+        }
     }
     Ok(CompiledRule {
         name: rule.name.clone(),
@@ -129,11 +131,17 @@ pub(crate) fn compile_rule(
 fn compile_variant(
     rule: &Rule,
     variant_idx: usize,
-    focus: usize,
+    focus: Option<usize>,
     functions: &HashMap<String, FunctionInfo>,
 ) -> Result<CompiledVariant> {
     // 1) Build the body's FROM/WHERE and a binding for body vars.
     let (from, where_clause, mut binding) = build_query(rule, focus)?;
+    // No Func atoms → use a 1-row dummy as FROM source.
+    let from = if from.is_empty() {
+        "(SELECT 1) __empty__".to_string()
+    } else {
+        from
+    };
 
     // 2) Decide whether we need the materialized path.
     let has_let = rule
@@ -309,8 +317,44 @@ fn walk_body(
                 where_parts.push(term_sql(t, &binding, rule_name)?);
             }
             Atom::Bind { var, expr } => {
-                let s = term_sql(expr, &binding, rule_name)?;
-                binding.insert(var.clone(), s);
+                // Symmetric handling for Var-Var binds: if one side is
+                // already bound and the other isn't, propagate the
+                // binding to the unbound side. Term encoding produces
+                // these to chain proof-normalized equalities.
+                if let Term::Var(other) = expr {
+                    let var_bound = binding.contains_key(var);
+                    let other_bound = binding.contains_key(other);
+                    match (var_bound, other_bound) {
+                        (true, true) => {
+                            let l = binding[var].clone();
+                            let r = binding[other].clone();
+                            where_parts.push(format!("{l} = {r}"));
+                        }
+                        (true, false) => {
+                            let l = binding[var].clone();
+                            binding.insert(other.clone(), l);
+                        }
+                        (false, true) => {
+                            let r = binding[other].clone();
+                            binding.insert(var.clone(), r);
+                        }
+                        (false, false) => {
+                            return Err(anyhow!(
+                                "rule {rule_name}: Bind var={var} = {other}: neither var bound"
+                            ));
+                        }
+                    }
+                } else {
+                    let s = term_sql(expr, &binding, rule_name)?;
+                    match binding.get(var) {
+                        None => {
+                            binding.insert(var.clone(), s);
+                        }
+                        Some(prev) => {
+                            where_parts.push(format!("{prev} = {s}"));
+                        }
+                    }
+                }
             }
         }
     }
@@ -344,9 +388,9 @@ fn walk_body(
 
 fn build_query(
     rule: &Rule,
-    focus: usize,
+    focus: Option<usize>,
 ) -> Result<(String, String, HashMap<String, String>)> {
-    walk_body(&rule.body, Some(focus), &rule.name)
+    walk_body(&rule.body, focus, &rule.name)
 }
 
 /// Compile a single action under the *simple* path: INSERT/DELETE
@@ -410,6 +454,14 @@ fn compile_simple_action(
             // materialized path before we reach this point.
             Err(anyhow!(
                 "rule {rule_name}: internal: Let reached simple-action codegen"
+            ))
+        }
+        Action::Panic { msg } => {
+            // `error()` is only evaluated on returned rows, so 0 rows
+            // = no error, ≥1 row = SQL exception.
+            let safe = msg.replace('\'', "''");
+            Ok(format!(
+                "SELECT error('panic: {safe}') FROM {from}{where_clause} LIMIT 1"
             ))
         }
     }
@@ -505,6 +557,12 @@ fn compile_materialized_action(
                 q(target),
             ))
         }
+        Action::Panic { msg } => {
+            let safe = msg.replace('\'', "''");
+            Ok(format!(
+                "SELECT error('panic: {safe}') FROM {from} LIMIT 1"
+            ))
+        }
     }
 }
 
@@ -582,8 +640,21 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
     };
     match op {
         "+" | "-" | "*" | "/" => binop(op),
-        // Bitwise integer ops (DuckDB uses C-style operators).
-        "&" | "|" | "^" => binop(op),
+        "int-div" => binop("//"),
+        // Bitwise integer ops. DuckDB uses & | for AND/OR but `^` is
+        // exponentiation — for f64 `^` (power) we let it through; for
+        // i64 `^` (XOR) the frontend rewrites to `i64-xor`.
+        "&" | "|" => binop(op),
+        "^" => binop(op),
+        "i64-xor" => {
+            if args.len() != 2 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `i64-xor` expects 2 args, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("xor({}, {})", args[0], args[1]))
+        }
         "<<" | ">>" => binop(op),
         "<" | "<=" | ">" | ">=" => binop(op),
         "=" => binop("="),
@@ -595,6 +666,65 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
         "ordering-min" | "min" => func("LEAST"),
         "abs" => func("ABS"),
         "%" => binop("%"),
+        "neg" => unop("-"),
+        "not-i64" => unop("~"),
+        "to-f64" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `to-f64` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("CAST({} AS DOUBLE)", args[0]))
+        }
+        "to-i64" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `to-i64` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("CAST({} AS BIGINT)", args[0]))
+        }
+        "to-string" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `to-string` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("CAST({} AS VARCHAR)", args[0]))
+        }
+        "string-concat" => {
+            if args.is_empty() {
+                return Ok("''".to_string());
+            }
+            Ok(format!("({})", args.join(" || ")))
+        }
+        "replace" => {
+            if args.len() != 3 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `replace` expects 3 args, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("REPLACE({}, {}, {})", args[0], args[1], args[2]))
+        }
+        "count-matches" => {
+            if args.len() != 2 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `count-matches` expects 2 args, got {}",
+                    args.len()
+                ));
+            }
+            // Count occurrences = (len(haystack) - len(replace(haystack, needle, ''))) / len(needle).
+            // DuckDB has no direct count() so we compute it.
+            let h = &args[0];
+            let n = &args[1];
+            Ok(format!(
+                "((LENGTH({h}) - LENGTH(REPLACE({h}, {n}, ''))) / LENGTH({n}))"
+            ))
+        }
         "guard" => unop(""),
         _ => Err(anyhow!("rule {rule_name}: unknown primitive `{op}`")),
     }
