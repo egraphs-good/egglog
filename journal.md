@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## Q9: get_unchecked in UnionFind::find_naive (2026-05-09) — REVERTED
+
+**Hypothesis:** Hoisting bounds checks out of the parent-walk loop in `union-find/src/lib.rs::find_naive` should help rebuild-heavy benchmarks; cykjson doesn't enter rebuild paths so should be untouched. Invariant: every value in `parents[]` is itself a valid index.
+
+**Approach:** `parents.get_unchecked(cur.index())` with SAFETY comment. 7-line change in a function in a separate crate.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q8-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.294 → 0.290 (-1.3%)
+- hardboiled_conv1d_128: 0.765 → 0.758 (-0.9%)
+- luminal-llama: 0.216 → 0.217 (+0.4%, noise)
+- python_array_optimize: 0.511 → 0.511 (-0.0%, noise)
+- cykjson: 0.101 → 0.106 (**+4.7% regression**)
+- eggcc-extraction: 0.432 → 0.443 (**+2.5% regression**)
+- Overall average: +0.89%
+
+**VERDICT: REGRESSION** — Reverted. Cykjson +4.7% despite cross-crate isolation; eggcc +2.5% unexpected (eggcc is rebuild-heavy and should have benefited).
+
+**Lesson:** Cykjson's hyper-sensitivity reaches even cross-crate changes. Possible mechanisms: (a) `find_naive` IS called occasionally for cykjson (via `DisplacedTable::get_row_column` which the analyst may have undercounted), (b) the unsafe `get_unchecked` codegen somehow perturbs LTO inlining decisions across crate boundaries. Eggcc regression is harder to explain. **Implication: the cykjson canary is essentially impossible to bypass at this point. Further iteration risks net regressions.**
+
 ## Q8: Hoist FusedIntersectMat bind partition to per-stage (2026-05-09) — REVERTED
 
 **Hypothesis:** Q7's per-group partition can be done once per stage (group_key_len is invariant within a materialization). Should net a small additional gain.
