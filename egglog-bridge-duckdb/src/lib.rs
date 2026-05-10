@@ -565,6 +565,9 @@ impl EGraph {
                     let n = self.conn.execute(&bound_sql, [])?;
                     self.rules_affected = self.rules_affected.wrapping_add(n as u64);
                     total += n;
+                    if std::env::var("DUCK_TRACE_RULE_AFFECTED").is_ok() && n > 0 {
+                        eprintln!("[duck/rule_n] {} +{n}", rule.name);
+                    }
                 }
                 if let Some(cleanup) = &variant.cleanup {
                     self.conn.execute(cleanup, [])?;
@@ -619,6 +622,9 @@ impl EGraph {
                     let n = self.conn.execute(&bound_sql, [])?;
                     self.rules_affected = self.rules_affected.wrapping_add(n as u64);
                     total += n;
+                    if std::env::var("DUCK_TRACE_RULE_AFFECTED").is_ok() && n > 0 {
+                        eprintln!("[duck/rule_n] {} +{n}", rule.name);
+                    }
                 }
             }
             self.last_run_at.insert(rule.name.clone(), cur);

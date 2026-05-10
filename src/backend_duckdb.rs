@@ -538,13 +538,16 @@ impl DuckdbBackend {
             // than comparing total tuple counts, which can balance
             // out (deletes equal inserts within a rule).
             GenericSchedule::Saturate(_, inner) => {
+                let mut iters: usize = 0;
                 loop {
                     let before = self.db.rules_affected_total();
                     self.run_schedule(inner)?;
                     let after = self.db.rules_affected_total();
-                    if before == after {
-                        break;
-                    }
+                    iters += 1;
+                    if before == after { break; }
+                }
+                if std::env::var("DUCK_TRACE_SAT").is_ok() {
+                    eprintln!("[duck/sat] iters={iters}");
                 }
                 Ok(())
             }
