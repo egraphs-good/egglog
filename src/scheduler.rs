@@ -32,7 +32,34 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     fn filter_matches(&mut self, rule: &str, ruleset: &str, matches: &mut Matches) -> bool;
 }
 
+/// A scheduler that rematches the rebuilt e-graph every iteration.
+///
+/// For example, if `copy: R(x) -> S(x)` is skipped while `grow` adds a new
+/// `R(1)` row, a backlog scheduler can replay only the skipped `copy(R(0))`
+/// match while a fresh scheduler rematches and sees both `R(0)` and `R(1)`.
+pub trait FreshScheduler: dyn_clone::DynClone + Send + Sync {
+    /// Whether a rule should be queried against the current rebuilt e-graph in
+    /// this iteration.
+    fn should_search(&mut self, rule: &str, ruleset: &str) -> bool {
+        let _ = (rule, ruleset);
+        true
+    }
+
+    /// Whether or not the rules can be considered as saturated (i.e.,
+    /// `run_report.updated == false`).
+    fn can_stop(&mut self, rules: &[&str], ruleset: &str) -> bool {
+        let _ = (rules, ruleset);
+        true
+    }
+
+    /// Filter the current iteration's fresh matches for a rule.
+    ///
+    /// Unchosen matches are discarded after the iteration.
+    fn filter_matches(&mut self, rule: &str, ruleset: &str, matches: &mut Matches);
+}
+
 dyn_clone::clone_trait_object!(Scheduler);
+dyn_clone::clone_trait_object!(FreshScheduler);
 
 /// A collection of matches produced by a rule.
 /// The user can choose which matches to be fired.
@@ -149,18 +176,76 @@ define_id!(
     "A unique identifier for a scheduler in the EGraph."
 );
 
+#[derive(Clone)]
+enum SchedulerKind {
+    Backlog(Box<dyn Scheduler>),
+    Fresh(Box<dyn FreshScheduler>),
+}
+
 impl EGraph {
     /// Register a new scheduler and return its id.
     pub fn add_scheduler(&mut self, scheduler: Box<dyn Scheduler>) -> SchedulerId {
         self.schedulers.push(SchedulerRecord {
-            scheduler,
+            scheduler: SchedulerKind::Backlog(scheduler),
             rule_info: Default::default(),
         })
     }
 
-    /// Removes a scheduler
+    /// Register a new fresh-rematch scheduler and return its id.
+    pub fn add_fresh_scheduler(&mut self, scheduler: Box<dyn FreshScheduler>) -> SchedulerId {
+        self.schedulers.push(SchedulerRecord {
+            scheduler: SchedulerKind::Fresh(scheduler),
+            rule_info: Default::default(),
+        })
+    }
+
+    /// Removes a backlog scheduler.
+    ///
+    /// Returns `None` for fresh scheduler ids; use
+    /// [`EGraph::remove_fresh_scheduler`] to remove those.
     pub fn remove_scheduler(&mut self, scheduler_id: SchedulerId) -> Option<Box<dyn Scheduler>> {
-        self.schedulers.take(scheduler_id).map(|r| r.scheduler)
+        if matches!(
+            self.schedulers.get(scheduler_id),
+            Some(SchedulerRecord {
+                scheduler: SchedulerKind::Backlog(_),
+                ..
+            })
+        ) {
+            self.schedulers
+                .take(scheduler_id)
+                .and_then(|r| match r.scheduler {
+                    SchedulerKind::Backlog(scheduler) => Some(scheduler),
+                    SchedulerKind::Fresh(_) => None,
+                })
+        } else {
+            None
+        }
+    }
+
+    /// Removes a fresh-rematch scheduler.
+    ///
+    /// Returns `None` for backlog scheduler ids; use [`EGraph::remove_scheduler`]
+    /// to remove those.
+    pub fn remove_fresh_scheduler(
+        &mut self,
+        scheduler_id: SchedulerId,
+    ) -> Option<Box<dyn FreshScheduler>> {
+        if matches!(
+            self.schedulers.get(scheduler_id),
+            Some(SchedulerRecord {
+                scheduler: SchedulerKind::Fresh(_),
+                ..
+            })
+        ) {
+            self.schedulers
+                .take(scheduler_id)
+                .and_then(|r| match r.scheduler {
+                    SchedulerKind::Fresh(scheduler) => Some(scheduler),
+                    SchedulerKind::Backlog(_) => None,
+                })
+        } else {
+            None
+        }
     }
 
     /// Runs a ruleset for one iteration using the given ruleset
@@ -195,26 +280,53 @@ impl EGraph {
 
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[scheduler_id];
+        let fresh = matches!(record.scheduler, SchedulerKind::Fresh(_));
         rules.iter().for_each(|(id, rule)| {
             record
                 .rule_info
                 .entry((*id).to_owned())
-                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
+                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id, fresh));
         });
 
-        // Step 2: run all the queries for one iteration
-        let query_rules = rules
-            .iter()
-            .filter_map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
+        let scheduler = &mut record.scheduler;
+        let rule_info = &mut record.rule_info;
 
-                if rule_info.should_seek {
-                    Some(rule_info.query_rule)
-                } else {
-                    None
+        // Step 2: run all the queries for one iteration
+        let query_rules = match scheduler {
+            SchedulerKind::Backlog(_) => rules
+                .iter()
+                .filter_map(|(rule_id, _rule)| {
+                    let rule_info = rule_info.get(rule_id).unwrap();
+                    if rule_info.should_seek {
+                        Some(rule_info.query_rule)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>(),
+            SchedulerKind::Fresh(scheduler) => {
+                for (rule_id, _rule) in rules.iter() {
+                    rule_info
+                        .get_mut(rule_id)
+                        .unwrap()
+                        .matches
+                        .lock()
+                        .unwrap()
+                        .clear();
                 }
-            })
-            .collect::<Vec<_>>();
+                rules
+                    .iter()
+                    .filter_map(|(rule_id, _rule)| {
+                        let rule_info = rule_info.get(rule_id).unwrap();
+                        if scheduler.should_search(rule_id, ruleset) {
+                            Some(rule_info.query_rule)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
 
         let query_iter_report = self
             .backend
@@ -224,17 +336,24 @@ impl EGraph {
         // Step 3: let the scheduler decide which matches need to be kept
         self.backend.with_execution_state(|state| {
             for (rule_id, _rule) in rules.iter() {
-                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+                let rule_info = rule_info.get_mut(rule_id).unwrap();
 
                 let matches: Vec<Value> =
                     std::mem::take(rule_info.matches.lock().unwrap().as_mut());
                 let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                rule_info.should_seek =
-                    record
-                        .scheduler
-                        .filter_matches(rule_id, ruleset, &mut matches);
                 let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
+                match scheduler {
+                    SchedulerKind::Backlog(scheduler) => {
+                        rule_info.should_seek =
+                            scheduler.filter_matches(rule_id, ruleset, &mut matches);
+                        *rule_info.matches.lock().unwrap() =
+                            matches.instantiate(state, &table_action);
+                    }
+                    SchedulerKind::Fresh(scheduler) => {
+                        scheduler.filter_matches(rule_id, ruleset, &mut matches);
+                        let _ = matches.instantiate(state, &table_action);
+                    }
+                }
             }
         });
         self.backend.flush_updates();
@@ -262,7 +381,10 @@ impl EGraph {
         // if the scheduler says it shouldn't stop, then it's considered updated (unsaturated)
         action_report.updated = action_report.updated || {
             let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
-            !record.scheduler.can_stop(&rule_ids, ruleset)
+            match scheduler {
+                SchedulerKind::Backlog(scheduler) => !scheduler.can_stop(&rule_ids, ruleset),
+                SchedulerKind::Fresh(scheduler) => !scheduler.can_stop(&rule_ids, ruleset),
+            }
         };
 
         query_report.union(action_report);
@@ -276,7 +398,7 @@ impl EGraph {
 
 #[derive(Clone)]
 pub(crate) struct SchedulerRecord {
-    scheduler: Box<dyn Scheduler>,
+    scheduler: SchedulerKind,
     rule_info: HashMap<String, SchedulerRuleInfo>,
 }
 
@@ -320,7 +442,12 @@ impl ExternalFunction for CollectMatches {
 }
 
 impl SchedulerRuleInfo {
-    fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
+    fn new(
+        egraph: &mut EGraph,
+        rule: &ResolvedCoreRule,
+        name: &str,
+        fresh: bool,
+    ) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
         let unit = egraph.backend.base_values().get(());
@@ -344,13 +471,14 @@ impl SchedulerRuleInfo {
         });
 
         // Step 1: build the query rule
+        // Fresh schedulers rematch the rebuilt graph every step by querying non-seminaively.
         let mut qrule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, true),
+            egraph.backend.new_rule(name, !fresh),
             &egraph.functions,
             &egraph.type_info,
             true, // seminaive rule context
         );
-        qrule_builder.query(&rule.body, true);
+        qrule_builder.query(&rule.body, !fresh);
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -398,6 +526,8 @@ impl SchedulerRuleInfo {
 
 #[cfg(test)]
 mod test {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     #[derive(Clone)]
@@ -415,6 +545,28 @@ mod test {
                 }
             }
             matches.match_size() < self.n * 2
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SkipCopyOnFirstIterationFreshScheduler {
+        copy_calls: usize,
+        copy_match_sizes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl FreshScheduler for SkipCopyOnFirstIterationFreshScheduler {
+        fn filter_matches(&mut self, rule: &str, _ruleset: &str, matches: &mut Matches) {
+            if rule == "copy" {
+                self.copy_calls += 1;
+                self.copy_match_sizes
+                    .lock()
+                    .unwrap()
+                    .push(matches.match_size());
+                if self.copy_calls == 1 {
+                    return;
+                }
+            }
+            matches.choose_all();
         }
     }
 
@@ -475,5 +627,87 @@ mod test {
         }
 
         assert_eq!(iter, 12);
+    }
+
+    #[test]
+    fn test_fresh_scheduler_rematches_rebuilt_graph() {
+        let mut egraph = EGraph::default();
+        let copy_match_sizes = Arc::new(Mutex::new(Vec::new()));
+        let scheduler_id =
+            egraph.add_fresh_scheduler(Box::new(SkipCopyOnFirstIterationFreshScheduler {
+                copy_calls: 0,
+                copy_match_sizes: copy_match_sizes.clone(),
+            }));
+        let input = r#"
+        (ruleset test)
+        (relation R (i64))
+        (relation S (i64))
+        (R 0)
+        (rule ((R x) (< x 1)) ((R (+ x 1))) :ruleset test :name "grow")
+        (rule ((R x)) ((S x)) :ruleset test :name "copy")
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let first = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        assert!(first.updated);
+        assert_eq!(egraph.get_size("R"), 2);
+        assert_eq!(egraph.get_size("S"), 0);
+
+        let second = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        assert!(second.updated);
+        assert_eq!(*copy_match_sizes.lock().unwrap(), vec![1, 2]);
+        assert_eq!(egraph.get_size("S"), 2);
+        assert_eq!(second.num_matches_per_rule["copy"], 2);
+    }
+
+    #[test]
+    fn test_fresh_scheduler_does_not_match_subsumed_rows() {
+        let mut egraph = EGraph::default();
+        let copy_match_sizes = Arc::new(Mutex::new(Vec::new()));
+        let scheduler_id =
+            egraph.add_fresh_scheduler(Box::new(SkipCopyOnFirstIterationFreshScheduler {
+                copy_calls: 1,
+                copy_match_sizes: copy_match_sizes.clone(),
+            }));
+        let input = r#"
+        (ruleset analysis)
+        (ruleset test)
+        (datatype Math
+          (Add Math Math)
+          (Mul Math Math)
+          (Num i64))
+        (relation Hit (i64))
+        (let expr (Add (Mul (Num 0) (Num 1)) (Num 2)))
+        (rewrite (Mul (Num 0) x) (Num 0) :subsume :ruleset analysis)
+        (rewrite (Add (Num 0) x) x :subsume :ruleset analysis)
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a)) :ruleset test :name "copy")
+        (run-schedule (saturate (run analysis)))
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let report = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(*copy_match_sizes.lock().unwrap(), vec![0]);
+        assert_eq!(egraph.get_size("Hit"), 0);
+        assert!(!report.updated);
+    }
+
+    #[test]
+    fn test_remove_fresh_scheduler() {
+        let mut egraph = EGraph::default();
+        let backlog_id = egraph.add_scheduler(Box::new(FirstNScheduler { n: 1 }));
+        let fresh_id =
+            egraph.add_fresh_scheduler(Box::new(SkipCopyOnFirstIterationFreshScheduler::default()));
+
+        assert!(egraph.remove_scheduler(fresh_id).is_none());
+        assert!(egraph.remove_fresh_scheduler(backlog_id).is_none());
+        assert!(egraph.remove_fresh_scheduler(fresh_id).is_some());
+        assert!(egraph.remove_scheduler(backlog_id).is_some());
     }
 }
