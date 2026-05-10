@@ -244,43 +244,11 @@ enum DynamicIndex {
     SparseColumn(SparseColumnIndex),
 }
 
-/// This struct is used to mark subsets that can contain non-stale entries.
-/// Whether a subset can be stale depends on the type of index it came from.
-/// Indices that come from a table may contain stale entries, while
-/// those that are built on the fly will not.
-struct PotentiallyStale<T> {
-    inner: T,
-    can_be_stale: bool,
-}
-
-impl<T> PotentiallyStale<T> {
-    fn maybe_stale(inner: T) -> Self {
-        Self {
-            inner,
-            can_be_stale: true,
-        }
-    }
-
-    fn not_stale(inner: T) -> Self {
-        Self {
-            inner,
-            can_be_stale: false,
-        }
-    }
-}
-
-impl PotentiallyStale<SubsetRef<'_>> {
-    fn size(&self) -> usize {
-        self.inner.size()
-    }
-
-    fn to_owned(&self, pool: &Pool<SortedOffsetVector>) -> PotentiallyStale<Subset> {
-        PotentiallyStale {
-            inner: self.inner.to_owned(pool),
-            can_be_stale: self.can_be_stale,
-        }
-    }
-}
+// PotentiallyStale<T> was removed. The `can_be_stale` bit is now a field on
+// `Prober` (set at construction time based on which DynamicIndex variant is
+// used). Call sites hoist `prober.can_be_stale && has_stale` once before the
+// inner loop and pass the combined bool directly to `refine_subset`, avoiding
+// the per-call AND inside the hot path.
 
 /// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
 /// borrowed `SubsetRef`, or `None` if the intersection is empty.
@@ -315,22 +283,25 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
 struct Prober {
     node: Arc<TrieNode>,
     ix: DynamicIndex,
+    /// True iff subsets returned by this prober may contain stale rows.
+    /// Cached* variants read from the table index (may be stale);
+    /// Dynamic*, DynamicColumn, and SparseColumn build fresh indices (never stale).
+    can_be_stale: bool,
 }
 
 impl Prober {
-    fn get_subset<'a>(&'a self, key: &'a [Value]) -> Option<PotentiallyStale<SubsetRef<'a>>> {
+    fn get_subset<'a>(&'a self, key: &'a [Value]) -> Option<SubsetRef<'a>> {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer,
                 table,
             } => {
                 let subset_ref = table.get().unwrap().get_subset(key)?;
-                let subset = if let Some(range) = intersect_outer {
-                    intersect_with_dense_ref(subset_ref, *range)?
+                if let Some(range) = intersect_outer {
+                    intersect_with_dense_ref(subset_ref, *range)
                 } else {
-                    subset_ref
-                };
-                Some(PotentiallyStale::maybe_stale(subset))
+                    Some(subset_ref)
+                }
             }
             DynamicIndex::CachedColumn {
                 intersect_outer,
@@ -338,24 +309,21 @@ impl Prober {
             } => {
                 debug_assert_eq!(key.len(), 1);
                 let subset_ref = table.get().unwrap().get_subset(&key[0])?;
-                let subset = if let Some(range) = intersect_outer {
-                    intersect_with_dense_ref(subset_ref, *range)?
+                if let Some(range) = intersect_outer {
+                    intersect_with_dense_ref(subset_ref, *range)
                 } else {
-                    subset_ref
-                };
-                Some(PotentiallyStale::maybe_stale(subset))
+                    Some(subset_ref)
+                }
             }
-            DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(PotentiallyStale::not_stale),
-            DynamicIndex::DynamicColumn(tab) => {
-                tab.get_subset(&key[0]).map(PotentiallyStale::not_stale)
-            }
+            DynamicIndex::Dynamic(tab) => tab.get_subset(key),
+            DynamicIndex::DynamicColumn(tab) => tab.get_subset(&key[0]),
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
-                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
+                tab.get_subset(key[0])
             }
         }
     }
-    fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
+    fn for_each(&self, mut f: impl FnMut(&[Value], SubsetRef)) {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer: Some(range),
@@ -364,17 +332,14 @@ impl Prober {
                 let range = *range;
                 table.get().unwrap().for_each(|k, v| {
                     if let Some(res) = intersect_with_dense_ref(v, range) {
-                        f(k, PotentiallyStale::maybe_stale(res))
+                        f(k, res)
                     }
                 });
             }
             DynamicIndex::Cached {
                 intersect_outer: None,
                 table,
-            } => table
-                .get()
-                .unwrap()
-                .for_each(|k, v| f(k, PotentiallyStale::maybe_stale(v))),
+            } => table.get().unwrap().for_each(|k, v| f(k, v)),
             DynamicIndex::CachedColumn {
                 intersect_outer: Some(range),
                 table,
@@ -382,7 +347,7 @@ impl Prober {
                 let range = *range;
                 table.get().unwrap().for_each(|k, v| {
                     if let Some(res) = intersect_with_dense_ref(v, range) {
-                        f(&[*k], PotentiallyStale::maybe_stale(res))
+                        f(&[*k], res)
                     }
                 });
             }
@@ -390,19 +355,16 @@ impl Prober {
                 intersect_outer: None,
                 table,
             } => {
-                table
-                    .get()
-                    .unwrap()
-                    .for_each(|k, v| f(&[*k], PotentiallyStale::maybe_stale(v)));
+                table.get().unwrap().for_each(|k, v| f(&[*k], v));
             }
             DynamicIndex::Dynamic(tab) => {
-                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
+                tab.for_each(|k, v| f(k, v));
             }
             DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
-                f(&[*k], PotentiallyStale::not_stale(v));
+                f(&[*k], v);
             }),
             DynamicIndex::SparseColumn(tab) => {
-                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
+                tab.for_each(|k, v| f(k, v));
             }
         }
     }
@@ -975,9 +937,16 @@ impl<'a> JoinState<'a> {
                 DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
             }
         };
+        // Cached* variants index into the persistent table (may have stale rows).
+        // Dynamic*, DynamicColumn, SparseColumn build fresh indices (never stale).
+        let can_be_stale = matches!(
+            dyn_index,
+            DynamicIndex::Cached { .. } | DynamicIndex::CachedColumn { .. }
+        );
         Prober {
             node: trie_node,
             ix: dyn_index,
+            can_be_stale,
         }
     }
     fn get_column_index(
@@ -1173,15 +1142,17 @@ impl<'a> JoinState<'a> {
         }
 
         fn refine_subset(
-            sub: PotentiallyStale<Subset>,
+            sub: Subset,
             constraints: &[Constraint],
             table: &WrappedTableRef,
-            has_stale: bool,
+            // must_refine_live = prober.can_be_stale && table.has_stale_rows(),
+            // hoisted once per prober before the hot loop.
+            must_refine_live: bool,
         ) -> Subset {
-            let sub = if sub.can_be_stale && has_stale {
-                table.refine_live(sub.inner)
+            let sub = if must_refine_live {
+                table.refine_live(sub)
             } else {
-                sub.inner
+                sub
             };
             if constraints.is_empty() {
                 sub
@@ -1204,13 +1175,15 @@ impl<'a> JoinState<'a> {
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
                     let info = &self.db.tables[atoms[a.atom].table];
                     let table = info.table.as_ref();
-                    let has_stale = table.has_stale_rows();
+                    // Hoist the AND once: avoids re-evaluating per closure call.
+                    let must_refine_live = prober.can_be_stale && table.has_stale_rows();
                     let cap = cmp::min(chunk_size, cur_size);
                     let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                     prober.for_each(|val, x| {
                         updates.push_binding(*var, val[0]);
                         if x.size() <= 16 {
-                            let sub = refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale);
+                            let sub =
+                                refine_subset(x.to_owned(&pool), &a.cs, &table, must_refine_live);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
@@ -1221,7 +1194,12 @@ impl<'a> JoinState<'a> {
                                 prober
                                     .node
                                     .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale)
+                                        refine_subset(
+                                            x.to_owned(&pool),
+                                            &a.cs,
+                                            &table,
+                                            must_refine_live,
+                                        )
                                     });
                             if node.subset.is_empty() {
                                 updates.rollback();
@@ -1253,10 +1231,13 @@ impl<'a> JoinState<'a> {
                     let larger_atom = larger_scan.atom;
                     let large_info = &self.db.tables[atoms[larger_atom].table];
                     let large_table = large_info.table.as_ref();
-                    let large_has_stale = large_table.has_stale_rows();
+                    // Hoist the AND once per prober — avoids re-evaluating per closure call.
+                    let must_refine_live_large =
+                        larger.can_be_stale && large_table.has_stale_rows();
                     let small_info = &self.db.tables[atoms[smaller_atom].table];
                     let small_table = small_info.table.as_ref();
-                    let small_has_stale = small_table.has_stale_rows();
+                    let must_refine_live_small =
+                        smaller.can_be_stale && small_table.has_stale_rows();
                     let cap = cmp::min(chunk_size, cur_size);
                     let mut updates = FrameUpdates::from_pooled_vec(self.take_update_buf(cap), cap);
                     smaller.for_each(|val, small_sub| {
@@ -1267,7 +1248,7 @@ impl<'a> JoinState<'a> {
                                     small_sub.to_owned(&pool),
                                     &smaller_scan.cs,
                                     &small_table,
-                                    small_has_stale,
+                                    must_refine_live_small,
                                 );
                                 if small_sub.is_empty() {
                                     updates.rollback();
@@ -1284,7 +1265,7 @@ impl<'a> JoinState<'a> {
                                             small_sub.to_owned(&pool),
                                             &smaller_scan.cs,
                                             &small_table,
-                                            small_has_stale,
+                                            must_refine_live_small,
                                         )
                                     },
                                 );
@@ -1299,7 +1280,7 @@ impl<'a> JoinState<'a> {
                                     large_sub.to_owned(&pool),
                                     &larger_scan.cs,
                                     &large_table,
-                                    large_has_stale,
+                                    must_refine_live_large,
                                 );
                                 if large_sub.is_empty() {
                                     updates.rollback();
@@ -1316,7 +1297,7 @@ impl<'a> JoinState<'a> {
                                             large_sub.to_owned(&pool),
                                             &larger_scan.cs,
                                             &large_table,
-                                            large_has_stale,
+                                            must_refine_live_large,
                                         )
                                     },
                                 );
@@ -1356,15 +1337,19 @@ impl<'a> JoinState<'a> {
                     let main_spec = &rest[smallest];
                     let main_spec_info = &self.db.tables[atoms[main_spec.atom].table];
                     let main_spec_table = main_spec_info.table.as_ref();
-                    let main_spec_has_stale = main_spec_table.has_stale_rows();
-                    // Pre-compute has_stale for each scan to avoid vtable calls in the hot loop.
-                    let rest_has_stale: SmallVec<[bool; 3]> = rest
+                    // Hoist AND of can_be_stale && has_stale for the lead (main) prober.
+                    let must_refine_live_main = probers[smallest].can_be_stale
+                        && main_spec_table.has_stale_rows();
+                    // Pre-compute must_refine_live per scan to avoid vtable calls in the hot loop.
+                    let rest_must_refine_live: SmallVec<[bool; 3]> = rest
                         .iter()
-                        .map(|scan| {
-                            self.db.tables[atoms[scan.atom].table]
-                                .table
-                                .as_ref()
-                                .has_stale_rows()
+                        .zip(probers.iter())
+                        .map(|(scan, prober)| {
+                            prober.can_be_stale
+                                && self.db.tables[atoms[scan.atom].table]
+                                    .table
+                                    .as_ref()
+                                    .has_stale_rows()
                         })
                         .collect();
 
@@ -1387,7 +1372,7 @@ impl<'a> JoinState<'a> {
                                             sub.to_owned(&pool),
                                             &rest[i].cs,
                                             &table,
-                                            rest_has_stale[i],
+                                            rest_must_refine_live[i],
                                         );
                                         if sub.is_empty() {
                                             updates.rollback();
@@ -1404,7 +1389,7 @@ impl<'a> JoinState<'a> {
                                                     sub.to_owned(&pool),
                                                     &rest[i].cs,
                                                     &table,
-                                                    rest_has_stale[i],
+                                                    rest_must_refine_live[i],
                                                 )
                                             },
                                         );
@@ -1425,7 +1410,7 @@ impl<'a> JoinState<'a> {
                                     sub.to_owned(&pool),
                                     &main_spec.cs,
                                     &main_spec_table,
-                                    main_spec_has_stale,
+                                    must_refine_live_main,
                                 );
                                 if main_sub.is_empty() {
                                     updates.rollback();
@@ -1443,7 +1428,7 @@ impl<'a> JoinState<'a> {
                                             sub,
                                             &main_spec.cs,
                                             &main_spec_table,
-                                            main_spec_has_stale,
+                                            must_refine_live_main,
                                         )
                                     },
                                 );
@@ -1540,14 +1525,16 @@ impl<'a> JoinState<'a> {
                         )
                     })
                     .collect::<SmallVec<[(usize, AtomId, Prober); 4]>>();
-                // Pre-compute has_stale per prober to avoid vtable calls in the hot loop.
-                let index_has_stale: SmallVec<[bool; 4]> = index_probers
+                // Pre-compute must_refine_live per prober to avoid vtable calls in the hot loop.
+                // AND prober.can_be_stale with has_stale_rows() once here — loop-invariant.
+                let index_must_refine_live: SmallVec<[bool; 4]> = index_probers
                     .iter()
-                    .map(|(_, atom, _)| {
-                        self.db.tables[atoms[*atom].table]
-                            .table
-                            .as_ref()
-                            .has_stale_rows()
+                    .map(|(_, atom, prober)| {
+                        prober.can_be_stale
+                            && self.db.tables[atoms[*atom].table]
+                                .table
+                                .as_ref()
+                                .has_stale_rows()
                     })
                     .collect();
                 let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
@@ -1599,7 +1586,7 @@ impl<'a> JoinState<'a> {
                                 subset.to_owned(&pool),
                                 cs,
                                 &table_info.table.as_ref(),
-                                index_has_stale[prober_idx],
+                                index_must_refine_live[prober_idx],
                             );
                             if subset.is_empty() {
                                 updates.rollback();
@@ -1651,14 +1638,17 @@ impl<'a> JoinState<'a> {
                         )
                     })
                     .collect::<SmallVec<[Prober; 4]>>();
-                // Pre-compute has_stale per prober to avoid vtable calls in the hot loop.
-                let probers_has_stale: SmallVec<[bool; 4]> = to_intersect
+                // Pre-compute must_refine_live per prober to avoid vtable calls in the hot loop.
+                // AND prober.can_be_stale with has_stale_rows() once here — loop-invariant.
+                let probers_must_refine_live: SmallVec<[bool; 4]> = to_intersect
                     .iter()
-                    .map(|(spec, _)| {
-                        self.db.tables[atoms[spec.to_index.atom].table]
-                            .table
-                            .as_ref()
-                            .has_stale_rows()
+                    .zip(probers.iter())
+                    .map(|((spec, _), prober)| {
+                        prober.can_be_stale
+                            && self.db.tables[atoms[spec.to_index.atom].table]
+                                .table
+                                .as_ref()
+                                .has_stale_rows()
                     })
                     .collect();
 
@@ -1691,7 +1681,7 @@ impl<'a> JoinState<'a> {
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table
                                     .as_ref(),
-                                probers_has_stale[j],
+                                probers_must_refine_live[j],
                             );
                             if subset.is_empty() {
                                 return false;
