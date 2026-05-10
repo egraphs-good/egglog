@@ -1,5 +1,31 @@
 # Experiment Journal
 
+## Q7: Pre-partition bind in FusedIntersectMat (2026-05-09) — KEPT
+
+**Hypothesis:** In `JoinStage::FusedIntersectMat`'s `MatScanMode::Full` block, the per-`non_keys`-row inner loop scanned `bind` TWICE with branch filters (col.index() < group_key_len vs >= group_key_len). For groups with many non_keys rows, this is quadratic in `bind.len()`.
+
+**Approach:** Partition `bind` into `bind_key`/`bind_nonkey: SmallVec<[(ColumnId, Variable); 2]>` ONCE per group (just inside the outer scan loop). Then each per-row inner loop iterates only the relevant SmallVec, with no branching. Same change applied to `MatScanMode::KeyOnly`.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q6-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.290 (-1.3%)
+- hardboiled_conv1d_128: 0.760 → 0.757 (-0.3%, noise)
+- luminal-llama: 0.216 → 0.212 (-1.9%)
+- python_array_optimize: 0.513 → 0.514 (+0.3%, noise)
+- cykjson: 0.105 → 0.104 (-0.8%) — slight improvement, not regressed
+- eggcc-extraction: 0.442 → 0.437 (-1.0%)
+- Overall average: −0.82%
+
+**VERDICT: MODEST GAIN** — Accepted. 4 benchmarks improved, no regressions ≥1%, even cykjson slipped slightly faster (likely cache/code-layout improvement from removing branch density). Predicted "cykjson untouched" held.
+
+**Commit:** 9ea072ba — KEPT.
+
+**Lessons:**
+- The "pick a code path cykjson doesn't exercise" strategy worked. FusedIntersectMat is gated behind tree decomposition (multi-arg constructors), which CYK grammars don't trigger.
+- Branch-density-removal in tight inner loops paid off across multiple benchmarks even at modest magnitudes.
+- The partition is per-group (could be hoisted further to per-stage since `group_key_len` is constant within a materialization) — possible follow-up.
+
 ## Q6: extend_from_slice in SortedOffsetVector (2026-05-09) — REVERTED
 
 **Hypothesis:** `SortedOffsetVector::extend_nonoverlapping` calls `self.0.extend(other.iter())` where `iter()` returns `Copied<slice::Iter<RowId>>` wrapped in opaque impl-trait. The opaque return type may block Vec::extend's memcpy specialization. Switching to `extend_from_slice(other.inner())` should give direct memcpy.
