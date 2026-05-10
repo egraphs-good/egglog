@@ -192,16 +192,68 @@ fn compile_variant(
         mat_binding.insert(v.clone(), q(v));
     }
     // Let allocations: each adds a column to the temp table.
-    // LetCtor uses nextval() (and the action issues an INSERT to
-    // the constructor table at run-time); LetExpr is just an alias
-    // for an expression evaluated against the body bindings.
+    // LetCtor: when all args resolve to body-bound vars (i.e., they
+    // don't reference an earlier LetCtor's var), hash-cons against
+    // the existing view via a scalar subquery — only burn a fresh
+    // sequence value when no row exists for these args. Avoids the
+    // duplicate-ID-then-congruence-collapse churn that drives
+    // @UF_<sort> growth. When args reference an earlier LetCtor's
+    // value, we can't read sibling SELECT-list aliases in the same
+    // SELECT, so fall back to plain nextval.
+    // LetExpr: just an alias for an expression evaluated against
+    // the body bindings.
+    // For LetCtors whose args are body-resolvable, we add a LEFT
+    // JOIN against a derived table that aggregates the constructor
+    // view by (input cols), giving at most one existing-id row per
+    // (args). The temp table's column for that LetCtor is then
+    // `COALESCE(hc<i>.id, nextval(seq))` — reusing an existing id
+    // when the term has been seen before, else allocating fresh.
+    // This is the in-band hash-cons that avoids the duplicate-id-
+    // then-congruence-collapse pattern.
+    let mut hc_joins: Vec<String> = Vec::new();
     for action in &rule.actions {
         match action {
-            Action::LetCtor { var, .. } => {
-                select_cols.push(format!(
-                    "nextval('__egglog_eqsort_seq') AS {}",
-                    q(var)
-                ));
+            Action::LetCtor { var, name, args } => {
+                let body_resolvable = args.iter().all(|t| match t {
+                    Term::Var(v) => binding.contains_key(v),
+                    _ => true,
+                });
+                let col_expr = if body_resolvable {
+                    let arg_sqls: Vec<String> = args
+                        .iter()
+                        .map(|t| term_sql(t, &binding, &rule.name))
+                        .collect::<Result<_>>()?;
+                    let view = format!("@{name}View");
+                    let hc_alias = format!("hc{}", hc_joins.len());
+                    let id_col_idx = arg_sqls.len();
+                    let in_cols: Vec<String> =
+                        (0..id_col_idx).map(|i| format!("c{i}")).collect();
+                    if arg_sqls.is_empty() {
+                        // 0-input: there's only ever one such row.
+                        // Cross join with a 1-row aggregate.
+                        hc_joins.push(format!(
+                            "LEFT JOIN (SELECT MIN(c{id_col_idx}) AS id FROM {}) {hc_alias} ON TRUE",
+                            q(&view)
+                        ));
+                    } else {
+                        let on_conds: Vec<String> = arg_sqls
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| format!("{hc_alias}.c{i} = {s}"))
+                            .collect();
+                        hc_joins.push(format!(
+                            "LEFT JOIN (SELECT {}, MIN(c{id_col_idx}) AS id FROM {} GROUP BY {}) {hc_alias} ON {}",
+                            in_cols.join(", "),
+                            q(&view),
+                            in_cols.join(", "),
+                            on_conds.join(" AND ")
+                        ));
+                    }
+                    format!("COALESCE({hc_alias}.id, nextval('__egglog_eqsort_seq'))")
+                } else {
+                    "nextval('__egglog_eqsort_seq')".to_string()
+                };
+                select_cols.push(format!("{col_expr} AS {}", q(var)));
                 mat_binding.insert(var.clone(), q(var));
             }
             Action::LetExpr { var, expr } => {
@@ -212,12 +264,22 @@ fn compile_variant(
             _ => {}
         }
     }
+    let from_with_hc = if hc_joins.is_empty() {
+        from.clone()
+    } else {
+        // SQL grammar: `t0, t1 LEFT JOIN d ON …` parses the LEFT
+        // JOIN as binding to `t1` alone, so the ON clause can't see
+        // `t0`. Convert comma-joins to explicit CROSS JOIN so the
+        // LEFT JOIN binds to the whole left side.
+        let xj = from.replace(", ", " CROSS JOIN ");
+        format!("{xj} {}", hc_joins.join(" "))
+    };
     // Build the materialize SQL.
     let materialize = format!(
         "CREATE OR REPLACE TEMP TABLE {} AS SELECT {} FROM {}{}",
         q(&temp_table),
         select_cols.join(", "),
-        from,
+        from_with_hc,
         where_clause,
     );
 

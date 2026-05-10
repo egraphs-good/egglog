@@ -94,6 +94,9 @@ impl DuckdbBackend {
         if std::env::var("DUCK_TABLE_SIZES").is_ok() {
             self.dump_table_sizes()?;
         }
+        if std::env::var("DUCK_PROBE_HASHCONS").is_ok() {
+            self.probe_hashcons()?;
+        }
         Ok(())
     }
 
@@ -590,6 +593,81 @@ impl DuckdbBackend {
                 "{}",
                 ListDisplay(facts, " ")
             )));
+        }
+        Ok(())
+    }
+
+    /// Diagnostic: probe whether multiple ids exist for the same
+    /// term. For each `@<X>View` table, count distinct (input cols)
+    /// pairs vs total rows; the gap is "duplicate ids per term".
+    /// Triggered by `DUCK_PROBE_HASHCONS=1`.
+    fn probe_hashcons(&self) -> Result<(), DuckdbBackendError> {
+        // Decompose each @UF_<Sort> into self-marks (a==b, no real
+        // info) vs actual unions (a!=b). High self-mark count means
+        // every fresh ID is paying a UF self-write tax even when no
+        // unification happens.
+        for n in &self.registered {
+            if !n.starts_with("@UF_") || n.ends_with('f') {
+                continue;
+            }
+            let qn = duck::q(n);
+            let total: i64 = self
+                .db
+                .conn_for_dump()
+                .query_row(&format!("SELECT COUNT(*) FROM {qn}"), [], |r| r.get(0))
+                .unwrap_or(0);
+            let self_marks: i64 = self
+                .db
+                .conn_for_dump()
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {qn} WHERE c0 = c1"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let unions = total - self_marks;
+            if total > 0 {
+                eprintln!(
+                    "[duck/probe] {n:<24}  total={total:>7}  self_marks={self_marks:>7}  unions={unions:>7}"
+                );
+            }
+        }
+        eprintln!("[duck/probe] hash-cons gap (rows - distinct args = redundant ids):");
+        for n in &self.registered {
+            if !n.starts_with('@') || !n.ends_with("View") {
+                continue;
+            }
+            let info = match self.db.functions.get(n) {
+                Some(i) => i.clone(),
+                None => continue,
+            };
+            if info.inputs_len == 0 {
+                continue;
+            }
+            let in_cols: Vec<String> =
+                (0..info.inputs_len).map(|i| format!("c{i}")).collect();
+            let qn = duck::q(n);
+            let sql_total = format!("SELECT COUNT(*) FROM {qn}");
+            let sql_distinct = format!(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT {} FROM {qn})",
+                in_cols.join(", ")
+            );
+            let total: i64 = self
+                .db
+                .conn_for_dump()
+                .query_row(&sql_total, [], |r| r.get(0))
+                .unwrap_or(0);
+            let distinct: i64 = self
+                .db
+                .conn_for_dump()
+                .query_row(&sql_distinct, [], |r| r.get(0))
+                .unwrap_or(0);
+            let dup = total - distinct;
+            if total > 0 {
+                eprintln!(
+                    "[duck/probe] {n:<24}  rows={total:>7}  distinct_args={distinct:>7}  dup_ids={dup:>7}"
+                );
+            }
         }
         Ok(())
     }
