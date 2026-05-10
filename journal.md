@@ -1,5 +1,31 @@
 # Experiment Journal
 
+## H2: Direct-read SortedWritesTable in TupleIndex::rebuild_full (2026-05-09) — KEPT
+
+**Hypothesis (H1 generalization):** H1's SortedWritesTable downcast pattern won at the single-column `ColumnIndex::rebuild_full`. Apply the SAME pattern to the multi-column `TupleIndex::rebuild_full`, which currently uses the *default* `IndexBase::rebuild_full` (a `scan_project` → `TaggedRowBuffer` → `merge_rows` chain in 1024-row batches). TupleIndex backs every multi-key cached/HashIndex, including the multi-arg constructor joins prevalent in hardboiled (Bop, Cast, Select, Load, Ramp, Call) and cykjson.
+
+**Approach:** In `core-relations/src/hash_index/mod.rs`, override `IndexBase::rebuild_full` for `TupleIndex`. SWT fast path: iterate Dense range or Sparse `inner()` rows; for each row, build the key tuple in a stack-local `Vec<Value>` scratch by calling `swt.read_value_at_row_unchecked(row, col)` per col; if any column reads `None`, set a `stale` flag and skip the whole row (matching `scan_generic` semantics); otherwise call `self.add_row(&scratch, row)` directly. Fallback else-branch is the verbatim default `scan_project` + `merge_rows` loop. Borrow-checker: the `&mut self` (for `add_row`) vs `swt` borrows would conflict in a closure, so the per-row body is inlined in both Dense and Sparse arms.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs H1 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.296 → 0.295 (-0.5%, noise)
+- hardboiled_conv1d_128: 0.768 → 0.764 (-0.4%, noise)
+- luminal-llama: 0.217 → 0.217 (+0.3%, noise)
+- python_array_optimize: 0.521 → 0.522 (+0.2%, noise)
+- cykjson: 0.109 → 0.102 (**-6.3%**)
+- eggcc-extraction: 0.442 → 0.439 (-0.8%)
+- Overall average: −1.25%
+
+**VERDICT: IMPROVEMENT** — Clean accept (no reviewer needed). cykjson ≥3% threshold cleared. No regressions. cykjson now firmly below pre-G3 levels (0.102 < 0.108).
+
+**Commit:** c8ee3469 — KEPT.
+
+**Lessons:**
+- The H1 generalization paid off — TupleIndex's `add_row` per-key path still has the per-row dispatch chain that direct read eliminates, and cykjson's multi-arg constructor joins exercise this heavily.
+- Hardboiled barely benefits because its TupleIndex-backed joins were less of its hot path than its single-column `ColumnIndex::rebuild_full` (which H1 already shaved).
+- The pattern is now applied to all three known SortedWritesTable hot consumers: `SparseColumnIndex::new` (E3, E4), `ColumnIndex::rebuild_full` (H1), `TupleIndex::rebuild_full` (H2). Next candidates would be elsewhere (e.g. `merge_parallel`, `scan_project` consumers outside rebuild paths).
+
 ## H1: Direct-read SortedWritesTable in ColumnIndex::rebuild_full (2026-05-09) — KEPT
 
 **Hypothesis:** The post-D3 9.4% "rebuild_full + closure + for_each_col" cluster is the same per-row dispatch chain (vtable → downcast → scan_generic → SubsetRef::offsets → RowId::range iter → dyn FnMut) that E3 (commit 16c83f12) and E4 (c173a8cf) eliminated for `SparseColumnIndex::new`. Applying the identical SortedWritesTable downcast + `read_value_at_row_unchecked` pattern to `rebuild_full`'s pair-collection loop should win at a hotter call site.
