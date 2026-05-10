@@ -14,7 +14,7 @@ use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
 use crate::{
-    OffsetRange, Subset,
+    OffsetRange, Subset, SortedWritesTable,
     common::{HashMap, ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
     parallel_heuristics::parallelize_index_construction,
@@ -339,10 +339,38 @@ impl IndexBase for ColumnIndex {
         let n = table.all().size() * cols.len();
 
         let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
-        for &col in cols {
-            table.for_each_col(subset, col, &mut |row_id, val| {
-                pairs.push((val, row_id));
-            });
+        // Fast path: downcast to SortedWritesTable and read values directly, bypassing
+        // the vtable → downcast → scan_generic → iterator → dyn-closure chain that
+        // for_each_col goes through (6 indirection layers per row).
+        // Mirrors the same optimization in SparseColumnIndex::new (execute.rs).
+        if let Some(swt) = table.inner_as_any().downcast_ref::<SortedWritesTable>() {
+            for &col in cols {
+                match subset {
+                    SubsetRef::Dense(r) => {
+                        for row_idx in r.start.index()..r.end.index() {
+                            let row = RowId::from_usize(row_idx);
+                            // SAFETY: row is in [start, end) of the table-bounded subset.
+                            if let Some(val) = unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                pairs.push((val, row));
+                            }
+                        }
+                    }
+                    SubsetRef::Sparse(s) => {
+                        for &row in s.inner() {
+                            // SAFETY: rows in a SubsetRef are bounded by the table's row count.
+                            if let Some(val) = unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                pairs.push((val, row));
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            for &col in cols {
+                table.for_each_col(subset, col, &mut |row_id, val| {
+                    pairs.push((val, row_id));
+                });
+            }
         }
 
         radix_sort_pairs_by_value(&mut pairs);
