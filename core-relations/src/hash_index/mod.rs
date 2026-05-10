@@ -925,6 +925,33 @@ impl SubsetBuffer {
         self.fill_at(start, rows)
     }
 
+    /// Like `new_vec` but appends one extra row at the end. Used by the
+    /// Dense → Sparse transition in `add_row_sorted` to pre-size the
+    /// allocation in one step, avoiding a follow-on `push_vec` that would
+    /// copy_within when `rows.len()` is a power of 2.
+    fn new_vec_with_extra(
+        &mut self,
+        rows: impl ExactSizeIterator<Item = RowId>,
+        extra: RowId,
+    ) -> BufferedVec {
+        let total = rows.len() + 1;
+        if let Some(v) = self.free_list.get_size_class(total).pop() {
+            let mut out = self.fill_at(v, rows);
+            self.buf[out.1.index()] = extra;
+            out.1 = out.1.inc();
+            return out;
+        }
+        let start = BufferIndex::from_usize(self.buf.len());
+        self.buf.resize(
+            start.index() + total.next_power_of_two(),
+            RowId::new(u32::MAX),
+        );
+        let mut out = self.fill_at(start, rows);
+        self.buf[out.1.index()] = extra;
+        out.1 = out.1.inc();
+        out
+    }
+
     fn fill_at(
         &mut self,
         start: BufferIndex,
@@ -1037,8 +1064,14 @@ impl BufferedSubset {
                     range.end = row.inc();
                     return;
                 }
-                let mut v = buf.new_vec((range.start.rep()..range.end.rep()).map(RowId::new));
-                v = buf.push_vec(v, row);
+                // Allocate enough space for range + the new row in one shot,
+                // avoiding a push_vec that would copy_within when range.len()
+                // is a power of 2 (the next_power_of_two allocation is already
+                // full).
+                let v = buf.new_vec_with_extra(
+                    (range.start.rep()..range.end.rep()).map(RowId::new),
+                    row,
+                );
                 *self = BufferedSubset::Sparse(v);
             }
             BufferedSubset::Sparse(vec) => *vec = buf.push_vec(mem::take(vec), row),
