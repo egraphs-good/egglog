@@ -1,5 +1,15 @@
 # Experiment Journal
 
+## Bugfix: Stale-row correctness in SparseColumnIndex::new size==1 fast path (2026-05-09)
+
+**Bug:** E1's fast path unconditionally returned `n_keys: 1` even when no value was found (stale row where `for_each_col` / `read_value_at_row_unchecked` produces nothing). `keys[0]` stayed at `Value::new_const(0)`, making stale rows appear as valid join matches. Tests `fusion` (panics in set-union primitive) and `fail_wrong_assertion` (deleted row still matched) were broken since E1.
+
+**Root cause of silent failure:** `make test 2>&1 | tail -5` masks the exit code — `tail` always exits 0.
+
+**Fix (commit 1e237463):** In the `None` arm: SortedWritesTable path returns `None` directly (no fallback); non-SortedWritesTable wraps `for_each_col` in `Option`. Either `None` → empty index (`n_keys: 0, n_subsets: 0`).
+
+**Lesson:** Check test exit code explicitly; never pipe through `tail` without `${PIPESTATUS[0]}`.
+
 ## E4: Direct-read loop for SparseColumnIndex::new general path (2026-05-09)
 
 **Hypothesis:** E3 applied the `SortedWritesTable` downcast trick only to the size==1 fast path. The 2..=8-row general path still uses `for_each_col` (vtable → downcast → scan_generic → iterator → dyn-FnMut per row). Applying the same direct-read pattern there should save the same per-row overhead.
