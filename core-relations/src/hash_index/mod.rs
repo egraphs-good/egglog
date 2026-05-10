@@ -14,7 +14,7 @@ use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
 use crate::{
-    OffsetRange, Subset,
+    OffsetRange, Subset, SortedWritesTable,
     common::{HashMap, ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
     parallel_heuristics::parallelize_index_construction,
@@ -339,10 +339,38 @@ impl IndexBase for ColumnIndex {
         let n = table.all().size() * cols.len();
 
         let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
-        for &col in cols {
-            table.for_each_col(subset, col, &mut |row_id, val| {
-                pairs.push((val, row_id));
-            });
+        // Fast path: downcast to SortedWritesTable and read values directly, bypassing
+        // the vtable → downcast → scan_generic → iterator → dyn-closure chain that
+        // for_each_col goes through (6 indirection layers per row).
+        // Mirrors the same optimization in SparseColumnIndex::new (execute.rs).
+        if let Some(swt) = table.inner_as_any().downcast_ref::<SortedWritesTable>() {
+            for &col in cols {
+                match subset {
+                    SubsetRef::Dense(r) => {
+                        for row_idx in r.start.index()..r.end.index() {
+                            let row = RowId::from_usize(row_idx);
+                            // SAFETY: row is in [start, end) of the table-bounded subset.
+                            if let Some(val) = unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                pairs.push((val, row));
+                            }
+                        }
+                    }
+                    SubsetRef::Sparse(s) => {
+                        for &row in s.inner() {
+                            // SAFETY: rows in a SubsetRef are bounded by the table's row count.
+                            if let Some(val) = unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                pairs.push((val, row));
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            for &col in cols {
+                table.for_each_col(subset, col, &mut |row_id, val| {
+                    pairs.push((val, row_id));
+                });
+            }
         }
 
         radix_sort_pairs_by_value(&mut pairs);
@@ -638,6 +666,70 @@ impl IndexBase for TupleIndex {
             .sum()
     }
 
+    /// Bulk-rebuild override: read values directly from SortedWritesTable, bypassing
+    /// the scan_project → TaggedRowBuffer → merge_rows chain (multiple indirection layers
+    /// per row). Falls back to the default scan_project+merge_rows loop for other table types.
+    ///
+    /// Stale-row semantics: if ANY column read returns None, the ENTIRE row is skipped,
+    /// matching scan_generic's behaviour. The scratch vec is cleared at the start of each row,
+    /// so a partial fill from an early-return is harmless.
+    fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
+        if let Some(swt) = table.inner_as_any().downcast_ref::<SortedWritesTable>() {
+            // Inline the per-row logic in each arm to avoid borrow-checker conflicts
+            // that arise when a closure captures both `&mut self` and `swt`.
+            let mut scratch: Vec<Value> = Vec::with_capacity(cols.len());
+            match subset {
+                SubsetRef::Dense(r) => {
+                    for row_idx in r.start.index()..r.end.index() {
+                        let row = RowId::from_usize(row_idx);
+                        scratch.clear();
+                        let mut stale = false;
+                        for &col in cols {
+                            // SAFETY: row is within the table-bounded Dense range.
+                            match unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                Some(v) => scratch.push(v),
+                                None => { stale = true; break; }
+                            }
+                        }
+                        if !stale {
+                            self.add_row(&scratch, row);
+                        }
+                    }
+                }
+                SubsetRef::Sparse(s) => {
+                    for &row in s.inner() {
+                        scratch.clear();
+                        let mut stale = false;
+                        for &col in cols {
+                            // SAFETY: rows in a SubsetRef are bounded by the table's row count.
+                            match unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                                Some(v) => scratch.push(v),
+                                None => { stale = true; break; }
+                            }
+                        }
+                        if !stale {
+                            self.add_row(&scratch, row);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Default: batch via scan_project + merge_rows (verbatim from IndexBase::rebuild_full).
+            let mut buf = TaggedRowBuffer::new(cols.len());
+            let mut cur = Offset::new(0);
+            loop {
+                buf.clear();
+                if let Some(next) = table.scan_project(subset, cols, cur, 1024, &[], &mut buf) {
+                    cur = next;
+                    self.merge_rows(&buf);
+                } else {
+                    self.merge_rows(&buf);
+                    break;
+                }
+            }
+        }
+    }
+
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
         // The structure here is similar to the implementation for ColumnIndex, with
         // slightly more bookkeeping needed to handle arbitrary-arity keys.
@@ -833,6 +925,33 @@ impl SubsetBuffer {
         self.fill_at(start, rows)
     }
 
+    /// Like `new_vec` but appends one extra row at the end. Used by the
+    /// Dense → Sparse transition in `add_row_sorted` to pre-size the
+    /// allocation in one step, avoiding a follow-on `push_vec` that would
+    /// copy_within when `rows.len()` is a power of 2.
+    fn new_vec_with_extra(
+        &mut self,
+        rows: impl ExactSizeIterator<Item = RowId>,
+        extra: RowId,
+    ) -> BufferedVec {
+        let total = rows.len() + 1;
+        if let Some(v) = self.free_list.get_size_class(total).pop() {
+            let mut out = self.fill_at(v, rows);
+            self.buf[out.1.index()] = extra;
+            out.1 = out.1.inc();
+            return out;
+        }
+        let start = BufferIndex::from_usize(self.buf.len());
+        self.buf.resize(
+            start.index() + total.next_power_of_two(),
+            RowId::new(u32::MAX),
+        );
+        let mut out = self.fill_at(start, rows);
+        self.buf[out.1.index()] = extra;
+        out.1 = out.1.inc();
+        out
+    }
+
     fn fill_at(
         &mut self,
         start: BufferIndex,
@@ -945,8 +1064,14 @@ impl BufferedSubset {
                     range.end = row.inc();
                     return;
                 }
-                let mut v = buf.new_vec((range.start.rep()..range.end.rep()).map(RowId::new));
-                v = buf.push_vec(v, row);
+                // Allocate enough space for range + the new row in one shot,
+                // avoiding a push_vec that would copy_within when range.len()
+                // is a power of 2 (the next_power_of_two allocation is already
+                // full).
+                let v = buf.new_vec_with_extra(
+                    (range.start.rep()..range.end.rep()).map(RowId::new),
+                    row,
+                );
                 *self = BufferedSubset::Sparse(v);
             }
             BufferedSubset::Sparse(vec) => *vec = buf.push_vec(mem::take(vec), row),

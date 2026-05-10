@@ -1241,6 +1241,29 @@ impl SortedWritesTable {
             &mut self.hash,
         )
     }
+
+    /// Read a single column value from a single row, bypassing scan_generic/closure overhead.
+    ///
+    /// Returns `None` if the row is stale (deleted). Mirrors the fast-path logic in
+    /// `scan_generic`: skip the per-row stale check when `stale_rows == 0`.
+    ///
+    /// # Safety
+    /// `row.index()` must be less than `self.data.data.len()` — guaranteed when
+    /// `row` comes from a `SubsetRef` that is bounded by the table's row count.
+    #[inline]
+    pub(crate) unsafe fn read_value_at_row_unchecked(
+        &self,
+        row: RowId,
+        col: ColumnId,
+    ) -> Option<Value> {
+        if self.data.stale_rows == 0 {
+            // No stale rows — skip the is_stale check entirely.
+            Some(unsafe { self.data.data.get_row_unchecked(row) }[col.index()])
+        } else {
+            // There are stale rows; `Rows::get_row_unchecked` returns None for stale rows.
+            unsafe { self.data.get_row_unchecked(row) }.map(|r| r[col.index()])
+        }
+    }
 }
 
 fn get_entry(
