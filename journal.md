@@ -1,5 +1,30 @@
 # Experiment Journal
 
+## Q4: Skip placeholder fill in SubsetBuffer growth (2026-05-09) — REVERTED
+
+**Hypothesis:** `SubsetBuffer`'s 3 growth paths call `Vec::resize(new_len, RowId::new(u32::MAX))`. The placeholders are immediately overwritten by `fill_at` for the prefix, and the slack is never read (verified). Replacing with `reserve` + `unsafe set_len` should skip a wasted memset.
+
+**Approach:** All 3 growth sites (`new_vec`, `new_vec_with_extra`, `push_vec` else-branch) changed from `resize(.., placeholder)` to `reserve(additional) + unsafe { set_len(new_len) }` with a SAFETY comment. Removed the now-meaningless `assert_ne!(x.rep(), u32::MAX)` debug check in `make_ref`.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs Q3 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.292 → 0.292 (-0.1%, noise)
+- hardboiled_conv1d_128: 0.757 → 0.757 (-0.0%, noise)
+- luminal-llama: 0.213 → 0.215 (+0.7%, noise)
+- python_array_optimize: 0.517 → 0.512 (-0.9%)
+- cykjson: 0.102 → 0.106 (**+3.6%**)
+- eggcc-extraction: 0.440 → 0.441 (+0.2%, noise)
+- Overall average: +0.60%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`. cykjson regressed exactly the bench Q3 just won big on.
+
+**Lesson:** Removing the memset placeholder fill counterintuitively HURT cykjson by +3.6%. Likely reasons:
+1. `Vec::resize` with a constant value uses highly-optimized SIMD memset that warms up cache lines (those bytes are about to be touched by `fill_at`). Skipping the memset means the cache lines arrive cold during fill_at.
+2. With placeholders gone, the slack contains random recycled bytes; if any subsequent code path observes them via vectorized loads (even speculatively), it might trigger branch mispredicts.
+
+**General rule: a "wasted" memset of bytes that are about to be touched is NOT necessarily wasted — modern CPUs benefit from prefetch-via-write.** Skip-the-memset optimizations need to be paired with explicit prefetch hints or alternative cache warming.
+
 ## Q3: Skip Dense→Sparse transition copy in SubsetBuffer (2026-05-09) — KEPT
 
 **Hypothesis:** Investigating the 4.4% `memmove` profile entry by reading code (lessons-learned ruled out the 64–511 group_by_col range), found a concrete source: `SubsetBuffer::push_vec` (`core-relations/src/hash_index/mod.rs`) does `copy_within` on every power-of-2 growth. The hottest call site is `BufferedSubset::add_row_sorted`'s Dense→Sparse transition (`buf.new_vec(range)` then `buf.push_vec(v, row)`). When `range.len()` is a power of 2, the `next_power_of_two` allocation in `new_vec` is already filled, so the immediate `push_vec` triggers a wasted copy.
