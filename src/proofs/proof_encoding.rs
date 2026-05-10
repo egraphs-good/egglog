@@ -63,6 +63,10 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Mark two things as equal, adding proof if proofs are enabled.
+    /// `for_user_write` selects buffer vs canonical UF under
+    /// souffle_compat_strata. System-stratum callers (rebuild) pass false;
+    /// user-stratum callers pass true so the write lands in the buffer
+    /// and the rebuild drain rule canonicalizes it.
     pub(crate) fn union(
         &mut self,
         type_name: &str,
@@ -70,7 +74,32 @@ impl<'a> ProofInstrumentor<'a> {
         rhs: &str,
         justification: &Justification,
     ) -> String {
-        let uf_name = self.uf_name(type_name);
+        self.union_with(type_name, lhs, rhs, justification, false)
+    }
+
+    pub(crate) fn union_user_write(
+        &mut self,
+        type_name: &str,
+        lhs: &str,
+        rhs: &str,
+        justification: &Justification,
+    ) -> String {
+        self.union_with(type_name, lhs, rhs, justification, true)
+    }
+
+    fn union_with(
+        &mut self,
+        type_name: &str,
+        lhs: &str,
+        rhs: &str,
+        justification: &Justification,
+        for_user_write: bool,
+    ) -> String {
+        let uf_name = if for_user_write {
+            self.uf_name_for_user_write(type_name)
+        } else {
+            self.uf_name(type_name)
+        };
         let smaller = format!("(ordering-min {lhs} {rhs})");
         let larger = format!("(ordering-max {lhs} {rhs})");
         let proof = if self.egraph.proof_state.proofs_enabled {
@@ -197,10 +226,41 @@ impl<'a> ProofInstrumentor<'a> {
                 )
             };
 
+        // Strata extras for the UF table: declare the buffer + a drain
+        // rule that copies buffer entries into the canonical UF in the
+        // rebuilding stratum. No snap is needed because user rules don't
+        // read the UF directly (they go through views).
+        let uf_strata_decl = if self.egraph.proof_state.souffle_compat_strata {
+            let uf_buffer = self.uf_buffer_name(sort_name);
+            let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+            let drain = if self.egraph.proof_state.proofs_enabled {
+                let pf = self.fresh_var();
+                format!(
+                    "(function {uf_buffer} ({sort_name} {sort_name}) {proof_type} :merge old)
+                     (rule ((= {pf} ({uf_buffer} a b)))
+                          ((set ({pname} a b) {pf}))
+                           :ruleset {rebuilding_ruleset}
+                           :name \"{uf_buffer}_drain\")"
+                )
+            } else {
+                format!(
+                    "(function {uf_buffer} ({sort_name} {sort_name}) {proof_type} :merge old)
+                     (rule (({uf_buffer} a b))
+                          ((set ({pname} a b) ()))
+                           :ruleset {rebuilding_ruleset}
+                           :name \"{uf_buffer}_drain\")"
+                )
+            };
+            drain
+        } else {
+            String::new()
+        };
+
         let mut code = format!(
             "{uf_pair_sort_decl}
              (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
              {uf_function_decl}
+             {uf_strata_decl}
              ;; performs path compression, ensuring each term points to the representative
              (rule ({path_compress_query}
                     (!= b c))
@@ -221,9 +281,30 @@ impl<'a> ProofInstrumentor<'a> {
         if self.egraph.proof_state.proofs_enabled {
             let term_proof_name = self.term_proof_name(sort_name);
             let add_to_ast_code = self.add_to_ast(sort_name);
+
+            // Strata extras for the proof table: buffer (user writes),
+            // snap (user reads, runtime-populated by Souffle), drain
+            // rule.
+            let proof_strata_decl = if self.egraph.proof_state.souffle_compat_strata {
+                let proof_buffer = self.term_proof_buffer_name(sort_name);
+                let proof_snap = self.term_proof_snap_name(sort_name);
+                let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+                let pf = self.fresh_var();
+                format!(
+                    "(function {proof_buffer} ({sort_name}) {proof_type} :merge old)
+                     (function {proof_snap} ({sort_name}) {proof_type} :merge old)
+                     (rule ((= {pf} ({proof_buffer} t)))
+                          ((set ({term_proof_name} t) {pf}))
+                           :ruleset {rebuilding_ruleset}
+                           :name \"{proof_buffer}_drain\")"
+                )
+            } else {
+                String::new()
+            };
             code = format!(
                 "{add_to_ast_code}
                  (function {term_proof_name} ({sort_name}) {proof_type} :merge old :internal-hidden)
+                 {proof_strata_decl}
                  {code}"
             );
         }
@@ -806,7 +887,10 @@ impl<'a> ProofInstrumentor<'a> {
                     if !self.egraph.proof_state.proofs_enabled {
                         "()".to_string()
                     } else if resolved_var.sort.is_eq_sort() {
-                        let term_proof_name = self.term_proof_name(resolved_var.sort.name());
+                        // User-rule body read: under strata, source from the
+                        // proof snapshot.
+                        let term_proof_name =
+                            self.term_proof_name_for_user_read(resolved_var.sort.name());
                         let fresh_proof = self.fresh_var();
                         res.push(format!("(= {fresh_proof} ({term_proof_name} {var}))"));
                         fresh_proof
@@ -970,7 +1054,9 @@ impl<'a> ProofInstrumentor<'a> {
                 let v2 = self.instrument_action_expr(generic_expr1, &mut res, justification);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let unioned = self.union(type_name, &v1, &v2, justification);
+                // User-rule write: under strata this lands in the UF buffer;
+                // otherwise canonical UF as before.
+                let unioned = self.union_user_write(type_name, &v1, &v2, justification);
                 res.push(unioned);
             }
             ResolvedAction::Panic(..) => {
@@ -1052,9 +1138,12 @@ impl<'a> ProofInstrumentor<'a> {
             };
 
             let proof_var = self.fresh_var();
-            // add a proof for the constructor if needed
+            // add a proof for the constructor if needed.
+            // User-rule write: under strata this lands in the proof buffer
+            // (drain rule moves it to the canonical proof table).
             let term_proof = if func_type.subtype == FunctionSubtype::Constructor {
-                let term_proof_constructor = self.term_proof_name(func_type.output.name());
+                let term_proof_constructor =
+                    self.term_proof_name_for_user_write(func_type.output.name());
                 format!("(set ({term_proof_constructor} {fv}) {proof_var})")
             } else {
                 "".to_string()
@@ -1075,9 +1164,10 @@ impl<'a> ProofInstrumentor<'a> {
         // User-rule write goes to buffer under strata; canonical otherwise.
         res.push(self.update_view_user_write(&func_type.name, &args_with_fv, &view_proof_var));
 
-        // add to uf table to initialize eclass for constructors
+        // add to uf table to initialize eclass for constructors —
+        // user-rule path, so under strata this writes to the UF buffer.
         if func_type.subtype == FunctionSubtype::Constructor {
-            res.push(self.union(
+            res.push(self.union_user_write(
                 func_type.output.name(),
                 &fv,
                 &fv,

@@ -140,6 +140,15 @@ mod tests {
             snapshot.contains("__AddView_buffer_drain"),
             "expected __AddView_buffer_drain rule in:\n{snapshot}"
         );
+        // Phase 4: UF buffer + drain.
+        assert!(
+            snapshot.contains("__UF_Math_buffer"),
+            "expected __UF_Math_buffer in:\n{snapshot}"
+        );
+        assert!(
+            snapshot.contains("__UF_Math_buffer_drain"),
+            "expected __UF_Math_buffer_drain rule in:\n{snapshot}"
+        );
     }
 
     /// Phase 3: with user rules in the program, those rules' reads should

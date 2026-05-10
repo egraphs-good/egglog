@@ -270,6 +270,53 @@ impl ProofInstrumentor<'_> {
         }
     }
 
+    /// `__UF_<Sort>_buffer` — under souffle_compat_strata, user-rule
+    /// writes (from `union` actions and constructor self-loop init) go
+    /// here; a rebuild-stratum drain rule copies entries into the
+    /// canonical UF table.
+    pub(crate) fn uf_buffer_name(&mut self, sort: &str) -> String {
+        let uf = self.uf_name(sort);
+        format!("{uf}_buffer")
+    }
+
+    /// Pick the UF table name for a USER-rule write.
+    pub(crate) fn uf_name_for_user_write(&mut self, sort: &str) -> String {
+        if self.egraph.proof_state.souffle_compat_strata {
+            self.uf_buffer_name(sort)
+        } else {
+            self.uf_name(sort)
+        }
+    }
+
+    /// `__<Sort>Proof_buffer` and `__<Sort>Proof_snap` — analogous to view
+    /// tables. User rules write to buffer, read from snap; rebuild drains
+    /// buffer into canonical proof table.
+    pub(crate) fn term_proof_buffer_name(&mut self, sort: &str) -> String {
+        let pf = self.term_proof_name(sort);
+        format!("{pf}_buffer")
+    }
+
+    pub(crate) fn term_proof_snap_name(&mut self, sort: &str) -> String {
+        let pf = self.term_proof_name(sort);
+        format!("{pf}_snap")
+    }
+
+    pub(crate) fn term_proof_name_for_user_read(&mut self, sort: &str) -> String {
+        if self.egraph.proof_state.souffle_compat_strata {
+            self.term_proof_snap_name(sort)
+        } else {
+            self.term_proof_name(sort)
+        }
+    }
+
+    pub(crate) fn term_proof_name_for_user_write(&mut self, sort: &str) -> String {
+        if self.egraph.proof_state.souffle_compat_strata {
+            self.term_proof_buffer_name(sort)
+        } else {
+            self.term_proof_name(sort)
+        }
+    }
+
     pub(crate) fn subsumed_name(&mut self, name: &str) -> String {
         if let Some(n) = self.egraph.proof_state.proof_names.subsumed_name.get(name) {
             n.clone()
