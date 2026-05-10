@@ -1,5 +1,30 @@
 # Experiment Journal
 
+## P3: Remove PotentiallyStale<T> wrapper, hoist refine_live decision (2026-05-09) — KEPT
+
+**Hypothesis:** `struct PotentiallyStale<T> { inner: T, can_be_stale: bool }` wraps every value returned by `Prober::get_subset`/`for_each`. The `can_be_stale` field is **purely a function of which `DynamicIndex` variant produced it** (`Cached*` → always true; `Dynamic*`/`SparseColumn` → always false). So the per-value bool is redundant metadata, and `refine_subset`'s `sub.can_be_stale && has_stale` AND can be hoisted to a single `must_refine_live` constant per Prober.
+
+**Approach:** Delete `struct PotentiallyStale<T>` and its 4 impls. Add `can_be_stale: bool` to `Prober`, set in `get_index`/`get_column_index` via `matches!(dyn_index, DynamicIndex::Cached{..} | DynamicIndex::CachedColumn{..})`. Change `refine_subset` signature from `(PotentiallyStale<Subset>, ..., has_stale)` to `(Subset, ..., must_refine_live)`. At each of the 5 Intersect call sites, compute `let must_refine_live = prober.can_be_stale && table.has_stale_rows();` once before the closure and pass that to `refine_subset`. The closure no longer carries the wrapper, and LLVM can constant-fold-away `refine_subset`'s first branch when `must_refine_live` is statically false.
+
+**Build/tests:** Clean release build, all `make test` suites pass. Net -6 LOC (103 added, 109 removed).
+
+**Results vs P2-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.295 (+0.7%, within noise)
+- hardboiled_conv1d_128: 0.768 → 0.757 (-1.4%)
+- luminal-llama: 0.215 → 0.214 (-0.6%)
+- python_array_optimize: 0.518 → 0.521 (+0.4%, noise)
+- cykjson: 0.105 → 0.104 (-1.1%)
+- eggcc-extraction: 0.446 → 0.443 (-0.5%)
+- Overall average: −0.42%
+
+**VERDICT: MODEST GAIN** — Accepted. No single bench cleared 3%, but net is negative, every meaningful benchmark improved, NO regressions ≥1%, and the change REMOVES code (-6 LOC) so the complexity cost is negative. Per program.md's simplicity criterion: "removing code and getting equal or better results is a great outcome."
+
+**Commit:** adb35eb0 — KEPT.
+
+**Lessons:**
+- After 4 consecutive add-code reverts (H3, PP1, P1, P2), a code-removal refactor finally landed cleanly with broad-spectrum modest wins and no regressions. Confirms the lesson: **prefer changes that remove redundancy or hoist work outside hot loops; avoid changes that add per-iteration branches or write-amplification.**
+- The "redundant per-value metadata derivable from variant" pattern is worth looking for elsewhere — bools or small fields that are constant across a Prober/scan lifetime.
+
 ## P2: Bypass to_owned + refine_subset round-trip when refinement is no-op (2026-05-09) — REVERTED
 
 **Hypothesis:** In `JoinStage::Intersect` `[a]` and `[a,b]` arms, when `cs.is_empty() && !has_stale`, `refine_subset` is the identity. The to_owned + Pool alloc + memcpy + Arc<TrieNode>::new round-trip is wasted. Hoisting a `no_refine` flag once and dispatching directly to `refine_atom_dense` for Dense (and 1-row Sparse) subsets should save ~1.5% (combination of `SubsetRef::to_owned` 1.5% and parts of `refine_atom_subset` 2.1%).
