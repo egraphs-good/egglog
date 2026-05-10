@@ -1,5 +1,26 @@
 # Experiment Journal
 
+## H3: Direct-read SortedWritesTable in rebuild_incremental (2026-05-09) — REVERTED
+
+**Hypothesis (H1/H2 generalization):** Apply the SortedWritesTable downcast pattern to the `table.scan_project(...)` call in `SortedWritesTable::rebuild_incremental` (`core-relations/src/table/rebuild.rs`). Note: an initial proposal mistakenly assumed `table` and `self` were the same SortedWritesTable; the implementer correctly refused that version. The corrected version downcasts the `table` argument (which is a *different* SWT — the upstream relation being scanned during rebuild).
+
+**Approach:** Wrap the `table.scan_project(to_scan.as_ref(), &[search_col], Offset::new(0), usize::MAX, &[], &mut buf)` call in `if let Some(swt) = table.as_ref().inner_as_any().downcast_ref::<SortedWritesTable>()`. SWT branch: walk Dense range / Sparse `inner()` calling `swt.read_value_at_row_unchecked(row, search_col)` and pushing `(row, [val])` into `buf`. Fallback to original `scan_project` for non-SWT tables.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs H2 baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.295 → 0.297 (+0.8%)
+- hardboiled_conv1d_128: 0.762 → 0.766 (+0.5%)
+- luminal-llama: 0.218 → 0.213 (-1.9%)
+- python_array_optimize: 0.522 → 0.520 (-0.3%)
+- cykjson: 0.101 → 0.107 (**+6.3% regression**)
+- eggcc-extraction: 0.441 → 0.442 (+0.2%)
+- Overall average: +0.93%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`. cykjson (which H2 just won big on) regressed by exactly the amount that H2 won. Hypothesis: rebuild_incremental in cykjson's hot path runs over many small `to_scan` subsets, where the inline Dense/Sparse loop has higher per-call overhead (longer inlined codegen, instruction cache pressure) than `scan_project`'s tight inner loop. luminal-llama wins because it has fewer-but-larger rebuild_incremental subsets.
+
+**Lesson:** The H1/H2 pattern is NOT universally applicable. It pays off when the per-row dispatch chain dominates per-call setup (large subsets, many rows, full rebuild paths called once per epoch). It HURTS when the call site fires many times on small subsets (incremental rebuilds with frequent updates), because then `scan_project`'s amortized per-row cost is below the new inline loop's per-call setup. **For incremental/streaming hot paths, prefer the existing batched dispatch.**
+
 ## H2: Direct-read SortedWritesTable in TupleIndex::rebuild_full (2026-05-09) — KEPT
 
 **Hypothesis (H1 generalization):** H1's SortedWritesTable downcast pattern won at the single-column `ColumnIndex::rebuild_full`. Apply the SAME pattern to the multi-column `TupleIndex::rebuild_full`, which currently uses the *default* `IndexBase::rebuild_full` (a `scan_project` → `TaggedRowBuffer` → `merge_rows` chain in 1024-row batches). TupleIndex backs every multi-key cached/HashIndex, including the multi-arg constructor joins prevalent in hardboiled (Bop, Cast, Select, Load, Ramp, Call) and cykjson.
