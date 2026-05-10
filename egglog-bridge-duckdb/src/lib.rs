@@ -23,8 +23,28 @@ mod compile;
 /// Quote a SQL identifier with double quotes, escaping any embedded
 /// double quote. Necessary because egglog identifiers can contain
 /// `@`, `$`, etc., which DuckDB rejects in unquoted form.
-pub(crate) fn q(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
+///
+/// DuckDB compares quoted identifiers case-insensitively (so
+/// `"AConst"` and `"aConst"` collide as table names). We encode the
+/// case bits with a two-step escape so distinct case-shapes always
+/// produce distinct lowered identifiers:
+///   1. `_` → `__` (escape literal underscore so it can't be
+///      confused with the uppercase marker).
+///   2. ASCII uppercase `X` → `_<lowercase x>`.
+pub fn q(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for c in name.chars() {
+        if c == '_' {
+            out.push('_');
+            out.push('_');
+        } else if c.is_ascii_uppercase() {
+            out.push('_');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    format!("\"{}\"", out.replace('"', "\"\""))
 }
 
 /// Format a list of comma-separated SQL fragments as a prefix that

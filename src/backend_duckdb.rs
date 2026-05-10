@@ -600,9 +600,9 @@ impl DuckdbBackend {
                 let cols: Vec<String> =
                     (0..info.cols.len()).map(|i| format!("c{i}")).collect();
                 let sql = format!(
-                    "SELECT {}, ts FROM \"{}\" ORDER BY {}, ts",
+                    "SELECT {}, ts FROM {} ORDER BY {}, ts",
                     cols.join(", "),
-                    n.replace('"', "\"\""),
+                    duck::q(n),
                     cols.join(", ")
                 );
                 let mut stmt = self
