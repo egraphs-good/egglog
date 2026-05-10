@@ -1,5 +1,24 @@
 # Experiment Journal
 
+## P1: #[inline] on Offsets trait impls (2026-05-09) — REVERTED
+
+**Hypothesis:** `SubsetRef::offsets` shows 5.4% self-time in profile despite being a 2-4-instruction loop body, suggesting the compiler is materializing it out-of-line. Adding `#[inline]` to all `Offsets::offsets` and `Offsets::bounds` impls (`OffsetRange`, `SortedOffsetVector`, `SortedOffsetSlice`, `&SortedOffsetSlice`, `SubsetRef`, `Subset` — 12 methods total) should let LLVM fuse the closure body into the per-row loop.
+
+**Build/tests:** Clean release build, all `make test` suites pass.
+
+**Results vs PP1-revert baseline (hyperfine, 15 runs):**
+- hardboiled_conv1d_32: 0.293 → 0.296 (+1.0%)
+- hardboiled_conv1d_128: 0.776 → 0.769 (-0.8%)
+- luminal-llama: 0.212 → 0.215 (+1.3%)
+- python_array_optimize: 0.523 → 0.517 (-1.0%)
+- cykjson: 0.100 → 0.107 (**+6.7%**)
+- eggcc-extraction: 0.454 → 0.442 (-2.8%)
+- Overall average: +0.74%
+
+**VERDICT: REGRESSION** — Reverted via `git reset --hard HEAD~1`. Mixed: 3 faster (hardboiled_128, python, eggcc) and 3 slower (hardboiled_32, luminal, cykjson). Cykjson took the biggest hit (+6.7%).
+
+**Lesson:** `#[inline]` is not always free even though it's "purely a hint." Forcing inlining of these closure-taking trait methods at every call site bloats code, increases instruction-cache pressure, and hurts paths where the call already devirtualized cleanly via monomorphization. The compiler's default heuristic for these methods was apparently better than blanket inlining. **General rule: prefer per-callsite or per-method inlining decisions; blanket-inlining a hot trait is risky.** A more nuanced version would benchmark each `#[inline]` separately or use `#[inline(always)]` only on the body of the truly tightest loop.
+
 ## PP1: Cache subset sizes in BindingInfo (2026-05-09) — REVERTED
 
 **Hypothesis (lessons-learned #7):** `estimate_size` walks Arc<TrieNode> → Subset → Pooled<SortedOffsetVector> → Vec::len for every scan in every `run_plan` recursion frame (~1.2% profile). Caching the size as a parallel `DenseIdMap<AtomId, u32>` next to `subsets` should skip this pointer chain on the hot reduction.
