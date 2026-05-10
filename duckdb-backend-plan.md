@@ -734,3 +734,15 @@ intermediate joins.
 For now the test passes correctness checks; the mismatch is in extra
 residual tuples after rewrite saturation, not in user-visible truth
 values.
+
+### `(push)` / `(pop)` are no-ops
+
+Our `dispatch` silently skips `Push`/`Pop` commands. Tests that wrap
+`(run …)` blocks in `(push)/(pop)` to scope intermediate derivations
+(e.g. `tests/calc.egg`) accumulate state across blocks instead of
+rolling back, so `print-size` reports many more terms than egglog.
+
+Implementing this needs DuckDB savepoints (`SAVEPOINT push_<n>`/
+`ROLLBACK TO`) plus per-EGraph state (next_ts, last_run_at,
+combined_rulesets) to be checkpointed. Not high priority — most
+tests don't use it — but it's the cause of the calc.egg mismatch.
