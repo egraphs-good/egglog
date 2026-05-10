@@ -500,18 +500,44 @@ impl<'a> ProofInstrumentor<'a> {
         // buffer and the rebuild-snapshot relation. The buffer holds pending
         // user writes; the snap is populated by the Souffle runtime via
         // .snapshot at outer-loop boundaries (translator picks up the _snap
-        // suffix). Both share the same shape as the canonical view. No
-        // rules touch these yet — phase 1 just declares the relations so
-        // later phases can wire them in incrementally.
-        let strata_decls = if self.egraph.proof_state.souffle_compat_strata {
+        // suffix). Both share the same shape as the canonical view.
+        //
+        // Plus: a drain rule in the rebuilding stratum copies buffer
+        // entries into the canonical view. This is what makes user writes
+        // (which land in the buffer) eventually visible to rebuild.
+        let (strata_decls, drain_rule) = if self.egraph.proof_state.souffle_compat_strata {
             let buffer_name = self.view_buffer_name(&fdecl.name);
             let snap_name = self.view_snap_name(&fdecl.name);
-            format!(
+            let decls = format!(
                 "(function {buffer_name} ({view_sorts}) {proof_type} :merge old{view_flags})
                  (function {snap_name} ({view_sorts}) {proof_type} :merge old{view_flags})"
-            )
+            );
+            // Drain: for each (args, leader) in buffer, set (args, leader)
+            // in the canonical view to the same value.
+            let arity = fdecl.schema.input.len();
+            let arg_names: Vec<String> = (0..arity).map(|i| format!("c{i}_")).collect();
+            let arg_str = arg_names.join(" ");
+            let leader = "leader_";
+            let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+            let drain = if self.egraph.proof_state.proofs_enabled {
+                let pf = self.fresh_var();
+                format!(
+                    "(rule ((= {pf} ({buffer_name} {arg_str} {leader})))
+                          ((set ({view_name} {arg_str} {leader}) {pf}))
+                           :ruleset {rebuilding_ruleset}
+                           :name \"{buffer_name}_drain\")"
+                )
+            } else {
+                format!(
+                    "(rule (({buffer_name} {arg_str} {leader}))
+                          ((set ({view_name} {arg_str} {leader}) ()))
+                           :ruleset {rebuilding_ruleset}
+                           :name \"{buffer_name}_drain\")"
+                )
+            };
+            (decls, drain)
         } else {
-            String::new()
+            (String::new(), String::new())
         };
 
         self.parse_program(&format!(
@@ -525,7 +551,8 @@ impl<'a> ProofInstrumentor<'a> {
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             {proof_constructors}
             {merge_rule}
-            {delete_rule}",
+            {delete_rule}
+            {drain_rule}",
         ))
     }
 
@@ -706,7 +733,9 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 new_args.push(v.to_string());
 
-                let view_name = self.view_name(head.name());
+                // Read from snap under souffle_compat_strata; canonical
+                // view otherwise.
+                let view_name = self.view_name_for_user_read(head.name());
                 let args_str = ListDisplay(new_args, " ");
 
                 // View is always a function; query it and bind the output
@@ -815,7 +844,8 @@ impl<'a> ProofInstrumentor<'a> {
                         );
 
                         let fv = self.fresh_var();
-                        let view_name = self.view_name(&func_type.name);
+                        // Read from snap under souffle_compat_strata.
+                        let view_name = self.view_name_for_user_read(&func_type.name);
                         let args_str = ListDisplay(new_args, " ");
 
                         let proof = {
@@ -962,6 +992,14 @@ impl<'a> ProofInstrumentor<'a> {
         format!("(set ({view_name} {}) {proof})", ListDisplay(args, " "))
     }
 
+    /// Same as [`update_view`] but for USER-rule writes. Under
+    /// souffle_compat_strata, user rules write to the buffer; the rebuild
+    /// stratum drains buffer → canonical view.
+    fn update_view_user_write(&mut self, fname: &str, args: &[String], proof: &str) -> String {
+        let target = self.view_name_for_user_write(fname);
+        format!("(set ({target} {}) {proof})", ListDisplay(args, " "))
+    }
+
     /// Return some code adding to the view and term tables.
     /// For constructors, `args` should not include the eclass of the resulting term (since it may not exist yet).
     /// For custom functions, `args` should include all arguments (including the output for the function).
@@ -1034,7 +1072,8 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         res.push(proof_str);
-        res.push(self.update_view(&func_type.name, &args_with_fv, &view_proof_var));
+        // User-rule write goes to buffer under strata; canonical otherwise.
+        res.push(self.update_view_user_write(&func_type.name, &args_with_fv, &view_proof_var));
 
         // add to uf table to initialize eclass for constructors
         if func_type.subtype == FunctionSubtype::Constructor {

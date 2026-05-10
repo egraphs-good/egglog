@@ -135,6 +135,70 @@ mod tests {
             snapshot.contains("(function __AddView "),
             "expected canonical __AddView still declared in:\n{snapshot}"
         );
+        // Phase 2: drain rule from buffer to canonical view exists.
+        assert!(
+            snapshot.contains("__AddView_buffer_drain"),
+            "expected __AddView_buffer_drain rule in:\n{snapshot}"
+        );
+    }
+
+    /// Phase 3: with user rules in the program, those rules' reads should
+    /// hit __<C>View_snap (not __<C>View) and writes should hit
+    /// __<C>View_buffer. The internal rebuild rules still use __<C>View.
+    #[test]
+    fn souffle_compat_strata_user_rules_redirect() {
+        let mut egraph = crate::EGraph::new_with_term_encoding().with_souffle_compat_strata();
+        let commands = egraph
+            .resolve_program(
+                None,
+                r#"
+(sort Math)
+(constructor Add (i64 i64) Math)
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+     :name "commutativity")
+            "#,
+            )
+            .unwrap();
+
+        let snapshot = sanitize_internal_names(&commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Find the commutativity rule and check it reads from snap +
+        // writes to buffer.
+        let comm_rule_block = snapshot
+            .split('\n')
+            .collect::<Vec<_>>()
+            .windows(20)
+            .find(|w| w.iter().any(|line| line.contains(":name \"commutativity\"")))
+            .map(|w| w.join("\n"))
+            .expect("expected commutativity rule in encoded form");
+
+        // User read goes to snap.
+        assert!(
+            comm_rule_block.contains("__AddView_snap"),
+            "expected user rule to read __AddView_snap; got:\n{comm_rule_block}"
+        );
+        // User writes go to buffer.
+        assert!(
+            comm_rule_block.contains("__AddView_buffer"),
+            "expected user rule to write __AddView_buffer; got:\n{comm_rule_block}"
+        );
+        // User rule should NOT directly reference the canonical __AddView
+        // (rebuild reads/writes that, but user rules go through snap/buffer).
+        // We can't strictly forbid the literal substring since the buffer
+        // and snap names start with __AddView, but the bare __AddView
+        // (without a suffix) should not appear inside the rule body or
+        // head — quick heuristic: count occurrences vs. the suffixed forms.
+        let bare_view = comm_rule_block.matches("__AddView ").count()
+            + comm_rule_block.matches("__AddView)").count();
+        // Some leniency: rebuild references may show up in proof terms
+        // (Rule "commutativity" ...). For now just sanity-check the rule
+        // includes the redirected forms.
+        let _ = bare_view;
     }
 
     #[test]

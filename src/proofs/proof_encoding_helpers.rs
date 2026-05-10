@@ -247,6 +247,29 @@ impl ProofInstrumentor<'_> {
         format!("{view}_snap")
     }
 
+    /// Pick the right view name for a USER-rule read. Under
+    /// souffle_compat_strata, user rules read from the snapshot (so they
+    /// see a frozen-at-outer-iteration-boundary view). Otherwise the
+    /// canonical view is fine.
+    pub(crate) fn view_name_for_user_read(&mut self, name: &str) -> String {
+        if self.egraph.proof_state.souffle_compat_strata {
+            self.view_snap_name(name)
+        } else {
+            self.view_name(name)
+        }
+    }
+
+    /// Pick the right view name for a USER-rule write. Under
+    /// souffle_compat_strata, user rules write to the buffer; rebuild
+    /// drains the buffer into the canonical view.
+    pub(crate) fn view_name_for_user_write(&mut self, name: &str) -> String {
+        if self.egraph.proof_state.souffle_compat_strata {
+            self.view_buffer_name(name)
+        } else {
+            self.view_name(name)
+        }
+    }
+
     pub(crate) fn subsumed_name(&mut self, name: &str) -> String {
         if let Some(n) = self.egraph.proof_state.proof_names.subsumed_name.get(name) {
             n.clone()
