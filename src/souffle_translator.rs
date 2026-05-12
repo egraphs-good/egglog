@@ -725,10 +725,10 @@ fn translate_rule(
     let use_wave_filter = ctx.user_run_count.is_some()
         && !is_system_ruleset(rule.ruleset.as_str())
         && !rule.body.is_empty();
-    let preserve_wave = ctx.user_run_count.is_some()
-        && is_wave_preservation_rule(rule.name.as_str());
+    let is_drain = ctx.user_run_count.is_some() && is_drain_rule(rule.name.as_str());
+    let is_rebuild = ctx.user_run_count.is_some() && is_rebuild_rule(rule.name.as_str());
     let k_var_name = "__K";
-    let head_wave_expr = if use_wave_filter {
+    let head_wave_expr = if use_wave_filter || is_rebuild {
         Expr::Var(k_var_name.to_string())
     } else {
         Expr::Number(0)
@@ -945,17 +945,21 @@ fn translate_rule(
             let mut head_args = args.clone();
             let head_atom_for_lets = Atom { relation: rel.clone(), args: head_args.clone() };
             add_let_lookups_to_body(&head_atom_for_lets, &mut full_body, &all_lets);
-            if use_wave_filter {
-                full_body = rewrite_user_rule_body_with_wave_filter(
-                    full_body, ctx, k_var_name,
-                );
-            } else if preserve_wave {
-                full_body = rewrite_wave_preservation(full_body, &mut head_args, ctx);
+            let final_bodies: Vec<Vec<IrLit>> = if use_wave_filter {
+                rewrite_user_rule_body_with_wave_filter(full_body, ctx, k_var_name)
+            } else if is_rebuild {
+                vec![rewrite_rebuild_body(full_body, k_var_name)]
+            } else if is_drain {
+                vec![rewrite_wave_preservation(full_body, &mut head_args, ctx)]
+            } else {
+                vec![full_body]
+            };
+            for variant in final_bodies {
+                p.clauses.push(Clause::rule(
+                    Atom { relation: rel.clone(), args: head_args.clone() },
+                    variant,
+                ));
             }
-            p.clauses.push(Clause::rule(
-                Atom { relation: rel.clone(), args: head_args },
-                full_body,
-            ));
         }
         for (rel, del_args) in &changes {
             // The set's arg list is the delete's args + an output column
@@ -993,16 +997,26 @@ fn translate_rule(
                     args: dominating_args.clone(),
                 };
                 add_let_lookups_to_body(&dominating_for_lets, &mut sub_body, &all_lets);
-                if use_wave_filter {
-                    sub_body = rewrite_user_rule_body_with_wave_filter(
-                        sub_body, ctx, k_var_name,
-                    );
-                } else if preserve_wave {
-                    sub_body =
-                        rewrite_wave_preservation(sub_body, &mut dominating_args, ctx);
+                let final_sub_bodies: Vec<Vec<IrLit>> = if use_wave_filter {
+                    rewrite_user_rule_body_with_wave_filter(sub_body, ctx, k_var_name)
+                } else if is_rebuild {
+                    vec![rewrite_rebuild_body(sub_body, k_var_name)]
+                } else if is_drain {
+                    vec![rewrite_wave_preservation(sub_body, &mut dominating_args, ctx)]
+                } else {
+                    vec![sub_body]
+                };
+                for variant in final_sub_bodies {
+                    let dominating = Atom {
+                        relation: set_rel.clone(),
+                        args: dominating_args.clone(),
+                    };
+                    p.clauses.push(Clause::subsume(
+                        dominated.clone(),
+                        dominating,
+                        variant,
+                    ));
                 }
-                let dominating = Atom { relation: set_rel.clone(), args: dominating_args };
-                p.clauses.push(Clause::subsume(dominated, dominating, sub_body));
             } else {
                 return Err(TranslateError::Unsupported(format!(
                     "isolated delete on {rel} (no paired set in same actions); needs tombstone helper relation"
@@ -1013,25 +1027,30 @@ fn translate_rule(
     Ok(())
 }
 
-/// True for system rules that COPY a wave-bearing row from one
-/// wave-bearing relation to another (drain: buffer → view; rebuild:
-/// view → view, canonicalized). Their head wave must match the
-/// source's wave; otherwise drain's wave-0 output triggers user-rule
-/// re-firing within the same outer iter (infinite loop / fixpoint
-/// instead of one-pass-per-K semantics).
-fn is_wave_preservation_rule(name: &str) -> bool {
-    // Drain rules: `<view>_buffer_drain` (proof_encoding.rs:608).
-    if name.ends_with("_drain") {
-        return true;
-    }
-    // Rebuild rules: fresh-from "rebuild_rule" hint.
-    if let Some(suffix) = name.strip_prefix('@')
-        && let Some(rest) = suffix.strip_prefix("rebuild_rule")
-        && (rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()))
-    {
-        return true;
-    }
-    false
+/// True for the drain rule (`<view>_buffer_drain`). Drain copies a
+/// buffer row to its canonical view; the wave on the destination
+/// matches the wave on the source (preservation). Otherwise drain's
+/// wave-0 output triggers user-rule re-firing within the same iter.
+fn is_drain_rule(name: &str) -> bool {
+    name.ends_with("_drain")
+}
+
+/// True for the rebuild rule (fresh-from "rebuild_rule" hint).
+/// Rebuild canonicalizes a non-leader c2 to its leader. The
+/// canonicalized row is logically "newly visible" at the current
+/// outer iter (since the leader may have just been determined), so
+/// its wave is set to the CURRENT K — not the source row's original
+/// wave. This way user rules pick it up as a delta in the next iter
+/// (matching default egglog's semi-naive behavior, where
+/// canonicalization adds to `@delta`).
+fn is_rebuild_rule(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix('@') else {
+        return false;
+    };
+    let Some(rest) = suffix.strip_prefix("rebuild_rule") else {
+        return false;
+    };
+    rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Rewrite drain/rebuild bodies + heads so the head wave matches the
@@ -1067,6 +1086,20 @@ fn rewrite_wave_preservation(
     new_body
 }
 
+/// For the rebuild rule: inject `IterCounter(K)` into the body so the
+/// head can write `wave = K`. No wave-filter constraint on body
+/// atoms — rebuild needs to canonicalize rows from any past iter
+/// when their c2's leader has changed.
+fn rewrite_rebuild_body(body: Vec<IrLit>, k_var: &str) -> Vec<IrLit> {
+    let mut new_body: Vec<IrLit> = Vec::with_capacity(body.len() + 1);
+    new_body.push(IrLit::Atom(Atom {
+        relation: ITER_COUNTER.to_string(),
+        args: vec![Expr::Var(k_var.to_string())],
+    }));
+    new_body.extend(body);
+    new_body
+}
+
 /// Phase 60b body rewrite for USER rules under `(run N)`. For every
 /// wave-bearing body atom, replace the auto-padded wave wildcard with a
 /// fresh wave var, and add `wave < K` so the rule only sees rows from
@@ -1074,61 +1107,94 @@ fn rewrite_wave_preservation(
 /// is bound. Net effect: each outer iter K, user rules fire exactly
 /// once against the accumulation of prior iters' writes — matching
 /// egglog `(run N)` semantics.
+/// Semi-naive rotation: for a rule with N wave-bearing body atoms,
+/// emit N variants. In variant i, atom i is the "delta" (wave =
+/// K - 1) and the others are "any past iter" (wave < K). This
+/// matches default egglog's semi-naive evaluation, where each
+/// (run) iter fires each rule on every (delta_i, full_others)
+/// combination. With only "all atoms at K - 1," rules fire only
+/// when all bodies happen to be fresh in the same iter — a
+/// gross under-count.
+///
+/// Souffle's set semantics dedups duplicate outputs across variants.
 fn rewrite_user_rule_body_with_wave_filter(
     body: Vec<IrLit>,
     ctx: &Ctx,
     k_var: &str,
-) -> Vec<IrLit> {
-    let mut new_body: Vec<IrLit> = Vec::with_capacity(body.len() + 2);
-    let mut wave_counter = 0u32;
-    for lit in body {
-        match lit {
+) -> Vec<Vec<IrLit>> {
+    // Step 1: identify wave-bearing atom positions and strip `_snap`.
+    let mut normalized: Vec<IrLit> = body
+        .into_iter()
+        .map(|lit| match lit {
             IrLit::Atom(mut a) if is_wave_bearing(ctx, &a.relation) => {
-                // Strip `_snap` suffix: phase 60c reads view directly,
-                // not snap. The wave filter (below) breaks the cycle
-                // that snap used to break by lagging-by-one-iter.
                 if let Some(base) = a.relation.strip_suffix("_snap")
                     && ctx.view_relations.contains(base)
                 {
                     a.relation = base.to_string();
                 }
-                // The wave column is the last arg; auto-pad put a
-                // Wildcard there. Replace with a fresh var bound by
-                // `< K`. If the wave position is *not* a wildcard
-                // (some future caller wrote it explicitly), leave it
-                // alone — the call site knows what it's doing.
-                let bound = match a.args.last() {
-                    Some(Expr::Wildcard) => {
-                        let w_name = format!("__w{wave_counter}");
-                        wave_counter += 1;
-                        *a.args.last_mut().unwrap() = Expr::Var(w_name.clone());
-                        Some(w_name)
-                    }
-                    _ => None,
-                };
-                new_body.push(IrLit::Atom(a));
-                if let Some(w_name) = bound {
-                    new_body.push(IrLit::Constraint(
-                        BinaryOp::Lt,
-                        Expr::Var(w_name),
-                        Expr::Var(k_var.to_string()),
-                    ));
-                }
+                IrLit::Atom(a)
             }
-            other => new_body.push(other),
+            other => other,
+        })
+        .collect();
+    let wave_positions: Vec<usize> = normalized
+        .iter()
+        .enumerate()
+        .filter_map(|(i, lit)| match lit {
+            IrLit::Atom(a) if is_wave_bearing(ctx, &a.relation) => Some(i),
+            _ => None,
+        })
+        .collect();
+    // Step 2: bind wave wildcards to fresh vars (same vars across all
+    // variants — clauses are scoped independently in souffle).
+    let mut wave_vars: Vec<String> = Vec::with_capacity(wave_positions.len());
+    for (i, &pos) in wave_positions.iter().enumerate() {
+        let w_name = format!("__w{i}");
+        if let IrLit::Atom(a) = &mut normalized[pos]
+            && matches!(a.args.last(), Some(Expr::Wildcard))
+        {
+            *a.args.last_mut().unwrap() = Expr::Var(w_name.clone());
         }
+        wave_vars.push(w_name);
     }
-    // Always bind K: the head writes `wave = K`, so K must be bound by
-    // the body. Even rules whose body has no wave-bearing atoms (e.g.,
-    // pure UF guards) need IterCounter for K to resolve.
-    new_body.insert(
-        0,
-        IrLit::Atom(Atom {
-            relation: ITER_COUNTER.to_string(),
-            args: vec![Expr::Var(k_var.to_string())],
-        }),
-    );
-    new_body
+    let iter_counter_atom = IrLit::Atom(Atom {
+        relation: ITER_COUNTER.to_string(),
+        args: vec![Expr::Var(k_var.to_string())],
+    });
+    let k_minus_1 = || {
+        Expr::BinOp(
+            ArithOp::Sub,
+            Box::new(Expr::Var(k_var.to_string())),
+            Box::new(Expr::Number(1)),
+        )
+    };
+    let k_expr = || Expr::Var(k_var.to_string());
+    // Step 3: emit variants. With M wave atoms, emit M variants
+    // (or 1 if M == 0 — body has only non-wave atoms or constraints).
+    if wave_positions.is_empty() {
+        let mut variant = Vec::with_capacity(normalized.len() + 1);
+        variant.push(iter_counter_atom.clone());
+        variant.extend(normalized);
+        return vec![variant];
+    }
+    let mut variants = Vec::with_capacity(wave_positions.len());
+    for delta_idx in 0..wave_positions.len() {
+        let mut variant = Vec::with_capacity(normalized.len() + wave_positions.len() + 1);
+        variant.push(iter_counter_atom.clone());
+        for lit in &normalized {
+            variant.push(lit.clone());
+        }
+        for (i, w_name) in wave_vars.iter().enumerate() {
+            let (op, rhs) = if i == delta_idx {
+                (BinaryOp::Eq, k_minus_1())
+            } else {
+                (BinaryOp::Lt, k_expr())
+            };
+            variant.push(IrLit::Constraint(op, Expr::Var(w_name.clone()), rhs));
+        }
+        variants.push(variant);
+    }
+    variants
 }
 
 /// Returns true iff `head`'s relation and arg shape exactly match the
