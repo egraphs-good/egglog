@@ -114,6 +114,36 @@ become next iter's delta. So egglog also does *one logical pass per
 from within-iter cascading. Good — that matches the generation-column
 design exactly.
 
+## Implementation note: translator-side, not encoder-side (2026-05-12)
+
+Originally the plan was to thread `wave: i64` through `proof_encoding.rs`
+itself — modifying 20 emission sites and the `doc_example_add_function1`
+snapshot. On closer reading, the translator turned out to be a cleaner
+injection point:
+
+- The wave column is purely a Souffle concern (egglog has no notion of
+  iterations as a relational column). Adding it at the souffle IR level
+  keeps the abstraction clean.
+- The translator already has full per-relation context (`relation_arity`,
+  `view_for_user`) and can detect view/buffer/snap relations by name
+  pattern + the `term_constructor` annotation.
+- Zero encoder changes ⇒ zero snapshot churn. The
+  `doc_example_add_function1.snap` site map below stays informational
+  (still useful for reasoning about which rules will need wave-aware
+  treatment), but no edits land there.
+
+Phase 60a (landed): translator declares view/buffer/snap with an extra
+`wave: number` column, body atoms get a wildcard for the wave slot
+(auto-padded via `relation_arity` lookup, with `_live` fallback for
+post-translation-declared views), and head atoms get a hardcoded
+`Number(0)`. Semantically a no-op (every wave value is 0 or wildcard),
+but the column shape is in place for phase 60b (IterCounter wiring).
+
+Phase 60b (next): user rules — detected via `rule.ruleset` membership
+in the 6 system rulesets listed below — emit `IterCounter(K)` body atom
++ `wave < K` constraint on body view reads, and write `wave = K` in
+head atoms instead of `0`.
+
 ## Encoder rule-emission site map (intel from Explore agents, 2026-05)
 
 Twenty distinct view-touching emission sites in `src/proofs/proof_encoding.rs`,

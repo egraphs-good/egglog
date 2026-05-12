@@ -115,6 +115,14 @@ pub struct Ctx {
     /// Used by the runner to map souffle's printsize output back to
     /// the user's constructor names.
     pub view_for_user: HashMap<String, String>,
+    /// View relation names (the canonical relations declared with
+    /// `:internal-term-constructor`). Their `<view>_buffer` /
+    /// `<view>_snap` siblings are wave-bearing by extension. The wave
+    /// column underpins the generation-column construction — every
+    /// row carries the outer-iteration counter at which it was written,
+    /// so user rules can filter to `wave < K` for precise `(run N)`
+    /// semantics. See souffle-generation-column-design.md.
+    pub view_relations: std::collections::HashSet<String>,
     /// Metadata for global-let captures: the fresh-var holding the
     /// term, the buffer relation it lives in, and the args used in the
     /// view's input columns. Each rule that references a fresh-var pulls
@@ -160,6 +168,10 @@ pub struct LetInfo {
     /// this term. Used as the RHS of the create-rule's constraint
     /// `fresh_var = record_literal`.
     pub record_literal: Expr,
+    /// Whether `lookup_rel` carries a wave column (see
+    /// `Ctx::view_relations`). When true, lookup body atoms emitted
+    /// from this LetInfo append an extra Wildcard for the wave.
+    pub lookup_rel_wave_bearing: bool,
 }
 
 /// Output of [`translate_with_manifest`]: the IR program plus a manifest
@@ -428,7 +440,24 @@ fn translate_command(
                 return Ok(());
             }
             // Other functions (UF, view tables, etc.) become Souffle relations.
-            let cols = function_columns(schema, ctx)?;
+            let mut cols = function_columns(schema, ctx)?;
+            // Wave column: views (and their _buffer/_snap siblings) get an
+            // extra `wave: number` trailing column. Phase 60a writes literal
+            // 0 to wave everywhere — semantically a no-op, but lays the
+            // groundwork for generation-column filtering on user rules.
+            let is_view = term_constructor.is_some();
+            let strata_sibling_of_view = ["_buffer", "_snap"].iter().any(|suffix| {
+                name.as_str()
+                    .strip_suffix(suffix)
+                    .is_some_and(|stripped| ctx.view_relations.contains(stripped))
+            });
+            let wave_bearing = is_view || strata_sibling_of_view;
+            if wave_bearing {
+                cols.push(("wave".into(), "number".into()));
+            }
+            if is_view {
+                ctx.view_relations.insert(name.to_string());
+            }
             ctx.relation_arity.insert(name.to_string(), cols.len());
             p.relations.push(RelationDecl {
                 name: name.to_string(),
@@ -524,6 +553,23 @@ fn function_columns(
     Ok(cols)
 }
 
+/// True iff `rel` carries a wave column: either a registered view
+/// relation or one of its `_buffer` / `_snap` siblings. See
+/// `Ctx::view_relations`.
+fn is_wave_bearing(ctx: &Ctx, rel: &str) -> bool {
+    if ctx.view_relations.contains(rel) {
+        return true;
+    }
+    for suffix in ["_buffer", "_snap"] {
+        if let Some(stripped) = rel.strip_suffix(suffix)
+            && ctx.view_relations.contains(stripped)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn sort_to_souffle_type(sort: &str) -> String {
     match sort {
         "i64" => "number".into(),
@@ -594,6 +640,7 @@ fn translate_rule(
                         lookup_rel: info.lookup_rel.clone(),
                         lookup_args: args,
                         record_literal,
+                        lookup_rel_wave_bearing: info.lookup_rel_wave_bearing,
                     };
                     lets.insert(var.name.to_string(), Expr::Var(info.fresh_var.clone()));
                     let_infos.push(info);
@@ -712,6 +759,12 @@ fn translate_rule(
                             replace_expr_match(arg, &bv_rec, &v_b);
                         }
                     }
+                    // Wave column for view/buffer/snap writes. Phase 60a:
+                    // hardcoded 0; phase 60b ties this to IterCounter for
+                    // user rules.
+                    if is_wave_bearing(ctx, head.name()) {
+                        souffle_args.push(Expr::Number(0));
+                    }
                     sets.push((head.name().to_string(), souffle_args, extra));
                 }
             }
@@ -763,16 +816,26 @@ fn translate_rule(
             p.clauses.push(Clause::rule(head_atom, full_body));
         }
         for (rel, del_args) in &changes {
+            // The set's arg list is the delete's args + an output column
+            // (+1) plus a wave column when the relation is wave-bearing
+            // (+1 more). Pair only when arities are consistent with that
+            // shape; otherwise the subsumption clause would be malformed.
+            let extra_set_cols = if is_wave_bearing(ctx, rel) { 2 } else { 1 };
             let paired: Vec<&(String, Vec<Expr>, Vec<IrLit>)> = sets
                 .iter()
                 .filter(|(set_rel, set_args, _)| {
-                    set_rel == rel && set_args.len() == del_args.len() + 1
+                    set_rel == rel && set_args.len() == del_args.len() + extra_set_cols
                 })
                 .collect();
             if let Some((set_rel, set_args, extra)) = paired.first().copied() {
                 let mut dom_args = del_args.clone();
                 let v = format!("__del_out_{}", p.clauses.len());
                 dom_args.push(Expr::Var(v));
+                // Wave column on the dominated tuple: delete any-wave row
+                // (the new dominating tuple is the canonical replacement).
+                if is_wave_bearing(ctx, rel) {
+                    dom_args.push(Expr::Wildcard);
+                }
                 let mut sub_body = body_subst.clone();
                 for x in extra {
                     sub_body.push(x.clone());
@@ -804,16 +867,19 @@ fn is_let_create_rule(head: &Atom, info: &LetInfo) -> bool {
     if head.relation != info.buffer_rel {
         return false;
     }
-    // Head shape: lookup_args + [fresh_var] + [out_unit_column].
-    if head.args.len() != info.lookup_args.len() + 2 {
+    // Head shape: lookup_args + [fresh_var] + [out_unit_column] + maybe
+    // [wave_column]. We allow either length so the same detector works
+    // whether the buffer is wave-bearing or not.
+    let n = info.lookup_args.len();
+    if head.args.len() < n + 2 {
         return false;
     }
-    for (h, l) in head.args.iter().zip(info.lookup_args.iter()) {
+    for (h, l) in head.args.iter().take(n).zip(info.lookup_args.iter()) {
         if h != l {
             return false;
         }
     }
-    matches!(&head.args[info.lookup_args.len()], Expr::Var(v) if v == &info.fresh_var)
+    matches!(&head.args[n], Expr::Var(v) if v == &info.fresh_var)
 }
 
 /// For each let-fresh-var transitively referenced by `head` or `body`,
@@ -852,6 +918,10 @@ fn add_let_lookups_to_body(
                 let mut atom_args = info.lookup_args.clone();
                 atom_args.push(Expr::Var(info.fresh_var.clone()));
                 atom_args.push(Expr::Wildcard);
+                if info.lookup_rel_wave_bearing {
+                    // Wave column: match any wave in phase 60a.
+                    atom_args.push(Expr::Wildcard);
+                }
                 body.push(IrLit::Atom(Atom {
                     relation: info.lookup_rel.clone(),
                     args: atom_args,
@@ -1383,6 +1453,19 @@ fn translate_eq_fact(
         souffle_args.push(Expr::Var(var_name));
         // Drained relations are read via their _live view.
         let rel = drained_view_name(ctx, head.name());
+        // Pad to declared arity (handles the wave column on view/buffer/
+        // snap reads, plus any future relations with more columns than
+        // the egglog source mentions). `_live` views aren't yet
+        // registered at this point, so fall back to source arity.
+        let arity = ctx.relation_arity.get(&rel).copied().or_else(|| {
+            rel.strip_suffix("_live")
+                .and_then(|src| ctx.relation_arity.get(src).copied())
+        });
+        if let Some(arity) = arity {
+            while souffle_args.len() < arity {
+                souffle_args.push(Expr::Wildcard);
+            }
+        }
         out.push(IrLit::Atom(Atom {
             relation: rel,
             args: souffle_args,
@@ -1409,7 +1492,16 @@ fn build_atom(
     for a in args {
         souffle_args.push(translate_value_expr(a, ctx)?);
     }
-    if let Some(&arity) = ctx.relation_arity.get(relation) {
+    // `_live` views are declared after rule translation (in
+    // emit_live_views), so their arity isn't yet in relation_arity. Fall
+    // back to the source relation's arity in that case — _live always
+    // mirrors the source's columns.
+    let arity = ctx.relation_arity.get(relation).copied().or_else(|| {
+        relation
+            .strip_suffix("_live")
+            .and_then(|src| ctx.relation_arity.get(src).copied())
+    });
+    if let Some(arity) = arity {
         while souffle_args.len() < arity {
             souffle_args.push(Expr::Wildcard);
         }
@@ -1579,12 +1671,14 @@ fn build_let_info_from_expr(
     // constraint to bind the var to a specific value.
     let tag = ctx.tag_of[cons_name];
     let record_literal = build_record_for_tag(tag, args, ctx)?;
+    let lookup_rel_wave_bearing = is_wave_bearing(ctx, &lookup_rel);
     Ok(Some(LetInfo {
         fresh_var: fresh_var_name.to_string(),
         buffer_rel,
         lookup_rel,
         lookup_args,
         record_literal,
+        lookup_rel_wave_bearing,
     }))
 }
 
