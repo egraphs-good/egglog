@@ -503,6 +503,7 @@ impl Parser {
                     let mut ruleset = String::new();
                     let mut conditions = Vec::new();
                     let mut subsume = false;
+                    let mut name = String::new();
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
@@ -514,6 +515,7 @@ impl Parser {
                                     Self::parse_fact,
                                 )?
                             }
+                            (":name", [s]) => name = s.expect_string("rule name")?,
                             _ => return error!(span, "could not parse rewrite options"),
                         }
                     }
@@ -525,6 +527,7 @@ impl Parser {
                             lhs,
                             rhs,
                             conditions,
+                            name,
                         },
                         subsume,
                     )]
@@ -538,6 +541,7 @@ impl Parser {
 
                     let mut ruleset = String::new();
                     let mut conditions = Vec::new();
+                    let mut name = String::new();
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
@@ -548,6 +552,7 @@ impl Parser {
                                     Self::parse_fact,
                                 )?
                             }
+                            (":name", [s]) => name = s.expect_string("rule name")?,
                             _ => return error!(span, "could not parse birewrite options"),
                         }
                     }
@@ -559,6 +564,7 @@ impl Parser {
                             lhs,
                             rhs,
                             conditions,
+                            name,
                         },
                     )]
                 }

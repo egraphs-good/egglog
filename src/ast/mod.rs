@@ -1480,6 +1480,7 @@ pub struct GenericRewrite<Head, Leaf> {
     pub lhs: GenericExpr<Head, Leaf>,
     pub rhs: GenericExpr<Head, Leaf>,
     pub conditions: Vec<GenericFact<Head, Leaf>>,
+    pub name: String,
 }
 
 impl<Head, Leaf> GenericRewrite<Head, Leaf>
@@ -1506,6 +1507,7 @@ where
                 .into_iter()
                 .map(|fact| fact.map_symbols(head, leaf))
                 .collect(),
+            name: self.name,
         }
     }
 
@@ -1808,6 +1810,7 @@ where
                         .into_iter()
                         .map(|fact| fact.visit_exprs(f))
                         .collect(),
+                    name: rewrite.name,
                 },
                 subsume,
             ),
@@ -1822,6 +1825,7 @@ where
                         .into_iter()
                         .map(|fact| fact.visit_exprs(f))
                         .collect(),
+                    name: rewrite.name,
                 },
             ),
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
