@@ -469,16 +469,16 @@ pub enum ResolvedFunctionId {
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
 //
-// Registered via `EGraph::add_higher_order_primitive` (issue #772).
-// That helper registers four `ExternalFunctionId`s under the same name
-// — one per `Context` variant — each closure stamping its specific
-// context onto `ExecutionState` before invoking the shared body.
-// `FunctionContainer::apply` reads back the runtime context and
-// chooses pure-side vs action-side dispatch (no mint in queries; mint
-// constructors in action contexts; `Pure` refuses all DB ops).
-// Distinct `FunctionSort`s produce different signature keys, so
-// `unstable-app` for `MathFn` stays a separate
-// overload from `unstable-app` for `i64Fun`.
+// `Apply` is registered as a `PurePrim`, so `add_pure_primitive`'s
+// `register_per_context` helper commits four `ExternalFunctionId`s
+// under the same name — one per `Context` variant — each stamping
+// its specific context onto the state wrapper before invoking the
+// shared body. `FunctionContainer::apply` reads back the runtime
+// context and chooses pure-side vs action-side dispatch (no mint in
+// queries; mint constructors in action contexts; `Pure` refuses all
+// DB ops). Distinct `FunctionSort`s produce different signature keys,
+// so `unstable-app` for `MathFn` stays a separate overload from
+// `unstable-app` for `i64Fun`.
 
 #[derive(Clone)]
 struct Apply {
@@ -568,6 +568,10 @@ impl FunctionContainer {
                 // the application ctx. Each `add_*_primitive` commits
                 // disjoint singletons across the trait's valid ctxs,
                 // so exactly one candidate matches.
+                debug_assert!(
+                    candidates.iter().filter(|(_, c)| *c == ctx).count() <= 1,
+                    "more than one primitive candidate matches ctx {ctx:?}"
+                );
                 match candidates.iter().find(|(_, c)| *c == ctx) {
                     Some((id, _)) => state.call_external_func(*id, &args),
                     None => mismatch(state),

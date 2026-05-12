@@ -20,8 +20,7 @@
 //!   methods the chosen state allows.
 //! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
 //!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
-//!   the "pure native function" case ergonomically — they generate
-//!   `PurePrim` impls and pull base-value conversions for you.
+//!   the simple "pure native function" case.
 
 use crate::*;
 use std::any::{Any, TypeId};

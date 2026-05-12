@@ -19,12 +19,9 @@ use std::sync::{Arc, RwLock};
 struct PurePrimWrapper<T> {
     prim: T,
     /// The call-site [`Context`] this wrapper stamps onto the
-    /// `PureState` before dispatching. For non-HOF registrations the
-    /// natural choice is [`Context::Pure`] (fail-closed: HOF dispatch
-    /// via `apply_function` would refuse mint/read). For HOF
-    /// registrations, [`EGraph::add_higher_order_primitive`] registers
-    /// one wrapper per `Context` variant so the typechecker's pick at
-    /// each call site is encoded directly here.
+    /// `PureState` before dispatching. `register_per_context` commits
+    /// one wrapper per valid `Context` for the trait, so the
+    /// typechecker's pick at each call site is encoded directly here.
     ctx: Context,
 }
 
@@ -42,8 +39,7 @@ impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
 struct RegistryPrimWrapper<T, S> {
     prim: T,
     registry: Arc<RwLock<ActionRegistry>>,
-    /// Stamped onto the state wrapper. Same role as
-    /// [`PurePrimWrapper::ctx`].
+    /// Stamped onto the state wrapper.
     ctx: Context,
     _wrap: std::marker::PhantomData<fn() -> S>,
 }
@@ -294,7 +290,7 @@ impl EGraph {
     where
         T: WritePrim + Clone,
     {
-        let registry = self.backend.action_registry();
+        let registry = self.backend.action_registry().clone();
         self.register_per_context(x, validator, WriteState::valid_contexts(), move |x, ctx| {
             Box::new(RegistryPrimWrapper::<T, WrapWrite> {
                 prim: x,
@@ -312,7 +308,7 @@ impl EGraph {
     where
         T: ReadPrim + Clone,
     {
-        let registry = self.backend.action_registry();
+        let registry = self.backend.action_registry().clone();
         self.register_per_context(x, validator, ReadState::valid_contexts(), move |x, ctx| {
             Box::new(RegistryPrimWrapper::<T, WrapRead> {
                 prim: x,
@@ -330,7 +326,7 @@ impl EGraph {
     where
         T: FullPrim + Clone,
     {
-        let registry = self.backend.action_registry();
+        let registry = self.backend.action_registry().clone();
         self.register_per_context(x, validator, FullState::valid_contexts(), move |x, ctx| {
             Box::new(RegistryPrimWrapper::<T, WrapFull> {
                 prim: x,

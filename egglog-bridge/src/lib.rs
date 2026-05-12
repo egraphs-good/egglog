@@ -552,8 +552,8 @@ impl EGraph {
     /// `Arc` does not duplicate the underlying registry. Used by the
     /// egglog crate's primitive machinery to thread the registry into
     /// state wrappers at invoke time.
-    pub fn action_registry(&self) -> Arc<std::sync::RwLock<ActionRegistry>> {
-        self.action_registry.clone()
+    pub fn action_registry(&self) -> &Arc<std::sync::RwLock<ActionRegistry>> {
+        &self.action_registry
     }
 
     /// Run the given rules, returning whether the database changed.

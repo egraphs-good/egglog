@@ -10,42 +10,6 @@
 //! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
 //! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
 //!
-//! # Using egglog from Rust
-//!
-//! Start with the [**`prelude`**](prelude) module — it re-exports the
-//! types and macros most Rust callers need and documents the common
-//! entry points (`rule`, `rust_rule`, `query`, the sort traits, the
-//! [`Primitive`] / [`PurePrim`] traits, and the
-//! `add_primitive!` macros). Almost every
-//! example in this crate's docs assumes `use egglog::prelude::*;`.
-//!
-//! For driving egglog as a script, [`EGraph::parse_and_run_program`]
-//! is the one-stop entry point.
-//!
-//! ## Extending egglog with your own native code
-//!
-//! When the prelude isn't enough — when you want to plug Rust functions
-//! or types into the egraph — the extension points are:
-//!
-//! - **Custom primitives**: implement [`Primitive`] plus one of
-//!   the four kind-specific traits ([`PurePrim`],
-//!   [`WritePrim`], [`ReadPrim`], [`FullPrim`])
-//!   and register via the matching `EGraph::add_*_primitive` method.
-//!   The chosen trait names the state wrapper its body sees —
-//!   [`PureState`] for pure ops, [`WriteState`] for writes,
-//!   etc. The Rust type checker enforces that the body only uses
-//!   capabilities that wrapper exposes; the typechecker enforces that
-//!   the primitive is only invoked from contexts the wrapper is valid
-//!   in. See each kind trait's docs for the state→context details.
-//! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]; the
-//!   closure receives an [`crate::WriteState`].
-//! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
-//!   [`ContainerSort`] (re-exported from the [`prelude`]).
-//!
-//! See issue #772 in the repo for the seminaive-safety reasoning
-//! behind the typed primitive surface.
-//!
-//!
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
@@ -136,7 +100,7 @@ pub type ArcSort = Arc<dyn Sort>;
 /// `name` and `get_type_constraints` aren't capability-dependent, so
 /// the four kind-specific traits ([`PurePrim`], [`WritePrim`],
 /// [`ReadPrim`], [`FullPrim`]) share this supertrait.
-pub trait PrimitiveCommon: Send + Sync + 'static {
+pub trait Primitive: Send + Sync + 'static {
     /// Returns the name of this primitive.
     fn name(&self) -> &str;
 
@@ -2320,9 +2284,8 @@ mod tests {
         vec: ArcSort,
     }
 
-    // Migrated to the new `Primitive` trait. `InnerProduct` is pure —
-    // it only reads base values and (idempotent) container contents — so it
-    // declares `State = PureState`, making it usable in all four
+    // `InnerProduct` is pure, so it declares
+    // `State = PureState` and is usable in all
     // contexts. The Rust type checker enforces that the body only uses
     // methods available on `PureState`.
     impl Primitive for InnerProduct {
