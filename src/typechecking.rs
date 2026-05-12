@@ -158,7 +158,7 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {
-    pub(crate) primitive: Arc<dyn PrimitiveCommon>,
+    pub(crate) primitive: Arc<dyn Primitive>,
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
     /// The single context this registration was created for. Each
@@ -359,10 +359,10 @@ impl EGraph {
         valid_ctxs: &[Context],
         mut build_wrapper: F,
     ) where
-        T: PrimitiveCommon + Clone,
+        T: Primitive + Clone,
         F: FnMut(T, Context) -> Box<dyn ExternalFunction>,
     {
-        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
+        let primitive: Arc<dyn Primitive> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
         for &ctx in valid_ctxs {
             let id = self
@@ -404,7 +404,7 @@ impl EGraph {
 /// helpers commit one of these per [`Context`] variant the trait
 /// supports.
 struct PendingPrimitive {
-    primitive: Arc<dyn PrimitiveCommon>,
+    primitive: Arc<dyn Primitive>,
     id: ExternalFunctionId,
     validator: Option<PrimitiveValidator>,
     selection_ctx: Context,

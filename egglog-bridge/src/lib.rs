@@ -156,7 +156,10 @@ impl Default for EGraph {
         )));
         panic_funcs.insert(default_panic_msg, default_panic_id);
 
-        let union_action = UnionAction::from_parts(uf_table, ts_counter);
+        let union_action = UnionAction {
+            table: uf_table,
+            timestamp: ts_counter,
+        };
         let action_registry = Arc::new(std::sync::RwLock::new(ActionRegistry::new(
             union_action,
             default_panic_id,
@@ -1353,13 +1356,6 @@ impl UnionAction {
             table: egraph.uf_table,
             timestamp: egraph.timestamp_counter,
         }
-    }
-
-    /// Construct a `UnionAction` directly from its constituent ids.
-    /// Used by the bridge to build a default union action during
-    /// `EGraph::default()` (when `&self` does not yet exist).
-    pub(crate) fn from_parts(table: TableId, timestamp: CounterId) -> UnionAction {
-        UnionAction { table, timestamp }
     }
 
     /// Union two values.

@@ -360,7 +360,7 @@ struct Map {
     output_multiset: ArcSort,
 }
 
-impl PrimitiveCommon for Map {
+impl Primitive for Map {
     fn name(&self) -> &str {
         &self.name
     }
@@ -424,7 +424,7 @@ struct FillIndex {
 // state, so it's only valid in `Context::Full` — registered as a
 // `FullPrim` and only callable from a `:naive` rule (or from a
 // global action).
-impl PrimitiveCommon for FillIndex {
+impl Primitive for FillIndex {
     fn name(&self) -> &str {
         &self.name
     }
@@ -456,8 +456,8 @@ impl FullPrim for FillIndex {
             .unwrap()
             .clone();
         let action = match fc.0 {
-            ResolvedFunctionId::ConstructorLookup(a) | ResolvedFunctionId::CustomLookup(a) => a,
-            ResolvedFunctionId::Prim { .. } => panic!(
+            ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
+            ResolvedFunctionId::Primitive { .. } => panic!(
                 "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
             ),
         };
@@ -489,7 +489,7 @@ struct ClearIndex {
 }
 
 // `ClearIndex` removes table rows; action-only.
-impl PrimitiveCommon for ClearIndex {
+impl Primitive for ClearIndex {
     fn name(&self) -> &str {
         &self.name
     }
@@ -521,8 +521,8 @@ impl WritePrim for ClearIndex {
             .unwrap()
             .clone();
         let action = match fc.0 {
-            ResolvedFunctionId::ConstructorLookup(a) | ResolvedFunctionId::CustomLookup(a) => a,
-            ResolvedFunctionId::Prim { .. } => panic!(
+            ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
+            ResolvedFunctionId::Primitive { .. } => panic!(
                 "Primitive functions cannot be used with unstable-multiset-clear-index, since they cannot be deleted"
             ),
         };
@@ -545,7 +545,7 @@ struct FlatMap {
     fn_: Arc<FunctionSort>,
 }
 
-impl PrimitiveCommon for FlatMap {
+impl Primitive for FlatMap {
     fn name(&self) -> &str {
         &self.name
     }
@@ -613,7 +613,7 @@ struct Filter {
     skip_empty: bool,
 }
 
-impl PrimitiveCommon for Filter {
+impl Primitive for Filter {
     fn name(&self) -> &str {
         &self.name
     }
@@ -674,7 +674,7 @@ struct SumMultisets {
 
 // `SumMultisets` flattens a multiset of multisets. Only reads container
 // contents and registers the result — pure.
-impl PrimitiveCommon for SumMultisets {
+impl Primitive for SumMultisets {
     fn name(&self) -> &str {
         &self.name
     }
@@ -729,7 +729,7 @@ struct Reduce {
     element: ArcSort,
 }
 
-impl PrimitiveCommon for Reduce {
+impl Primitive for Reduce {
     fn name(&self) -> &str {
         &self.name
     }
@@ -790,7 +790,7 @@ struct UnionValues {
 }
 
 // `UnionValues` writes to the union-find; action-only.
-impl PrimitiveCommon for UnionValues {
+impl Primitive for UnionValues {
     fn name(&self) -> &str {
         &self.name
     }

@@ -15,7 +15,7 @@
 //! Start with the [**`prelude`**](prelude) module — it re-exports the
 //! types and macros most Rust callers need and documents the common
 //! entry points (`rule`, `rust_rule`, `query`, the sort traits, the
-//! [`PrimitiveCommon`] / [`PurePrim`] traits, and the
+//! [`Primitive`] / [`PurePrim`] traits, and the
 //! `add_primitive!` macros). Almost every
 //! example in this crate's docs assumes `use egglog::prelude::*;`.
 //!
@@ -27,7 +27,7 @@
 //! When the prelude isn't enough — when you want to plug Rust functions
 //! or types into the egraph — the extension points are:
 //!
-//! - **Custom primitives**: implement [`PrimitiveCommon`] plus one of
+//! - **Custom primitives**: implement [`Primitive`] plus one of
 //!   the four kind-specific traits ([`PurePrim`],
 //!   [`WritePrim`], [`ReadPrim`], [`FullPrim`])
 //!   and register via the matching `EGraph::add_*_primitive` method.
@@ -152,7 +152,7 @@ pub trait PrimitiveCommon: Send + Sync + 'static {
 /// Most primitives are pure (e.g., `+`, `<`, `vec-of`). The macros
 /// `add_primitive!` / `add_literal_prim!` generate impls of this trait.
 /// Register via [`EGraph::add_pure_primitive`].
-pub trait PurePrim: PrimitiveCommon {
+pub trait PurePrim: Primitive {
     fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
@@ -160,7 +160,7 @@ pub trait PurePrim: PrimitiveCommon {
 /// [`WriteState`]: pure ops + DB writes + name-indexed
 /// `insert` / `remove` / `subsume` / `union` / `panic`. Valid only in
 /// rule-action and global-action contexts.
-pub trait WritePrim: PrimitiveCommon {
+pub trait WritePrim: Primitive {
     fn apply<'a, 'db>(&self, state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
@@ -168,13 +168,13 @@ pub trait WritePrim: PrimitiveCommon {
 /// sees a [`ReadState`]: pure ops + table reads. Valid only in
 /// global-query and global-action contexts (reading from a database
 /// during a rule query would be untracked by seminaive — see #772).
-pub trait ReadPrim: PrimitiveCommon {
+pub trait ReadPrim: Primitive {
     fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that needs both DB reads and DB writes. Body sees a
 /// [`FullState`]. Valid only in the global-action context.
-pub trait FullPrim: PrimitiveCommon {
+pub trait FullPrim: Primitive {
     fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
@@ -2068,10 +2068,8 @@ impl<'a> BackendRule<'a> {
                 // the user asked for.
                 let action = egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f));
                 match f.subtype {
-                    ast::FunctionSubtype::Constructor => {
-                        ResolvedFunctionId::ConstructorLookup(action)
-                    }
-                    ast::FunctionSubtype::Custom => ResolvedFunctionId::CustomLookup(action),
+                    ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
+                    ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
                 }
             } else if let Some(possible) = self.type_info.get_prims(name) {
                 let mut ps: Vec<_> = possible.iter().collect();
@@ -2103,7 +2101,7 @@ impl<'a> BackendRule<'a> {
                 let _ = ctx;
                 assert!(!ps.is_empty(), "no callable for {name}");
                 let candidates: Vec<_> = ps.into_iter().map(|p| (p.id, p.selection_ctx)).collect();
-                ResolvedFunctionId::Prim { candidates }
+                ResolvedFunctionId::Primitive { candidates }
             } else {
                 panic!("no callable for {name}");
             };
@@ -2327,7 +2325,7 @@ mod tests {
     // declares `State = PureState`, making it usable in all four
     // contexts. The Rust type checker enforces that the body only uses
     // methods available on `PureState`.
-    impl PrimitiveCommon for InnerProduct {
+    impl Primitive for InnerProduct {
         fn name(&self) -> &str {
             "inner-product"
         }

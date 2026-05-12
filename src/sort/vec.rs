@@ -238,7 +238,7 @@ struct VecMap {
     fn_: Arc<FunctionSort>,
 }
 
-impl PrimitiveCommon for VecMap {
+impl Primitive for VecMap {
     fn name(&self) -> &str {
         &self.name
     }
@@ -296,7 +296,7 @@ struct Union {
 // It writes to the union-find (via `UnionAction::union`), so it
 // implements `WritePrim` — valid in rule-action and global-action
 // contexts, rejected at rule-build time if used in a rule query.
-impl PrimitiveCommon for Union {
+impl Primitive for Union {
     fn name(&self) -> &str {
         &self.name
     }

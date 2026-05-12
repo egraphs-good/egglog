@@ -352,7 +352,7 @@ struct Ctor {
 // so it's safe in every context; declaring `State = PureState`
 // permits this primitive inside rule queries, actions, and global
 // contexts alike.
-impl PrimitiveCommon for Ctor {
+impl Primitive for Ctor {
     fn name(&self) -> &str {
         &self.name
     }
@@ -448,12 +448,13 @@ pub enum ResolvedFunctionId {
     /// it triggers the pre-registered runtime panic — a no-mint
     /// constructor would silently miss instead of producing the
     /// eclass the user asked for, so the call is rejected outright.
-    ConstructorLookup(egglog_bridge::TableAction),
-    /// Wraps a custom-function (`:no-merge`/`Fail`) lookup. Pure read
-    /// returning `None` on miss. `FunctionContainer::apply` allows
-    /// this in every context except `Pure` (where it would be an
-    /// untracked seminaive read).
-    CustomLookup(egglog_bridge::TableAction),
+    Constructor(egglog_bridge::TableAction),
+    /// Wraps a `(function …)` lookup — any non-constructor function,
+    /// regardless of its `:merge` strategy. Pure read returning `None`
+    /// on miss. `FunctionContainer::apply` allows this in every
+    /// context except `Pure` (where it would be an untracked
+    /// seminaive read).
+    Function(egglog_bridge::TableAction),
     /// Wraps a primitive. Carries every signature-matching
     /// registration the typechecker found at build time, paired with
     /// its `selection_ctx`. At dispatch time `FunctionContainer::apply`
@@ -461,7 +462,7 @@ pub enum ResolvedFunctionId {
     /// application context — so the runtime selection is independent
     /// of the build-site context, and an `unstable-fn` value may flow
     /// freely from one context to another.
-    Prim {
+    Primitive {
         candidates: Vec<(ExternalFunctionId, crate::Context)>,
     },
 }
@@ -485,7 +486,7 @@ struct Apply {
     function: Arc<FunctionSort>,
 }
 
-impl PrimitiveCommon for Apply {
+impl Primitive for Apply {
     fn name(&self) -> &str {
         &self.name
     }
@@ -515,9 +516,11 @@ impl PurePrim for Apply {
 }
 
 impl FunctionContainer {
-    /// Apply the wrapped function. `None` means the wrapped function
-    /// produced no result for this input; capability mismatch
-    /// triggers `panic_id` instead of silently returning `None`.
+    /// Apply the wrapped function. `state` is always a `PureState`
+    /// (the type every primitive's `apply` receives); the real
+    /// surrounding context is carried separately in `ctx`, and
+    /// read/write capabilities are reached through `raw_exec_state()`
+    /// gated by the `ctx`-derived checks below.
     pub(crate) fn apply<'a, 'db>(
         &self,
         state: &mut crate::PureState<'a, 'db>,
@@ -542,7 +545,7 @@ impl FunctionContainer {
             state.call_external_func(panic_id, &[])
         };
         match &self.0 {
-            ResolvedFunctionId::ConstructorLookup(action) => {
+            ResolvedFunctionId::Constructor(action) => {
                 if can_mint {
                     action.lookup_or_insert(state.raw_exec_state(), &args)
                 } else {
@@ -553,14 +556,14 @@ impl FunctionContainer {
                     mismatch(state)
                 }
             }
-            ResolvedFunctionId::CustomLookup(action) => {
+            ResolvedFunctionId::Function(action) => {
                 if can_read {
                     action.lookup(state.raw_exec_state(), &args)
                 } else {
                     mismatch(state)
                 }
             }
-            ResolvedFunctionId::Prim { candidates } => {
+            ResolvedFunctionId::Primitive { candidates } => {
                 // Pick the registration whose `selection_ctx` equals
                 // the application ctx. Each `add_*_primitive` commits
                 // disjoint singletons across the trait's valid ctxs,

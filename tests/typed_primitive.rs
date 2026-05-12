@@ -14,7 +14,7 @@ use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::sort::I64Sort;
 use egglog::{
-    EGraph, FullPrim, FullState, PrimitiveCommon, PurePrim, PureState, Read, ReadPrim, ReadState,
+    EGraph, FullPrim, FullState, Primitive, PurePrim, PureState, Read, ReadPrim, ReadState,
     Value, WritePrim, WriteState, prelude::*,
 };
 
@@ -23,7 +23,7 @@ use egglog::{
 /// A pure primitive that adds two i64s. Trivially safe in every context.
 #[derive(Clone)]
 struct PureAdd(&'static str);
-impl PrimitiveCommon for PureAdd {
+impl Primitive for PureAdd {
     fn name(&self) -> &str {
         self.0
     }
@@ -53,7 +53,7 @@ impl PurePrim for PureAdd {
 /// so it only type-checks against `WriteState`.
 #[derive(Clone)]
 struct WriteEcho(&'static str);
-impl PrimitiveCommon for WriteEcho {
+impl Primitive for WriteEcho {
     fn name(&self) -> &str {
         self.0
     }
@@ -81,7 +81,7 @@ struct ReadLookup {
     name: &'static str,
     table_name: &'static str,
 }
-impl PrimitiveCommon for ReadLookup {
+impl Primitive for ReadLookup {
     fn name(&self) -> &str {
         self.name
     }
@@ -103,7 +103,7 @@ impl ReadPrim for ReadLookup {
 /// A full primitive — uses `FullState` (writes + reads).
 #[derive(Clone)]
 struct FullEcho(&'static str);
-impl PrimitiveCommon for FullEcho {
+impl Primitive for FullEcho {
     fn name(&self) -> &str {
         self.0
     }
@@ -129,7 +129,7 @@ impl FullPrim for FullEcho {
 /// registration kinds.
 #[derive(Clone)]
 struct PureEcho(&'static str);
-impl PrimitiveCommon for PureEcho {
+impl Primitive for PureEcho {
     fn name(&self) -> &str {
         self.0
     }
@@ -153,7 +153,7 @@ impl PurePrim for PureEcho {
 /// at dispatch time, which is what the matrix test cares about.
 #[derive(Clone)]
 struct ReadEcho(&'static str);
-impl PrimitiveCommon for ReadEcho {
+impl Primitive for ReadEcho {
     fn name(&self) -> &str {
         self.0
     }
@@ -405,7 +405,7 @@ fn two_same_signature_registrations_panic_on_use() {
 
 // --- 4x4 unstable-app dispatch matrix ---
 //
-// `ResolvedFunctionId::Prim` is built only on the `unstable-fn` path
+// `ResolvedFunctionId::Primitive` is built only on the `unstable-fn` path
 // (`src/lib.rs` around L2103), and at dispatch time
 // `FunctionContainer::apply` (`src/sort/fn.rs` around L560-569)
 // picks the candidate whose `selection_ctx` equals the application

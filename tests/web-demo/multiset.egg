@@ -185,16 +185,14 @@
 (push)
 (constructor add (Math Math) Math)
 (sort MathAddFn (UnstableFn (Math Math) Math))
-;; not sure why we have to add this first to the e-graph to =?
-(unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs)
-(check (=
-        (unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs)
-        (add (add (Num 1) (Num 2)) (Num 3))
-    ))
-(check (=
-        (unstable-multiset-reduce (unstable-fn "add") (Num 0) (multiset-of))
-        (Num 0)
-    ))
+;; Bind the reduce results at top level (`Full` context, so the wrapped
+;; `add` constructor may mint), then `check` against the bindings.
+;; `unstable-multiset-reduce` inside `check` would be `Read` context,
+;; where constructors are inadmissible (no-mint constructors are banned).
+(let $sum-xs (unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs))
+(check (= $sum-xs (add (add (Num 1) (Num 2)) (Num 3))))
+(let $sum-empty (unstable-multiset-reduce (unstable-fn "add") (Num 0) (multiset-of)))
+(check (= $sum-empty (Num 0)))
 (pop)
 
 ;; filter

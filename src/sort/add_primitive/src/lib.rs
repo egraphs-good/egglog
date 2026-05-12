@@ -259,7 +259,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         #[derive(Clone)]
         #prim_def
 
-        impl PrimitiveCommon for Prim {
+        impl Primitive for Prim {
             fn name(&self) -> &str {
                 #name
             }

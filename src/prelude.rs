@@ -10,7 +10,7 @@
 //!   [`crate::WriteState`]).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
-//! - [`crate::PrimitiveCommon`] + one of four kind-specific traits
+//! - [`crate::Primitive`] + one of four kind-specific traits
 //!   ([`crate::PurePrim`], [`crate::WritePrim`],
 //!   [`crate::ReadPrim`], [`crate::FullPrim`]) —
 //!   register custom primitives. Each kind names its state wrapper
@@ -350,7 +350,7 @@ where
     func: F,
 }
 
-impl<F> PrimitiveCommon for RustRuleRhs<F>
+impl<F> Primitive for RustRuleRhs<F>
 where
     F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
@@ -519,7 +519,7 @@ where
     func: F,
 }
 
-impl<F> PrimitiveCommon for RustRuleFullRhs<F>
+impl<F> Primitive for RustRuleFullRhs<F>
 where
     F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
         + Clone

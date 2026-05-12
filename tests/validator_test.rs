@@ -41,8 +41,8 @@ fn test_add_primitive_validator() {
 }
 
 #[test]
-fn test_add_primitive_with_validator_method() {
-    // Test that we can add a validator to a primitive using the direct method
+fn test_add_pure_primitive_with_validator() {
+    // Test that we can add a validator to a primitive via `add_pure_primitive`.
     let mut egraph = EGraph::default();
 
     // Create a simple primitive that adds two numbers
@@ -50,7 +50,7 @@ fn test_add_primitive_with_validator_method() {
 
     #[derive(Clone)]
     struct TestAdd;
-    impl PrimitiveCommon for TestAdd {
+    impl Primitive for TestAdd {
         fn name(&self) -> &str {
             "test-add"
         }
@@ -94,7 +94,6 @@ fn test_add_primitive_with_validator_method() {
             Some(result_term)
         });
 
-    // Add the primitive with validator using the direct method
     egraph.add_pure_primitive(TestAdd, Some(validator));
 
     // Verify the primitive works
