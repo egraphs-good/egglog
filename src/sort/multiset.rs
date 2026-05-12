@@ -465,7 +465,9 @@ impl FullPrim for FillIndex {
         let es = state.raw_exec_state();
         for (v, c) in multiset.data.iter_counts() {
             let mut row = vec![args[0], v];
-            // Skip if already filled — assumes a working merge.
+            // Skip the whole fill if any index row already exists.
+            // This relies on `unstable-multiset-fill-index` writing all
+            // rows for a given multiset in one pass.
             if action.lookup(es, &row).is_some() {
                 break;
             }
