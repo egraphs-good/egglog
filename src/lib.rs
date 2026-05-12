@@ -135,8 +135,7 @@ pub type ArcSort = Arc<dyn Sort>;
 ///
 /// `name` and `get_type_constraints` aren't capability-dependent, so
 /// the four kind-specific traits ([`PurePrim`], [`WritePrim`],
-/// [`ReadPrim`], [`FullPrim`]) require this as a
-/// supertrait rather than duplicating the methods.
+/// [`ReadPrim`], [`FullPrim`]) share this supertrait.
 pub trait PrimitiveCommon: Send + Sync + 'static {
     /// Returns the name of this primitive.
     fn name(&self) -> &str;
