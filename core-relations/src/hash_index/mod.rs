@@ -1,5 +1,6 @@
 //! Hash-based secondary indexes.
 use std::{
+    cmp,
     hash::{Hash, Hasher},
     mem,
     sync::{Arc, Mutex},
@@ -67,7 +68,8 @@ impl<TI: IndexBase> Index<TI> {
         if cur_version == self.updated_to {
             return;
         }
-        let subset = if cur_version.major != self.updated_to.major {
+        let is_full = cur_version.major != self.updated_to.major;
+        let subset = if is_full {
             self.table.clear();
             table.all()
         } else {
@@ -75,6 +77,8 @@ impl<TI: IndexBase> Index<TI> {
         };
         if parallelize_index_construction(subset.size()) {
             self.table.merge_parallel(&self.key, table, subset.as_ref());
+        } else if is_full {
+            self.table.rebuild_full(&self.key, table, subset.as_ref());
         } else {
             self.refresh_serial(table, subset);
         }
@@ -160,6 +164,24 @@ pub(crate) trait IndexBase {
     fn len(&self) -> usize;
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef);
+
+    /// Bulk-rebuild this index from scratch (called on major version change after clear()).
+    /// The default implementation batches via `scan_project`+`merge_rows`. Implementations
+    /// can override this for more efficient bulk construction.
+    fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
+        let mut buf = TaggedRowBuffer::new(cols.len());
+        let mut cur = Offset::new(0);
+        loop {
+            buf.clear();
+            if let Some(next) = table.scan_project(subset, cols, cur, 1024, &[], &mut buf) {
+                cur = next;
+                self.merge_rows(&buf);
+            } else {
+                self.merge_rows(&buf);
+                break;
+            }
+        }
+    }
 }
 
 struct ColumnIndexShard {
@@ -305,6 +327,56 @@ impl IndexBase for ColumnIndex {
             });
         });
     }
+
+    /// Sort-based full rebuild: collect all (value, row_id) pairs, sort by (value, row_id),
+    /// then build each key's subset with a single pre-sized allocation. Compared to `merge_rows`,
+    /// this eliminates the doubling memmoves from `push_vec` that occur in the row-at-a-time `add_row` path.
+    ///
+    /// Supports multiple columns (e.g. rebuild_index covering all value columns): pairs from
+    /// all columns are merged into one sorted list, so each value maps to the union of rows
+    /// containing it in any of the covered columns.
+    fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
+        let n = table.all().size() * cols.len();
+
+        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
+        for &col in cols {
+            table.for_each_col(subset, col, &mut |row_id, val| {
+                pairs.push((val, row_id));
+            });
+        }
+
+        radix_sort_pairs_by_value(&mut pairs);
+        if cols.len() > 1 {
+            // Remove duplicates (same value in multiple columns of the same row).
+            pairs.dedup();
+        }
+
+        let mut i = 0;
+        while i < pairs.len() {
+            let key = pairs[i].0;
+            let start = i;
+            let mut first = pairs[i].1;
+            let mut last = pairs[i].1;
+            while i < pairs.len() && pairs[i].0 == key {
+                last = cmp::max(last, pairs[i].1);
+                first = cmp::min(first, pairs[i].1);
+                i += 1;
+            }
+            let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
+            let count = i - start;
+            let buffered = if last.rep() - first.rep() == (count - 1) as u32 {
+                // If the row ids are contiguous, we can represent the subset as a dense range
+                // to avoid allocations
+                BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
+            } else {
+                let bv = shard
+                    .subsets
+                    .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
+                BufferedSubset::Sparse(bv)
+            };
+            shard.table.insert(key, buffered);
+        }
+    }
 }
 
 /// This function is an alternative for [`rayon::ThreadPool::install`] that doesn't steal work from
@@ -344,6 +416,74 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
     n.wait()
 }
 
+/// Adaptive LSB radix sort for (Value, RowId) pairs, sorting by the Value field.
+///
+/// Chooses 1–4 passes of 8-bit radix sort based on the observed maximum Value, so that
+/// only the actually-used bit range is processed.  Within each Value group the original
+/// order (scan order = RowId-ascending) is preserved by the LSB stability guarantee,
+/// satisfying the add_row_sorted invariant without an explicit RowId sort.
+///
+/// Falls back to `sort_unstable()` for n < 64 where radix setup overhead dominates.
+fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
+    let n = pairs.len();
+    if n < 64 {
+        pairs.sort_unstable();
+        return;
+    }
+
+    let max_val = pairs.iter().map(|&(v, _)| v.rep()).max().unwrap_or(0);
+    let n_passes: u32 = if max_val < 256 {
+        1
+    } else if max_val < 65_536 {
+        2
+    } else if max_val < (1 << 24) {
+        3
+    } else {
+        4
+    };
+
+    let null_pair = (Value::new_const(0), RowId::new_const(0));
+    let mut buf: Vec<(Value, RowId)> = vec![null_pair; n];
+
+    let mut src: &mut Vec<(Value, RowId)> = pairs;
+    let mut dst: &mut Vec<(Value, RowId)> = &mut buf;
+
+    for pass in 0..n_passes {
+        let shift = pass * 8;
+        let mut count = [0u32; 256];
+
+        // Count occurrences of the relevant byte of each Value.
+        for pair in src.iter() {
+            let bucket = (pair.0.rep() >> shift) & 0xFF;
+            count[bucket as usize] += 1;
+        }
+
+        // Convert counts to exclusive prefix sums (start positions per bucket).
+        let mut prefix = 0u32;
+        for c in &mut count {
+            let prev = *c;
+            *c = prefix;
+            prefix += prev;
+        }
+
+        // Stable scatter: write each element to its bucket's next position.
+        for &pair in src.iter() {
+            let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
+            dst[count[bucket] as usize] = pair;
+            count[bucket] += 1;
+        }
+
+        core::mem::swap(&mut src, &mut dst);
+    }
+
+    // After `n_passes` swaps, `src` points to the sorted data.
+    // Odd passes: src == buf.as_mut_ptr(); copy back to pairs.
+    // Even passes: src == pairs.as_mut_ptr(); already in place.
+    if n_passes % 2 == 1 {
+        dst.copy_from_slice(src);
+    }
+}
+
 impl ColumnIndex {
     pub(crate) fn new() -> ColumnIndex {
         with_pool_set(|ps| {
@@ -355,6 +495,37 @@ impl ColumnIndex {
             });
             ColumnIndex { shard_data, shards }
         })
+    }
+
+    /// Pre-reserve capacity in each shard's HashMap for `n` rows total.
+    /// Eliminates hashbrown rehashing during add_row for the small-subset path.
+    pub(crate) fn reserve_for_n_rows(&mut self, n: usize) {
+        let n_shards = self.shards.len();
+        let per_shard = n / n_shards + 2;
+        for (_, shard) in self.shards.iter_mut() {
+            shard.table.reserve(per_shard);
+        }
+    }
+
+    /// Build a single-column index for `subset` of `table`. Picks between a
+    /// sort-based bulk path and a per-row scan based on subset size: large
+    /// subsets amortize the sort overhead, small ones avoid the buffer copy.
+    pub(crate) fn build_for_subset(
+        table: WrappedTableRef,
+        subset: SubsetRef,
+        col: ColumnId,
+    ) -> ColumnIndex {
+        const SORT_BULK_THRESHOLD: usize = 512;
+        let mut res = ColumnIndex::new();
+        if subset.size() >= SORT_BULK_THRESHOLD {
+            res.rebuild_full(&[col], table, subset);
+        } else {
+            res.reserve_for_n_rows(subset.size());
+            table.for_each_col(subset, col, &mut |row_id, val| {
+                res.add_row(&[val], row_id);
+            });
+        }
+        res
     }
 }
 

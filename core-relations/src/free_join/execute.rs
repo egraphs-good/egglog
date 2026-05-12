@@ -54,6 +54,24 @@ struct SparseColumnIndex {
     subset_ids: [RowId; SMALL_RESIDUAL],
 }
 
+/// Return a SubsetRef for the given range of rows in a SparseColumnIndex.
+/// Single-row ranges become Dense to skip pool allocation in to_owned.
+///
+/// # Safety
+/// `ids[range]` must be sorted in non-decreasing order. The wider `ids` slice
+/// need not be sorted as a whole; only the indicated sub-range. This is the
+/// invariant of `SortedOffsetSlice::new_unchecked`.
+#[inline]
+unsafe fn sparse_subset_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
+    if range.len() == 1 {
+        let row = ids[range.start];
+        SubsetRef::Dense(OffsetRange::new(row, row.inc()))
+    } else {
+        // SAFETY: caller guarantees `ids[range]` is sorted.
+        SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(&ids[range]) })
+    }
+}
+
 impl SparseColumnIndex {
     fn keys(&self) -> &[Value] {
         &self.keys[..self.n_keys]
@@ -111,10 +129,10 @@ impl SparseColumnIndex {
         }
         let found = self.keys().binary_search(&key).ok()?;
         let range = self.get_offset_for(found);
-
-        Some(SubsetRef::Sparse(unsafe {
-            SortedOffsetSlice::new_unchecked(&self.subset_ids[range])
-        }))
+        // SAFETY: `subset_ids` was populated from rows sorted by (Value, RowId),
+        // so RowIds within any single per-key range (as returned by
+        // `get_offset_for`) are in non-decreasing order.
+        Some(unsafe { sparse_subset_ref(&self.subset_ids, range) })
     }
 
     fn for_each(&self, mut f: impl FnMut(&[Value], SubsetRef)) {
@@ -123,9 +141,8 @@ impl SparseColumnIndex {
         }
         for i in 0..self.n_keys {
             let range = self.get_offset_for(i);
-            let subset = SubsetRef::Sparse(unsafe {
-                SortedOffsetSlice::new_unchecked(&self.subset_ids[range])
-            });
+            // SAFETY: see `get_subset` — each per-key range of `subset_ids` is sorted.
+            let subset = unsafe { sparse_subset_ref(&self.subset_ids, range) };
             f(&self.keys[i..i + 1], subset);
         }
     }
@@ -809,51 +826,53 @@ impl<'a> JoinState<'a> {
 
         let table_id = atoms[atom].table;
         let info = &self.db.tables[table_id];
-        let all_cacheable = cols.iter().all(|col| {
-            !info
-                .spec
-                .uncacheable_columns
-                .get(*col)
-                .copied()
-                .unwrap_or(false)
-        });
-        let whole_table = info.table.all();
         let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
             DynamicIndex::SparseColumn(SparseColumnIndex::new(
                 info.table.as_ref(),
                 subset.as_ref(),
                 cols[0],
             ))
-        } else if let Subset::Dense(range) = subset
-            && all_cacheable
-            && whole_table.size() / 2 < subset.size()
-        {
-            // Skip intersecting with the subset if we are just looking at the
-            // whole table.
-            let needs_intersect =
-                !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
-            // When intersecting, store the Dense range directly so we can do a
-            // combined copy+filter without a runtime match on subset type later.
-            let intersect_outer = if needs_intersect { Some(*range) } else { None };
-            // heuristic: if the subset we are scanning is somewhat
-            // large _or_ it is most of the table, or we already have a cached
-            // index for it, then return it.
-            if cols.len() != 1 {
-                DynamicIndex::Cached {
-                    intersect_outer,
-                    table: get_index_from_tableinfo(info, &cols),
-                }
-            } else {
-                DynamicIndex::CachedColumn {
-                    intersect_outer,
-                    table: get_column_index_from_tableinfo(info, cols[0]).clone(),
-                }
-            }
-        } else if cols.len() != 1 {
-            // NB: we should have a caching strategy for non-column indexes.
-            DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
         } else {
-            DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
+            let all_cacheable = cols.iter().all(|col| {
+                !info
+                    .spec
+                    .uncacheable_columns
+                    .get(*col)
+                    .copied()
+                    .unwrap_or(false)
+            });
+            let whole_table = info.table.all();
+            if let Subset::Dense(range) = subset
+                && all_cacheable
+                && whole_table.size() / 2 < subset.size()
+            {
+                // Skip intersecting with the subset if we are just looking at the
+                // whole table.
+                let needs_intersect =
+                    !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
+                // When intersecting, store the Dense range directly so we can do a
+                // combined copy+filter without a runtime match on subset type later.
+                let intersect_outer = if needs_intersect { Some(*range) } else { None };
+                // heuristic: if the subset we are scanning is somewhat
+                // large _or_ it is most of the table, or we already have a cached
+                // index for it, then return it.
+                if cols.len() != 1 {
+                    DynamicIndex::Cached {
+                        intersect_outer,
+                        table: get_index_from_tableinfo(info, &cols),
+                    }
+                } else {
+                    DynamicIndex::CachedColumn {
+                        intersect_outer,
+                        table: get_column_index_from_tableinfo(info, cols[0]).clone(),
+                    }
+                }
+            } else if cols.len() != 1 {
+                // NB: we should have a caching strategy for non-column indexes.
+                DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
+            } else {
+                DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
+            }
         };
         Prober {
             node: trie_node,
