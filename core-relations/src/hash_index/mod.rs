@@ -14,7 +14,7 @@ use rustc_hash::FxHasher;
 
 use crate::{
     OffsetRange, Subset,
-    common::{HashMap, IndexMap, ShardData, ShardId, Value},
+    common::{HashMap, ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
     parallel_heuristics::parallelize_index_construction,
     pool::{Pooled, with_pool_set},
@@ -163,7 +163,7 @@ pub(crate) trait IndexBase {
 }
 
 struct ColumnIndexShard {
-    table: Pooled<IndexMap<Value, BufferedSubset>>,
+    table: Pooled<HashMap<Value, BufferedSubset>>,
     subsets: SubsetBuffer,
 }
 
@@ -188,7 +188,7 @@ impl IndexBase for ColumnIndex {
     type WriteKey = [Value];
     fn clear(&mut self) {
         for (_, shard) in self.shards.iter_mut() {
-            for (_, subset) in shard.table.drain(..) {
+            for (_, subset) in shard.table.drain() {
                 match subset {
                     BufferedSubset::Dense(_) => {}
                     BufferedSubset::Sparse(buffered_vec) => {
@@ -282,7 +282,7 @@ impl IndexBase for ColumnIndex {
             });
 
             self.shards.par_iter_mut().for_each(|(shard_id, shard)| {
-                use indexmap::map::Entry;
+                use hashbrown::hash_map::Entry;
                 // Sort the vector by start row id to ensure we populate subsets in sorted order.
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
@@ -821,13 +821,19 @@ static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
 ///
 /// This free list works as a map from power-of-two size classes to a vector of offsets that point
 /// to the beginning of an unused vector.
-#[derive(Default, Clone)]
+///
+/// Size classes are indexed by their log2 value (i.e., size_class = 2^idx), so a 32-entry
+/// array covers all power-of-two sizes from 1 (idx=0) up to 2^31. This replaces the
+/// previous HashMap with an O(1) array index + trailing_zeros().
+#[derive(Clone, Default)]
 pub(super) struct FreeList {
-    data: HashMap<usize, Vec<BufferIndex>>,
+    data: [Vec<BufferIndex>; 32],
 }
+
 impl FreeList {
     fn get_size_class(&mut self, size: usize) -> &mut Vec<BufferIndex> {
         let size_class = size.next_power_of_two();
-        self.data.entry(size_class).or_default()
+        let idx = size_class.trailing_zeros() as usize;
+        &mut self.data[idx]
     }
 }

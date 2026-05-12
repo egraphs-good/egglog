@@ -429,7 +429,7 @@ pool_set! {
         // between vec_vals and shared_vals.
         rows: Vec<RowId> [ 1 << 25 ],
         offset_vec: SortedOffsetVector [ 1 << 20 ],
-        column_index: IndexMap<Value, BufferedSubset> [ 1 << 20 ],
+        column_index: HashMap<Value, BufferedSubset> [ 1 << 20 ],
         constraints: Vec<Constraint> [ 1 << 20 ],
         bitsets: FixedBitSet [ 1 << 20 ],
         instrs: Vec<Instr> [ 1 << 20 ],
