@@ -90,6 +90,18 @@ pub enum BinaryOp {
     Ge,
 }
 
+/// Arithmetic / boolean operators usable in body expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithOp {
+    /// `-` (subtraction). Used to derive a non-zero-iff-different number
+    /// from two record IDs (`ord(a) - ord(b)`).
+    Sub,
+    /// `lor` (logical OR, infix). Returns 1 if either operand is non-zero.
+    /// Used to combine N constraints into a single body literal without
+    /// rule fan-out.
+    Lor,
+}
+
 /// An expression in head/body. We keep this small — the encoded program's
 /// expressions are mostly literals, variables, record constructors, and
 /// `ord()` calls (to replace egglog's `ordering-min/max`).
@@ -106,6 +118,8 @@ pub enum Expr {
     Record(Vec<Expr>),
     /// `ord(e)` — Souffle built-in for ordinal of a record value.
     Ord(Box<Expr>),
+    /// `(l op r)` — infix arithmetic / boolean.
+    BinOp(ArithOp, Box<Expr>, Box<Expr>),
 }
 
 /// Top-level directives that apply to a relation.

@@ -19,6 +19,7 @@
 pub mod emit;
 pub mod examples;
 pub mod ir;
+pub mod runner;
 
 pub use emit::emit;
 pub use ir::*;

@@ -26,8 +26,8 @@
 //! incremental.
 
 use egglog_souffle_backend::ir::{
-    Atom, BinaryOp, Clause, Directive, Expr, Literal as IrLit, Program, RelationDecl, TypeDecl,
-    TypeKind,
+    ArithOp, Atom, BinaryOp, Clause, Directive, Expr, Literal as IrLit, Program, RelationDecl,
+    TypeDecl, TypeKind,
 };
 use std::collections::HashMap;
 
@@ -109,15 +109,89 @@ pub struct Ctx {
     /// helper_arity is the prefix length — the leading args of Target that
     /// match Helper's args.
     pub drains: HashMap<String, Vec<(String, usize)>>,
+    /// Map from user constructor name (e.g. `Add`) to the canonical view
+    /// relation name in the IR (e.g. `@AddView`). Built from each
+    /// `Function` command's `:internal-term-constructor` annotation.
+    /// Used by the runner to map souffle's printsize output back to
+    /// the user's constructor names.
+    pub view_for_user: HashMap<String, String>,
+    /// Metadata for global-let captures: the fresh-var holding the
+    /// term, the buffer relation it lives in, and the args used in the
+    /// view's input columns. Each rule that references a fresh-var pulls
+    /// in a body-atom lookup `<buffer>(args..., fresh_var, _)` which
+    /// grounds AND types the var via the relation's column — no
+    /// constraint needed. Without this, deeply nested record literals
+    /// inside `ord(...)` would have no type anchor.
+    pub global_let_infos: Vec<LetInfo>,
+    /// Sequential IDs for string literals — used to encode strings into
+    /// number-typed Math record fields without `ord([symbol])` (which
+    /// has unfixable record-type ambiguity).
+    pub string_ids: HashMap<String, i64>,
+    /// Names of `__check_K` query relations emitted so far. The runner
+    /// inspects these after souffle runs: each is empty iff the
+    /// corresponding `(check ...)` failed.
+    pub check_relations: Vec<String>,
     /// Whether the `Math` type and Term/UF helper relations have been emitted.
     emitted_helpers: bool,
 }
 
+/// Metadata for one let-binding (in-rule or global). Used to emit either
+/// a body-atom lookup (for "user" rules — the buffer relation grounds +
+/// types the var via its column) or an equality constraint (for the
+/// "create" rule itself — the rule whose head writes this term to the
+/// buffer; the lookup would be self-referential there).
+#[derive(Clone, Debug)]
+pub struct LetInfo {
+    /// The fresh variable name standing in for the let-bound term.
+    pub fresh_var: String,
+    /// Where the create-rule writes the term — `<view>_buffer` under
+    /// strata, or the canonical view otherwise. Used to detect "is THIS
+    /// rule the create-rule for this let?" (head.relation match).
+    pub buffer_rel: String,
+    /// Where lookups read the term — `<view>_snap` under strata so
+    /// reads don't create a recursive cycle with the buffer. Falls
+    /// back to `buffer_rel` if no snap is declared.
+    pub lookup_rel: String,
+    /// Constructor input args (already translated, with substitutions
+    /// applied). Become positional args of the lookup/create atom,
+    /// before the out-term column (which holds `fresh_var`).
+    pub lookup_args: Vec<Expr>,
+    /// The record literal `[tag, ord(arg1), ord(arg2), 0]` describing
+    /// this term. Used as the RHS of the create-rule's constraint
+    /// `fresh_var = record_literal`.
+    pub record_literal: Expr,
+}
+
+/// Output of [`translate_with_manifest`]: the IR program plus a manifest
+/// mapping user-facing names back to internal souffle relation names.
+pub struct TranslateOutput {
+    pub program: Program,
+    pub manifest: egglog_souffle_backend::runner::Manifest,
+}
+
+pub use egglog_souffle_backend::runner::Manifest;
+
 /// The single record type all sorts collapse to in v0.
 const MATH: &str = "Math";
+/// Wrapper record for string literals — gives us a stable `ord(...)` handle.
+const STR_REC: &str = "StrRec";
+/// Built-in counter relation populated by the souffle fork at the start of
+/// each outer-saturate iteration. Holds one row with the current iter
+/// number (1-indexed). User rules join against this for
+/// generation-column-style bounded iteration.
+const ITER_COUNTER: &str = "IterCounter";
 
 /// Translate a sequence of encoded commands to a [`Program`].
 pub fn translate(commands: &[ResolvedCommand]) -> Result<Program, TranslateError> {
+    Ok(translate_with_manifest(commands)?.program)
+}
+
+/// Like [`translate`], but also returns a [`Manifest`] mapping user
+/// constructor names back to the souffle relation names that hold their
+/// canonical views — needed to interpret souffle's stdout output.
+pub fn translate_with_manifest(
+    commands: &[ResolvedCommand],
+) -> Result<TranslateOutput, TranslateError> {
     let mut p = Program::default();
     let mut ctx = Ctx::default();
     for cmd in commands {
@@ -126,13 +200,56 @@ pub fn translate(commands: &[ResolvedCommand]) -> Result<Program, TranslateError
     emit_live_views(&ctx, &mut p);
     emit_snapshot_directives(&mut p);
     emit_run_limit(&ctx, &mut p);
-    Ok(p)
+    emit_printsize_directives(&mut p);
+    let manifest = build_manifest(&ctx);
+    Ok(TranslateOutput { program: p, manifest })
 }
 
-/// For each declared relation whose name ends in `_snap`, emit a
-/// `.snapshot R_snap(of = "R")` directive — convention adopted by the
-/// souffle_compat_strata encoder. The translator detects the suffix and
-/// emits the directive that the Souffle fork's runtime understands.
+/// Build a Manifest from the translator's context, applying the emitter's
+/// sanitize pass to internal IR names so consumers see the names that
+/// will appear in souffle's stdout.
+fn build_manifest(ctx: &Ctx) -> Manifest {
+    let view_relations: Vec<(String, String)> = ctx
+        .view_for_user
+        .iter()
+        .map(|(user, view)| (user.clone(), egglog_souffle_backend::emit::sanitize(view)))
+        .collect();
+    let check_relations: Vec<String> = ctx
+        .check_relations
+        .iter()
+        .map(|r| egglog_souffle_backend::emit::sanitize(r))
+        .collect();
+    Manifest { view_relations, check_relations }
+}
+
+/// Emit `.printsize` for every canonical relation — i.e. the relations a
+/// user would care about inspecting (view tables and UF tables), skipping
+/// internal scaffolding (`_buffer`, `_snap`, `_live`, `to_delete_*`,
+/// `to_subsume_*`).
+fn emit_printsize_directives(p: &mut Program) {
+    let names: Vec<String> = p
+        .relations
+        .iter()
+        .map(|r| r.name.clone())
+        .filter(|n| {
+            n != ITER_COUNTER
+                && !n.ends_with("_buffer")
+                && !n.ends_with("_snap")
+                && !n.ends_with("_live")
+                && !n.contains("to_delete_")
+                && !n.contains("to_subsume_")
+        })
+        .collect();
+    for n in names {
+        p.directives.push(Directive::PrintSize(n));
+    }
+}
+
+/// For each `<R>_snap` relation declared by the encoder, emit a
+/// `.snapshot <R>_snap(of = "<R>")` directive. The souffle fork
+/// refreshes `<R>_snap := <R>` at the start of each outer-saturate
+/// iteration, which breaks the user-rule ↔ canonical-view cycle
+/// without us having to manually wire deltas.
 fn emit_snapshot_directives(p: &mut Program) {
     let snap_pairs: Vec<(String, String)> = p
         .relations
@@ -158,17 +275,30 @@ fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
     let Some(n) = ctx.user_run_count else {
         return;
     };
-    if let Some(buffer) = p
-        .relations
-        .iter()
-        .find(|r| r.name.ends_with("_buffer"))
-        .map(|r| r.name.clone())
-    {
-        p.directives.push(Directive::LimitIterations {
-            relation: buffer,
-            n: n as u64,
-        });
-    }
+    // `outer-saturate = N + 2`. The "+2" accounts for two
+    // outer-iteration prefixes before user rules can produce their N
+    // intended rounds:
+    //   iter 1: drain initial facts into the canonical view (snap was
+    //           empty at this iter's start, so no user rule fires).
+    //   iter 2: snap := canonical (init terms only). User rules fire
+    //           against init; their let-lookup body atoms reference
+    //           snap too, so only let-vars matching iter-1 init terms
+    //           resolve. New writes go to buffer.
+    //   iters 3..N+2: N rounds where snap reflects the canonical view
+    //                 from the previous round, including all
+    //                 let-created terms; user rules fire freely.
+    p.pragmas
+        .push(("outer-saturate".into(), (n + 2).to_string()));
+    // Declare `IterCounter(n: number)`. The fork's outer-saturate
+    // implementation clears this at the start of each outer iter and
+    // inserts a single row holding the current iter counter value
+    // (1, 2, ...). User rules can join against it to drive the
+    // generation-column construction. See
+    // souffle-generation-column-design.md.
+    p.relations.push(RelationDecl {
+        name: ITER_COUNTER.into(),
+        columns: vec![("n".into(), "number".into())],
+    });
 }
 
 /// Walk a [`ResolvedSchedule`] and return the count of the first
@@ -235,6 +365,14 @@ fn ensure_helpers(ctx: &mut Ctx, p: &mut Program) {
             ("n".into(), "number".into()),
         ]),
     });
+    // String literals in user terms (e.g. `(Var "x")`) get encoded as
+    // `ord([s: "x"])` — a hash-consed handle that fits into Math's
+    // number columns. StrRec is the unique 1-field symbol record, so
+    // souffle's type inference resolves a `[symbol]` literal back to it.
+    p.types.push(TypeDecl {
+        name: STR_REC.into(),
+        kind: TypeKind::Record(vec![("s".into(), "symbol".into())]),
+    });
     ctx.emitted_helpers = true;
 }
 
@@ -281,7 +419,7 @@ fn translate_command(
             }
             Ok(())
         }
-        C::Function { name, schema, .. } => {
+        C::Function { name, schema, term_constructor, .. } => {
             ensure_helpers(ctx, p);
             // 0-arg functions are globals — track them so we know to inline
             // their values rather than emitting a relation.
@@ -296,6 +434,12 @@ fn translate_command(
                 name: name.to_string(),
                 columns: cols,
             });
+            // Encoder annotates view tables with `:internal-term-constructor C`
+            // pointing back at the user constructor. Record the mapping so
+            // the manifest can translate souffle's printsize output.
+            if let Some(user_name) = term_constructor {
+                ctx.view_for_user.insert(user_name.clone(), name.clone());
+            }
             Ok(())
         }
         C::AddRuleset(..) | C::UnstableCombinedRuleset(..) => Ok(()),
@@ -308,8 +452,21 @@ fn translate_command(
                 && args.is_empty()
                 && ctx.zero_arg_funcs.contains(head.name())
             {
-                let v = translate_value_expr(val, ctx)?;
-                ctx.globals.insert(head.name().to_string(), v);
+                // If the captured value is a constructor call, build a
+                // LetInfo so later rules can ground the fresh-var via
+                // a buffer-lookup body atom. For non-record values
+                // (numbers, strings already wrapped) just inline.
+                if let Some(info) = build_let_info_from_expr(
+                    &format!("__let_g_{}", head.name().replace('@', "")),
+                    val,
+                    ctx,
+                )? {
+                    ctx.globals.insert(head.name().to_string(), Expr::Var(info.fresh_var.clone()));
+                    ctx.global_let_infos.push(info);
+                } else {
+                    let v = translate_value_expr(val, ctx)?;
+                    ctx.globals.insert(head.name().to_string(), v);
+                }
                 return Ok(());
             }
             // Otherwise wrap in a degenerate rule (empty body) and reuse
@@ -344,6 +501,7 @@ fn translate_command(
             }
             Ok(())
         }
+        C::Check(_, facts) => translate_check(facts, ctx, p),
         // Everything else: silently skip in v0 (driver-side or not yet
         // supported). The caller can opt in to stricter handling later.
         _ => Ok(()),
@@ -398,7 +556,7 @@ fn translate_rule(
         ctx.drains.entry(target).or_default().push((helper, helper_arity));
         return Ok(());
     }
-    let body = translate_body(&rule.body, ctx)?;
+    let bodies = translate_body(&rule.body, ctx)?;
 
     // First pass: walk actions in order, building lets + collecting buckets.
     // For Set actions, we may emit MULTIPLE entries — when the action
@@ -409,12 +567,41 @@ fn translate_rule(
     let mut lets: HashMap<String, Expr> = HashMap::new();
     let mut sets: Vec<(String, Vec<Expr>, Vec<IrLit>)> = vec![];
     let mut changes: Vec<(String, Vec<Expr>)> = vec![];
+    // Per-rule LetInfos. Body-atom lookups derived from these get added
+    // to clauses that reference the fresh-vars (transitively). See
+    // `LetInfo` and `add_let_lookups_to_body`.
+    let mut let_infos: Vec<LetInfo> = vec![];
     for action in &rule.head.0 {
         match action {
             GenericAction::Let(_, var, expr) => {
-                let val = translate_value_expr(expr, ctx)?;
-                let val = substitute(&val, &lets);
-                lets.insert(var.name.to_string(), val);
+                if let Some(info) = build_let_info_from_expr(
+                    &format!("__let_{}", var.name.replace('@', "")),
+                    expr,
+                    ctx,
+                )? {
+                    // Substitute existing let-fresh-vars into the
+                    // lookup_args and record_literal (e.g. nested let
+                    // chains where args reference earlier let-vars).
+                    let args: Vec<Expr> = info
+                        .lookup_args
+                        .iter()
+                        .map(|a| substitute(a, &lets))
+                        .collect();
+                    let record_literal = substitute(&info.record_literal, &lets);
+                    let info = LetInfo {
+                        fresh_var: info.fresh_var.clone(),
+                        buffer_rel: info.buffer_rel.clone(),
+                        lookup_rel: info.lookup_rel.clone(),
+                        lookup_args: args,
+                        record_literal,
+                    };
+                    lets.insert(var.name.to_string(), Expr::Var(info.fresh_var.clone()));
+                    let_infos.push(info);
+                } else {
+                    let val = translate_value_expr(expr, ctx)?;
+                    let val = substitute(&val, &lets);
+                    lets.insert(var.name.to_string(), val);
+                }
             }
             GenericAction::Set(_, head, args, val) => {
                 // Detect ordering-max/min in any arg or val. If present,
@@ -425,7 +612,12 @@ fn translate_rule(
                 // is always false. Skip expansion and just substitute both
                 // ordering-max and ordering-min with the operand.
                 let pair = first_ordering_pair_in_args(args, val);
-                let variants: Vec<(Vec<ResolvedExpr>, ResolvedExpr, Vec<IrLit>)> = if let Some(
+                // Variant tuple: (args, val, extra body literals, optional
+                // substitution to apply to translated head args/val so
+                // record literals get replaced by fresh vars typed via
+                // the head column).
+                type OrdSubst = (Expr, Expr, Expr, Expr);
+                let variants: Vec<(Vec<ResolvedExpr>, ResolvedExpr, Vec<IrLit>, Option<OrdSubst>)> = if let Some(
                     (a, b),
                 ) =
                     pair
@@ -442,17 +634,36 @@ fn translate_rule(
                         let args_v: Vec<ResolvedExpr> =
                             args.iter().map(|x| rewrite_ordering(x, &a, &a)).collect();
                         let val_v = rewrite_ordering(val, &a, &a);
-                        vec![(args_v, val_v, vec![])]
+                        vec![(args_v, val_v, vec![], None)]
                     } else {
+                        // Souffle can't type a bare record literal inside
+                        // ord(). Bind av/bv to fresh vars; the head's
+                        // typed-column position carries the type back to
+                        // the binding, which then types the ord arg.
+                        let counter = sets.len();
+                        let v_a_name = format!("__ord_a_{counter}");
+                        let v_b_name = format!("__ord_b_{counter}");
+                        let v_a = Expr::Var(v_a_name.clone());
+                        let v_b = Expr::Var(v_b_name.clone());
+                        let bind_a = IrLit::Constraint(
+                            BinaryOp::Eq,
+                            v_a.clone(),
+                            av.clone(),
+                        );
+                        let bind_b = IrLit::Constraint(
+                            BinaryOp::Eq,
+                            v_b.clone(),
+                            bv.clone(),
+                        );
                         let guard_a_max = IrLit::Constraint(
                             BinaryOp::Gt,
-                            Expr::Ord(Box::new(av.clone())),
-                            Expr::Ord(Box::new(bv.clone())),
+                            Expr::Ord(Box::new(v_a.clone())),
+                            Expr::Ord(Box::new(v_b.clone())),
                         );
                         let guard_b_max = IrLit::Constraint(
                             BinaryOp::Gt,
-                            Expr::Ord(Box::new(bv.clone())),
-                            Expr::Ord(Box::new(av.clone())),
+                            Expr::Ord(Box::new(v_b.clone())),
+                            Expr::Ord(Box::new(v_a.clone())),
                         );
                         let args_a_max: Vec<ResolvedExpr> =
                             args.iter().map(|x| rewrite_ordering(x, &a, &b)).collect();
@@ -460,15 +671,31 @@ fn translate_rule(
                         let args_b_max: Vec<ResolvedExpr> =
                             args.iter().map(|x| rewrite_ordering(x, &b, &a)).collect();
                         let val_b_max = rewrite_ordering(val, &b, &a);
+                        // Each variant gets the bindings + its own guard.
+                        // We also need to rewrite occurrences of the
+                        // record `av`/`bv` in the head args/val to use
+                        // the fresh vars — so the head atom carries the
+                        // var (in a typed column) instead of the bare
+                        // record literal.
                         vec![
-                            (args_a_max, val_a_max, vec![guard_a_max]),
-                            (args_b_max, val_b_max, vec![guard_b_max]),
+                            (
+                                args_a_max,
+                                val_a_max,
+                                vec![bind_a.clone(), bind_b.clone(), guard_a_max],
+                                Some((av.clone(), v_a.clone(), bv.clone(), v_b.clone())),
+                            ),
+                            (
+                                args_b_max,
+                                val_b_max,
+                                vec![bind_a, bind_b, guard_b_max],
+                                Some((av.clone(), v_a, bv.clone(), v_b)),
+                            ),
                         ]
                     }
                 } else {
-                    vec![(args.to_vec(), val.clone(), vec![])]
+                    vec![(args.to_vec(), val.clone(), vec![], None)]
                 };
-                for (args_v, val_v, extra) in variants {
+                for (args_v, val_v, extra, ord_subst) in variants {
                     let mut souffle_args = Vec::with_capacity(args_v.len() + 1);
                     for a in &args_v {
                         let e = translate_value_expr(a, ctx)?;
@@ -476,6 +703,15 @@ fn translate_rule(
                     }
                     let v = translate_value_expr(&val_v, ctx)?;
                     souffle_args.push(substitute(&v, &lets));
+                    // Replace bare record literals with the fresh ord-vars
+                    // so the head atom carries typed vars instead of
+                    // ambiguous record literals.
+                    if let Some((av_rec, v_a, bv_rec, v_b)) = ord_subst {
+                        for arg in souffle_args.iter_mut() {
+                            replace_expr_match(arg, &av_rec, &v_a);
+                            replace_expr_match(arg, &bv_rec, &v_b);
+                        }
+                    }
                     sets.push((head.name().to_string(), souffle_args, extra));
                 }
             }
@@ -502,70 +738,367 @@ fn translate_rule(
         }
     }
 
-    // Second pass: emit clauses. Sets first, then subsumption rules.
-    let body_subst: Vec<IrLit> = body.iter().map(|l| substitute_literal(l, &lets)).collect();
-    for (rel, args, extra) in &sets {
-        let mut full_body = body_subst.clone();
-        for x in extra {
-            full_body.push(x.clone());
-        }
-        p.clauses.push(Clause::rule(
-            Atom { relation: rel.clone(), args: args.clone() },
-            full_body,
-        ));
-    }
-    for (rel, del_args) in &changes {
-        // Pair with a Set on the same relation that has one more arg than
-        // the delete (the extra arg is the output column). When sets have
-        // ordering-max/min variants we emit a subsumption per variant.
-        let paired: Vec<&(String, Vec<Expr>, Vec<IrLit>)> = sets
-            .iter()
-            .filter(|(set_rel, set_args, _)| {
-                set_rel == rel && set_args.len() == del_args.len() + 1
-            })
-            .collect();
-        if let Some((set_rel, set_args, extra)) = paired.first().copied() {
-            // Souffle subsumption rule:
-            //     dominated <= dominating :- body.
-            // The dominated and dominating atoms are matched implicitly by
-            // Souffle when iterating tuples; the body provides bindings for
-            // the variables in both. The dominated atom needs an output
-            // column too — bind it to a fresh var.
-            let mut dom_args = del_args.clone();
-            let v = format!("__del_out_{}", p.clauses.len());
-            dom_args.push(Expr::Var(v));
-            let mut sub_body = body_subst.clone();
+    // Second pass: emit clauses for EACH body alternative. Body alts are
+    // produced by OR fan-out — a single rule with `(or A B C)` in its
+    // body becomes three rules sharing the same head/actions.
+    // All LetInfos to consider per clause: in-rule lets first, then
+    // globals. We filter per clause to avoid pulling in unused lets
+    // (their lookup atoms would just dilute the join).
+    let mut all_lets: Vec<LetInfo> = Vec::with_capacity(
+        let_infos.len() + ctx.global_let_infos.len(),
+    );
+    all_lets.extend(let_infos.iter().cloned());
+    all_lets.extend(ctx.global_let_infos.iter().cloned());
+
+    for body in &bodies {
+        let body_subst: Vec<IrLit> =
+            body.iter().map(|l| substitute_literal(l, &lets)).collect();
+        for (rel, args, extra) in &sets {
+            let mut full_body = body_subst.clone();
             for x in extra {
-                sub_body.push(x.clone());
+                full_body.push(x.clone());
             }
-            p.clauses.push(Clause::subsume(
-                Atom { relation: rel.clone(), args: dom_args },
-                Atom { relation: set_rel.clone(), args: set_args.clone() },
-                sub_body,
-            ));
-        } else {
-            // Isolated delete with no paired set — needs tombstone pattern.
-            return Err(TranslateError::Unsupported(format!(
-                "isolated delete on {rel} (no paired set in same actions); needs tombstone helper relation"
-            )));
+            let head_atom = Atom { relation: rel.clone(), args: args.clone() };
+            add_let_lookups_to_body(&head_atom, &mut full_body, &all_lets);
+            p.clauses.push(Clause::rule(head_atom, full_body));
+        }
+        for (rel, del_args) in &changes {
+            let paired: Vec<&(String, Vec<Expr>, Vec<IrLit>)> = sets
+                .iter()
+                .filter(|(set_rel, set_args, _)| {
+                    set_rel == rel && set_args.len() == del_args.len() + 1
+                })
+                .collect();
+            if let Some((set_rel, set_args, extra)) = paired.first().copied() {
+                let mut dom_args = del_args.clone();
+                let v = format!("__del_out_{}", p.clauses.len());
+                dom_args.push(Expr::Var(v));
+                let mut sub_body = body_subst.clone();
+                for x in extra {
+                    sub_body.push(x.clone());
+                }
+                let dominated = Atom { relation: rel.clone(), args: dom_args };
+                let dominating = Atom { relation: set_rel.clone(), args: set_args.clone() };
+                // Use `dominating` for var collection — it carries the
+                // full set-shape (with the let-fresh-vars in typed
+                // head columns), so dependent lookups can derive from
+                // the same head context as the paired set.
+                add_let_lookups_to_body(&dominating, &mut sub_body, &all_lets);
+                p.clauses.push(Clause::subsume(dominated, dominating, sub_body));
+            } else {
+                return Err(TranslateError::Unsupported(format!(
+                    "isolated delete on {rel} (no paired set in same actions); needs tombstone helper relation"
+                )));
+            }
         }
     }
     Ok(())
 }
 
-/// Translate a list of body facts into Souffle body literals.
+/// Returns true iff `head`'s relation and arg shape exactly match the
+/// create-pattern for `info`: `<buffer_rel>(lookup_args..., fresh_var,
+/// <out>)`. A clause whose head matches is the rule that actually
+/// inserts this term into the buffer; a self-referential lookup would
+/// be circular, so we use the constraint form there.
+fn is_let_create_rule(head: &Atom, info: &LetInfo) -> bool {
+    if head.relation != info.buffer_rel {
+        return false;
+    }
+    // Head shape: lookup_args + [fresh_var] + [out_unit_column].
+    if head.args.len() != info.lookup_args.len() + 2 {
+        return false;
+    }
+    for (h, l) in head.args.iter().zip(info.lookup_args.iter()) {
+        if h != l {
+            return false;
+        }
+    }
+    matches!(&head.args[info.lookup_args.len()], Expr::Var(v) if v == &info.fresh_var)
+}
+
+/// For each let-fresh-var transitively referenced by `head` or `body`,
+/// append either a body-atom lookup or an equality constraint that
+/// binds + types the var:
+///   - lookup `<buffer>(lookup_args..., fresh_var, _)` for "user" rules
+///     where the relation is *different* from the buffer being written;
+///   - constraint `fresh_var = record_literal` for the create-rule
+///     itself, where a body lookup would be self-referential.
+fn add_let_lookups_to_body(
+    head: &Atom,
+    body: &mut Vec<IrLit>,
+    lets: &[LetInfo],
+) {
+    use std::collections::HashSet;
+    let mut used = collect_used_vars(head, body);
+    let mut emitted: HashSet<String> = HashSet::new();
+    loop {
+        let mut grew = false;
+        for info in lets {
+            if !used.contains(&info.fresh_var) || emitted.contains(&info.fresh_var) {
+                continue;
+            }
+            if is_let_create_rule(head, info) {
+                // Create-rule path: bind via constraint.
+                body.push(IrLit::Constraint(
+                    BinaryOp::Eq,
+                    Expr::Var(info.fresh_var.clone()),
+                    info.record_literal.clone(),
+                ));
+            } else {
+                // User-rule path: bind via body-atom lookup on the
+                // snap relation (so reads don't put us in the buffer's
+                // SCC). Snap reflects the canonical view at the start
+                // of the current outer iteration.
+                let mut atom_args = info.lookup_args.clone();
+                atom_args.push(Expr::Var(info.fresh_var.clone()));
+                atom_args.push(Expr::Wildcard);
+                body.push(IrLit::Atom(Atom {
+                    relation: info.lookup_rel.clone(),
+                    args: atom_args,
+                }));
+            }
+            emitted.insert(info.fresh_var.clone());
+            // Pull in `lookup_args`' vars (and `record_literal`'s vars)
+            // so deeper let-fresh-vars get processed too.
+            for a in &info.lookup_args {
+                let mut new_vars = HashSet::new();
+                collect_expr_vars(a, &mut new_vars);
+                for v in new_vars {
+                    if used.insert(v) {
+                        grew = true;
+                    }
+                }
+            }
+            let mut rec_vars = HashSet::new();
+            collect_expr_vars(&info.record_literal, &mut rec_vars);
+            for v in rec_vars {
+                if used.insert(v) {
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+}
+
+/// Collect every variable name that appears in `head` and `body`. Used to
+/// seed the transitive closure that decides which let-constraints belong
+/// in a clause.
+fn collect_used_vars(head: &Atom, body: &[IrLit]) -> std::collections::HashSet<String> {
+    let mut out = collect_atom_vars(head);
+    for lit in body {
+        match lit {
+            IrLit::Atom(a) | IrLit::Neg(a) => out.extend(collect_atom_vars(a)),
+            IrLit::Constraint(_, l, r) => {
+                collect_expr_vars(l, &mut out);
+                collect_expr_vars(r, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn collect_atom_vars(a: &Atom) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for e in &a.args {
+        collect_expr_vars(e, &mut out);
+    }
+    out
+}
+
+fn collect_expr_vars(e: &Expr, out: &mut std::collections::HashSet<String>) {
+    match e {
+        Expr::Var(v) => {
+            out.insert(v.clone());
+        }
+        Expr::Record(fs) => {
+            for f in fs {
+                collect_expr_vars(f, out);
+            }
+        }
+        Expr::Ord(inner) => collect_expr_vars(inner, out),
+        Expr::BinOp(_, l, r) => {
+            collect_expr_vars(l, out);
+            collect_expr_vars(r, out);
+        }
+        _ => {}
+    }
+}
+
+/// Compile each `(check fact1 fact2 ...)` into a Souffle query relation
+/// `__check_K(out: number)`. The relation is populated by a single rule
+/// whose body is the conjunction of the (translated) check facts. After
+/// running souffle the runner reads each `__check_K`'s size: 0 means the
+/// check failed (the conjunction did not hold); >0 means it passed.
+fn translate_check(
+    facts: &[ResolvedFact],
+    ctx: &mut Ctx,
+    p: &mut Program,
+) -> Result<(), TranslateError> {
+    let id = ctx.check_relations.len();
+    let rel = format!("__check_{id}");
+    p.relations.push(RelationDecl {
+        name: rel.clone(),
+        columns: vec![("out".into(), "number".into())],
+    });
+    let bodies = translate_body(facts, ctx)?;
+    if bodies.len() != 1 {
+        return Err(TranslateError::Unsupported(
+            "OR-fan-out in (check) facts not supported".into(),
+        ));
+    }
+    let mut body = bodies.into_iter().next().unwrap();
+    let head = Atom { relation: rel.clone(), args: vec![Expr::Number(0)] };
+    // The encoder produces check facts that read `<R>_snap`, but snap is
+    // a frozen-at-outer-iter-start view, so it lags the canonical view
+    // by one outer iteration. Checks need to observe the FINAL state,
+    // so rewrite snap references back to the canonical view here.
+    for lit in &mut body {
+        if let IrLit::Atom(a) = lit
+            && let Some(stripped) = a.relation.strip_suffix("_snap")
+        {
+            a.relation = stripped.to_string();
+        }
+    }
+    // Pull in any let-buffer lookups the body's vars need (mirrors the
+    // user-rule emission path; ensures inner record types resolve).
+    let all_lets: Vec<LetInfo> = ctx.global_let_infos.clone();
+    add_let_lookups_to_body(&head, &mut body, &all_lets);
+    p.clauses.push(Clause::rule(head, body));
+    // emit_printsize_directives picks up __check_K relations naturally
+    // (they don't match the _buffer / _snap / _live / to_* filters), so
+    // we don't add a `.printsize` directive here — would cause a
+    // souffle "Redefinition of printsize" error.
+    ctx.check_relations.push(rel);
+    Ok(())
+}
+
+/// Translate a list of body facts into one or more Souffle body literal
+/// lists. Multiple lists arise when an `(or e1 e2 …)` fact (possibly
+/// wrapped in `(guard …)`) is encountered: rule fan-out produces one
+/// alternative body per disjunct. Souffle has no body-level OR.
 fn translate_body(
     facts: &[ResolvedFact],
     ctx: &mut Ctx,
-) -> Result<Vec<IrLit>, TranslateError> {
-    let mut out = vec![];
+) -> Result<Vec<Vec<IrLit>>, TranslateError> {
+    let mut bodies: Vec<Vec<IrLit>> = vec![vec![]];
     for fact in facts {
-        match fact {
-            GenericFact::Fact(expr) => translate_fact_expr(expr, ctx, &mut out)?,
-            GenericFact::Eq(_, lhs, rhs) => translate_eq_fact(lhs, rhs, ctx, &mut out)?,
+        let alts = translate_fact_alternatives(fact, ctx)?;
+        let mut new_bodies = Vec::with_capacity(bodies.len() * alts.len());
+        for body in &bodies {
+            for alt in &alts {
+                let mut nb = body.clone();
+                nb.extend(alt.iter().cloned());
+                new_bodies.push(nb);
+            }
+        }
+        bodies = new_bodies;
+    }
+    Ok(bodies)
+}
+
+/// Returns one or more `Vec<IrLit>` extensions to apply to the running
+/// body. For most facts there's exactly one extension; the fan-out hook
+/// remains in case a future construct needs alternatives.
+///
+/// `(or …)` (possibly inside `(guard …)`) gets compiled to a single
+/// arithmetic constraint via `lor` of `ord(a) - ord(b)` differences,
+/// avoiding rule duplication.
+fn translate_fact_alternatives(
+    fact: &ResolvedFact,
+    ctx: &mut Ctx,
+) -> Result<Vec<Vec<IrLit>>, TranslateError> {
+    match fact {
+        GenericFact::Fact(expr) => {
+            if let Some(disjuncts) = extract_or_disjuncts(expr) {
+                let lit = compile_or_to_lor_constraint(disjuncts, ctx)?;
+                return Ok(vec![vec![lit]]);
+            }
+            let mut lits = vec![];
+            translate_fact_expr(expr, ctx, &mut lits)?;
+            Ok(vec![lits])
+        }
+        GenericFact::Eq(_, lhs, rhs) => {
+            let mut lits = vec![];
+            translate_eq_fact(lhs, rhs, ctx, &mut lits)?;
+            Ok(vec![lits])
         }
     }
-    Ok(out)
+}
+
+/// Compile a multi-disjunct `(or e1 e2 ...)` body fact into a single
+/// arithmetic constraint:
+///
+///     (ord(a1) - ord(b1)) lor (ord(a2) - ord(b2)) lor ... != 0
+///
+/// Each `ei` must be `(bool-!= a b)` (the only OR-disjunct shape egglog's
+/// rebuild rules currently produce). We use `ord(_) - ord(_)` rather than
+/// `ord(_) != ord(_)` because Souffle's `lor` operates on numbers, not
+/// boolean constraints, and a non-zero diff signals inequality. `lor`
+/// (bitwise-style logical OR) is non-cancelling, so a chain stays
+/// non-zero whenever any disjunct holds.
+fn compile_or_to_lor_constraint(
+    disjuncts: &[ResolvedExpr],
+    ctx: &mut Ctx,
+) -> Result<IrLit, TranslateError> {
+    let mut diff_exprs: Vec<Expr> = Vec::with_capacity(disjuncts.len());
+    for d in disjuncts {
+        let (a, b) = unpack_bool_neq(d).ok_or_else(|| {
+            TranslateError::Unsupported(format!(
+                "OR disjunct must be (bool-!= a b); got: {d}"
+            ))
+        })?;
+        let av = translate_value_expr(a, ctx)?;
+        let bv = translate_value_expr(b, ctx)?;
+        diff_exprs.push(Expr::BinOp(
+            ArithOp::Sub,
+            Box::new(Expr::Ord(Box::new(av))),
+            Box::new(Expr::Ord(Box::new(bv))),
+        ));
+    }
+    // Left-fold via `lor`. With one disjunct, this is just the diff itself.
+    let combined = diff_exprs
+        .into_iter()
+        .reduce(|acc, e| Expr::BinOp(ArithOp::Lor, Box::new(acc), Box::new(e)))
+        .expect("extract_or_disjuncts only returns non-empty slices");
+    Ok(IrLit::Constraint(BinaryOp::Ne, combined, Expr::Number(0)))
+}
+
+/// Pattern: `(bool-!= a b)`. Returns the operand pair if matched.
+fn unpack_bool_neq(expr: &ResolvedExpr) -> Option<(&ResolvedExpr, &ResolvedExpr)> {
+    if let GenericExpr::Call(_, head, args) = expr
+        && let ResolvedCall::Primitive(prim) = head
+        && prim.name() == "bool-!="
+        && args.len() == 2
+    {
+        Some((&args[0], &args[1]))
+    } else {
+        None
+    }
+}
+
+/// Recognize `(or e1 e2 …)` or `(guard (or e1 e2 …))`. The encoder wraps
+/// rebuild-rule guards in `guard`, so we have to peel that layer off.
+/// Returns the disjuncts when found, else None.
+fn extract_or_disjuncts(expr: &ResolvedExpr) -> Option<&[ResolvedExpr]> {
+    let mut cur = expr;
+    if let GenericExpr::Call(_, head, args) = cur
+        && let ResolvedCall::Primitive(prim) = head
+        && prim.name() == "guard"
+        && args.len() == 1
+    {
+        cur = &args[0];
+    }
+    if let GenericExpr::Call(_, head, args) = cur
+        && let ResolvedCall::Primitive(prim) = head
+        && prim.name() == "or"
+        && args.len() >= 2
+    {
+        return Some(args);
+    }
+    None
 }
 
 /// Egglog's `(ordering-max a b)` returns the larger of `a` and `b` by
@@ -751,18 +1284,16 @@ fn translate_fact_expr(
                     return translate_fact_expr(&args[0], ctx, out);
                 }
                 if name == "or" {
-                    // (or e1 e2 ...) — boolean OR primitive (sort/bool.rs).
-                    // In a guard body, this evaluates to true iff any disjunct
-                    // is true. Souffle has no boolean-OR in rule bodies; for
-                    // multi-disjunct cases we'd need to fan out a separate
-                    // rule per disjunct. v0: handle only the single-disjunct
-                    // case, which is what the encoded form produces today
-                    // (the `(or (bool-!= ...))` shape).
+                    // Multi-disjunct OR is intercepted upstream in
+                    // translate_fact_alternatives and lowered to a single
+                    // `lor`-of-diffs constraint. The single-disjunct case
+                    // can still appear when an `or` is unwrapped by a
+                    // higher level — recurse on the lone arg.
                     if args.len() == 1 {
                         return translate_fact_expr(&args[0], ctx, out);
                     }
                     return Err(TranslateError::Unsupported(format!(
-                        "boolean or with {} disjuncts in body (would need rule fan-out)",
+                        "or-disjuncts reached translate_fact_expr (should be intercepted upstream): {} args",
                         args.len()
                     )));
                 }
@@ -949,14 +1480,6 @@ fn build_record_for_tag(
     args: &[ResolvedExpr],
     ctx: &mut Ctx,
 ) -> Result<Expr, TranslateError> {
-    // Wrap a Record arg in ord(...) so it fits into a number-typed column.
-    fn as_num(e: Expr) -> Expr {
-        if matches!(e, Expr::Record(_)) {
-            Expr::Ord(Box::new(e))
-        } else {
-            e
-        }
-    }
     // [tag, a, b, n] of numbers. Args land in a/b for arity ≤ 2;
     // single-arg constructors with i64 args put the value in n.
     match args.len() {
@@ -967,36 +1490,187 @@ fn build_record_for_tag(
             Expr::Number(0),
         ])),
         1 => {
-            let a = translate_value_expr(&args[0], ctx)?;
-            if matches!(a, Expr::Number(_)) {
+            let a_expr = translate_arg_as_field(&args[0], ctx)?;
+            // Place i64 args in the `n` slot (preserving the previous
+            // convention); everything else (records, strings, user-sort
+            // refs — already `ord`-coerced) goes into `a`.
+            if matches!(a_expr, Expr::Number(_)) {
                 Ok(Expr::Record(vec![
                     Expr::Number(tag),
                     Expr::Number(0),
                     Expr::Number(0),
-                    a,
+                    a_expr,
                 ]))
             } else {
                 Ok(Expr::Record(vec![
                     Expr::Number(tag),
-                    as_num(a),
+                    a_expr,
                     Expr::Number(0),
                     Expr::Number(0),
                 ]))
             }
         }
         2 => {
-            let a = translate_value_expr(&args[0], ctx)?;
-            let b = translate_value_expr(&args[1], ctx)?;
+            let a = translate_arg_as_field(&args[0], ctx)?;
+            let b = translate_arg_as_field(&args[1], ctx)?;
             Ok(Expr::Record(vec![
                 Expr::Number(tag),
-                as_num(a),
-                as_num(b),
+                a,
+                b,
                 Expr::Number(0),
             ]))
         }
         n => Err(TranslateError::Unsupported(format!(
             "constructor arity {n} > 2 in v0"
         ))),
+    }
+}
+
+/// Build a `LetInfo` for a let-binding whose value is a constructor call
+/// `(F arg1 arg2 ...)`. Returns Ok(None) if the value isn't a constructor
+/// (e.g., a primitive literal, a let-bound var) — caller should fall back
+/// to inlining via the lets map. The buffer relation is derived from the
+/// constructor's view name (`view_for_user[F] + "_buffer"`); the lookup
+/// args are the translated input args.
+fn build_let_info_from_expr(
+    fresh_var_name: &str,
+    expr: &ResolvedExpr,
+    ctx: &mut Ctx,
+) -> Result<Option<LetInfo>, TranslateError> {
+    let GenericExpr::Call(_, head, args) = expr else {
+        return Ok(None);
+    };
+    let cons_name = head.name();
+    // Only constructors with a registered tag have a corresponding view.
+    if !ctx.tag_of.contains_key(cons_name) {
+        return Ok(None);
+    }
+    let Some(view_rel) = ctx.view_for_user.get(cons_name).cloned() else {
+        return Ok(None);
+    };
+    // Where create-rule writes (buffer_rel) vs where other rules look
+    // up (lookup_rel). Under strata mode these differ — buffer for
+    // writes, snap for reads (snap is in its own pre-stratum so reads
+    // don't create a recursive cycle with the buffer). Non-strata
+    // collapses both to the canonical view.
+    let candidate_snap = format!("{view_rel}_snap");
+    let candidate_buffer = format!("{view_rel}_buffer");
+    let buffer_rel = if ctx.relation_arity.contains_key(&candidate_buffer) {
+        candidate_buffer.clone()
+    } else {
+        view_rel.clone()
+    };
+    let lookup_rel = if ctx.relation_arity.contains_key(&candidate_snap) {
+        candidate_snap
+    } else {
+        buffer_rel.clone()
+    };
+    let mut lookup_args: Vec<Expr> = Vec::with_capacity(args.len());
+    for a in args {
+        // Buffer columns mirror the constructor's input sorts directly
+        // (`Math` stays `Math`, `i64` → `number`, `String` → `symbol`),
+        // so we pass through the translated value WITHOUT the
+        // `ord(...)` wrapping that record-field positions need.
+        let e = translate_value_expr(a, ctx)?;
+        lookup_args.push(e);
+    }
+    // Build the same record we'd have inlined under the old approach.
+    // The create-rule uses this as the RHS of its `fresh_var = ...`
+    // constraint to bind the var to a specific value.
+    let tag = ctx.tag_of[cons_name];
+    let record_literal = build_record_for_tag(tag, args, ctx)?;
+    Ok(Some(LetInfo {
+        fresh_var: fresh_var_name.to_string(),
+        buffer_rel,
+        lookup_rel,
+        lookup_args,
+        record_literal,
+    }))
+}
+
+/// Translate `arg` and coerce its result so it fits in a `number`-typed
+/// Math field. User-sort values become `ord(record)`; string literals
+/// become a stable per-string `Number(id)` (assigned by `intern_string`)
+/// — sequential IDs sidestep the typing trap of `ord([symbol_literal])`,
+/// where the inner record can't be type-resolved.
+fn translate_arg_as_field(
+    arg: &ResolvedExpr,
+    ctx: &mut Ctx,
+) -> Result<Expr, TranslateError> {
+    let sort = arg_sort_name(arg);
+    // String literals: intern to a number BEFORE generic translation.
+    if let GenericExpr::Lit(_, AstLit::String(s)) = arg {
+        return Ok(Expr::Number(intern_string(ctx, s)));
+    }
+    let e = translate_value_expr(arg, ctx)?;
+    match sort.as_deref() {
+        // User-sort variable or record: wrap in ord() so it becomes a number.
+        Some(s) if ctx.user_sorts.contains(s) => Ok(Expr::Ord(Box::new(e))),
+        // String-typed variable (not a literal): we don't currently have
+        // a sound way to coerce arbitrary symbol vars into Math fields
+        // since the per-string interning happens at literal-translation
+        // time. Fall back to ord(StrRec) — works only when the var ends
+        // up in a typed position (rare in practice).
+        Some("String") => Ok(Expr::Ord(Box::new(Expr::Record(vec![e])))),
+        // Sort unknown or numeric — pass through, but still ord-wrap if it
+        // came back as a record (e.g., a nested constructor call returned
+        // a Math record literal).
+        _ => match e {
+            Expr::Record(_) => Ok(Expr::Ord(Box::new(e))),
+            _ => Ok(e),
+        },
+    }
+}
+
+/// Assign a stable, sequential numeric ID to each unique string literal.
+/// Used to encode strings inside Math record fields, which are typed
+/// `number` and can't accept symbol values directly.
+fn intern_string(ctx: &mut Ctx, s: &str) -> i64 {
+    if let Some(id) = ctx.string_ids.get(s) {
+        return *id;
+    }
+    let id = ctx.string_ids.len() as i64;
+    ctx.string_ids.insert(s.to_string(), id);
+    id
+}
+
+/// Best-effort sort name for a ResolvedExpr — pulls the leaf's sort for
+/// Vars and infers from literal kind. Call results need a context lookup
+/// we don't currently maintain, so we return None and let the caller
+/// fall back on the shape of the translated Expr.
+fn arg_sort_name(expr: &ResolvedExpr) -> Option<String> {
+    match expr {
+        GenericExpr::Var(_, v) => Some(v.sort.name().to_string()),
+        GenericExpr::Lit(_, AstLit::Int(_)) => Some("i64".to_string()),
+        GenericExpr::Lit(_, AstLit::String(_)) => Some("String".to_string()),
+        GenericExpr::Lit(_, AstLit::Unit) => Some("Unit".to_string()),
+        GenericExpr::Lit(_, _) => None,
+        GenericExpr::Call(_, head, _) => match head {
+            ResolvedCall::Func(f) => Some(f.output.name().to_string()),
+            ResolvedCall::Primitive(_) => None,
+        },
+    }
+}
+
+/// In-place: replace any occurrence of `target` inside `e` with `replacement`.
+/// Used to rewrite head args after ordering-max/min expansion so that bare
+/// record literals (which Souffle can't type from `ord()` context) get
+/// replaced by fresh vars typed via the head's column.
+fn replace_expr_match(e: &mut Expr, target: &Expr, replacement: &Expr) {
+    if e == target {
+        *e = replacement.clone();
+        return;
+    }
+    match e {
+        Expr::Record(fs) => {
+            for f in fs.iter_mut() {
+                replace_expr_match(f, target, replacement);
+            }
+        }
+        Expr::Ord(inner) => {
+            replace_expr_match(inner, target, replacement);
+        }
+        _ => {}
     }
 }
 

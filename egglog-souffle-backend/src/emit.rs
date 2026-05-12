@@ -14,7 +14,7 @@ pub fn emit(program: &Program) -> String {
 /// Souffle disallows `@` (and other characters) in identifiers, but egglog's
 /// term encoding generates internal names like `@UF_Math` and `@to_delete_Add`.
 /// Map every `@`-prefixed name to a Souffle-safe `Eg_` prefix.
-fn sanitize(name: &str) -> String {
+pub fn sanitize(name: &str) -> String {
     if let Some(rest) = name.strip_prefix('@') {
         format!("Eg_{rest}")
     } else {
@@ -201,18 +201,26 @@ fn emit_expr(out: &mut String, e: &Expr) -> std::fmt::Result {
             write!(out, "]")
         }
         Expr::Ord(inner) => {
-            // Souffle requires a type annotation when `ord`'s argument is a
-            // bare record literal — otherwise the record's type can't be
-            // inferred from context. Cast to the universal Math type.
-            if matches!(inner.as_ref(), Expr::Record(_)) {
-                write!(out, "ord(as(")?;
-                emit_expr(out, inner)?;
-                write!(out, ", Math))")
-            } else {
-                write!(out, "ord(")?;
-                emit_expr(out, inner)?;
-                write!(out, ")")
-            }
+            // Souffle's type checker can't always infer the type of a bare
+            // record literal inside `ord()`. The fix is at translator level
+            // (preprocess clauses to bind record literals to vars first);
+            // here we emit straightforwardly.
+            write!(out, "ord(")?;
+            emit_expr(out, inner)?;
+            write!(out, ")")
+        }
+        Expr::BinOp(op, l, r) => {
+            // Always parenthesize. We don't track precedence in the IR;
+            // explicit parens make the emitted source unambiguous.
+            let s = match op {
+                ArithOp::Sub => "-",
+                ArithOp::Lor => "lor",
+            };
+            write!(out, "(")?;
+            emit_expr(out, l)?;
+            write!(out, " {s} ")?;
+            emit_expr(out, r)?;
+            write!(out, ")")
         }
     }
 }
