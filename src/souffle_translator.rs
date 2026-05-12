@@ -206,6 +206,17 @@ pub fn translate_with_manifest(
 ) -> Result<TranslateOutput, TranslateError> {
     let mut p = Program::default();
     let mut ctx = Ctx::default();
+    // Pre-pass: capture user `(run N)` count. RunSchedule typically
+    // appears AFTER rules in source order, but rule translation needs
+    // to know whether `(run N)` is present (phase 60b wave filtering
+    // only kicks in when there's a bounded iter limit).
+    for cmd in commands {
+        if let ResolvedCommand::RunSchedule(s) = cmd
+            && let Some(n) = first_repeat_count(s)
+        {
+            ctx.user_run_count = ctx.user_run_count.or(Some(n));
+        }
+    }
     for cmd in commands {
         translate_command(cmd, &mut ctx, &mut p)?;
     }
@@ -301,16 +312,22 @@ fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
     //                 let-created terms; user rules fire freely.
     p.pragmas
         .push(("outer-saturate".into(), (n + 2).to_string()));
-    // Declare `IterCounter(n: number)`. The fork's outer-saturate
-    // implementation clears this at the start of each outer iter and
-    // inserts a single row holding the current iter counter value
-    // (1, 2, ...). User rules can join against it to drive the
-    // generation-column construction. See
-    // souffle-generation-column-design.md.
+    // Declare `IterCounter(n: number)` and seed a sentinel fact `(0)`.
+    // The fork's outer-saturate runtime inserts the current iter
+    // counter into this relation each outer iter (accumulating
+    // {0, 1, ..., K}). The static sentinel is critical: without any
+    // facts or rules, souffle's dead-code analysis treats IterCounter
+    // as permanently empty and eliminates the rules that join against
+    // it. The (0) seed is harmless — user rules use `wave < K` to
+    // filter, and `wave < 0` matches nothing.
     p.relations.push(RelationDecl {
         name: ITER_COUNTER.into(),
         columns: vec![("n".into(), "number".into())],
     });
+    p.clauses.push(Clause::fact(Atom {
+        relation: ITER_COUNTER.into(),
+        args: vec![Expr::Number(0)],
+    }));
 }
 
 /// Walk a [`ResolvedSchedule`] and return the count of the first
@@ -554,15 +571,46 @@ fn function_columns(
 }
 
 /// True iff `rel` carries a wave column: either a registered view
-/// relation or one of its `_buffer` / `_snap` siblings. See
+/// relation or one of its `_buffer` / `_snap` / `_live` siblings. See
 /// `Ctx::view_relations`.
 fn is_wave_bearing(ctx: &Ctx, rel: &str) -> bool {
     if ctx.view_relations.contains(rel) {
         return true;
     }
-    for suffix in ["_buffer", "_snap"] {
+    for suffix in ["_buffer", "_snap", "_live"] {
         if let Some(stripped) = rel.strip_suffix(suffix)
             && ctx.view_relations.contains(stripped)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Recognize the encoder-generated system rulesets — rules tagged with
+/// these are part of the term/proof scaffolding (rebuild, drain,
+/// congruence, merge, delete/subsume, parent compress) and should NOT
+/// get user-rule wave filtering. The 6 prefixes come from
+/// `proof_encoding_helpers.rs::ProofNames` fresh-symbol seeds. The
+/// generator prefixes `@` (the parser's reserved string) and appends
+/// an optional sequence digit when the same hint is fresh'd multiple
+/// times.
+fn is_system_ruleset(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix('@') else {
+        return false;
+    };
+    // Longest first so "rebuilding_cleanup" wins over "rebuilding".
+    const PREFIXES: &[&str] = &[
+        "rebuilding_cleanup",
+        "delete_subsume_ruleset",
+        "uf_function_index",
+        "single_parent",
+        "rebuilding",
+        "parent",
+    ];
+    for prefix in PREFIXES {
+        if let Some(rest) = suffix.strip_prefix(prefix)
+            && (rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()))
         {
             return true;
         }
@@ -603,6 +651,28 @@ fn translate_rule(
         return Ok(());
     }
     let bodies = translate_body(&rule.body, ctx)?;
+
+    // Phase 60b: when there's a user `(run N)` bound, USER rules read at
+    // `wave < K` and write at `wave = K`, where K is the current outer
+    // iter counter (exposed via the fork-built `IterCounter` relation).
+    // System rules (rebuild, drain, merge, congruence, parent-compress,
+    // delete/subsume) keep writing `wave = 0` — they're scaffolding that
+    // operates uniformly across iters. See souffle-generation-column-
+    // design.md.
+    //
+    // Empty-body rules are initialization (top-level `(Add 1 2)` etc.
+    // get wrapped in a body-less fake_rule via translate_command's
+    // C::Action branch). Those must NOT get wave filtering — they're
+    // facts that should appear at wave 0, fire once, not at every K.
+    let use_wave_filter = ctx.user_run_count.is_some()
+        && !is_system_ruleset(rule.ruleset.as_str())
+        && !rule.body.is_empty();
+    let k_var_name = "__K";
+    let head_wave_expr = if use_wave_filter {
+        Expr::Var(k_var_name.to_string())
+    } else {
+        Expr::Number(0)
+    };
 
     // First pass: walk actions in order, building lets + collecting buckets.
     // For Set actions, we may emit MULTIPLE entries — when the action
@@ -759,11 +829,12 @@ fn translate_rule(
                             replace_expr_match(arg, &bv_rec, &v_b);
                         }
                     }
-                    // Wave column for view/buffer/snap writes. Phase 60a:
-                    // hardcoded 0; phase 60b ties this to IterCounter for
-                    // user rules.
+                    // Wave column for view/buffer/snap writes. User rules
+                    // under `(run N)` write `wave = K` (K bound by the
+                    // IterCounter atom that `rewrite_user_rule_body_with_
+                    // wave_filter` prepended); everyone else writes 0.
                     if is_wave_bearing(ctx, head.name()) {
-                        souffle_args.push(Expr::Number(0));
+                        souffle_args.push(head_wave_expr.clone());
                     }
                     sets.push((head.name().to_string(), souffle_args, extra));
                 }
@@ -813,6 +884,11 @@ fn translate_rule(
             }
             let head_atom = Atom { relation: rel.clone(), args: args.clone() };
             add_let_lookups_to_body(&head_atom, &mut full_body, &all_lets);
+            if use_wave_filter {
+                full_body = rewrite_user_rule_body_with_wave_filter(
+                    full_body, ctx, k_var_name,
+                );
+            }
             p.clauses.push(Clause::rule(head_atom, full_body));
         }
         for (rel, del_args) in &changes {
@@ -847,6 +923,11 @@ fn translate_rule(
                 // head columns), so dependent lookups can derive from
                 // the same head context as the paired set.
                 add_let_lookups_to_body(&dominating, &mut sub_body, &all_lets);
+                if use_wave_filter {
+                    sub_body = rewrite_user_rule_body_with_wave_filter(
+                        sub_body, ctx, k_var_name,
+                    );
+                }
                 p.clauses.push(Clause::subsume(dominated, dominating, sub_body));
             } else {
                 return Err(TranslateError::Unsupported(format!(
@@ -856,6 +937,62 @@ fn translate_rule(
         }
     }
     Ok(())
+}
+
+/// Phase 60b body rewrite for USER rules under `(run N)`. For every
+/// wave-bearing body atom, replace the auto-padded wave wildcard with a
+/// fresh wave var, and add `wave < K` so the rule only sees rows from
+/// strictly-earlier outer iters. Prepend an `IterCounter(K)` atom so K
+/// is bound. Net effect: each outer iter K, user rules fire exactly
+/// once against the accumulation of prior iters' writes — matching
+/// egglog `(run N)` semantics.
+fn rewrite_user_rule_body_with_wave_filter(
+    body: Vec<IrLit>,
+    ctx: &Ctx,
+    k_var: &str,
+) -> Vec<IrLit> {
+    let mut new_body: Vec<IrLit> = Vec::with_capacity(body.len() + 2);
+    let mut wave_counter = 0u32;
+    for lit in body {
+        match lit {
+            IrLit::Atom(mut a) if is_wave_bearing(ctx, &a.relation) => {
+                // The wave column is the last arg; auto-pad put a
+                // Wildcard there. Replace with a fresh var bound by
+                // `< K`. If the wave position is *not* a wildcard
+                // (some future caller wrote it explicitly), leave it
+                // alone — the call site knows what it's doing.
+                let bound = match a.args.last() {
+                    Some(Expr::Wildcard) => {
+                        let w_name = format!("__w{wave_counter}");
+                        wave_counter += 1;
+                        *a.args.last_mut().unwrap() = Expr::Var(w_name.clone());
+                        Some(w_name)
+                    }
+                    _ => None,
+                };
+                new_body.push(IrLit::Atom(a));
+                if let Some(w_name) = bound {
+                    new_body.push(IrLit::Constraint(
+                        BinaryOp::Lt,
+                        Expr::Var(w_name),
+                        Expr::Var(k_var.to_string()),
+                    ));
+                }
+            }
+            other => new_body.push(other),
+        }
+    }
+    // Always bind K: the head writes `wave = K`, so K must be bound by
+    // the body. Even rules whose body has no wave-bearing atoms (e.g.,
+    // pure UF guards) need IterCounter for K to resolve.
+    new_body.insert(
+        0,
+        IrLit::Atom(Atom {
+            relation: ITER_COUNTER.to_string(),
+            args: vec![Expr::Var(k_var.to_string())],
+        }),
+    );
+    new_body
 }
 
 /// Returns true iff `head`'s relation and arg shape exactly match the
