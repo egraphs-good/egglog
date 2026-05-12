@@ -21,7 +21,7 @@ def main(benchmark_dir):
   data = {
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "failing_benchmarks": [str(b) for b in failing_benchmarks],
-    "data": benchmark_results
+    "passing_benchmarks": benchmark_results
   }
   data_out_path = NIGHTLY_DIR / "output" / "data" / "data.json"
   data_out_path.parent.mkdir(parents=True, exist_ok=True)

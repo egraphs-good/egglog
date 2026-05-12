@@ -1,148 +1,126 @@
-import { formatMillis } from "./util.js";
+import { convertToTable } from "./table.js";
 
-let suites = [];
-let activeSuiteName = null;
-let sortKey = "benchmark_path";
-let sortDir = "asc";
+const STATE = {
+  activeSuite: null,
+};
+
+const GLOBAL_DATA = {
+  data: null,
+  suites: null,
+};
+
 load();
-installHeaderSortHandlers();
 
 async function load() {
   const statusNode = document.querySelector("#status");
 
-  try {
-    const response = await fetch("./data/data.json");
-    if (!response.ok) {
-      throw new Error(`Failed to load data.json (${response.status})`);
-    }
-
-    const data = await response.json();
-    suites = [...data.suites].sort((a, b) => a.name.localeCompare(b.name));
-    activeSuiteName = suites[0]?.name ?? null;
-    statusNode.textContent = "Loaded data/data.json";
-    renderSummary(data);
-    renderSuites();
-  } catch (error) {
+  const response = await fetch("./data/data.json");
+  if (!response.ok) {
     statusNode.textContent = `Failed to load data/data.json: ${error}`;
+    return;
   }
+
+  GLOBAL_DATA.data = await response.json();
+  GLOBAL_DATA.suites = [
+    ...new Set(GLOBAL_DATA.data.passing_benchmarks.map((x) => x.suite_name)),
+  ].sort();
+  STATE.activeSuite = GLOBAL_DATA.suites[0] ?? null;
+
+  statusNode.textContent = "Loaded data/data.json";
+  renderSummary();
+
+  renderSuiteSelectors();
+  renderTable();
 }
 
-function renderSummary(data) {
-  let ruleRunningMillis = 0;
-  let extractionMillis = 0;
-  let otherMillis = 0;
+function renderSummary() {
+  let ruleMs = 0;
+  let extractMs = 0;
+  let otherMs = 0;
 
-  for (const { timing_summary } of data.reports) {
-    ruleRunningMillis += timing_summary.rule_running_millis;
-    extractionMillis += timing_summary.extraction_millis;
-    otherMillis += timing_summary.other_millis;
+  for (const reportSummary of GLOBAL_DATA.data.passing_benchmarks) {
+    ruleMs += reportSummary.report.rule_ms;
+    extractMs += reportSummary.report.extraction_ms;
+    otherMs += reportSummary.report.other_ms;
   }
+
+  const numPassing = GLOBAL_DATA.data.passing_benchmarks.length;
+  const numFailing = GLOBAL_DATA.data.failing_benchmarks.length;
+  const totalTime = GLOBAL_DATA.data.passing_benchmarks
+    .map((x) => x.wall_time_s)
+    .reduce((a, b) => a + b, 0);
 
   document.querySelector("#summary-text").textContent =
-    `${data.summary.benchmark_count} benchmarks across ${data.suites.length} suites | ` +
-    `Nightly time: ${data.summary.total_time_seconds.toFixed(1)} s | ` +
-    `Rule running: ${ruleRunningMillis} ms | ` +
-    `Extraction: ${extractionMillis} ms | ` +
-    `Other: ${otherMillis} ms`;
+    `Passing Benchmarks: ${numPassing} | ` +
+    `Failing Benchmarks: ${numFailing} | ` +
+    `Nightly time: ${totalTime.toFixed(1)} s | ` +
+    `Rule running: ${(ruleMs / 1000).toFixed(1)} s | ` +
+    `Extraction: ${(extractMs / 1000).toFixed(1)} s | ` +
+    `Other: ${(otherMs / 1000).toFixed(1)} s`;
 }
 
-function renderSuites() {
-  document.querySelector("#suite-tabs").innerHTML = suites
-    .map((suite) => {
-      return `
-        <button
-          type="button"
-          class="suite-tab${suite.name === activeSuiteName ? " is-active" : ""}"
-          data-suite-name="${suite.name}"
-        >
-          ${suite.name}
-        </button>
-      `;
-    })
+function renderSuiteSelectors() {
+  document.querySelector("#suite-tabs").innerHTML = GLOBAL_DATA.suites
+    .map(
+      (suite) =>
+        `<button
+    type="button"
+    class="suite-tab ${suite === STATE.activeSuite ? " is-active" : ""}"
+    data-suite-name="${suite}"
+      >
+      ${suite}
+      </button>
+      `,
+    )
     .join("");
 
   for (const button of document.querySelectorAll(".suite-tab")) {
     button.addEventListener("click", () => {
-      activeSuiteName = button.dataset.suiteName;
-      renderSuites();
+      STATE.activeSuite = button.dataset.suiteName;
+
+      for (const btn of document.querySelectorAll(".suite-tab")) {
+        btn.classList.toggle(
+          "is-active",
+          btn.dataset.suiteName === STATE.activeSuite,
+        );
+      }
+
+      renderTable();
     });
   }
+}
 
-  const activeSuite = suites.find((suite) => suite.name === activeSuiteName);
-  if (!activeSuite) {
-    document.querySelector("#active-suite-summary").textContent = "";
-    document.querySelector("#benchmarks-body").innerHTML = "";
-    return;
-  }
+function renderTable() {
+  const benchmarks = GLOBAL_DATA.data.passing_benchmarks.filter(
+    (x) => x.suite_name === STATE.activeSuite,
+  );
+  const totalTime = benchmarks
+    .map((x) => x.wall_time_s)
+    .reduce((a, b) => a + b, 0);
 
   document.querySelector("#active-suite-summary").innerHTML = `
-    <div class="suite-header">
-      <h3>${activeSuite.name}</h3>
-      <p>${activeSuite.reports.length} benchmarks | ${activeSuite.summary.total_time_seconds.toFixed(1)} s</p>
-    </div>
-  `;
-  document.querySelector("#benchmarks-body").innerHTML = renderRows(
-    sortReports(activeSuite.reports),
-  );
-  updateHeaderIndicators();
-}
+  <div>
+    <h3>${STATE.activeSuite}</h3>
+    <p>${benchmarks.length} benchmarks | ${totalTime} s</p>
+  </div>`;
 
-function getSortValue(report, key) {
-  return key.split(".").reduce((acc, part) => acc?.[part], report) ?? 0;
-}
+  const columns = [
+    "Benchmark",
+    "Wall Time (s)",
+    "Rules (ms)",
+    "Extraction (ms)",
+    "Other (ms)",
+  ];
 
-function sortReports(reports) {
-  const sorted = [...reports];
-  const dir = sortDir === "asc" ? 1 : -1;
-  sorted.sort((a, b) => {
-    const av = getSortValue(a, sortKey);
-    const bv = getSortValue(b, sortKey);
-    if (typeof av === "string" || typeof bv === "string") {
-      return String(av).localeCompare(String(bv)) * dir;
-    }
-    return (av - bv) * dir;
-  });
-  return sorted;
-}
+  const rows = benchmarks.map((b) => ({
+    Benchmark: b.benchmark_name,
+    "Wall Time (s)": b.wall_time_s,
+    "Rules (ms)": b.report.rule_ms,
+    "Extraction (ms)": b.report.extraction_ms,
+    "Other (ms)": b.report.other_ms,
+  }));
 
-function installHeaderSortHandlers() {
-  for (const th of document.querySelectorAll("#benchmarks-header th")) {
-    th.style.cursor = "pointer";
-    th.addEventListener("click", () => {
-      const key = th.dataset.sortKey;
-      if (sortKey === key) {
-        sortDir = sortDir === "asc" ? "desc" : "asc";
-      } else {
-        sortKey = key;
-        sortDir = "asc";
-      }
-      renderSuites();
-    });
-  }
-}
-
-function updateHeaderIndicators() {
-  for (const th of document.querySelectorAll("#benchmarks-header th")) {
-    const label = th.textContent.replace(/[ ▲▼]+$/, "");
-    const arrow =
-      th.dataset.sortKey === sortKey ? (sortDir === "asc" ? " ▲" : " ▼") : "";
-    th.textContent = label + arrow;
-  }
-}
-
-function renderRows(reports) {
-  return reports
-    .map(({ benchmark_path, time_seconds, timing_summary }) => {
-      return `
-        <tr>
-          <td>${benchmark_path}</td>
-          <td>${time_seconds.toFixed(3)} s</td>
-          <td>${formatMillis(timing_summary.rule_running_millis)}</td>
-          <td>${formatMillis(timing_summary.extraction_millis)}</td>
-          <td>${formatMillis(timing_summary.other_millis)}</td>
-          <td>${timing_summary.timing_steps}</td>
-        </tr>
-      `;
-    })
-    .join("");
+  const tableDiv = document.querySelector("#active-suite-table");
+  tableDiv.innerHTML = "";
+  tableDiv.appendChild(convertToTable(columns, rows));
 }
