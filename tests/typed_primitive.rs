@@ -123,6 +123,55 @@ impl FullPrim for FullEcho {
     }
 }
 
+/// A pure primitive with the (i64) -> i64 shape used by the
+/// unstable-app dispatch matrix below — uniform signature lets the
+/// same `unstable-fn` / `unstable-app` programs cover all four
+/// registration kinds.
+#[derive(Clone)]
+struct PureEcho(&'static str);
+impl PrimitiveCommon for PureEcho {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl PurePrim for PureEcho {
+    fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        Some(args[0])
+    }
+}
+
+/// A read primitive that doesn't actually consult a table — its body
+/// just echoes `args[0]`. The trait still wraps it as a `ReadState`
+/// at dispatch time, which is what the matrix test cares about.
+#[derive(Clone)]
+struct ReadEcho(&'static str);
+impl PrimitiveCommon for ReadEcho {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl ReadPrim for ReadEcho {
+    fn apply<'a, 'db>(&self, _state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        Some(args[0])
+    }
+}
+
 // --- per-context acceptance ---
 
 /// A pure primitive runs in any of the four contexts.
@@ -352,4 +401,126 @@ fn two_same_signature_registrations_panic_on_use() {
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
 
     let _ = egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))");
+}
+
+// --- 4x4 unstable-app dispatch matrix ---
+//
+// `ResolvedFunctionId::Prim` is built only on the `unstable-fn` path
+// (`src/lib.rs` around L2103), and at dispatch time
+// `FunctionContainer::apply` (`src/sort/fn.rs` around L560-569)
+// picks the candidate whose `selection_ctx` equals the application
+// ctx. For each registration kind we wrap a uniform (i64)->i64
+// echo primitive in `unstable-fn` and apply it from each of the
+// four application contexts, asserting the outcome matches the
+// trait's `valid_contexts`. Dispatch succeeds iff the application
+// ctx is in the trait's valid set; otherwise the pre-registered
+// panic surfaces as an Err.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppCtx {
+    /// Rule LHS under default seminaive — body context is `Pure`.
+    Pure,
+    /// Top-level `check` — context is `Read`.
+    Read,
+    /// Rule RHS under default seminaive — action context is `Write`.
+    Write,
+    /// Top-level `let` — context is `Full`.
+    Full,
+}
+
+const ALL_CTXS: [AppCtx; 4] = [AppCtx::Pure, AppCtx::Read, AppCtx::Write, AppCtx::Full];
+
+fn matrix_program(ctx: AppCtx) -> String {
+    let header = "(sort Fn (UnstableFn (i64) i64))\n\
+                  (let $f (unstable-fn \"p\"))\n";
+    match ctx {
+        AppCtx::Pure => format!(
+            "{header}(function out (i64) i64 :no-merge)\n\
+             (rule ((= y (unstable-app $f 7))) ((set (out 0) y)))\n\
+             (run 1)\n\
+             (check (= (out 0) 7))"
+        ),
+        AppCtx::Read => format!("{header}(check (= (unstable-app $f 7) 7))"),
+        AppCtx::Write => format!(
+            "{header}(function out (i64) i64 :no-merge)\n\
+             (rule () ((set (out 0) (unstable-app $f 7))))\n\
+             (run 1)\n\
+             (check (= (out 0) 7))"
+        ),
+        AppCtx::Full => format!("{header}(let $r (unstable-app $f 7))\n(check (= $r 7))"),
+    }
+}
+
+fn run_matrix_cell(register: impl FnOnce(&mut EGraph), ctx: AppCtx) -> Result<(), String> {
+    let mut egraph = EGraph::default();
+    register(&mut egraph);
+    // Dispatch mismatch usually surfaces as `Err` from
+    // `parse_and_run_program` (via the egglog panic side channel),
+    // but in a `check` it can bubble up as a thread panic because
+    // `EGraph::check_facts` unwraps the underlying `run_rules`
+    // result. Treat either signal as a dispatch failure here.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        egraph.parse_and_run_program(None, &matrix_program(ctx))
+    }));
+    match result {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!("{e}")),
+        Err(p) => {
+            let msg = p
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| p.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "<non-string panic>".to_string());
+            Err(format!("panic: {msg}"))
+        }
+    }
+}
+
+#[test]
+fn unstable_app_dispatch_matrix() {
+    // For each (registration kind, application ctx) cell, expected
+    // success follows the trait's `valid_contexts`.
+    let cells: &[(&str, fn(&mut EGraph), &[AppCtx])] = &[
+        (
+            "pure",
+            |e: &mut EGraph| e.add_pure_primitive(PureEcho("p"), None),
+            &[AppCtx::Pure, AppCtx::Read, AppCtx::Write, AppCtx::Full],
+        ),
+        (
+            "read",
+            |e: &mut EGraph| e.add_read_primitive(ReadEcho("p"), None),
+            &[AppCtx::Read, AppCtx::Full],
+        ),
+        (
+            "write",
+            |e: &mut EGraph| e.add_write_primitive(WriteEcho("p"), None),
+            &[AppCtx::Write, AppCtx::Full],
+        ),
+        (
+            "full",
+            |e: &mut EGraph| e.add_full_primitive(FullEcho("p"), None),
+            &[AppCtx::Full],
+        ),
+    ];
+
+    for (label, register, valid) in cells {
+        for &ctx in &ALL_CTXS {
+            let result = run_matrix_cell(*register, ctx);
+            let should_succeed = valid.contains(&ctx);
+            if should_succeed {
+                assert!(
+                    result.is_ok(),
+                    "{label} prim applied via unstable-app in {ctx:?} ctx should succeed; \
+                     got error: {:?}",
+                    result.err()
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{label} prim applied via unstable-app in {ctx:?} ctx should fail \
+                     (dispatch mismatch panic), but parse_and_run_program returned Ok"
+                );
+            }
+        }
+    }
 }
