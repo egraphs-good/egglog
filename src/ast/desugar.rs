@@ -118,7 +118,12 @@ pub(crate) fn desugar_command(
             res
         }
         Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rule_name, rewrite, subsume, parser)
+            let resolved_name = if rewrite.name.is_empty() {
+                rule_name
+            } else {
+                rewrite.name.clone()
+            };            
+            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)
         }
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rule_name, rewrite, parser)
@@ -352,17 +357,23 @@ fn desugar_birewrite(
     parser: &mut Parser,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
+    let rewrite_name = if rewrite.name.is_empty() {
+        name
+    } else {
+        rewrite.name.clone()
+    };    
     let rw2 = Rewrite {
         span,
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
+        name: rewrite_name.clone(),
     };
-    desugar_rewrite(ruleset.clone(), format!("{name}=>"), rewrite, false, parser)
+    desugar_rewrite(ruleset.clone(), format!("{rewrite_name}=>"), rewrite, false, parser)
         .into_iter()
         .chain(desugar_rewrite(
             ruleset,
-            format!("{name}<="),
+            format!("{rewrite_name}<="),
             rw2,
             false,
             parser,
