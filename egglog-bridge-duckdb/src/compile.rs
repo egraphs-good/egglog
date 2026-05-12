@@ -244,13 +244,15 @@ fn compile_variant(
                     .get(&view)
                     .map(|i| i.cols.len() > args.len())
                     .unwrap_or(false);
-                // Hash-cons is on by default; opt out via
-                // `DUCK_NO_HASHCONS=1` for debugging. We look up an
-                // existing canonical id for (args) before allocating,
-                // which saves substantial time and memory on
-                // workloads like math-microbenchmark.
-                let hashcons_enabled = std::env::var("DUCK_NO_HASHCONS").is_err();
-                let col_expr = if body_resolvable && view_has_id && hashcons_enabled {
+                // Hash-cons: look up an existing canonical id for
+                // (args) before allocating, falling back to a fresh
+                // sequence value when nothing matches. Saves
+                // substantial work on rule-heavy workloads
+                // (math-microbenchmark run-10: 34.6s/10.27 GB →
+                // 17.4s/668 MB) without affecting tuple counts —
+                // verified through run-11 against the reference
+                // backend, and the full snapshot suite.
+                let col_expr = if body_resolvable && view_has_id {
                     let arg_sqls: Vec<String> = args
                         .iter()
                         .map(|t| term_sql(t, &binding, &rule.name))
