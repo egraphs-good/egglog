@@ -273,9 +273,8 @@ impl EGraph {
     /// the registered function has unrestricted access and is not
     /// tracked by the per-context validity system. Prefer building
     /// primitives via the higher-level `egglog::Primitive` /
-    /// `egglog::EGraph::add_primitive` API (in the egglog crate, not
-    /// linkable from here), which enforces #772's seminaive-safety
-    /// contract.
+    /// `egglog::EGraph::add_primitive` API, which enforces #772's
+    /// seminaive-safety contract.
     pub fn register_external_func(
         &mut self,
         func: Box<dyn ExternalFunction + 'static>,
