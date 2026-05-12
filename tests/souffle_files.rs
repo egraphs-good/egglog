@@ -6,19 +6,16 @@
 //! gold-standard semantics — proof mode in `tests/files.rs` validates
 //! itself the same way.
 //!
-//! Print-size parity is *not* tested here. Default egglog tracks every
-//! e-node flatly (e.g. (Add 1 2) and (Add 2 1) after commutativity are
-//! two e-nodes in one eclass); the souffle backend's strata setup uses
-//! subsumption to keep one canonical rep per eclass. Both are valid
-//! views of the same egraph — checks of equivalence-class equality
-//! agree, but per-relation row counts don't.
+//! Phase 60a–60b's wave column + `IterCounter` wiring closed the
+//! print-size gap for programs where the canonical view doesn't get
+//! shrunk by the rebuild rule's subsumption. Simple commutativity-style
+//! cases now match exactly (souffle Add == default Add). The remaining
+//! gap is in subsumption-heavy programs like math-microbenchmark
+//! (default egglog tracks every e-node flatly, ~641K rows for `(run
+//! 11)`; souffle's rebuild rule's `<= subsume` keeps only one canonical
+//! rep per `(c0, c1)` key). That's phase 60c.
 //!
 //! Skipped when the souffle binary isn't available.
-//!
-//! TODO: integrate as a treatment in tests/files.rs (alongside proof
-//! mode) so the souffle backend gets exercised on the full corpus
-//! automatically — same shared-snapshot machinery, just with the
-//! check-only comparison.
 
 use egglog::souffle_translator;
 use egglog::EGraph;
@@ -108,6 +105,117 @@ fn check_parity_against_default_egglog() {
             }
         }
     }
+}
+
+/// Programs whose `(print-size <fname>)` should equal default egglog
+/// after `(run N)`. These are programs where the rebuild rule's
+/// subsumption *doesn't* shrink the canonical view below default
+/// egglog's count — i.e., programs that don't rely on heavy congruence
+/// closure cascades.
+///
+/// Format: (file stem, function name to check).
+const PRINT_SIZE_PARITY: &[(&str, &str)] = &[
+    ("souffle_smoke_commutativity.egg", "Add"),
+    ("souffle_smoke_check.egg", "Add"),
+];
+
+#[test]
+fn print_size_parity_against_default_egglog() {
+    if runner::find_souffle_binary().is_none() {
+        eprintln!("skipping: souffle binary not found");
+        return;
+    }
+    for (f, fname) in PRINT_SIZE_PARITY {
+        eprintln!("checking print-size parity: {f} for {fname}");
+        let Some(source) = read_file(f) else {
+            eprintln!("  skipping {f}: file not present");
+            continue;
+        };
+        // Native default-mode count, captured by re-running
+        // `(print-size <fname>)` after the program.
+        let mut native = EGraph::default();
+        native.ensure_no_reserved_symbols(false);
+        native
+            .parse_and_run_program(None, &source)
+            .expect("native run");
+        let print_results = native
+            .parse_and_run_program(None, &format!("(print-size {fname})"))
+            .expect("native print-size");
+        let native_count = match print_results.as_slice() {
+            [egglog::CommandOutput::PrintFunctionSize(n)] => *n,
+            other => panic!("{f}: unexpected print-size result shape: {other:?}"),
+        };
+        // Souffle count via runner's view_sizes (collected from
+        // souffle's `.printsize` stdout).
+        let souffle = run_souffle(&source).expect("souffle run");
+        let souffle_count = souffle
+            .view_sizes
+            .iter()
+            .find(|(name, _)| name == fname)
+            .map(|(_, n)| *n as usize)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{f}: souffle output has no count for {fname} \
+                     (view_sizes={:?})",
+                    souffle.view_sizes
+                )
+            });
+        assert_eq!(
+            souffle_count, native_count,
+            "{f}: print-size mismatch for {fname} \
+             (souffle={souffle_count}, native={native_count})\n\
+             souffle stdout:\n{}",
+            souffle.raw_stdout
+        );
+    }
+}
+
+/// Cases where parity is KNOWN to fail at this commit. Documents the gap
+/// (subsumption-heavy programs) without blocking CI. Once phase 60c
+/// (remove rebuild-rule subsumption) lands, these should move into
+/// PRINT_SIZE_PARITY.
+#[test]
+fn print_size_parity_known_gap() {
+    if runner::find_souffle_binary().is_none() {
+        eprintln!("skipping: souffle binary not found");
+        return;
+    }
+    // math-microbenchmark: default reports ~641,743 Adds at (run 11);
+    // souffle's subsumption keeps the canonical view at ~few hundred.
+    // Asserts the gap exists so a future fix that closes it triggers a
+    // failure here (forcing migration into the parity list).
+    let Some(source) = read_file("math-microbenchmark.egg") else {
+        eprintln!("skipping: math-microbenchmark.egg not present");
+        return;
+    };
+    let mut native = EGraph::default();
+    native.ensure_no_reserved_symbols(false);
+    native
+        .parse_and_run_program(None, &source)
+        .expect("native run");
+    let print_results = native
+        .parse_and_run_program(None, "(print-size Add)")
+        .expect("native print-size");
+    let native_count = match print_results.as_slice() {
+        [egglog::CommandOutput::PrintFunctionSize(n)] => *n,
+        other => panic!("unexpected print-size result shape: {other:?}"),
+    };
+    let souffle = run_souffle(&source).expect("souffle run");
+    let souffle_count = souffle
+        .view_sizes
+        .iter()
+        .find(|(name, _)| name == "Add")
+        .map(|(_, n)| *n as usize)
+        .expect("souffle Add count");
+    assert!(
+        souffle_count < native_count,
+        "expected souffle Add ({souffle_count}) < native Add ({native_count}) \
+         — if this fails, the subsumption gap may have closed; move \
+         math-microbenchmark.egg into PRINT_SIZE_PARITY"
+    );
+    eprintln!(
+        "known gap: math-microbenchmark Add — souffle={souffle_count}, native={native_count}"
+    );
 }
 
 #[test]

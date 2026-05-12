@@ -248,9 +248,21 @@ column.
   format unchanged, just the row count.
 - `tests/souffle_files.rs`: add a `print_size_parity_against_default` test
   that compares `(print-size)` outputs between souffle backend and default
-  egglog, file by file.
+  egglog, file by file. **Landed 2026-05-12.** Commutativity-style cases
+  match exactly (souffle = native). Subsumption-heavy programs
+  (math-microbenchmark: souffle ~387, native ~641K Adds at `(run 11)`)
+  have a known gap captured by `print_size_parity_known_gap`. Closing
+  that gap is phase 60c (remove rebuild-rule subsumption).
 - `tests/files.rs`: add a `souffle` treatment alongside `proof`,
-  comparing against `shared_snapshot`.
+  comparing against `shared_snapshot`. **Deferred.** Most files in
+  the `tests/*.egg` corpus use features the souffle backend doesn't
+  yet support (primitives like `(and ...)`, `push`/`pop`,
+  `run :until`, vec/multiset sorts, complex datatypes). The curated
+  lists in `souffle_files.rs` (`CHECK_PARITY`, `PRINT_SIZE_PARITY`,
+  `SMOKE`) are the present integration point — easy to extend as the
+  backend gains feature coverage. Full files.rs integration is
+  blocked on (a) backend feature work and (b) phase 60c for the
+  larger corpus to have print-size parity.
 
 Estimated effort: half a day, once the prior pieces work.
 
