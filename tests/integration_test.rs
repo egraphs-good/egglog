@@ -995,3 +995,106 @@ fn eqsat_basic_term_encoding_roundtrip() {
         .parse_and_run_program(None, &text_thrice)
         .expect("final program should execute successfully");
 }
+
+#[test]
+fn rewrite_name_basic() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math (Num i64) (Mul Math Math))
+            (rewrite (Mul a (Num 1)) a :name \"mul-identity\")
+            (let $x (Mul (Num 42) (Num 1)))
+            (run 3)
+            (check (= $x (Num 42)))
+            ",
+        )
+        .unwrap();
+}
+
+#[test]
+fn rewrite_name_birewrite() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math (Num i64) (Add Math Math))
+            (birewrite (Add a b) (Add b a) :name \"add-comm\")
+            (let $x (Add (Num 1) (Num 2)))
+            (run 3)
+            (check (= $x (Add (Num 2) (Num 1))))
+            ",
+        )
+        .unwrap();
+}
+
+#[test]
+fn rewrite_name_desugars_correctly() {
+    let mut egraph = EGraph::default();
+    let desugared = egraph
+        .resolve_program(
+            None,
+            "
+            (datatype Math (Num i64) (Mul Math Math) (Add Math Math))
+            (rewrite (Mul a (Num 1)) a :name \"mul-identity\")
+            (birewrite (Add a b) (Add b a) :name \"add-comm\")
+            ",
+        )
+        .unwrap();
+
+    let joined: String = desugared
+        .iter()
+        .map(|cmd| format!("{cmd}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        joined.contains("mul-identity"),
+        "expected 'mul-identity' in:\n{joined}"
+    );
+    assert!(
+        joined.contains("add-comm=>"),
+        "expected 'add-comm=>' in:\n{joined}"
+    );
+    assert!(
+        joined.contains("add-comm<="),
+        "expected 'add-comm<=' in:\n{joined}"
+    );
+}
+
+#[test]
+fn rewrite_without_name_still_works() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math (Num i64) (Add Math Math))
+            (rewrite (Add a b) (Add b a))
+            (let $x (Add (Num 1) (Num 2)))
+            (run 3)
+            (check (= $x (Add (Num 2) (Num 1))))
+            ",
+        )
+        .unwrap();
+}
+
+#[test]
+fn rewrite_name_with_ruleset() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math (Num i64) (Mul Math Math))
+            (ruleset my-rules)
+            (rewrite (Mul a (Num 0)) (Num 0) :name \"mul-zero\" :ruleset my-rules)
+            (let $x (Mul (Num 99) (Num 0)))
+            (run my-rules 3)
+            (check (= $x (Num 0)))
+            ",
+        )
+        .unwrap();
+}
