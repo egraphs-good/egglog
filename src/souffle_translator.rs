@@ -115,14 +115,6 @@ pub struct Ctx {
     /// Used by the runner to map souffle's printsize output back to
     /// the user's constructor names.
     pub view_for_user: HashMap<String, String>,
-    /// View relation names (the canonical relations declared with
-    /// `:internal-term-constructor`). Their `<view>_buffer` /
-    /// `<view>_snap` siblings are wave-bearing by extension. The wave
-    /// column underpins the generation-column construction — every
-    /// row carries the outer-iteration counter at which it was written,
-    /// so user rules can filter to `wave < K` for precise `(run N)`
-    /// semantics. See souffle-generation-column-design.md.
-    pub view_relations: std::collections::HashSet<String>,
     /// Metadata for global-let captures: the fresh-var holding the
     /// term, the buffer relation it lives in, and the args used in the
     /// view's input columns. Each rule that references a fresh-var pulls
@@ -168,10 +160,6 @@ pub struct LetInfo {
     /// this term. Used as the RHS of the create-rule's constraint
     /// `fresh_var = record_literal`.
     pub record_literal: Expr,
-    /// Whether `lookup_rel` carries a wave column (see
-    /// `Ctx::view_relations`). When true, lookup body atoms emitted
-    /// from this LetInfo append an extra Wildcard for the wave.
-    pub lookup_rel_wave_bearing: bool,
 }
 
 /// Output of [`translate_with_manifest`]: the IR program plus a manifest
@@ -206,25 +194,13 @@ pub fn translate_with_manifest(
 ) -> Result<TranslateOutput, TranslateError> {
     let mut p = Program::default();
     let mut ctx = Ctx::default();
-    // Pre-pass: capture user `(run N)` count. RunSchedule typically
-    // appears AFTER rules in source order, but rule translation needs
-    // to know whether `(run N)` is present (phase 60b wave filtering
-    // only kicks in when there's a bounded iter limit).
-    for cmd in commands {
-        if let ResolvedCommand::RunSchedule(s) = cmd
-            && let Some(n) = first_repeat_count(s)
-        {
-            ctx.user_run_count = ctx.user_run_count.or(Some(n));
-        }
-    }
     for cmd in commands {
         translate_command(cmd, &mut ctx, &mut p)?;
     }
     emit_live_views(&ctx, &mut p);
     emit_snapshot_directives(&mut p);
     emit_run_limit(&ctx, &mut p);
-    emit_wave_dedup_subsumption(&ctx, &mut p);
-    emit_printsize_directives(&ctx, &mut p);
+    emit_printsize_directives(&mut p);
     let manifest = build_manifest(&ctx);
     Ok(TranslateOutput { program: p, manifest })
 }
@@ -236,17 +212,7 @@ fn build_manifest(ctx: &Ctx) -> Manifest {
     let view_relations: Vec<(String, String)> = ctx
         .view_for_user
         .iter()
-        .map(|(user, view)| {
-            // For wave-bearing canonical views, point at the
-            // `<view>_canonical` projection (wave column dropped) so
-            // print-size reports the distinct-content row count.
-            let target = if ctx.view_relations.contains(view) {
-                format!("{view}_canonical")
-            } else {
-                view.clone()
-            };
-            (user.clone(), egglog_souffle_backend::emit::sanitize(&target))
-        })
+        .map(|(user, view)| (user.clone(), egglog_souffle_backend::emit::sanitize(view)))
         .collect();
     let check_relations: Vec<String> = ctx
         .check_relations
@@ -260,7 +226,7 @@ fn build_manifest(ctx: &Ctx) -> Manifest {
 /// user would care about inspecting (view tables and UF tables), skipping
 /// internal scaffolding (`_buffer`, `_snap`, `_live`, `to_delete_*`,
 /// `to_subsume_*`).
-fn emit_printsize_directives(ctx: &Ctx, p: &mut Program) {
+fn emit_printsize_directives(p: &mut Program) {
     let names: Vec<String> = p
         .relations
         .iter()
@@ -272,10 +238,6 @@ fn emit_printsize_directives(ctx: &Ctx, p: &mut Program) {
                 && !n.ends_with("_live")
                 && !n.contains("to_delete_")
                 && !n.contains("to_subsume_")
-                // For wave-bearing canonical views we report the
-                // `_canonical` projection's size instead of the
-                // wave-tagged view (which has per-wave duplicates).
-                && !ctx.view_relations.contains(n.as_str())
         })
         .collect();
     for n in names {
@@ -309,49 +271,6 @@ fn emit_snapshot_directives(p: &mut Program) {
 /// the Souffle fork's bounded-iteration mechanism caps that SCC at N.
 /// The buffer relations all live in the same SCC (they're co-written
 /// by user rules), so attaching the bound to any one of them suffices.
-/// For each wave-bearing CANONICAL view relation, declare a
-/// `<view>_canonical` projection that drops the eclass (`c_{N-3}`),
-/// proof (`c_{N-2}`), and `wave` (`c_{N-1}`) columns — keeping just
-/// the original-input columns. For functional egglog constructors
-/// (`:merge old` etc.), per (inputs) there's exactly one eclass
-/// after canonicalization, so distinct-(inputs) count equals
-/// distinct-(inputs, eclass) count which is what default egglog's
-/// print-size reports. Souffle naturally dedups via set semantics —
-/// no subsumption clause needed — so this is O(N) per derivation.
-fn emit_wave_dedup_subsumption(ctx: &Ctx, p: &mut Program) {
-    let targets: Vec<(String, Vec<(String, String)>)> = p
-        .relations
-        .iter()
-        .filter(|r| is_wave_bearing(ctx, &r.name) && ctx.view_relations.contains(&r.name))
-        .map(|r| (r.name.clone(), r.columns.clone()))
-        .collect();
-    for (rel, cols) in targets {
-        let canonical_name = format!("{rel}_canonical");
-        // Keep only the leading input columns; drop eclass, proof,
-        // and wave.
-        let n = cols.len();
-        if n < 3 {
-            continue;
-        }
-        let key_cols = &cols[..n - 3];
-        p.relations.push(RelationDecl {
-            name: canonical_name.clone(),
-            columns: key_cols.to_vec(),
-        });
-        let key_vars: Vec<Expr> = (0..key_cols.len())
-            .map(|i| Expr::Var(format!("c{i}_")))
-            .collect();
-        let mut body_args = key_vars.clone();
-        body_args.push(Expr::Wildcard); // eclass column
-        body_args.push(Expr::Wildcard); // out (proof) column
-        body_args.push(Expr::Wildcard); // wave column
-        p.clauses.push(Clause::rule(
-            Atom { relation: canonical_name, args: key_vars },
-            vec![IrLit::Atom(Atom { relation: rel, args: body_args })],
-        ));
-    }
-}
-
 fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
     let Some(n) = ctx.user_run_count else {
         return;
@@ -370,22 +289,16 @@ fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
     //                 let-created terms; user rules fire freely.
     p.pragmas
         .push(("outer-saturate".into(), (n + 2).to_string()));
-    // Declare `IterCounter(n: number)` and seed a sentinel fact `(0)`.
-    // The fork's outer-saturate runtime inserts the current iter
-    // counter into this relation each outer iter (accumulating
-    // {0, 1, ..., K}). The static sentinel is critical: without any
-    // facts or rules, souffle's dead-code analysis treats IterCounter
-    // as permanently empty and eliminates the rules that join against
-    // it. The (0) seed is harmless — user rules use `wave < K` to
-    // filter, and `wave < 0` matches nothing.
+    // Declare `IterCounter(n: number)`. The fork's outer-saturate
+    // implementation clears this at the start of each outer iter and
+    // inserts a single row holding the current iter counter value
+    // (1, 2, ...). User rules can join against it to drive the
+    // generation-column construction. See
+    // souffle-generation-column-design.md.
     p.relations.push(RelationDecl {
         name: ITER_COUNTER.into(),
         columns: vec![("n".into(), "number".into())],
     });
-    p.clauses.push(Clause::fact(Atom {
-        relation: ITER_COUNTER.into(),
-        args: vec![Expr::Number(0)],
-    }));
 }
 
 /// Walk a [`ResolvedSchedule`] and return the count of the first
@@ -515,24 +428,7 @@ fn translate_command(
                 return Ok(());
             }
             // Other functions (UF, view tables, etc.) become Souffle relations.
-            let mut cols = function_columns(schema, ctx)?;
-            // Wave column: views (and their _buffer/_snap siblings) get an
-            // extra `wave: number` trailing column. Phase 60a writes literal
-            // 0 to wave everywhere — semantically a no-op, but lays the
-            // groundwork for generation-column filtering on user rules.
-            let is_view = term_constructor.is_some();
-            let strata_sibling_of_view = ["_buffer", "_snap"].iter().any(|suffix| {
-                name.as_str()
-                    .strip_suffix(suffix)
-                    .is_some_and(|stripped| ctx.view_relations.contains(stripped))
-            });
-            let wave_bearing = is_view || strata_sibling_of_view;
-            if wave_bearing {
-                cols.push(("wave".into(), "number".into()));
-            }
-            if is_view {
-                ctx.view_relations.insert(name.to_string());
-            }
+            let cols = function_columns(schema, ctx)?;
             ctx.relation_arity.insert(name.to_string(), cols.len());
             p.relations.push(RelationDecl {
                 name: name.to_string(),
@@ -628,54 +524,6 @@ fn function_columns(
     Ok(cols)
 }
 
-/// True iff `rel` carries a wave column: either a registered view
-/// relation or one of its `_buffer` / `_snap` / `_live` siblings. See
-/// `Ctx::view_relations`.
-fn is_wave_bearing(ctx: &Ctx, rel: &str) -> bool {
-    if ctx.view_relations.contains(rel) {
-        return true;
-    }
-    for suffix in ["_buffer", "_snap", "_live"] {
-        if let Some(stripped) = rel.strip_suffix(suffix)
-            && ctx.view_relations.contains(stripped)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Recognize the encoder-generated system rulesets — rules tagged with
-/// these are part of the term/proof scaffolding (rebuild, drain,
-/// congruence, merge, delete/subsume, parent compress) and should NOT
-/// get user-rule wave filtering. The 6 prefixes come from
-/// `proof_encoding_helpers.rs::ProofNames` fresh-symbol seeds. The
-/// generator prefixes `@` (the parser's reserved string) and appends
-/// an optional sequence digit when the same hint is fresh'd multiple
-/// times.
-fn is_system_ruleset(name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix('@') else {
-        return false;
-    };
-    // Longest first so "rebuilding_cleanup" wins over "rebuilding".
-    const PREFIXES: &[&str] = &[
-        "rebuilding_cleanup",
-        "delete_subsume_ruleset",
-        "uf_function_index",
-        "single_parent",
-        "rebuilding",
-        "parent",
-    ];
-    for prefix in PREFIXES {
-        if let Some(rest) = suffix.strip_prefix(prefix)
-            && (rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()))
-        {
-            return true;
-        }
-    }
-    false
-}
-
 fn sort_to_souffle_type(sort: &str) -> String {
     match sort {
         "i64" => "number".into(),
@@ -709,30 +557,6 @@ fn translate_rule(
         return Ok(());
     }
     let bodies = translate_body(&rule.body, ctx)?;
-
-    // Phase 60b: when there's a user `(run N)` bound, USER rules read at
-    // `wave < K` and write at `wave = K`, where K is the current outer
-    // iter counter (exposed via the fork-built `IterCounter` relation).
-    // System rules (rebuild, drain, merge, congruence, parent-compress,
-    // delete/subsume) keep writing `wave = 0` — they're scaffolding that
-    // operates uniformly across iters. See souffle-generation-column-
-    // design.md.
-    //
-    // Empty-body rules are initialization (top-level `(Add 1 2)` etc.
-    // get wrapped in a body-less fake_rule via translate_command's
-    // C::Action branch). Those must NOT get wave filtering — they're
-    // facts that should appear at wave 0, fire once, not at every K.
-    let use_wave_filter = ctx.user_run_count.is_some()
-        && !is_system_ruleset(rule.ruleset.as_str())
-        && !rule.body.is_empty();
-    let is_drain = ctx.user_run_count.is_some() && is_drain_rule(rule.name.as_str());
-    let is_rebuild = ctx.user_run_count.is_some() && is_rebuild_rule(rule.name.as_str());
-    let k_var_name = "__K";
-    let head_wave_expr = if use_wave_filter || is_rebuild {
-        Expr::Var(k_var_name.to_string())
-    } else {
-        Expr::Number(0)
-    };
 
     // First pass: walk actions in order, building lets + collecting buckets.
     // For Set actions, we may emit MULTIPLE entries — when the action
@@ -770,7 +594,6 @@ fn translate_rule(
                         lookup_rel: info.lookup_rel.clone(),
                         lookup_args: args,
                         record_literal,
-                        lookup_rel_wave_bearing: info.lookup_rel_wave_bearing,
                     };
                     lets.insert(var.name.to_string(), Expr::Var(info.fresh_var.clone()));
                     let_infos.push(info);
@@ -889,13 +712,6 @@ fn translate_rule(
                             replace_expr_match(arg, &bv_rec, &v_b);
                         }
                     }
-                    // Wave column for view/buffer/snap writes. User rules
-                    // under `(run N)` write `wave = K` (K bound by the
-                    // IterCounter atom that `rewrite_user_rule_body_with_
-                    // wave_filter` prepended); everyone else writes 0.
-                    if is_wave_bearing(ctx, head.name()) {
-                        souffle_args.push(head_wave_expr.clone());
-                    }
                     sets.push((head.name().to_string(), souffle_args, extra));
                 }
             }
@@ -942,81 +758,33 @@ fn translate_rule(
             for x in extra {
                 full_body.push(x.clone());
             }
-            let mut head_args = args.clone();
-            let head_atom_for_lets = Atom { relation: rel.clone(), args: head_args.clone() };
-            add_let_lookups_to_body(&head_atom_for_lets, &mut full_body, &all_lets);
-            let final_bodies: Vec<Vec<IrLit>> = if use_wave_filter {
-                rewrite_user_rule_body_with_wave_filter(full_body, ctx, k_var_name)
-            } else if is_rebuild {
-                vec![rewrite_rebuild_body(full_body, k_var_name)]
-            } else if is_drain {
-                vec![rewrite_wave_preservation(full_body, &mut head_args, ctx)]
-            } else {
-                vec![full_body]
-            };
-            for variant in final_bodies {
-                p.clauses.push(Clause::rule(
-                    Atom { relation: rel.clone(), args: head_args.clone() },
-                    variant,
-                ));
-            }
+            let head_atom = Atom { relation: rel.clone(), args: args.clone() };
+            add_let_lookups_to_body(&head_atom, &mut full_body, &all_lets);
+            p.clauses.push(Clause::rule(head_atom, full_body));
         }
         for (rel, del_args) in &changes {
-            // The set's arg list is the delete's args + an output column
-            // (+1) plus a wave column when the relation is wave-bearing
-            // (+1 more). Pair only when arities are consistent with that
-            // shape; otherwise the subsumption clause would be malformed.
-            let extra_set_cols = if is_wave_bearing(ctx, rel) { 2 } else { 1 };
             let paired: Vec<&(String, Vec<Expr>, Vec<IrLit>)> = sets
                 .iter()
                 .filter(|(set_rel, set_args, _)| {
-                    set_rel == rel && set_args.len() == del_args.len() + extra_set_cols
+                    set_rel == rel && set_args.len() == del_args.len() + 1
                 })
                 .collect();
             if let Some((set_rel, set_args, extra)) = paired.first().copied() {
                 let mut dom_args = del_args.clone();
                 let v = format!("__del_out_{}", p.clauses.len());
                 dom_args.push(Expr::Var(v));
-                // Wave column on the dominated tuple: delete any-wave row
-                // (the new dominating tuple is the canonical replacement).
-                if is_wave_bearing(ctx, rel) {
-                    dom_args.push(Expr::Wildcard);
-                }
                 let mut sub_body = body_subst.clone();
                 for x in extra {
                     sub_body.push(x.clone());
                 }
-                let mut dominating_args = set_args.clone();
                 let dominated = Atom { relation: rel.clone(), args: dom_args };
+                let dominating = Atom { relation: set_rel.clone(), args: set_args.clone() };
                 // Use `dominating` for var collection — it carries the
                 // full set-shape (with the let-fresh-vars in typed
                 // head columns), so dependent lookups can derive from
                 // the same head context as the paired set.
-                let dominating_for_lets = Atom {
-                    relation: set_rel.clone(),
-                    args: dominating_args.clone(),
-                };
-                add_let_lookups_to_body(&dominating_for_lets, &mut sub_body, &all_lets);
-                let final_sub_bodies: Vec<Vec<IrLit>> = if use_wave_filter {
-                    rewrite_user_rule_body_with_wave_filter(sub_body, ctx, k_var_name)
-                } else if is_rebuild {
-                    vec![rewrite_rebuild_body(sub_body, k_var_name)]
-                } else if is_drain {
-                    vec![rewrite_wave_preservation(sub_body, &mut dominating_args, ctx)]
-                } else {
-                    vec![sub_body]
-                };
-                for variant in final_sub_bodies {
-                    let dominating = Atom {
-                        relation: set_rel.clone(),
-                        args: dominating_args.clone(),
-                    };
-                    p.clauses.push(Clause::subsume(
-                        dominated.clone(),
-                        dominating,
-                        variant,
-                    ));
-                }
+                add_let_lookups_to_body(&dominating, &mut sub_body, &all_lets);
+                p.clauses.push(Clause::subsume(dominated, dominating, sub_body));
             } else {
                 return Err(TranslateError::Unsupported(format!(
                     "isolated delete on {rel} (no paired set in same actions); needs tombstone helper relation"
@@ -1025,176 +793,6 @@ fn translate_rule(
         }
     }
     Ok(())
-}
-
-/// True for the drain rule (`<view>_buffer_drain`). Drain copies a
-/// buffer row to its canonical view; the wave on the destination
-/// matches the wave on the source (preservation). Otherwise drain's
-/// wave-0 output triggers user-rule re-firing within the same iter.
-fn is_drain_rule(name: &str) -> bool {
-    name.ends_with("_drain")
-}
-
-/// True for the rebuild rule (fresh-from "rebuild_rule" hint).
-/// Rebuild canonicalizes a non-leader c2 to its leader. The
-/// canonicalized row is logically "newly visible" at the current
-/// outer iter (since the leader may have just been determined), so
-/// its wave is set to the CURRENT K — not the source row's original
-/// wave. This way user rules pick it up as a delta in the next iter
-/// (matching default egglog's semi-naive behavior, where
-/// canonicalization adds to `@delta`).
-fn is_rebuild_rule(name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix('@') else {
-        return false;
-    };
-    let Some(rest) = suffix.strip_prefix("rebuild_rule") else {
-        return false;
-    };
-    rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit())
-}
-
-/// Rewrite drain/rebuild bodies + heads so the head wave matches the
-/// (first) wave-bearing body atom's wave. Without this, system-rule
-/// heads write wave=0, which collides with the user-rule wave filter
-/// (`wave < K` matches wave=0) and causes within-iter cascading
-/// instead of one-pass-per-K semantics. Returns the new body.
-fn rewrite_wave_preservation(
-    body: Vec<IrLit>,
-    head_args: &mut [Expr],
-    ctx: &Ctx,
-) -> Vec<IrLit> {
-    let preserved = "__pw";
-    let mut new_body = Vec::with_capacity(body.len());
-    let mut bound = false;
-    for lit in body {
-        match lit {
-            IrLit::Atom(mut a) if !bound && is_wave_bearing(ctx, &a.relation) => {
-                if let Some(last) = a.args.last_mut()
-                    && matches!(last, Expr::Wildcard)
-                {
-                    *last = Expr::Var(preserved.to_string());
-                    bound = true;
-                }
-                new_body.push(IrLit::Atom(a));
-            }
-            other => new_body.push(other),
-        }
-    }
-    if bound && let Some(last) = head_args.last_mut() {
-        *last = Expr::Var(preserved.to_string());
-    }
-    new_body
-}
-
-/// For the rebuild rule: inject `IterCounter(K)` into the body so the
-/// head can write `wave = K`. No wave-filter constraint on body
-/// atoms — rebuild needs to canonicalize rows from any past iter
-/// when their c2's leader has changed.
-fn rewrite_rebuild_body(body: Vec<IrLit>, k_var: &str) -> Vec<IrLit> {
-    let mut new_body: Vec<IrLit> = Vec::with_capacity(body.len() + 1);
-    new_body.push(IrLit::Atom(Atom {
-        relation: ITER_COUNTER.to_string(),
-        args: vec![Expr::Var(k_var.to_string())],
-    }));
-    new_body.extend(body);
-    new_body
-}
-
-/// Phase 60b body rewrite for USER rules under `(run N)`. For every
-/// wave-bearing body atom, replace the auto-padded wave wildcard with a
-/// fresh wave var, and add `wave < K` so the rule only sees rows from
-/// strictly-earlier outer iters. Prepend an `IterCounter(K)` atom so K
-/// is bound. Net effect: each outer iter K, user rules fire exactly
-/// once against the accumulation of prior iters' writes — matching
-/// egglog `(run N)` semantics.
-/// Semi-naive rotation: for a rule with N wave-bearing body atoms,
-/// emit N variants. In variant i, atom i is the "delta" (wave =
-/// K - 1) and the others are "any past iter" (wave < K). This
-/// matches default egglog's semi-naive evaluation, where each
-/// (run) iter fires each rule on every (delta_i, full_others)
-/// combination. With only "all atoms at K - 1," rules fire only
-/// when all bodies happen to be fresh in the same iter — a
-/// gross under-count.
-///
-/// Souffle's set semantics dedups duplicate outputs across variants.
-fn rewrite_user_rule_body_with_wave_filter(
-    body: Vec<IrLit>,
-    ctx: &Ctx,
-    k_var: &str,
-) -> Vec<Vec<IrLit>> {
-    // Step 1: identify wave-bearing atom positions and strip `_snap`.
-    let mut normalized: Vec<IrLit> = body
-        .into_iter()
-        .map(|lit| match lit {
-            IrLit::Atom(mut a) if is_wave_bearing(ctx, &a.relation) => {
-                if let Some(base) = a.relation.strip_suffix("_snap")
-                    && ctx.view_relations.contains(base)
-                {
-                    a.relation = base.to_string();
-                }
-                IrLit::Atom(a)
-            }
-            other => other,
-        })
-        .collect();
-    let wave_positions: Vec<usize> = normalized
-        .iter()
-        .enumerate()
-        .filter_map(|(i, lit)| match lit {
-            IrLit::Atom(a) if is_wave_bearing(ctx, &a.relation) => Some(i),
-            _ => None,
-        })
-        .collect();
-    // Step 2: bind wave wildcards to fresh vars (same vars across all
-    // variants — clauses are scoped independently in souffle).
-    let mut wave_vars: Vec<String> = Vec::with_capacity(wave_positions.len());
-    for (i, &pos) in wave_positions.iter().enumerate() {
-        let w_name = format!("__w{i}");
-        if let IrLit::Atom(a) = &mut normalized[pos]
-            && matches!(a.args.last(), Some(Expr::Wildcard))
-        {
-            *a.args.last_mut().unwrap() = Expr::Var(w_name.clone());
-        }
-        wave_vars.push(w_name);
-    }
-    let iter_counter_atom = IrLit::Atom(Atom {
-        relation: ITER_COUNTER.to_string(),
-        args: vec![Expr::Var(k_var.to_string())],
-    });
-    let k_minus_1 = || {
-        Expr::BinOp(
-            ArithOp::Sub,
-            Box::new(Expr::Var(k_var.to_string())),
-            Box::new(Expr::Number(1)),
-        )
-    };
-    let k_expr = || Expr::Var(k_var.to_string());
-    // Step 3: emit variants. With M wave atoms, emit M variants
-    // (or 1 if M == 0 — body has only non-wave atoms or constraints).
-    if wave_positions.is_empty() {
-        let mut variant = Vec::with_capacity(normalized.len() + 1);
-        variant.push(iter_counter_atom.clone());
-        variant.extend(normalized);
-        return vec![variant];
-    }
-    let mut variants = Vec::with_capacity(wave_positions.len());
-    for delta_idx in 0..wave_positions.len() {
-        let mut variant = Vec::with_capacity(normalized.len() + wave_positions.len() + 1);
-        variant.push(iter_counter_atom.clone());
-        for lit in &normalized {
-            variant.push(lit.clone());
-        }
-        for (i, w_name) in wave_vars.iter().enumerate() {
-            let (op, rhs) = if i == delta_idx {
-                (BinaryOp::Eq, k_minus_1())
-            } else {
-                (BinaryOp::Lt, k_expr())
-            };
-            variant.push(IrLit::Constraint(op, Expr::Var(w_name.clone()), rhs));
-        }
-        variants.push(variant);
-    }
-    variants
 }
 
 /// Returns true iff `head`'s relation and arg shape exactly match the
@@ -1206,19 +804,16 @@ fn is_let_create_rule(head: &Atom, info: &LetInfo) -> bool {
     if head.relation != info.buffer_rel {
         return false;
     }
-    // Head shape: lookup_args + [fresh_var] + [out_unit_column] + maybe
-    // [wave_column]. We allow either length so the same detector works
-    // whether the buffer is wave-bearing or not.
-    let n = info.lookup_args.len();
-    if head.args.len() < n + 2 {
+    // Head shape: lookup_args + [fresh_var] + [out_unit_column].
+    if head.args.len() != info.lookup_args.len() + 2 {
         return false;
     }
-    for (h, l) in head.args.iter().take(n).zip(info.lookup_args.iter()) {
+    for (h, l) in head.args.iter().zip(info.lookup_args.iter()) {
         if h != l {
             return false;
         }
     }
-    matches!(&head.args[n], Expr::Var(v) if v == &info.fresh_var)
+    matches!(&head.args[info.lookup_args.len()], Expr::Var(v) if v == &info.fresh_var)
 }
 
 /// For each let-fresh-var transitively referenced by `head` or `body`,
@@ -1257,10 +852,6 @@ fn add_let_lookups_to_body(
                 let mut atom_args = info.lookup_args.clone();
                 atom_args.push(Expr::Var(info.fresh_var.clone()));
                 atom_args.push(Expr::Wildcard);
-                if info.lookup_rel_wave_bearing {
-                    // Wave column: match any wave in phase 60a.
-                    atom_args.push(Expr::Wildcard);
-                }
                 body.push(IrLit::Atom(Atom {
                     relation: info.lookup_rel.clone(),
                     args: atom_args,
@@ -1792,19 +1383,6 @@ fn translate_eq_fact(
         souffle_args.push(Expr::Var(var_name));
         // Drained relations are read via their _live view.
         let rel = drained_view_name(ctx, head.name());
-        // Pad to declared arity (handles the wave column on view/buffer/
-        // snap reads, plus any future relations with more columns than
-        // the egglog source mentions). `_live` views aren't yet
-        // registered at this point, so fall back to source arity.
-        let arity = ctx.relation_arity.get(&rel).copied().or_else(|| {
-            rel.strip_suffix("_live")
-                .and_then(|src| ctx.relation_arity.get(src).copied())
-        });
-        if let Some(arity) = arity {
-            while souffle_args.len() < arity {
-                souffle_args.push(Expr::Wildcard);
-            }
-        }
         out.push(IrLit::Atom(Atom {
             relation: rel,
             args: souffle_args,
@@ -1831,16 +1409,7 @@ fn build_atom(
     for a in args {
         souffle_args.push(translate_value_expr(a, ctx)?);
     }
-    // `_live` views are declared after rule translation (in
-    // emit_live_views), so their arity isn't yet in relation_arity. Fall
-    // back to the source relation's arity in that case — _live always
-    // mirrors the source's columns.
-    let arity = ctx.relation_arity.get(relation).copied().or_else(|| {
-        relation
-            .strip_suffix("_live")
-            .and_then(|src| ctx.relation_arity.get(src).copied())
-    });
-    if let Some(arity) = arity {
+    if let Some(&arity) = ctx.relation_arity.get(relation) {
         while souffle_args.len() < arity {
             souffle_args.push(Expr::Wildcard);
         }
@@ -1984,19 +1553,18 @@ fn build_let_info_from_expr(
     // writes, snap for reads (snap is in its own pre-stratum so reads
     // don't create a recursive cycle with the buffer). Non-strata
     // collapses both to the canonical view.
+    let candidate_snap = format!("{view_rel}_snap");
     let candidate_buffer = format!("{view_rel}_buffer");
     let buffer_rel = if ctx.relation_arity.contains_key(&candidate_buffer) {
         candidate_buffer.clone()
     } else {
         view_rel.clone()
     };
-    // Read directly from the canonical view, not snap. The wave column
-    // does the cycle-breaking; the snap-based strata setup imposed a
-    // one-outer-iter delay per nesting level, which makes initial
-    // expressions and rule cascades take many iters to propagate.
-    // Phase 60c: drop snap reads entirely; user rules read view with
-    // `wave < K` filter.
-    let lookup_rel = view_rel.clone();
+    let lookup_rel = if ctx.relation_arity.contains_key(&candidate_snap) {
+        candidate_snap
+    } else {
+        buffer_rel.clone()
+    };
     let mut lookup_args: Vec<Expr> = Vec::with_capacity(args.len());
     for a in args {
         // Buffer columns mirror the constructor's input sorts directly
@@ -2011,14 +1579,12 @@ fn build_let_info_from_expr(
     // constraint to bind the var to a specific value.
     let tag = ctx.tag_of[cons_name];
     let record_literal = build_record_for_tag(tag, args, ctx)?;
-    let lookup_rel_wave_bearing = is_wave_bearing(ctx, &lookup_rel);
     Ok(Some(LetInfo {
         fresh_var: fresh_var_name.to_string(),
         buffer_rel,
         lookup_rel,
         lookup_args,
         record_literal,
-        lookup_rel_wave_bearing,
     }))
 }
 
