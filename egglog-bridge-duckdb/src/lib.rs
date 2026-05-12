@@ -52,6 +52,120 @@ pub fn q(name: &str) -> String {
 /// list is non-empty and an empty string otherwise. Used to safely
 /// concatenate column lists with the always-present trailing `ts`
 /// column without producing `(, ts)` when there are no other cols.
+/// Bind a rule template by substituting `?1` -> `last`,
+/// `?2` -> `cur`, and execute it. Values are i64s, so direct
+/// inlining is safe.
+///
+/// We tried `prepare_cached` with proper positional binds, but
+/// duckdb-rust 1.5 didn't actually keep the planned representation
+/// across calls in our setup — overall wall time roughly doubled.
+/// Plain `execute` with string substitution beats it.
+pub(crate) fn exec_bound(
+    conn: &Connection,
+    sql: &str,
+    last: i64,
+    cur: i64,
+) -> Result<usize> {
+    let bound = sql
+        .replace("?1", &last.to_string())
+        .replace("?2", &cur.to_string());
+    Ok(conn.execute(&bound, [])?)
+}
+
+/// Execute all variants of a single rule for one seminaive
+/// iteration. Pulled out of `run_iteration_in*` so both entry points
+/// share the same shape and so per-rule timing accounting lives in
+/// one place. Borrows `self.rules` (read-only) and the timing fields
+/// disjointly — the caller passes those as `&mut` references.
+#[allow(clippy::too_many_arguments)]
+fn run_rule_variants(
+    rule: &CompiledRule,
+    last: i64,
+    cur: i64,
+    conn: &Connection,
+    time_mat_ns: &mut u64,
+    time_mat_act_ns: &mut u64,
+    time_act_ns: &mut u64,
+    rules_affected: &mut u64,
+    rule_perf_ns: &mut HashMap<String, (u64, u64)>,
+    table_watermarks: &mut HashMap<String, i64>,
+    rules_skipped: &mut u64,
+) -> Result<usize> {
+    // Watermark gate: if no body table has had inserts since this
+    // rule last ran, every variant's seminaive predicate is empty.
+    // Skip the whole rule. Falls through for rules with no body
+    // (shouldn't happen, but cheap to handle).
+    if !rule.body_tables.is_empty() {
+        let mut any_fresh = false;
+        for t in &rule.body_tables {
+            let wm = table_watermarks.get(t).copied().unwrap_or(0);
+            if wm >= last {
+                any_fresh = true;
+                break;
+            }
+        }
+        if !any_fresh {
+            *rules_skipped = rules_skipped.wrapping_add(1);
+            return Ok(0);
+        }
+    }
+
+    let mut total: usize = 0;
+    let mut rule_mat_ns: u64 = 0;
+    let mut rule_act_ns: u64 = 0;
+    let trace = std::env::var("DUCK_TRACE_RULE_AFFECTED").is_ok();
+    let trace_sql = std::env::var("DUCK_TRACE_SQL").is_ok();
+    for variant in &rule.variants {
+        if let Some(mat_sql_template) = &variant.materialize {
+            if trace_sql {
+                eprintln!("[duck/mat] {mat_sql_template}");
+            }
+            let t0 = std::time::Instant::now();
+            exec_bound(conn, mat_sql_template, last, cur)?;
+            let dt = t0.elapsed().as_nanos() as u64;
+            *time_mat_ns = time_mat_ns.wrapping_add(dt);
+            rule_mat_ns = rule_mat_ns.wrapping_add(dt);
+        }
+        for act in &variant.actions {
+            if trace_sql {
+                eprintln!(
+                    "[duck/{}] {}",
+                    if variant.materialize.is_some() { "mat-act" } else { "act" },
+                    act.sql,
+                );
+            }
+            let t0 = std::time::Instant::now();
+            let n = exec_bound(conn, &act.sql, last, cur)?;
+            let dt = t0.elapsed().as_nanos() as u64;
+            if variant.materialize.is_some() {
+                *time_mat_act_ns = time_mat_act_ns.wrapping_add(dt);
+            } else {
+                *time_act_ns = time_act_ns.wrapping_add(dt);
+            }
+            rule_act_ns = rule_act_ns.wrapping_add(dt);
+            *rules_affected = rules_affected.wrapping_add(n as u64);
+            total += n;
+            if n > 0 {
+                if let Some(target) = &act.target {
+                    let e = table_watermarks.entry(target.clone()).or_insert(0);
+                    if cur > *e {
+                        *e = cur;
+                    }
+                }
+                if trace {
+                    eprintln!("[duck/rule_n] {} +{n}", rule.name);
+                }
+            }
+        }
+    }
+    if rule_mat_ns != 0 || rule_act_ns != 0 {
+        let e = rule_perf_ns.entry(rule.name.clone()).or_insert((0, 0));
+        e.0 = e.0.wrapping_add(rule_mat_ns);
+        e.1 = e.1.wrapping_add(rule_act_ns);
+    }
+    Ok(total)
+}
+
 pub(crate) fn prefix_with_comma(parts: &[String]) -> String {
     if parts.is_empty() {
         String::new()
@@ -246,12 +360,42 @@ pub struct EGraph {
     /// counter to detect saturation precisely (vs total tuple count,
     /// which can balance to zero when deletes match inserts).
     rules_affected: u64,
+    /// Per-category nanosecond counters for SQL `execute` calls.
+    /// Exposed by `DUCK_PERF_DUMP=1` so we can see where the per-
+    /// iteration wall time goes. Not part of the public API; debug
+    /// hook only.
+    time_mat_ns: u64,
+    time_mat_act_ns: u64,
+    time_act_ns: u64,
+    /// (mat_ns, act_ns) per rule name. Populated alongside the
+    /// global accumulators. Used by `DUCK_PERF_DUMP` to surface
+    /// which individual rules dominate.
+    rule_perf_ns: HashMap<String, (u64, u64)>,
+    /// Ruleset of each rule, mirrored so `DUCK_PERF_DUMP` can roll
+    /// per-rule timings up to per-ruleset.
+    rule_to_ruleset: HashMap<String, String>,
+    /// Per-table "max `ts` of any insert" watermark. Bumped on
+    /// every successful row-affecting INSERT (top-level seeds and
+    /// rule actions alike). The seminaive predicate fires on rows
+    /// with `ts >= last_run_at`, so a rule whose every body table
+    /// has `watermark < last_run_at` cannot match anything — we
+    /// skip it entirely.
+    table_watermarks: HashMap<String, i64>,
+    /// Count of rule firings short-circuited by the watermark gate.
+    /// Surfaced by `DUCK_PERF_DUMP`.
+    rules_skipped: u64,
 }
 
 struct CompiledRule {
     name: String,
     ruleset: String,
     variants: Vec<CompiledVariant>,
+    /// Distinct function-table names appearing in the rule body. The
+    /// runner skips the whole rule when none of these tables has had
+    /// rows inserted since the rule's `last_run_at` — there's nothing
+    /// for any variant to match. Pure functional / filter atoms
+    /// don't appear here.
+    body_tables: Vec<String>,
 }
 
 /// One seminaive variant of a rule, ready to execute.
@@ -263,11 +407,16 @@ pub(crate) struct CompiledVariant {
     pub(crate) materialize: Option<String>,
     /// Action SQLs to run in order. When `materialize` is Some, each
     /// action SELECTs from the temp table; otherwise from the body.
-    pub(crate) actions: Vec<String>,
-    /// Optional cleanup SQL run after the variant's actions. Used to
-    /// drop the materialized temp table so DuckDB can release its
-    /// in-memory buffers between iterations.
-    pub(crate) cleanup: Option<String>,
+    pub(crate) actions: Vec<CompiledAction>,
+}
+
+/// One rule action paired with the table it writes to (so the
+/// watermark tracker can bump that table's high-water-mark after a
+/// successful row-affecting execute). `target` is `None` for no-op
+/// LetCtor/LetExpr placeholders and for Panic.
+pub(crate) struct CompiledAction {
+    pub(crate) sql: String,
+    pub(crate) target: Option<String>,
 }
 
 impl EGraph {
@@ -299,7 +448,59 @@ impl EGraph {
             next_ts: 0,
             last_run_at: HashMap::new(),
             rules_affected: 0,
+            time_mat_ns: 0,
+            time_mat_act_ns: 0,
+            time_act_ns: 0,
+            rule_perf_ns: HashMap::new(),
+            rule_to_ruleset: HashMap::new(),
+            table_watermarks: HashMap::new(),
+            rules_skipped: 0,
         })
+    }
+
+    /// Bump `table`'s watermark to `ts` if `ts` is newer than the
+    /// current value. Cheap: called from every insert path.
+    fn bump_watermark(&mut self, table: &str, ts: i64) {
+        let e = self.table_watermarks.entry(table.to_string()).or_insert(0);
+        if ts > *e {
+            *e = ts;
+        }
+    }
+
+    /// Total rule firings short-circuited by the watermark gate
+    /// since this `EGraph` was created.
+    pub fn rules_skipped(&self) -> u64 {
+        self.rules_skipped
+    }
+
+    /// Per-category nanosecond accumulators for SQL `execute` calls.
+    /// Returns `(materialize, materialized_action, simple_action)`.
+    /// Read after `run_program` to see where time goes.
+    pub fn perf_timings_ns(&self) -> (u64, u64, u64) {
+        (
+            self.time_mat_ns,
+            self.time_mat_act_ns,
+            self.time_act_ns,
+        )
+    }
+
+    /// `(rule_name, ruleset, mat_ns, act_ns)` rows sorted by total
+    /// time descending. Empty if the program hasn't run yet.
+    pub fn perf_per_rule(&self) -> Vec<(String, String, u64, u64)> {
+        let mut rows: Vec<(String, String, u64, u64)> = self
+            .rule_perf_ns
+            .iter()
+            .map(|(rn, &(m, a))| {
+                let rs = self
+                    .rule_to_ruleset
+                    .get(rn)
+                    .cloned()
+                    .unwrap_or_default();
+                (rn.clone(), rs, m, a)
+            })
+            .collect();
+        rows.sort_by(|x, y| (y.2 + y.3).cmp(&(x.2 + x.3)));
+        rows
     }
 
     /// Cumulative count of rows affected by rule action SQLs across
@@ -456,6 +657,23 @@ impl EGraph {
         let sql = format!("CREATE TABLE {} ({col_list}{pk_clause})", q(name));
         self.debug_sql("create", &sql);
         self.conn.execute(&sql, [])?;
+        // We tried two flavors of auxiliary indexes here and both
+        // were a net loss on math-microbenchmark:
+        //  - Secondary B-tree indexes on each non-leading input
+        //    column (intended to accelerate rebuild variants that
+        //    join `view.c_i = uf.c0` for i > 0). DuckDB's planner
+        //    correctly chose hash joins over index seeks (the NEW
+        //    side is small, the build cost is amortized), so the
+        //    indexes went unused while costing per-insert
+        //    maintenance. mm-microbenchmark slowed by ~26%.
+        //  - Index on the `ts` column (intended to speed up the
+        //    seminaive `ts >= ?1 AND ts < ?2` range filter). Lost
+        //    to DuckDB's built-in zone maps for monotonically-
+        //    inserted ts; insert maintenance dominated. Slowed by
+        //    ~14%.
+        // Insert-heavy analytical workloads on DuckDB don't want
+        // OLTP-style auxiliary indexes — the columnar storage and
+        // zone maps already cover the access patterns we use.
         self.functions.insert(name.to_string(), info);
         Ok(())
     }
@@ -463,8 +681,22 @@ impl EGraph {
     /// Compile and store a rule. Compilation produces one SQL
     /// statement per (variant × action).
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
-        let compiled = compile::compile_rule(&rule, &self.functions)?;
+        let mut compiled = compile::compile_rule(&rule, &self.functions)?;
+        // Body tables = distinct Atom::Func names. The watermark gate
+        // reads this set to decide whether the rule has anything new
+        // to look at on a given iteration.
+        let mut bt: Vec<String> = Vec::new();
+        for atom in &rule.body {
+            if let Atom::Func { name, .. } = atom {
+                if !bt.iter().any(|n| n == name) {
+                    bt.push(name.clone());
+                }
+            }
+        }
+        compiled.body_tables = bt;
         self.last_run_at.insert(rule.name.clone(), 0);
+        self.rule_to_ruleset
+            .insert(rule.name.clone(), rule.ruleset.clone());
         self.rules.push(compiled);
         Ok(())
     }
@@ -500,7 +732,10 @@ impl EGraph {
         );
         let sql = sql_unfiltered.trim_end();
         self.debug_sql("insert", sql);
-        self.conn.execute(sql, [])?;
+        let n = self.conn.execute(sql, [])?;
+        if n > 0 {
+            self.bump_watermark(name, cur_ts);
+        }
         Ok(())
     }
 
@@ -534,7 +769,10 @@ impl EGraph {
             q(name),
         );
         self.debug_sql("insert_terms", &sql);
-        self.conn.execute(&sql, [])?;
+        let n = self.conn.execute(&sql, [])?;
+        if n > 0 {
+            self.bump_watermark(name, cur_ts);
+        }
         Ok(())
     }
 
@@ -554,33 +792,19 @@ impl EGraph {
                 continue;
             }
             let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
-            for variant in &rule.variants {
-                let bind = |sql: &str| -> String {
-                    sql.replace("?1", &last.to_string())
-                        .replace("?2", &cur.to_string())
-                };
-                if let Some(mat_sql_template) = &variant.materialize {
-                    let mat_sql = bind(mat_sql_template);
-                    self.debug_sql("mat", &mat_sql);
-                    self.conn.execute(&mat_sql, [])?;
-                }
-                for sql in &variant.actions {
-                    let bound_sql = bind(sql);
-                    self.debug_sql(
-                        if variant.materialize.is_some() { "mat-act" } else { "act" },
-                        &bound_sql,
-                    );
-                    let n = self.conn.execute(&bound_sql, [])?;
-                    self.rules_affected = self.rules_affected.wrapping_add(n as u64);
-                    total += n;
-                    if std::env::var("DUCK_TRACE_RULE_AFFECTED").is_ok() && n > 0 {
-                        eprintln!("[duck/rule_n] {} +{n}", rule.name);
-                    }
-                }
-                if let Some(cleanup) = &variant.cleanup {
-                    self.conn.execute(cleanup, [])?;
-                }
-            }
+            total += run_rule_variants(
+                rule,
+                last,
+                cur,
+                &self.conn,
+                &mut self.time_mat_ns,
+                &mut self.time_mat_act_ns,
+                &mut self.time_act_ns,
+                &mut self.rules_affected,
+                &mut self.rule_perf_ns,
+                &mut self.table_watermarks,
+                &mut self.rules_skipped,
+            )?;
             self.last_run_at.insert(rule.name.clone(), cur);
         }
         Ok(total)
@@ -601,40 +825,19 @@ impl EGraph {
                 continue;
             }
             let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
-            for variant in &rule.variants {
-                // Unified bind convention across the whole rule:
-                //   ?1 = last_run_at, ?2 = cur_iter_ts.
-                // Inline both via string substitution (DuckDB doesn't
-                // accept bound params in CREATE OR REPLACE TEMP TABLE
-                // AS SELECT, and per-action statements have varying
-                // ?-counts). Values are i64s; safe to interpolate.
-                let bind = |sql: &str| -> String {
-                    sql.replace("?1", &last.to_string())
-                        .replace("?2", &cur.to_string())
-                };
-                if let Some(mat_sql_template) = &variant.materialize {
-                    let mat_sql = bind(mat_sql_template);
-                    self.debug_sql("mat", &mat_sql);
-                    self.conn.execute(&mat_sql, [])?;
-                }
-                for sql in &variant.actions {
-                    let bound_sql = bind(sql);
-                    self.debug_sql(
-                        if variant.materialize.is_some() {
-                            "mat-act"
-                        } else {
-                            "act"
-                        },
-                        &bound_sql,
-                    );
-                    let n = self.conn.execute(&bound_sql, [])?;
-                    self.rules_affected = self.rules_affected.wrapping_add(n as u64);
-                    total += n;
-                    if std::env::var("DUCK_TRACE_RULE_AFFECTED").is_ok() && n > 0 {
-                        eprintln!("[duck/rule_n] {} +{n}", rule.name);
-                    }
-                }
-            }
+            total += run_rule_variants(
+                rule,
+                last,
+                cur,
+                &self.conn,
+                &mut self.time_mat_ns,
+                &mut self.time_mat_act_ns,
+                &mut self.time_act_ns,
+                &mut self.rules_affected,
+                &mut self.rule_perf_ns,
+                &mut self.table_watermarks,
+                &mut self.rules_skipped,
+            )?;
             self.last_run_at.insert(rule.name.clone(), cur);
         }
         Ok(total)

@@ -22,9 +22,18 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
 use crate::{
-    Action, Atom, CompiledRule, CompiledVariant, FunctionInfo, Rule, Term, conflict_clause,
-    prefix_with_comma, q,
+    Action, Atom, CompiledAction, CompiledRule, CompiledVariant, FunctionInfo, Rule, Term,
+    conflict_clause, prefix_with_comma, q,
 };
+
+/// Target table written by an action, if any. Used by the runner
+/// to bump the table's insert watermark after a successful execute.
+fn action_target(a: &Action) -> Option<String> {
+    match a {
+        Action::Insert { name, .. } | Action::Delete { name, .. } => Some(name.clone()),
+        Action::LetCtor { .. } | Action::LetExpr { .. } | Action::Panic { .. } => None,
+    }
+}
 
 pub(crate) fn compile_rule(
     rule: &Rule,
@@ -125,6 +134,9 @@ pub(crate) fn compile_rule(
         name: rule.name.clone(),
         ruleset: rule.ruleset.clone(),
         variants,
+        // `add_rule` re-derives this from `rule.body` so it stays in
+        // sync with the IR even if compilation rewrites the variants.
+        body_tables: Vec::new(),
     })
 }
 
@@ -167,12 +179,21 @@ fn compile_variant(
         let actions = rule
             .actions
             .iter()
-            .map(|a| compile_simple_action(a, &binding, &from, &where_clause, &rule.name, functions))
+            .map(|a| {
+                let sql = compile_simple_action(
+                    a,
+                    &binding,
+                    &from,
+                    &where_clause,
+                    &rule.name,
+                    functions,
+                )?;
+                Ok(CompiledAction { sql, target: action_target(a) })
+            })
             .collect::<Result<_>>()?;
         return Ok(CompiledVariant {
             materialize: None,
             actions,
-            cleanup: None,
         });
     }
 
@@ -330,26 +351,31 @@ fn compile_variant(
     );
 
     // 4) Build per-action SQLs that select FROM the temp table.
-    let mut action_sqls: Vec<String> = Vec::new();
+    let mut action_sqls: Vec<CompiledAction> = Vec::new();
     for action in &rule.actions {
-        action_sqls.push(compile_materialized_action(
+        let sql = compile_materialized_action(
             action,
             &mat_binding,
             &temp_table,
             &rule.name,
             functions,
-        )?);
+        )?;
+        action_sqls.push(CompiledAction {
+            sql,
+            target: action_target(action),
+        });
     }
 
     // Suppress `binding` unused warnings; it's only relevant on the
     // simple path above.
     let _ = &mut binding;
 
-    let cleanup = format!("DROP TABLE IF EXISTS {}", q(&temp_table));
+    // No explicit DROP — the next iteration's CREATE OR REPLACE
+    // recycles the temp table in place. Issuing a redundant DROP
+    // cost ~25% of our SQL-statement count on math-microbenchmark.
     Ok(CompiledVariant {
         materialize: Some(materialize),
         actions: action_sqls,
-        cleanup: Some(cleanup),
     })
 }
 

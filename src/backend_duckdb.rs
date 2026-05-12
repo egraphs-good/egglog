@@ -133,6 +133,70 @@ impl DuckdbBackend {
         if std::env::var("DUCK_PROBE_HASHCONS").is_ok() {
             self.probe_hashcons()?;
         }
+        if std::env::var("DUCK_PERF_DUMP").is_ok() {
+            let (mat, mat_act, act) = self.db.perf_timings_ns();
+            let total = mat + mat_act + act;
+            let fmt = |ns: u64| -> String {
+                let pct = if total > 0 {
+                    (ns as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                format!("{:>8.3}s ({:>4.1}%)", ns as f64 / 1e9, pct)
+            };
+            eprintln!("[duck/perf] materialize       {}", fmt(mat));
+            eprintln!("[duck/perf] mat-action        {}", fmt(mat_act));
+            eprintln!("[duck/perf] simple-action     {}", fmt(act));
+            eprintln!("[duck/perf] total             {}", fmt(total));
+            eprintln!(
+                "[duck/perf] rule firings skipped by watermark gate: {}",
+                self.db.rules_skipped()
+            );
+
+            // Per-ruleset and top-N per-rule breakdowns.
+            let per_rule = self.db.perf_per_rule();
+            // Roll up to ruleset.
+            let mut by_ruleset: std::collections::HashMap<String, (u64, u64)> =
+                std::collections::HashMap::new();
+            for (_, rs, m, a) in &per_rule {
+                let e = by_ruleset.entry(rs.clone()).or_insert((0, 0));
+                e.0 = e.0.wrapping_add(*m);
+                e.1 = e.1.wrapping_add(*a);
+            }
+            let mut rs_rows: Vec<(String, u64, u64)> = by_ruleset
+                .into_iter()
+                .map(|(rs, (m, a))| (rs, m, a))
+                .collect();
+            rs_rows.sort_by(|x, y| (y.1 + y.2).cmp(&(x.1 + x.2)));
+            if !rs_rows.is_empty() {
+                eprintln!("[duck/perf] per-ruleset:");
+                for (rs, m, a) in &rs_rows {
+                    let label = if rs.is_empty() { "<default>" } else { rs };
+                    eprintln!(
+                        "[duck/perf]   {:<40} mat {} act {}",
+                        truncate(label, 40),
+                        fmt(*m),
+                        fmt(*a),
+                    );
+                }
+            }
+            let top_n: usize = std::env::var("DUCK_PERF_TOP_RULES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10);
+            if top_n > 0 && !per_rule.is_empty() {
+                eprintln!("[duck/perf] top {} rules by total time:", top_n);
+                for (name, rs, m, a) in per_rule.iter().take(top_n) {
+                    eprintln!(
+                        "[duck/perf]   [{}] mat {} act {}  {}",
+                        if rs.is_empty() { "<default>" } else { rs },
+                        fmt(*m),
+                        fmt(*a),
+                        truncate(name, 100),
+                    );
+                }
+            }
+        }
         Ok(std::mem::take(&mut self.outputs))
     }
 
@@ -856,6 +920,16 @@ impl DuckdbBackend {
 /// `Math` or `@pathSort`) are stored as BIGINT IDs. Term encoding
 /// runs upstream of this backend, so we don't see ad-hoc EqSort
 /// values in queries — only IDs.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
 fn sort_to_column_ty(sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
     match sort {
         "i64" => Ok(duck::ColumnTy::I64),
