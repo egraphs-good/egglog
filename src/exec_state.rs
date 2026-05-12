@@ -262,13 +262,7 @@ fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableActio
 // The four wrapper types — plain structs, methods come from traits.
 // =====================================================================
 
-/// Typed view for primitives running in a pure context. Valid in all
-/// four execution contexts. Implements [`Core`] only.
-///
-/// `PureState` exposes no DB read or write methods to user code: the
-/// pure-side privileged seams (`call_external_func`, `table_lookup`)
-/// are on the crate-private `Internal` trait so external callers
-/// cannot reach them.
+/// Wrapper for [`Context::Pure`]. Implements [`Core`] only.
 ///
 /// ```compile_fail
 /// // Pure context cannot insert: `Write` is not implemented.
@@ -293,24 +287,14 @@ pub struct PureState<'a, 'db> {
     pub(crate) ctx: Context,
 }
 
-/// Typed view for read-only primitives. Valid in [`Context::Read`]
-/// and [`Context::Full`] (top-level query-shaped commands and the
-/// body of an `:naive` rule). Implements [`Core`] + [`Read`]
-/// — name-indexed table lookups (`state.lookup("name", &[args])`)
-/// return the row's value or `None`.
+/// Wrapper for [`Context::Read`]. Implements [`Core`] + [`Read`].
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
     pub(crate) ctx: Context,
 }
 
-/// Typed view for primitives running on the RHS of a rule. Valid in
-/// [`Context::Write`] and [`Context::Full`] (the head of any rule and
-/// any top-level action). Implements [`Core`] + [`Write`].
-///
-/// `WriteState` exposes writes (`insert`/`remove`/`subsume`/`union`/
-/// `panic`) but no DB reads — a rule action that depends on live
-/// database state would break saturation detection under seminaive.
+/// Wrapper for [`Context::Write`]. Implements [`Core`] + [`Write`].
 ///
 /// ```compile_fail
 /// // Write context cannot reach raw `ExecutionState`.
@@ -324,14 +308,10 @@ pub struct WriteState<'a, 'db> {
     pub(crate) ctx: Context,
 }
 
-/// Typed view for top-level action sites with both read and write
-/// access. Valid in [`Context::Full`] only (top-level actions and the
-/// head of an `:naive` rule). Implements [`Core`] + [`Read`] +
-/// [`Write`].
+/// Wrapper for [`Context::Full`]. Implements [`Core`] + [`Read`] + [`Write`].
 ///
 /// ```compile_fail
-/// // Even `FullState` cannot reach the raw `ExecutionState` —
-/// // privileged seams live on the crate-private `Internal` trait.
+/// // Even `FullState` cannot reach the raw `ExecutionState`.
 /// fn _no_raw<'a, 'db>(state: &mut egglog::FullState<'a, 'db>) {
 ///     state.raw_exec_state();
 /// }

@@ -108,36 +108,26 @@ pub trait Primitive: Send + Sync + 'static {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
 }
 
-/// A pure primitive — runs in any of the four contexts. Body sees a
-/// [`PureState`]: no DB reads, no DB writes, just base values,
-/// counters, container interning, and `call_external_func` /
-/// `table_lookup` escapes (caller-checked).
-///
-/// Most primitives are pure (e.g., `+`, `<`, `vec-of`). The macros
-/// `add_primitive!` / `add_literal_prim!` generate impls of this trait.
-/// Register via [`EGraph::add_pure_primitive`].
+/// A primitive whose body sees a [`PureState`]. Register via
+/// [`EGraph::add_pure_primitive`].
 pub trait PurePrim: Primitive {
     fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
-/// A primitive that writes to the e-graph. Body sees a
-/// [`WriteState`]: pure ops + DB writes + name-indexed
-/// `insert` / `remove` / `subsume` / `union` / `panic`. Valid only in
-/// rule-action and global-action contexts.
+/// A primitive whose body sees a [`WriteState`]. Register via
+/// [`EGraph::add_write_primitive`].
 pub trait WritePrim: Primitive {
     fn apply<'a, 'db>(&self, state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
-/// A primitive that reads from the database but doesn't write. Body
-/// sees a [`ReadState`]: pure ops + table reads. Valid only in
-/// global-query and global-action contexts (reading from a database
-/// during a rule query would be untracked by seminaive — see #772).
+/// A primitive whose body sees a [`ReadState`]. Register via
+/// [`EGraph::add_read_primitive`].
 pub trait ReadPrim: Primitive {
     fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
-/// A primitive that needs both DB reads and DB writes. Body sees a
-/// [`FullState`]. Valid only in the global-action context.
+/// A primitive whose body sees a [`FullState`]. Register via
+/// [`EGraph::add_full_primitive`].
 pub trait FullPrim: Primitive {
     fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }

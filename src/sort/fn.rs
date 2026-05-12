@@ -469,16 +469,10 @@ pub enum ResolvedFunctionId {
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
 //
-// `Apply` is registered as a `PurePrim`, so `add_pure_primitive`'s
-// `register_per_context` helper commits four `ExternalFunctionId`s
-// under the same name — one per `Context` variant — each stamping
-// its specific context onto the state wrapper before invoking the
-// shared body. `FunctionContainer::apply` reads back the runtime
-// context and chooses pure-side vs action-side dispatch (no mint in
-// queries; mint constructors in action contexts; `Pure` refuses all
-// DB ops). Distinct `FunctionSort`s produce different signature keys,
-// so `unstable-app` for `MathFn` stays a separate overload from
-// `unstable-app` for `i64Fun`.
+// Registered as a `PurePrim`; `FunctionContainer::apply` reads the
+// runtime context to dispatch. Distinct `FunctionSort`s produce
+// different signature keys, so `unstable-app` for `MathFn` stays a
+// separate overload from `unstable-app` for `i64Fun`.
 
 #[derive(Clone)]
 struct Apply {
@@ -549,10 +543,6 @@ impl FunctionContainer {
                 if can_mint {
                     action.lookup_or_insert(state.raw_exec_state(), &args)
                 } else {
-                    // Read-only contexts (`Read`/`Pure`) reject the
-                    // call: a no-mint constructor would silently miss
-                    // instead of producing the eclass the user asked
-                    // for.
                     mismatch(state)
                 }
             }

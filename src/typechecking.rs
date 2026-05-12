@@ -262,18 +262,14 @@ impl EGraph {
         }
     }
 
-    /// Register a [`PurePrim`] — a pure primitive runnable in
-    /// every context (rule query / rule action / global query /
-    /// global action).
+    /// Register a [`PurePrim`]. Pass `None` for the validator if not
+    /// using the proof checker.
     ///
-    /// The four traits ([`PurePrim`], [`WritePrim`],
-    /// [`ReadPrim`], [`FullPrim`]) name the state
-    /// wrapper they want directly. Pick the one matching what the
-    /// body actually does — pure → `PurePrim`; writes →
-    /// `WritePrim`; reads tables → `ReadPrim`;
-    /// reads-and-writes → `FullPrim`. The Rust type checker
-    /// enforces that the body only uses methods the chosen state
-    /// allows.
+    /// Pick the trait whose state wrapper matches the body's needs:
+    /// [`PurePrim`] for pure ops, [`WritePrim`] for writes,
+    /// [`ReadPrim`] for table reads, [`FullPrim`] for both. The Rust
+    /// type checker enforces the body only uses methods the chosen
+    /// state allows.
     pub fn add_pure_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
     where
         T: PurePrim + Clone,
@@ -283,8 +279,7 @@ impl EGraph {
         });
     }
 
-    /// Register a [`WritePrim`] — runs in rule-action and
-    /// global-action contexts. Pass `None` for the validator if not
+    /// Register a [`WritePrim`]. Pass `None` for the validator if not
     /// using the proof checker.
     pub fn add_write_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
     where
@@ -301,8 +296,7 @@ impl EGraph {
         });
     }
 
-    /// Register a [`ReadPrim`] — runs in global-query and
-    /// global-action contexts. Pass `None` for the validator if not
+    /// Register a [`ReadPrim`]. Pass `None` for the validator if not
     /// using the proof checker.
     pub fn add_read_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
     where
@@ -319,8 +313,7 @@ impl EGraph {
         });
     }
 
-    /// Register a [`FullPrim`] — runs only in the
-    /// global-action context. Pass `None` for the validator if not
+    /// Register a [`FullPrim`]. Pass `None` for the validator if not
     /// using the proof checker.
     pub fn add_full_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
     where
@@ -339,15 +332,9 @@ impl EGraph {
 
     /// Shared registration engine. Registers `x` once per `Context` in
     /// `valid_ctxs`, with each wrapper carrying its specific context
-    /// stamped onto the state wrapper at invoke time.
-    ///
-    /// Every primitive is registered per-context. The typechecker's
-    /// `selection_ctx` filter selects exactly one candidate at each
-    /// call site; an `unstable-fn` value built around the primitive
-    /// bakes *all* signature-matching candidates, and
-    /// `FunctionContainer::apply` picks the one whose `selection_ctx`
-    /// matches the application ctx — so values flow freely across
-    /// contexts.
+    /// stamped onto the state wrapper at invoke time. The typechecker's
+    /// `selection_ctx` filter picks exactly one candidate at each call
+    /// site.
     fn register_per_context<T, F>(
         &mut self,
         x: T,

@@ -10,14 +10,9 @@
 //!   [`crate::WriteState`]).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
-//! - [`crate::Primitive`] + one of four kind-specific traits
-//!   ([`crate::PurePrim`], [`crate::WritePrim`],
-//!   [`crate::ReadPrim`], [`crate::FullPrim`]) —
-//!   register custom primitives. Each kind names its state wrapper
-//!   directly; pick the trait matching what the body actually needs
-//!   and register via [`crate::EGraph::add_pure_primitive`]
-//!   etc. The Rust type checker enforces that the body only uses
-//!   methods the chosen state allows.
+//! - [`crate::PurePrim`] / [`crate::WritePrim`] / [`crate::ReadPrim`] /
+//!   [`crate::FullPrim`] — register custom primitives via the matching
+//!   `EGraph::add_*_primitive` method.
 //! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
 //!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
 //!   the simple "pure native function" case.
