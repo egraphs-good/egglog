@@ -760,6 +760,24 @@ fn translate_rule(
             }
             let head_atom = Atom { relation: rel.clone(), args: args.clone() };
             add_let_lookups_to_body(&head_atom, &mut full_body, &all_lets);
+            // For top-level init expressions (fake_rules with empty
+            // body), rewrite body atoms reading `_snap` to read the
+            // canonical view directly. This lets the whole tree of
+            // initial expressions cascade in one outer iter via
+            // souffle's natural SCC saturation, instead of taking N
+            // outer iters for N levels of nesting (the snap-based
+            // delay). User rules (rule.body non-empty) still read
+            // snap, which keeps them firing exactly once per outer
+            // iter — that's what gives `(run N)` semantics.
+            if rule.body.is_empty() {
+                for lit in full_body.iter_mut() {
+                    if let IrLit::Atom(a) = lit
+                        && let Some(base) = a.relation.strip_suffix("_snap")
+                    {
+                        a.relation = base.to_string();
+                    }
+                }
+            }
             p.clauses.push(Clause::rule(head_atom, full_body));
         }
         for (rel, del_args) in &changes {
