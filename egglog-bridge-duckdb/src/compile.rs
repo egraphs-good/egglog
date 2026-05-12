@@ -26,6 +26,16 @@ use crate::{
     conflict_clause, prefix_with_comma, q,
 };
 
+/// Glue a list of WHERE atoms into a single SQL fragment that
+/// starts with a leading space + `WHERE`, or "" if empty.
+fn format_where(parts: &[String]) -> String {
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", parts.join(" AND "))
+    }
+}
+
 /// Target table written by an action, if any. Used by the runner
 /// to bump the table's insert watermark after a successful execute.
 fn action_target(a: &Action) -> Option<String> {
@@ -119,17 +129,14 @@ pub(crate) fn compile_rule(
         return Err(anyhow!("rule {}: at least one action required", rule.name));
     }
 
-    let mut variants = Vec::with_capacity(func_atom_indices.len().max(1));
-    if func_atom_indices.is_empty() {
-        // No Func atom — rule fires every iteration. Idempotent
-        // INSERTs make this safe; non-idempotent rules with empty
-        // bodies don't really make sense in egglog.
-        variants.push(compile_variant(rule, 0, None, functions)?);
-    } else {
-        for (variant_idx, &focus) in func_atom_indices.iter().enumerate() {
-            variants.push(compile_variant(rule, variant_idx, Some(focus), functions)?);
-        }
-    }
+    // Fuse all K seminaive variants for this rule into a single
+    // `CompiledVariant`. The materialize SELECT becomes a UNION ALL
+    // of K branches differing only in their ts predicates; the
+    // partitioning is disjoint by construction (each match has
+    // exactly one "first new" atom), so no dedup is needed. Cuts
+    // the per-iter statement count by ~K× without changing the
+    // total join work.
+    let variants = vec![compile_fused_variant(rule, &func_atom_indices, functions)?];
     Ok(CompiledRule {
         name: rule.name.clone(),
         ruleset: rule.ruleset.clone(),
@@ -140,20 +147,28 @@ pub(crate) fn compile_rule(
     })
 }
 
-fn compile_variant(
+/// Compile all seminaive variants of `rule` into a single
+/// `CompiledVariant` by UNION-ALL-ing the per-focus branches.
+///
+/// Each branch shares the same FROM clause, hash-cons LEFT JOINs,
+/// and SELECT projection — the branches differ only in their `ts`
+/// predicates. Seminaive triangulation guarantees the partitions
+/// are disjoint, so UNION ALL preserves exactly the union-of-
+/// per-focus matches with no duplicates.
+fn compile_fused_variant(
     rule: &Rule,
-    variant_idx: usize,
-    focus: Option<usize>,
+    func_atom_indices: &[usize],
     functions: &HashMap<String, FunctionInfo>,
 ) -> Result<CompiledVariant> {
     // 1) Build the body's FROM/WHERE and a binding for body vars.
-    let (from, where_clause, mut binding) = build_query(rule, focus)?;
+    let (from, base_where_parts, mut binding) = walk_body(&rule.body, &rule.name)?;
     // No Func atoms → use a 1-row dummy as FROM source.
     let from = if from.is_empty() {
         "(SELECT 1) __empty__".to_string()
     } else {
         from
     };
+    let where_clause = format_where(&base_where_parts);
 
     // 2) Decide whether we need the materialized path.
     //
@@ -173,18 +188,39 @@ fn compile_variant(
         .any(|a| matches!(a, Action::LetCtor { .. } | Action::LetExpr { .. }));
     let needs_snapshot = has_let || rule.actions.len() > 1;
 
+    // The K seminaive partitions, expressed as per-focus WHERE
+    // clauses (built from the shared body WHERE + per-focus ts
+    // predicates). Empty body (no Func atom) → one branch with no
+    // ts predicates: the rule still fires every iteration.
+    let branch_wheres: Vec<String> = if func_atom_indices.is_empty() {
+        vec![where_clause.clone()]
+    } else {
+        func_atom_indices
+            .iter()
+            .map(|&focus| {
+                let mut parts = base_where_parts.clone();
+                parts.extend(ts_predicates_for_focus(&rule.body, focus));
+                format_where(&parts)
+            })
+            .collect()
+    };
+    let _ = where_clause;
+
     if !needs_snapshot {
         // Single-action rule with no Let: simple INSERT/DELETE FROM
         // <body> is correct, and avoids the temp-table overhead.
+        // For K-way fusion we UNION ALL the per-focus branches as
+        // the source of the action; the partitioning is disjoint so
+        // no rows are duplicated.
         let actions = rule
             .actions
             .iter()
             .map(|a| {
-                let sql = compile_simple_action(
+                let sql = compile_simple_action_fused(
                     a,
                     &binding,
                     &from,
-                    &where_clause,
+                    &branch_wheres,
                     &rule.name,
                     functions,
                 )?;
@@ -193,6 +229,7 @@ fn compile_variant(
             .collect::<Result<_>>()?;
         return Ok(CompiledVariant {
             materialize: None,
+            temp_table: None,
             actions,
         });
     }
@@ -201,11 +238,7 @@ fn compile_variant(
     // - one column per body-bound variable (so subsequent actions can
     //   reference body vars).
     // - one nextval column per LetCtor.
-    let temp_table = format!(
-        "__m_{}_{}",
-        sanitize(&rule.name),
-        variant_idx + 1
-    );
+    let temp_table = format!("__m_{}", sanitize(&rule.name));
 
     let mut select_cols: Vec<String> = Vec::new();
     // body vars: take their stable binding location and assign an
@@ -341,13 +374,20 @@ fn compile_variant(
         let xj = from.replace(", ", " CROSS JOIN ");
         format!("{xj} {}", hc_joins.join(" "))
     };
-    // Build the materialize SQL.
+    // Build the materialize SQL as a UNION ALL of one branch per
+    // focus. Each branch has the same SELECT projection and FROM
+    // clause (including hash-cons LEFT JOINs); only the WHERE
+    // changes. Seminaive partitions are disjoint by construction,
+    // so UNION ALL is exact — no need for UNION/DISTINCT.
+    let select_cols_str = select_cols.join(", ");
+    let branches: Vec<String> = branch_wheres
+        .iter()
+        .map(|w| format!("SELECT {select_cols_str} FROM {from_with_hc}{w}"))
+        .collect();
     let materialize = format!(
-        "CREATE OR REPLACE TEMP TABLE {} AS SELECT {} FROM {}{}",
+        "CREATE OR REPLACE TEMP TABLE {} AS {}",
         q(&temp_table),
-        select_cols.join(", "),
-        from_with_hc,
-        where_clause,
+        branches.join(" UNION ALL "),
     );
 
     // 4) Build per-action SQLs that select FROM the temp table.
@@ -375,6 +415,7 @@ fn compile_variant(
     // cost ~25% of our SQL-statement count on math-microbenchmark.
     Ok(CompiledVariant {
         materialize: Some(materialize),
+        temp_table: Some(temp_table),
         actions: action_sqls,
     })
 }
@@ -402,7 +443,8 @@ pub(crate) fn compile_body_select(
             }
         }
     }
-    let (from, where_clause, _binding) = walk_body(atoms, None, "<check>")?;
+    let (from, where_parts, _binding) = walk_body(atoms, "<check>")?;
+    let where_clause = format_where(&where_parts);
     if from.is_empty() {
         // No function atoms: a pure-primitive `(check (= 1 1))`-style
         // assertion. Evaluate the WHERE clause as a constant.
@@ -522,11 +564,36 @@ fn term_vars_all_bound(t: &Term, binding: &HashMap<String, String>) -> bool {
     }
 }
 
+/// Compute the seminaive ts predicates for a single focus choice.
+/// Returned strings reference table aliases `t{i}` for each Func
+/// atom; they're meant to be AND-combined with the body's own WHERE
+/// parts (which `walk_body` builds and returns unbounded).
+fn ts_predicates_for_focus(atoms: &[Atom], focus_idx: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    for (i, atom) in atoms.iter().enumerate() {
+        if !matches!(atom, Atom::Func { .. }) {
+            continue;
+        }
+        match i.cmp(&focus_idx) {
+            std::cmp::Ordering::Equal => {
+                parts.push(format!("t{i}.ts >= ?1"));
+                parts.push(format!("t{i}.ts < ?2"));
+            }
+            std::cmp::Ordering::Less => {
+                parts.push(format!("t{i}.ts < ?1"));
+            }
+            std::cmp::Ordering::Greater => {
+                parts.push(format!("t{i}.ts < ?2"));
+            }
+        }
+    }
+    parts
+}
+
 fn walk_body(
     atoms: &[Atom],
-    focus: Option<usize>,
     rule_name: &str,
-) -> Result<(String, String, HashMap<String, String>)> {
+) -> Result<(String, Vec<String>, HashMap<String, String>)> {
     let mut binding: HashMap<String, String> = HashMap::new();
     let mut from_parts: Vec<String> = Vec::new();
     let mut where_parts: Vec<String> = Vec::new();
@@ -584,69 +651,30 @@ fn walk_body(
         }
         pending = still_pending;
     }
-    if let Some(focus_idx) = focus {
-        // Standard seminaive triangulation, mirroring egglog-bridge
-        // (rule.rs add_rules_from_cached). Each variant focuses on
-        // one atom; for the variant with focus=k:
-        //   focus (atom k):      ts >= last_run_at  (must be NEW)
-        //   atoms before focus:  ts < last_run_at  (must be OLD)
-        //   atoms after focus:   no lower bound
-        // This partition guarantees every body match where at least
-        // one atom is new fires in EXACTLY ONE variant — no double-
-        // firing on matches with multiple "new" atoms.
-        //
-        // We additionally add `ts < cur_iter_ts` to all non-focus
-        // atoms because, unlike egglog-bridge (which batches actions
-        // until the iteration ends), we apply each rule's actions
-        // immediately. Without this upper bound, atoms after focus
-        // could see rows just inserted by earlier rules in the same
-        // iteration, leading to a different kind of over-firing.
-        //
-        // ?1 = last_run_at, ?2 = cur_iter_ts.
-        for (i, atom) in atoms.iter().enumerate() {
-            if !matches!(atom, Atom::Func { .. }) {
-                continue;
-            }
-            match i.cmp(&focus_idx) {
-                std::cmp::Ordering::Equal => {
-                    where_parts.push(format!("t{i}.ts >= ?1"));
-                    where_parts.push(format!("t{i}.ts < ?2"));
-                }
-                std::cmp::Ordering::Less => {
-                    where_parts.push(format!("t{i}.ts < ?1"));
-                }
-                std::cmp::Ordering::Greater => {
-                    where_parts.push(format!("t{i}.ts < ?2"));
-                }
-            }
-        }
-    }
     let from = from_parts.join(", ");
-    let where_clause = if where_parts.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", where_parts.join(" AND "))
-    };
-    Ok((from, where_clause, binding))
+    Ok((from, where_parts, binding))
 }
 
-fn build_query(
-    rule: &Rule,
-    focus: Option<usize>,
-) -> Result<(String, String, HashMap<String, String>)> {
-    walk_body(&rule.body, focus, &rule.name)
-}
-
-/// Compile a single action under the *simple* path: INSERT/DELETE
-/// FROM <body>.
-fn compile_simple_action(
+/// Compile one rule action under the *simple* path, fused across
+/// all K seminaive partitions. Each `branch_wheres` entry is the
+/// fully-formed WHERE clause (including the per-focus ts
+/// predicates) for one partition; the action's source SELECT is
+/// the UNION ALL of one branch per entry.
+fn compile_simple_action_fused(
     action: &Action,
     binding: &HashMap<String, String>,
     from: &str,
-    where_clause: &str,
+    branch_wheres: &[String],
     rule_name: &str,
     functions: &HashMap<String, FunctionInfo>,
 ) -> Result<String> {
+    let union_branches = |body: &str| -> String {
+        branch_wheres
+            .iter()
+            .map(|w| format!("{body}{w}"))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ")
+    };
     match action {
         Action::Insert {
             name: target,
@@ -662,9 +690,11 @@ fn compile_simple_action(
             let select_list = format!("{}?2", prefix_with_comma(&select_cols));
             let insert_cols = format!("{}ts", prefix_with_comma(&target_cols));
             let conflict = conflict_clause(info);
+            let body = format!("SELECT {select_list} FROM {from}");
             Ok(format!(
-                "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}",
+                "INSERT INTO {} ({insert_cols}) {} {conflict}",
                 q(target),
+                union_branches(&body),
             ))
         }
         Action::Delete {
@@ -675,9 +705,11 @@ fn compile_simple_action(
             // invalid. Use `EXISTS (SELECT 1 FROM body)` instead —
             // delete every row of the target iff the body matches.
             if key_args.is_empty() {
+                let body = format!("SELECT 1 FROM {from}");
                 return Ok(format!(
-                    "DELETE FROM {} WHERE EXISTS (SELECT 1 FROM {from}{where_clause})",
-                    q(target)
+                    "DELETE FROM {} WHERE EXISTS ({})",
+                    q(target),
+                    union_branches(&body),
                 ));
             }
             let key_cols: Vec<String> =
@@ -686,11 +718,12 @@ fn compile_simple_action(
                 .iter()
                 .map(|t| term_sql(t, binding, rule_name))
                 .collect::<Result<_>>()?;
+            let body = format!("SELECT {} FROM {from}", key_select.join(", "));
             Ok(format!(
-                "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {from}{where_clause})",
+                "DELETE FROM {} WHERE ({}) IN ({})",
                 q(target),
                 key_cols.join(", "),
-                key_select.join(", "),
+                union_branches(&body),
             ))
         }
         Action::LetCtor { .. } | Action::LetExpr { .. } => {
@@ -704,8 +737,10 @@ fn compile_simple_action(
             // `error()` is only evaluated on returned rows, so 0 rows
             // = no error, ≥1 row = SQL exception.
             let safe = msg.replace('\'', "''");
+            let body = format!("SELECT 1 FROM {from}");
             Ok(format!(
-                "SELECT error('panic: {safe}') FROM {from}{where_clause} LIMIT 1"
+                "SELECT error('panic: {safe}') FROM ({}) LIMIT 1",
+                union_branches(&body),
             ))
         }
     }

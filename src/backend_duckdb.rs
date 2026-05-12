@@ -196,6 +196,16 @@ impl DuckdbBackend {
                     );
                 }
             }
+            if let Ok(top_s) = std::env::var("DUCK_EXPLAIN_TOP") {
+                let n: usize = top_s.parse().unwrap_or(3);
+                eprintln!(
+                    "[duck/perf] EXPLAIN ANALYZE for top {n} rules' materialize SELECTs:"
+                );
+                match self.db.explain_top_rules(n) {
+                    Ok(s) => eprint!("{s}"),
+                    Err(e) => eprintln!("[duck/perf]   explain failed: {e}"),
+                }
+            }
         }
         Ok(std::mem::take(&mut self.outputs))
     }

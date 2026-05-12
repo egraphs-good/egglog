@@ -116,6 +116,7 @@ fn run_rule_variants(
     let trace = std::env::var("DUCK_TRACE_RULE_AFFECTED").is_ok();
     let trace_sql = std::env::var("DUCK_TRACE_SQL").is_ok();
     for variant in &rule.variants {
+        let mut skip_actions = false;
         if let Some(mat_sql_template) = &variant.materialize {
             if trace_sql {
                 eprintln!("[duck/mat] {mat_sql_template}");
@@ -125,6 +126,22 @@ fn run_rule_variants(
             let dt = t0.elapsed().as_nanos() as u64;
             *time_mat_ns = time_mat_ns.wrapping_add(dt);
             rule_mat_ns = rule_mat_ns.wrapping_add(dt);
+            // Skip the action set if the materialize produced
+            // zero rows. CREATE TABLE AS SELECT is DDL so its
+            // `execute` return is 0 regardless of SELECT row
+            // count; we use a follow-up COUNT(*) on the temp
+            // table to actually find out. The count is O(1)
+            // against DuckDB's row-count metadata.
+            if let Some(temp) = &variant.temp_table {
+                let count_sql = format!("SELECT COUNT(*) FROM {}", q(temp));
+                let n: i64 = conn.query_row(&count_sql, [], |r| r.get(0))?;
+                if n == 0 {
+                    skip_actions = true;
+                }
+            }
+        }
+        if skip_actions {
+            continue;
         }
         for act in &variant.actions {
             if trace_sql {
@@ -405,6 +422,10 @@ pub(crate) struct CompiledVariant {
     /// `None` for variants whose actions are all simple inserts/
     /// deletes — those just run directly.
     pub(crate) materialize: Option<String>,
+    /// Name of the temp table created by `materialize`. Used by the
+    /// runner to short-circuit the action set when the temp table
+    /// is empty after materialization.
+    pub(crate) temp_table: Option<String>,
     /// Action SQLs to run in order. When `materialize` is Some, each
     /// action SELECTs from the temp table; otherwise from the body.
     pub(crate) actions: Vec<CompiledAction>,
@@ -482,6 +503,77 @@ impl EGraph {
             self.time_mat_act_ns,
             self.time_act_ns,
         )
+    }
+
+    /// Run `EXPLAIN ANALYZE` against the materialize SELECT of each
+    /// variant of the top-`top` rules by total time. Uses `?1 = 0`
+    /// and `?2 = next_ts + 1` so the scan covers all rows currently
+    /// in each body table — that's the "everything fits" plan
+    /// DuckDB picks once the DB is fully populated, which is what
+    /// we care about for steady-state behavior. Returns a
+    /// pre-formatted multi-line report.
+    pub fn explain_top_rules(&self, top: usize) -> anyhow::Result<String> {
+        let mut by_total: Vec<(String, u64)> = self
+            .rule_perf_ns
+            .iter()
+            .map(|(n, (m, a))| (n.clone(), m + a))
+            .collect();
+        by_total.sort_by(|x, y| y.1.cmp(&x.1));
+        let last: i64 = 0;
+        let cur: i64 = self.next_ts + 1;
+        let mut out = String::new();
+        for (name, total) in by_total.into_iter().take(top) {
+            let Some(rule) = self.rules.iter().find(|r| r.name == name) else {
+                continue;
+            };
+            out.push_str(&format!(
+                "=== {name} (ruleset={}, total {:.3}s) ===\n",
+                rule.ruleset,
+                total as f64 / 1e9,
+            ));
+            for (vi, variant) in rule.variants.iter().enumerate() {
+                let Some(mat) = &variant.materialize else {
+                    out.push_str(&format!("  variant {vi}: no materialize\n"));
+                    continue;
+                };
+                // The materialize SQL is
+                // `CREATE OR REPLACE TEMP TABLE "..." AS SELECT ...`.
+                // Strip the wrapper so EXPLAIN ANALYZE doesn't
+                // (re)create a temp table as a side effect.
+                let Some(idx) = mat.find(" AS SELECT ") else {
+                    out.push_str(&format!("  variant {vi}: unexpected SQL shape\n"));
+                    continue;
+                };
+                let inner = &mat[idx + " AS ".len()..];
+                let bound = inner
+                    .replace("?1", &last.to_string())
+                    .replace("?2", &cur.to_string());
+                let explain_sql = format!("EXPLAIN ANALYZE {bound}");
+                out.push_str(&format!("\n  --- variant {vi} ---\n"));
+                match self.conn.prepare(&explain_sql) {
+                    Ok(mut stmt) => {
+                        let mut rows = stmt.query([])?;
+                        while let Some(row) = rows.next()? {
+                            // EXPLAIN ANALYZE returns
+                            // (explain_key, explain_value).
+                            let val: Result<String, _> = row.get::<_, String>(1);
+                            if let Ok(v) = val {
+                                for line in v.lines() {
+                                    out.push_str("    ");
+                                    out.push_str(line);
+                                    out.push('\n');
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        out.push_str(&format!("    error: {e}\n    sql: {explain_sql}\n"));
+                    }
+                }
+            }
+            out.push('\n');
+        }
+        Ok(out)
     }
 
     /// `(rule_name, ruleset, mat_ns, act_ns)` rows sorted by total
