@@ -1566,23 +1566,24 @@ fn build_let_info_from_expr(
     let Some(view_rel) = ctx.view_for_user.get(cons_name).cloned() else {
         return Ok(None);
     };
-    // Where create-rule writes (buffer_rel) vs where other rules look
-    // up (lookup_rel). Under strata mode these differ — buffer for
-    // writes, snap for reads (snap is in its own pre-stratum so reads
-    // don't create a recursive cycle with the buffer). Non-strata
-    // collapses both to the canonical view.
-    let candidate_snap = format!("{view_rel}_snap");
+    // Buffer is where create-rules write (under strata: `<view>_buffer`;
+    // otherwise the canonical view itself).
     let candidate_buffer = format!("{view_rel}_buffer");
     let buffer_rel = if ctx.relation_arity.contains_key(&candidate_buffer) {
         candidate_buffer.clone()
     } else {
         view_rel.clone()
     };
-    let lookup_rel = if ctx.relation_arity.contains_key(&candidate_snap) {
-        candidate_snap
-    } else {
-        buffer_rel.clone()
-    };
+    // Let-lookups (referencing terms created by `(let v (Cons args))`
+    // within the same rule) MUST read the canonical view, not snap. A
+    // term created by this rule lands in buffer → drain → view within
+    // the current iter; if the let-lookup reads snap (frozen at iter
+    // start) it can't see the just-created term and the dependent
+    // clause fires only one iter later. That lag accumulates across
+    // nested patterns — e.g., associativity emits two output rules
+    // where rule 2 references rule 1's just-created term, so under
+    // snap reads associativity would take 2 iters per application.
+    let lookup_rel = view_rel.clone();
     let mut lookup_args: Vec<Expr> = Vec::with_capacity(args.len());
     for a in args {
         // Buffer columns mirror the constructor's input sorts directly
