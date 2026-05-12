@@ -959,8 +959,8 @@ fn sort_to_column_ty(sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
     }
 }
 
-/// Decode a `:merge old` / `:merge new` declaration. Custom-merge
-/// expressions are rejected.
+/// Decode a `:merge old` / `:merge new` / `(ordering-min old new)`
+/// declaration. Other custom-merge expressions are rejected.
 fn parse_merge(
     merge: Option<&GenericExpr<ResolvedCall, ResolvedVar>>,
 ) -> Result<Option<duck::MergeMode>, DuckdbBackendError> {
@@ -968,10 +968,42 @@ fn parse_merge(
         None => Ok(None),
         Some(GenericExpr::Var(_, v)) if v.name == "old" => Ok(Some(duck::MergeMode::Old)),
         Some(GenericExpr::Var(_, v)) if v.name == "new" => Ok(Some(duck::MergeMode::New)),
+        Some(expr) if is_ordering_min_old_new(expr) => Ok(Some(duck::MergeMode::Min)),
         Some(other) => Err(DuckdbBackendError::Unsupported(format!(
             "custom merge expression `{other}`"
         ))),
     }
+}
+
+/// Recognize the literal shape `(ordering-min old new)` in either
+/// argument order, allowing for `Prim` or `Func` resolution of the
+/// `ordering-min` head. Anything else is rejected.
+fn is_ordering_min_old_new(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> bool {
+    let GenericExpr::Call(_, head, args) = expr else {
+        return false;
+    };
+    let head_name = match head {
+        ResolvedCall::Func(f) => f.name.as_str(),
+        ResolvedCall::Primitive(p) => p.name(),
+    };
+    if head_name != "ordering-min" {
+        return false;
+    }
+    if args.len() != 2 {
+        return false;
+    }
+    fn var_name<'a>(
+        a: &'a GenericExpr<ResolvedCall, ResolvedVar>,
+    ) -> Option<&'a str> {
+        if let GenericExpr::Var(_, v) = a {
+            Some(v.name.as_str())
+        } else {
+            None
+        }
+    }
+    let a = var_name(&args[0]);
+    let b = var_name(&args[1]);
+    matches!((a, b), (Some("old"), Some("new")) | (Some("new"), Some("old")))
 }
 
 impl DuckdbBackend {

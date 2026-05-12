@@ -219,6 +219,11 @@ pub enum MergeMode {
     Old,
     /// Latest-set wins. `ON CONFLICT DO UPDATE` of the output and ts.
     New,
+    /// `(ordering-min old new)` — output is `LEAST(existing, incoming)`.
+    /// Used by the UF function-index table so it always holds the
+    /// smallest known representative for each input, letting
+    /// singleparent skip its pairwise self-join.
+    Min,
 }
 
 /// A literal value usable in seed inserts and `check`/`lookup`.
@@ -1106,6 +1111,15 @@ pub(crate) fn conflict_clause(info: &FunctionInfo) -> String {
             let out_col = info.inputs_len;
             format!(
                 "ON CONFLICT DO UPDATE SET c{out_col} = EXCLUDED.c{out_col}, ts = EXCLUDED.ts"
+            )
+        }
+        Some(MergeMode::Min) => {
+            let out_col = info.inputs_len;
+            // Unprefixed `c{out_col}` on the RHS refers to the
+            // existing target row; `EXCLUDED.c{out_col}` is the new
+            // value being inserted.
+            format!(
+                "ON CONFLICT DO UPDATE SET c{out_col} = LEAST(c{out_col}, EXCLUDED.c{out_col}), ts = EXCLUDED.ts"
             )
         }
     }

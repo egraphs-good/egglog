@@ -130,14 +130,31 @@ impl<'a> ProofInstrumentor<'a> {
                     ),
                 )
             } else {
+                // singleparent (term mode): instead of self-joining
+                // pname to find pairs (a→b, a→c) and reducing them
+                // pairwise (O(N²) per group, N-1 iterations), look
+                // up the current representative for `a` via the
+                // function-form table and redirect every non-min
+                // row to it in one pass. Each group of size N is
+                // collapsed in a single iteration. The action also
+                // updates `uf_function_name(b)` so subsequent
+                // singleparent iterations see the latest mapping
+                // without waiting for uf_function_index to fire.
+                //
+                // Relies on `uf_function_name`'s merge being changed
+                // to ordering-min (see below) so the function
+                // actually holds the minimum c1 per a, not just the
+                // most-recently-inserted value.
                 (
                     format!("({pname} a b)\n                        ({pname} b c)"),
                     format!(
                         "(delete ({pname} a b))\n                       (set ({pname} a c) ())"
                     ),
-                    format!("({pname} a b)\n                        ({pname} a c)"),
                     format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} b c) ())"
+                        "({pname} a b)\n                        (= c ({uf_function_name} a))"
+                    ),
+                    format!(
+                        "(delete ({pname} a b))\n                       (set ({pname} b c) ())\n                       (set ({uf_function_name} b) c)"
                     ),
                 )
             };
@@ -163,10 +180,32 @@ impl<'a> ProofInstrumentor<'a> {
                 )
             };
 
+        // `uf_function_name` merge:
+        //   - proof mode: pairs (leader, proof) — `:merge new` keeps
+        //     whichever assertion was last seen, which is what proof
+        //     tracking expects.
+        //   - term mode: plain leader ID — `:merge (ordering-min …)`
+        //     so the function always holds the smallest representative
+        //     and singleparent can use it as a direct lookup instead
+        //     of a quadratic self-join.
+        let uf_function_merge = if self.egraph.proof_state.proofs_enabled {
+            ":merge new".to_string()
+        } else {
+            ":merge (ordering-min old new)".to_string()
+        };
+        // singleparent in term mode redirects via the function-form
+        // table and updates it inline, so it doesn't need the
+        // `(ordering-max b c) = b` selector that the original
+        // pairwise rule used. Proof mode still does pairwise.
+        let single_parent_filter = if self.egraph.proof_state.proofs_enabled {
+            "(!= b c)\n                    (= (ordering-max b c) b)".to_string()
+        } else {
+            "(!= b c)".to_string()
+        };
         let mut code = format!(
             "{uf_pair_sort_decl}
              (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
-             (function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge new :unextractable :internal-hidden)
+             (function {uf_function_name} ({sort_name}) {uf_function_output_type} {uf_function_merge} :unextractable :internal-hidden)
              ;; performs path compression, ensuring each term points to the representative
              (rule ({path_compress_query}
                     (!= b c))
@@ -175,8 +214,7 @@ impl<'a> ProofInstrumentor<'a> {
                    :name \"{fresh_name}\")
              ;; ensures each term has only one parent
              (rule ({single_parent_query}
-                    (!= b c)
-                    (= (ordering-max b c) b))
+                    {single_parent_filter})
                   ({single_parent_action})
                    :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
