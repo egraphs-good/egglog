@@ -144,14 +144,26 @@ fn compile_variant(
     };
 
     // 2) Decide whether we need the materialized path.
+    //
+    // We materialize the body when:
+    //  (a) Any action allocates a fresh ID (LetCtor) or computes a
+    //      derived value (LetExpr) that subsequent actions reference.
+    //  (b) The rule has multiple actions — even pure INSERT/DELETE
+    //      pairs need to see the SAME body snapshot. Without
+    //      materialization, an action like `(delete X)` would remove
+    //      rows from the body before a subsequent `(set X')` action
+    //      could read them, dropping the corresponding insertions.
+    //      This is the @uf_update/@singleparent pattern: delete an
+    //      old row, insert the canonicalized successor.
     let has_let = rule
         .actions
         .iter()
         .any(|a| matches!(a, Action::LetCtor { .. } | Action::LetExpr { .. }));
+    let needs_snapshot = has_let || rule.actions.len() > 1;
 
-    if !has_let {
-        // Simple path: each action becomes its own INSERT/DELETE
-        // FROM <body>.
+    if !needs_snapshot {
+        // Single-action rule with no Let: simple INSERT/DELETE FROM
+        // <body> is correct, and avoids the temp-table overhead.
         let actions = rule
             .actions
             .iter()
