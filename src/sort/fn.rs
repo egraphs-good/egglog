@@ -441,10 +441,13 @@ impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
-    /// Wraps a constructor-table lookup. In a write-capable context
-    /// (`Write`/`Full`) `FunctionContainer::apply` mints a fresh
-    /// eclass via `lookup_or_insert`; in `Read` it does a read-only
-    /// `lookup`; in `Pure` it returns `None` (no DB ops).
+    /// Wraps a constructor-table lookup. Only admissible in
+    /// write-capable contexts (`Write`/`Full`), where
+    /// `FunctionContainer::apply` mints a fresh eclass via
+    /// `lookup_or_insert`. In any read-only context (`Read`/`Pure`)
+    /// it triggers the pre-registered runtime panic — a no-mint
+    /// constructor would silently miss instead of producing the
+    /// eclass the user asked for, so the call is rejected outright.
     ConstructorLookup(egglog_bridge::TableAction),
     /// Wraps a custom-function (`:no-merge`/`Fail`) lookup. Pure read
     /// returning `None` on miss. `FunctionContainer::apply` allows
@@ -542,11 +545,11 @@ impl FunctionContainer {
             ResolvedFunctionId::ConstructorLookup(action) => {
                 if can_mint {
                     action.lookup_or_insert(state.raw_exec_state(), &args)
-                } else if can_read {
-                    // Read-only path (e.g. `Read`): existing eclasses
-                    // are visible, but we don't mint.
-                    action.lookup(state.raw_exec_state(), &args)
                 } else {
+                    // Read-only contexts (`Read`/`Pure`) reject the
+                    // call: a no-mint constructor would silently miss
+                    // instead of producing the eclass the user asked
+                    // for.
                     mismatch(state)
                 }
             }

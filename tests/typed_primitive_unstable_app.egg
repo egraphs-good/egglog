@@ -25,12 +25,16 @@
 ; After the rule, (Num 99) exists in the e-graph.
 (check (Num 99))
 
-; --- 3. unstable-app over a constructor in a *query* must NOT mint.
-;     `FunctionContainer::apply` does a read-only `lookup` in
-;     `GlobalQuery` (no mint), so the eclass for `(Num 42)` does not
-;     exist and the check fails.
+; --- 3. unstable-app over a constructor in a read-only context
+;     (here, top-level `check` = `Read`) is rejected outright by
+;     `FunctionContainer::apply` via the pre-registered runtime
+;     panic — a no-mint constructor would silently miss instead of
+;     producing the eclass the user asked for, so the call is
+;     banned anywhere it can't mint. `(fail …)` here catches the
+;     `Err` surfaced from `run_rules`.
 (fail (check (= (unstable-app make 42) (Num 42))))
-; And the rule above did not unintentionally mint (Num 42).
+; And no eclass was minted along the way: `(Num 42)` still doesn't
+; exist as a direct atom-level lookup either.
 (fail (check (Num 42)))
 
 ; --- 4. unstable-app over a custom (non-constructor) function in a

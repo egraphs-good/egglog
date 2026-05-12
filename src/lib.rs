@@ -2062,8 +2062,11 @@ impl<'a> BackendRule<'a> {
                 // via `lookup_or_insert`) from custom-function lookups
                 // (pure read via `lookup`). `FunctionContainer::apply`
                 // uses this distinction to allow `unstable-app` over a
-                // custom function in safe contexts (e.g. global checks)
-                // while still refusing constructor minting in queries.
+                // custom function in any DB-read-capable context (e.g.
+                // global checks) while refusing constructors outright
+                // anywhere they can't mint — a no-mint constructor
+                // would silently miss instead of producing the eclass
+                // the user asked for.
                 let action = egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f));
                 match f.subtype {
                     ast::FunctionSubtype::Constructor => {
