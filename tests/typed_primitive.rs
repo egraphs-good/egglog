@@ -7,7 +7,7 @@
 //! - `unstable-fn` over a constructor in a query context is filtered
 //!   (does NOT mint an eclass), but works in actions.
 //! - `unstable-fn` over a custom function is filtered in rule queries.
-//! - Two same-signature registrations: silent-pick-first behavior
+//! - Two same-signature registrations: ambiguity is rejected
 //!   (regression guard).
 
 use egglog::ast::Span;
