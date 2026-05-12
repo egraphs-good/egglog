@@ -123,9 +123,7 @@ pub struct EGraph {
     /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
     /// in the egglog crate so name-indexed action methods on
     /// [`WriteState`] / [`FullState`] can resolve table actions at
-    /// invoke time. Mutated in place from
-    /// [`add_table`](EGraph::add_table) to avoid cloning the entire
-    /// registry on every declaration.
+    /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
 }
 
