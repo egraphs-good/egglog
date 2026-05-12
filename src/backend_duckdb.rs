@@ -14,7 +14,7 @@
 
 use crate::ast::*;
 use crate::core::ResolvedCall;
-use crate::{EGraph, Error, ResolvedNCommand};
+use crate::{CommandOutput, EGraph, Error, ResolvedNCommand};
 
 use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericFact, Literal as EgLit};
 use egglog_ast::util::ListDisplay;
@@ -60,6 +60,10 @@ pub struct DuckdbBackend {
     /// `@<Ctor>View` tables map back to the user's `Ctor` name
     /// post-term-encoding).
     function_meta: hashbrown::HashMap<String, FnMeta>,
+    /// Accumulator for command output (currently only `print-size`).
+    /// Mirrors `EGraph::parse_and_run_program`'s `Vec<CommandOutput>`
+    /// so the same test pipeline can target either executor.
+    outputs: Vec<CommandOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,19 +92,35 @@ impl DuckdbBackend {
             combined_rulesets: hashbrown::HashMap::default(),
             known_rulesets: hashbrown::HashSet::default(),
             function_meta: hashbrown::HashMap::default(),
+            outputs: Vec::new(),
         })
     }
 
-    /// Parse, resolve, and dispatch each command to the duckdb backend.
+    /// CLI entry point: run the program and print outputs to stdout.
     pub fn run_program(
         &mut self,
         filename: Option<String>,
         input: &str,
     ) -> Result<(), DuckdbBackendError> {
+        for output in self.parse_and_run_program(filename, input)? {
+            print!("{output}");
+        }
+        Ok(())
+    }
+
+    /// Egglog-shaped runner used by the test harness so the same
+    /// snapshot pipeline can target either executor (mirrors
+    /// `EGraph::parse_and_run_program`).
+    pub fn parse_and_run_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<CommandOutput>, DuckdbBackendError> {
         let resolved = self
             .typechecker
             .resolve_program_to_ncommands(filename, input)
             .map_err(DuckdbBackendError::Frontend)?;
+        self.outputs.clear();
         for ncmd in resolved {
             self.dispatch(&ncmd)?;
         }
@@ -113,7 +133,7 @@ impl DuckdbBackend {
         if std::env::var("DUCK_PROBE_HASHCONS").is_ok() {
             self.probe_hashcons()?;
         }
-        Ok(())
+        Ok(std::mem::take(&mut self.outputs))
     }
 
     /// Total tuples in a registered table.
@@ -790,7 +810,7 @@ impl DuckdbBackend {
         match name {
             Some(n) => {
                 let count = self.db.count(n).map_err(DuckdbBackendError::Backend)?;
-                println!("({n}: {count})");
+                self.outputs.push(CommandOutput::PrintFunctionSize(count as usize));
             }
             None => {
                 // Mirror egglog's `EGraph::print_size`: iterate
@@ -815,15 +835,16 @@ impl DuckdbBackend {
                     })
                     .collect();
                 entries.sort_by(|a, b| a.0.cmp(&b.0));
-                for (i, (display, count_name)) in entries.iter().enumerate() {
+                let mut names_and_sizes: Vec<(String, usize)> = Vec::with_capacity(entries.len());
+                for (display, count_name) in entries {
                     let count = self
                         .db
-                        .count(count_name)
+                        .count(&count_name)
                         .map_err(DuckdbBackendError::Backend)?;
-                    let prefix = if i == 0 { "(" } else { " " };
-                    let suffix = if i + 1 == entries.len() { ")" } else { "" };
-                    println!("{prefix}({display} {count}){suffix}");
+                    names_and_sizes.push((display, count as usize));
                 }
+                self.outputs
+                    .push(CommandOutput::PrintAllFunctionsSize(names_and_sizes));
             }
         }
         Ok(())

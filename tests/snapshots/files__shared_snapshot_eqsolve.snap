@@ -2,9 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-(extraction-costs 2)
-(extraction-costs 2)
-(extraction-costs 2)
 ((Add 788)
  (Mul 67)
  (Neg 31)

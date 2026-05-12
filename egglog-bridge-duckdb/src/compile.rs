@@ -293,6 +293,19 @@ fn compile_variant(
                 mat_binding.insert(var.clone(), q(var));
             }
             Action::LetExpr { var, expr } => {
+                // Pure aliases `(let $a @v6)` where the RHS is a
+                // var already bound by an earlier LetCtor live in
+                // `mat_binding`, not `binding`. SELECT-list aliases
+                // can't reference each other within the same SELECT,
+                // so just re-point the alias instead of emitting a
+                // column.
+                if let Term::Var(other) = expr {
+                    if let Some(src) = mat_binding.get(other) {
+                        let src = src.clone();
+                        mat_binding.insert(var.clone(), src);
+                        continue;
+                    }
+                }
                 let expr_sql = term_sql(expr, &binding, &rule.name)?;
                 select_cols.push(format!("{expr_sql} AS {}", q(var)));
                 mat_binding.insert(var.clone(), q(var));
@@ -382,6 +395,110 @@ pub(crate) fn compile_body_select(
 
 /// Shared body walker used by both rule compilation (via
 /// `build_query`) and check compilation (via `compile_body_select`).
+/// Try to process a single body atom. Returns `Ok(true)` if the
+/// atom was fully processed and contributed to `binding` /
+/// `from_parts` / `where_parts`; `Ok(false)` if it depends on a var
+/// that hasn't been bound yet and should be retried later. The Err
+/// path is reserved for genuine compilation errors (e.g., unbound
+/// var inside a Prim subterm).
+fn try_walk_atom(
+    atom: &Atom,
+    i: usize,
+    binding: &mut HashMap<String, String>,
+    from_parts: &mut Vec<String>,
+    where_parts: &mut Vec<String>,
+    rule_name: &str,
+) -> Result<bool> {
+    match atom {
+        Atom::Func { name, args } => {
+            let alias = format!("t{i}");
+            from_parts.push(format!("{} {alias}", q(name)));
+            for (col, term) in args.iter().enumerate() {
+                let lhs = format!("{alias}.c{col}");
+                match term {
+                    Term::Var(v) => match binding.get(v) {
+                        None => {
+                            binding.insert(v.clone(), lhs);
+                        }
+                        Some(prev) => {
+                            where_parts.push(format!("{prev} = {lhs}"));
+                        }
+                    },
+                    Term::Lit(_) | Term::Prim(_, _) | Term::FuncCall { .. } => {
+                        let rhs = term_sql(term, binding, rule_name)?;
+                        where_parts.push(format!("{lhs} = {rhs}"));
+                    }
+                }
+            }
+            Ok(true)
+        }
+        Atom::Filter(t) => {
+            if !term_vars_all_bound(t, binding) {
+                return Ok(false);
+            }
+            where_parts.push(term_sql(t, binding, rule_name)?);
+            Ok(true)
+        }
+        Atom::Bind { var, expr } => {
+            // Symmetric handling for Var-Var binds: if one side is
+            // already bound and the other isn't, propagate the
+            // binding to the unbound side. If neither is bound,
+            // defer (a later Func atom probably binds one of them).
+            if let Term::Var(other) = expr {
+                let var_bound = binding.contains_key(var);
+                let other_bound = binding.contains_key(other);
+                match (var_bound, other_bound) {
+                    (true, true) => {
+                        let l = binding[var].clone();
+                        let r = binding[other].clone();
+                        where_parts.push(format!("{l} = {r}"));
+                        Ok(true)
+                    }
+                    (true, false) => {
+                        let l = binding[var].clone();
+                        binding.insert(other.clone(), l);
+                        Ok(true)
+                    }
+                    (false, true) => {
+                        let r = binding[other].clone();
+                        binding.insert(var.clone(), r);
+                        Ok(true)
+                    }
+                    (false, false) => Ok(false),
+                }
+            } else {
+                if !term_vars_all_bound(expr, binding) {
+                    return Ok(false);
+                }
+                let s = term_sql(expr, binding, rule_name)?;
+                match binding.get(var) {
+                    None => {
+                        binding.insert(var.clone(), s);
+                    }
+                    Some(prev) => {
+                        where_parts.push(format!("{prev} = {s}"));
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
+}
+
+/// Check whether every `Term::Var` referenced inside `t` (directly
+/// or transitively through Prim/FuncCall children) is already
+/// bound. Used to decide whether a Filter/Bind atom is ready to
+/// process or should be deferred.
+fn term_vars_all_bound(t: &Term, binding: &HashMap<String, String>) -> bool {
+    match t {
+        Term::Var(v) => binding.contains_key(v),
+        Term::Lit(_) => true,
+        Term::Prim(_, args) | Term::FuncCall { args, .. } => {
+            args.iter().all(|a| term_vars_all_bound(a, binding))
+        }
+    }
+}
+
 fn walk_body(
     atoms: &[Atom],
     focus: Option<usize>,
@@ -391,73 +508,58 @@ fn walk_body(
     let mut from_parts: Vec<String> = Vec::new();
     let mut where_parts: Vec<String> = Vec::new();
 
-    for (i, atom) in atoms.iter().enumerate() {
-        match atom {
-            Atom::Func { name, args } => {
-                let alias = format!("t{i}");
-                from_parts.push(format!("{} {alias}", q(name)));
-                for (col, term) in args.iter().enumerate() {
-                    let lhs = format!("{alias}.c{col}");
-                    match term {
-                        Term::Var(v) => match binding.get(v) {
-                            None => {
-                                binding.insert(v.clone(), lhs);
-                            }
-                            Some(prev) => {
-                                where_parts.push(format!("{prev} = {lhs}"));
-                            }
-                        },
-                        Term::Lit(_) | Term::Prim(_, _) | Term::FuncCall { .. } => {
-                            let rhs = term_sql(term, &binding, rule_name)?;
-                            where_parts.push(format!("{lhs} = {rhs}"));
-                        }
-                    }
+    // Term encoding can emit Bind atoms whose vars are introduced
+    // by *later* Func atoms (e.g. `(rewrite p $True :when …)` →
+    // body atom 0 is `(= @rewrite_var__ p)` where `p` is first
+    // bound by atom 3). Defer any atom we can't process yet and
+    // retry until we converge. Func atoms always process first
+    // pass since they introduce their own bindings unconditionally.
+    let mut pending: Vec<usize> = (0..atoms.len()).collect();
+    loop {
+        let mut made_progress = false;
+        let mut still_pending: Vec<usize> = Vec::new();
+        for i in pending {
+            let atom = &atoms[i];
+            let ok = try_walk_atom(
+                atom,
+                i,
+                &mut binding,
+                &mut from_parts,
+                &mut where_parts,
+                rule_name,
+            )?;
+            if ok {
+                made_progress = true;
+            } else {
+                still_pending.push(i);
+            }
+        }
+        if still_pending.is_empty() {
+            break;
+        }
+        if !made_progress {
+            // Pick the first unsatisfied atom and error with a
+            // descriptive message rather than looping forever.
+            let i = still_pending[0];
+            match &atoms[i] {
+                Atom::Bind { var, expr } => {
+                    return Err(anyhow!(
+                        "rule {rule_name}: cannot resolve Bind {var} = {expr:?}: dependent vars never get bound"
+                    ));
                 }
-            }
-            Atom::Filter(t) => {
-                where_parts.push(term_sql(t, &binding, rule_name)?);
-            }
-            Atom::Bind { var, expr } => {
-                // Symmetric handling for Var-Var binds: if one side is
-                // already bound and the other isn't, propagate the
-                // binding to the unbound side. Term encoding produces
-                // these to chain proof-normalized equalities.
-                if let Term::Var(other) = expr {
-                    let var_bound = binding.contains_key(var);
-                    let other_bound = binding.contains_key(other);
-                    match (var_bound, other_bound) {
-                        (true, true) => {
-                            let l = binding[var].clone();
-                            let r = binding[other].clone();
-                            where_parts.push(format!("{l} = {r}"));
-                        }
-                        (true, false) => {
-                            let l = binding[var].clone();
-                            binding.insert(other.clone(), l);
-                        }
-                        (false, true) => {
-                            let r = binding[other].clone();
-                            binding.insert(var.clone(), r);
-                        }
-                        (false, false) => {
-                            return Err(anyhow!(
-                                "rule {rule_name}: Bind var={var} = {other}: neither var bound"
-                            ));
-                        }
-                    }
-                } else {
-                    let s = term_sql(expr, &binding, rule_name)?;
-                    match binding.get(var) {
-                        None => {
-                            binding.insert(var.clone(), s);
-                        }
-                        Some(prev) => {
-                            where_parts.push(format!("{prev} = {s}"));
-                        }
-                    }
+                Atom::Filter(t) => {
+                    return Err(anyhow!(
+                        "rule {rule_name}: cannot resolve Filter {t:?}: dependent vars never get bound"
+                    ));
+                }
+                Atom::Func { name, .. } => {
+                    return Err(anyhow!(
+                        "rule {rule_name}: cannot resolve Func {name}: internal error"
+                    ));
                 }
             }
         }
+        pending = still_pending;
     }
     if let Some(focus_idx) = focus {
         // Standard seminaive triangulation, mirroring egglog-bridge

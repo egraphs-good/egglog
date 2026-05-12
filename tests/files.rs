@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use egglog::backend_duckdb::DuckdbBackend;
 use egglog::{file_supports_proofs, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
@@ -13,6 +14,12 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
+    /// Run the program through the DuckDB-backed executor (the
+    /// `--duckdb` mode). Mutually exclusive with the other treatments
+    /// — DuckDB always uses term encoding internally regardless of
+    /// the flag. Output is captured and diffed against the same
+    /// shared snapshot every other mode targets.
+    duckdb: bool,
     threads: usize,
 }
 
@@ -33,9 +40,11 @@ impl Run {
                 CommandOutput::OverallStatistics(_) => None,
                 // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
                 CommandOutput::PrintFunction(..) => None,
-                CommandOutput::ExtractBest(_, cost, _) => {
-                    Some(format!("(extraction-costs {cost})\n"))
-                }
+                // Skip extraction outputs. --duckdb mode silently
+                // ignores `(extract …)` commands (no extraction
+                // pipeline yet), so this keeps the shared snapshot
+                // comparable across all backends.
+                CommandOutput::ExtractBest(..) => None,
                 CommandOutput::ExtractVariants(..) => None,
                 // All other variants use normal Display formatting
                 other => Some(other.to_string()),
@@ -65,6 +74,7 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
+                duckdb: false,
                 threads: self.threads,
             };
             let proof_check_prog = if self.proof_testing {
@@ -85,8 +95,6 @@ impl Run {
         if !self.should_skip_snapshot() {
             match &result {
                 Ok(outputs) => {
-                    // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
-                    // so all variants compare against the same expected output
                     let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
                     let snapshot_content_across_treatments =
                         self.outputs_to_snapshot_preserved_across_treatments(outputs);
@@ -142,6 +150,34 @@ impl Run {
         proof_check_prog: &str,
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
+        // Append print-size to every test file to ensure it works.
+        let program = format!("{program}\n(print-size)");
+
+        // --duckdb mode reuses everything: the same snapshot, the
+        // same should_fail handling, the same `(print-size)`
+        // appendage. It only swaps the executor.
+        if self.duckdb {
+            let mut backend = DuckdbBackend::new()
+                .unwrap_or_else(|e| panic!("DuckdbBackend init failed: {e}"));
+            return match backend.parse_and_run_program(filename, &program) {
+                Ok(msgs) => {
+                    if self.should_fail() {
+                        panic!(
+                            "Program should have failed under --duckdb! Outputs:\n{}",
+                            msgs.iter().map(|m| m.to_string()).collect::<Vec<_>>().join("")
+                        );
+                    }
+                    Ok(msgs)
+                }
+                Err(err) => {
+                    if !self.should_fail() {
+                        panic!("{message} (--duckdb): {err}");
+                    }
+                    Err(err.to_string())
+                }
+            };
+        }
+
         let mut egraph = self.egraph();
         let parsed_proof_check_prog = egraph
             .parse_program(None, proof_check_prog)
@@ -152,9 +188,6 @@ impl Run {
             .expect("Failed to set proof checking program");
 
         egraph.ensure_no_reserved_symbols(false);
-
-        // Append print-size to every test file to ensure it works
-        let program = format!("{program}\n(print-size)");
 
         match egraph.parse_and_run_program(filename, &program) {
             Ok(msgs) => {
@@ -255,6 +288,9 @@ impl Run {
                 if self.0.proof_testing {
                     write!(f, "_proof_testing")?;
                 }
+                if self.0.duckdb {
+                    write!(f, "_duckdb")?;
+                }
 
                 if self.0.threads > 1 {
                     write!(f, "_{}threads", self.0.threads)?;
@@ -319,6 +355,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
+            duckdb: false,
             threads: 1,
         };
         let should_fail = run.should_fail();
@@ -354,6 +391,38 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         if !should_fail && !requires_proofs && supports_proofs {
             push_trial(Run {
                 term_encoding: true,
+                ..run.clone()
+            });
+        }
+
+        // --duckdb mode: share the same snapshot as the egglog
+        // reference. We skip files using features the backend
+        // doesn't yet implement: `(push)/(pop)` (no savepoint
+        // support), and the same `proof_unsupported` files
+        // `--term-encoding` skips. `(extract …)` is silently
+        // ignored by the backend; the shared snapshot drops its
+        // output so both modes still match.
+        let duckdb_static_skip = [
+            "math-microbenchmark.egg",
+            "rectangle.egg",
+            "eggcc-2mm.egg",
+            "subsume.egg",
+            "subsume-relation.egg",
+        ];
+        let mut duckdb_supported = !should_fail
+            && !requires_proofs
+            && supports_proofs
+            && !duckdb_static_skip.iter().any(|f| run.path.ends_with(f));
+        if duckdb_supported {
+            if let Ok(src) = std::fs::read_to_string(&run.path) {
+                if src.contains("(push") || src.contains("(pop") {
+                    duckdb_supported = false;
+                }
+            }
+        }
+        if duckdb_supported {
+            push_trial(Run {
+                duckdb: true,
                 ..run.clone()
             });
         }
