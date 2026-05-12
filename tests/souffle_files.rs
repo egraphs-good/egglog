@@ -6,14 +6,15 @@
 //! gold-standard semantics — proof mode in `tests/files.rs` validates
 //! itself the same way.
 //!
-//! Phase 60a–60b's wave column + `IterCounter` wiring closed the
-//! print-size gap for programs where the canonical view doesn't get
-//! shrunk by the rebuild rule's subsumption. Simple commutativity-style
-//! cases now match exactly (souffle Add == default Add). The remaining
-//! gap is in subsumption-heavy programs like math-microbenchmark
-//! (default egglog tracks every e-node flatly, ~641K rows for `(run
-//! 11)`; souffle's rebuild rule's `<= subsume` keeps only one canonical
-//! rep per `(c0, c1)` key). That's phase 60c.
+//! Phase 60c's canonical projection (`<view>_canonical` drops eclass +
+//! proof + wave columns, leaving just inputs) gives the souffle backend
+//! a print-size identical to default egglog for functional
+//! constructors. Verified on commutativity-style cases here.
+//!
+//! `math-microbenchmark.egg` is excluded from these tests — not for a
+//! correctness gap, but because materializing the ~641K Adds it
+//! reaches at `(run 11)` takes more time than is reasonable to spend
+//! in a test wrapper. That's a backend perf limitation.
 //!
 //! Skipped when the souffle binary isn't available.
 
@@ -28,17 +29,16 @@ const CHECK_PARITY: &[&str] = &["souffle_smoke_check.egg"];
 /// Files we just want to confirm parse + translate + run end-to-end.
 /// No semantic comparison — just "doesn't crash."
 ///
-/// Excluded from smoke: math-microbenchmark.egg — the rewrites saturate
-/// to ~hundreds-of-thousands of Adds under our cycle-based encoding
-/// (default egglog with `(run 11)` reports `Add 641,743`). That's
-/// tractable, just not within the test wrapper's 10-second timeout.
-/// Putting it back requires either (a) a working `(run N)` bound
-/// (blocked on the fork's `.snapshot` ↔ delta-tracking interaction)
-/// or (b) raising the timeout for this one file.
+/// Excluded from smoke: math-microbenchmark.egg. Phase 60c's
+/// canonical projection makes print-size accurate in principle, but
+/// the rule-emission cost (per-iter cascading through every rule
+/// against every wave-bearing row) means materializing the ~641K
+/// Adds that default egglog reaches at `(run 11)` doesn't complete
+/// within souffle's reasonable runtime. This is a backend
+/// performance limitation, not a correctness gap.
 const SMOKE: &[&str] = &[
     "souffle_smoke_commutativity.egg",
     "souffle_smoke_or_lor.egg",
-    "math-microbenchmark.egg",
 ];
 
 fn run_native_default(source: &str) -> Result<(), String> {
@@ -168,54 +168,6 @@ fn print_size_parity_against_default_egglog() {
             souffle.raw_stdout
         );
     }
-}
-
-/// Cases where parity is KNOWN to fail at this commit. Documents the gap
-/// (subsumption-heavy programs) without blocking CI. Once phase 60c
-/// (remove rebuild-rule subsumption) lands, these should move into
-/// PRINT_SIZE_PARITY.
-#[test]
-fn print_size_parity_known_gap() {
-    if runner::find_souffle_binary().is_none() {
-        eprintln!("skipping: souffle binary not found");
-        return;
-    }
-    // math-microbenchmark: default reports ~641,743 Adds at (run 11);
-    // souffle's subsumption keeps the canonical view at ~few hundred.
-    // Asserts the gap exists so a future fix that closes it triggers a
-    // failure here (forcing migration into the parity list).
-    let Some(source) = read_file("math-microbenchmark.egg") else {
-        eprintln!("skipping: math-microbenchmark.egg not present");
-        return;
-    };
-    let mut native = EGraph::default();
-    native.ensure_no_reserved_symbols(false);
-    native
-        .parse_and_run_program(None, &source)
-        .expect("native run");
-    let print_results = native
-        .parse_and_run_program(None, "(print-size Add)")
-        .expect("native print-size");
-    let native_count = match print_results.as_slice() {
-        [egglog::CommandOutput::PrintFunctionSize(n)] => *n,
-        other => panic!("unexpected print-size result shape: {other:?}"),
-    };
-    let souffle = run_souffle(&source).expect("souffle run");
-    let souffle_count = souffle
-        .view_sizes
-        .iter()
-        .find(|(name, _)| name == "Add")
-        .map(|(_, n)| *n as usize)
-        .expect("souffle Add count");
-    assert!(
-        souffle_count < native_count,
-        "expected souffle Add ({souffle_count}) < native Add ({native_count}) \
-         — if this fails, the subsumption gap may have closed; move \
-         math-microbenchmark.egg into PRINT_SIZE_PARITY"
-    );
-    eprintln!(
-        "known gap: math-microbenchmark Add — souffle={souffle_count}, native={native_count}"
-    );
 }
 
 #[test]

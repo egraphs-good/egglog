@@ -223,7 +223,8 @@ pub fn translate_with_manifest(
     emit_live_views(&ctx, &mut p);
     emit_snapshot_directives(&mut p);
     emit_run_limit(&ctx, &mut p);
-    emit_printsize_directives(&mut p);
+    emit_wave_dedup_subsumption(&ctx, &mut p);
+    emit_printsize_directives(&ctx, &mut p);
     let manifest = build_manifest(&ctx);
     Ok(TranslateOutput { program: p, manifest })
 }
@@ -235,7 +236,17 @@ fn build_manifest(ctx: &Ctx) -> Manifest {
     let view_relations: Vec<(String, String)> = ctx
         .view_for_user
         .iter()
-        .map(|(user, view)| (user.clone(), egglog_souffle_backend::emit::sanitize(view)))
+        .map(|(user, view)| {
+            // For wave-bearing canonical views, point at the
+            // `<view>_canonical` projection (wave column dropped) so
+            // print-size reports the distinct-content row count.
+            let target = if ctx.view_relations.contains(view) {
+                format!("{view}_canonical")
+            } else {
+                view.clone()
+            };
+            (user.clone(), egglog_souffle_backend::emit::sanitize(&target))
+        })
         .collect();
     let check_relations: Vec<String> = ctx
         .check_relations
@@ -249,7 +260,7 @@ fn build_manifest(ctx: &Ctx) -> Manifest {
 /// user would care about inspecting (view tables and UF tables), skipping
 /// internal scaffolding (`_buffer`, `_snap`, `_live`, `to_delete_*`,
 /// `to_subsume_*`).
-fn emit_printsize_directives(p: &mut Program) {
+fn emit_printsize_directives(ctx: &Ctx, p: &mut Program) {
     let names: Vec<String> = p
         .relations
         .iter()
@@ -261,6 +272,10 @@ fn emit_printsize_directives(p: &mut Program) {
                 && !n.ends_with("_live")
                 && !n.contains("to_delete_")
                 && !n.contains("to_subsume_")
+                // For wave-bearing canonical views we report the
+                // `_canonical` projection's size instead of the
+                // wave-tagged view (which has per-wave duplicates).
+                && !ctx.view_relations.contains(n.as_str())
         })
         .collect();
     for n in names {
@@ -294,6 +309,49 @@ fn emit_snapshot_directives(p: &mut Program) {
 /// the Souffle fork's bounded-iteration mechanism caps that SCC at N.
 /// The buffer relations all live in the same SCC (they're co-written
 /// by user rules), so attaching the bound to any one of them suffices.
+/// For each wave-bearing CANONICAL view relation, declare a
+/// `<view>_canonical` projection that drops the eclass (`c_{N-3}`),
+/// proof (`c_{N-2}`), and `wave` (`c_{N-1}`) columns — keeping just
+/// the original-input columns. For functional egglog constructors
+/// (`:merge old` etc.), per (inputs) there's exactly one eclass
+/// after canonicalization, so distinct-(inputs) count equals
+/// distinct-(inputs, eclass) count which is what default egglog's
+/// print-size reports. Souffle naturally dedups via set semantics —
+/// no subsumption clause needed — so this is O(N) per derivation.
+fn emit_wave_dedup_subsumption(ctx: &Ctx, p: &mut Program) {
+    let targets: Vec<(String, Vec<(String, String)>)> = p
+        .relations
+        .iter()
+        .filter(|r| is_wave_bearing(ctx, &r.name) && ctx.view_relations.contains(&r.name))
+        .map(|r| (r.name.clone(), r.columns.clone()))
+        .collect();
+    for (rel, cols) in targets {
+        let canonical_name = format!("{rel}_canonical");
+        // Keep only the leading input columns; drop eclass, proof,
+        // and wave.
+        let n = cols.len();
+        if n < 3 {
+            continue;
+        }
+        let key_cols = &cols[..n - 3];
+        p.relations.push(RelationDecl {
+            name: canonical_name.clone(),
+            columns: key_cols.to_vec(),
+        });
+        let key_vars: Vec<Expr> = (0..key_cols.len())
+            .map(|i| Expr::Var(format!("c{i}_")))
+            .collect();
+        let mut body_args = key_vars.clone();
+        body_args.push(Expr::Wildcard); // eclass column
+        body_args.push(Expr::Wildcard); // out (proof) column
+        body_args.push(Expr::Wildcard); // wave column
+        p.clauses.push(Clause::rule(
+            Atom { relation: canonical_name, args: key_vars },
+            vec![IrLit::Atom(Atom { relation: rel, args: body_args })],
+        ));
+    }
+}
+
 fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
     let Some(n) = ctx.user_run_count else {
         return;
@@ -667,6 +725,8 @@ fn translate_rule(
     let use_wave_filter = ctx.user_run_count.is_some()
         && !is_system_ruleset(rule.ruleset.as_str())
         && !rule.body.is_empty();
+    let preserve_wave = ctx.user_run_count.is_some()
+        && is_wave_preservation_rule(rule.name.as_str());
     let k_var_name = "__K";
     let head_wave_expr = if use_wave_filter {
         Expr::Var(k_var_name.to_string())
@@ -882,14 +942,20 @@ fn translate_rule(
             for x in extra {
                 full_body.push(x.clone());
             }
-            let head_atom = Atom { relation: rel.clone(), args: args.clone() };
-            add_let_lookups_to_body(&head_atom, &mut full_body, &all_lets);
+            let mut head_args = args.clone();
+            let head_atom_for_lets = Atom { relation: rel.clone(), args: head_args.clone() };
+            add_let_lookups_to_body(&head_atom_for_lets, &mut full_body, &all_lets);
             if use_wave_filter {
                 full_body = rewrite_user_rule_body_with_wave_filter(
                     full_body, ctx, k_var_name,
                 );
+            } else if preserve_wave {
+                full_body = rewrite_wave_preservation(full_body, &mut head_args, ctx);
             }
-            p.clauses.push(Clause::rule(head_atom, full_body));
+            p.clauses.push(Clause::rule(
+                Atom { relation: rel.clone(), args: head_args },
+                full_body,
+            ));
         }
         for (rel, del_args) in &changes {
             // The set's arg list is the delete's args + an output column
@@ -916,18 +982,26 @@ fn translate_rule(
                 for x in extra {
                     sub_body.push(x.clone());
                 }
+                let mut dominating_args = set_args.clone();
                 let dominated = Atom { relation: rel.clone(), args: dom_args };
-                let dominating = Atom { relation: set_rel.clone(), args: set_args.clone() };
                 // Use `dominating` for var collection — it carries the
                 // full set-shape (with the let-fresh-vars in typed
                 // head columns), so dependent lookups can derive from
                 // the same head context as the paired set.
-                add_let_lookups_to_body(&dominating, &mut sub_body, &all_lets);
+                let dominating_for_lets = Atom {
+                    relation: set_rel.clone(),
+                    args: dominating_args.clone(),
+                };
+                add_let_lookups_to_body(&dominating_for_lets, &mut sub_body, &all_lets);
                 if use_wave_filter {
                     sub_body = rewrite_user_rule_body_with_wave_filter(
                         sub_body, ctx, k_var_name,
                     );
+                } else if preserve_wave {
+                    sub_body =
+                        rewrite_wave_preservation(sub_body, &mut dominating_args, ctx);
                 }
+                let dominating = Atom { relation: set_rel.clone(), args: dominating_args };
                 p.clauses.push(Clause::subsume(dominated, dominating, sub_body));
             } else {
                 return Err(TranslateError::Unsupported(format!(
@@ -937,6 +1011,60 @@ fn translate_rule(
         }
     }
     Ok(())
+}
+
+/// True for system rules that COPY a wave-bearing row from one
+/// wave-bearing relation to another (drain: buffer → view; rebuild:
+/// view → view, canonicalized). Their head wave must match the
+/// source's wave; otherwise drain's wave-0 output triggers user-rule
+/// re-firing within the same outer iter (infinite loop / fixpoint
+/// instead of one-pass-per-K semantics).
+fn is_wave_preservation_rule(name: &str) -> bool {
+    // Drain rules: `<view>_buffer_drain` (proof_encoding.rs:608).
+    if name.ends_with("_drain") {
+        return true;
+    }
+    // Rebuild rules: fresh-from "rebuild_rule" hint.
+    if let Some(suffix) = name.strip_prefix('@')
+        && let Some(rest) = suffix.strip_prefix("rebuild_rule")
+        && (rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()))
+    {
+        return true;
+    }
+    false
+}
+
+/// Rewrite drain/rebuild bodies + heads so the head wave matches the
+/// (first) wave-bearing body atom's wave. Without this, system-rule
+/// heads write wave=0, which collides with the user-rule wave filter
+/// (`wave < K` matches wave=0) and causes within-iter cascading
+/// instead of one-pass-per-K semantics. Returns the new body.
+fn rewrite_wave_preservation(
+    body: Vec<IrLit>,
+    head_args: &mut [Expr],
+    ctx: &Ctx,
+) -> Vec<IrLit> {
+    let preserved = "__pw";
+    let mut new_body = Vec::with_capacity(body.len());
+    let mut bound = false;
+    for lit in body {
+        match lit {
+            IrLit::Atom(mut a) if !bound && is_wave_bearing(ctx, &a.relation) => {
+                if let Some(last) = a.args.last_mut()
+                    && matches!(last, Expr::Wildcard)
+                {
+                    *last = Expr::Var(preserved.to_string());
+                    bound = true;
+                }
+                new_body.push(IrLit::Atom(a));
+            }
+            other => new_body.push(other),
+        }
+    }
+    if bound && let Some(last) = head_args.last_mut() {
+        *last = Expr::Var(preserved.to_string());
+    }
+    new_body
 }
 
 /// Phase 60b body rewrite for USER rules under `(run N)`. For every
@@ -956,6 +1084,14 @@ fn rewrite_user_rule_body_with_wave_filter(
     for lit in body {
         match lit {
             IrLit::Atom(mut a) if is_wave_bearing(ctx, &a.relation) => {
+                // Strip `_snap` suffix: phase 60c reads view directly,
+                // not snap. The wave filter (below) breaks the cycle
+                // that snap used to break by lagging-by-one-iter.
+                if let Some(base) = a.relation.strip_suffix("_snap")
+                    && ctx.view_relations.contains(base)
+                {
+                    a.relation = base.to_string();
+                }
                 // The wave column is the last arg; auto-pad put a
                 // Wildcard there. Replace with a fresh var bound by
                 // `< K`. If the wave position is *not* a wildcard
@@ -1782,18 +1918,19 @@ fn build_let_info_from_expr(
     // writes, snap for reads (snap is in its own pre-stratum so reads
     // don't create a recursive cycle with the buffer). Non-strata
     // collapses both to the canonical view.
-    let candidate_snap = format!("{view_rel}_snap");
     let candidate_buffer = format!("{view_rel}_buffer");
     let buffer_rel = if ctx.relation_arity.contains_key(&candidate_buffer) {
         candidate_buffer.clone()
     } else {
         view_rel.clone()
     };
-    let lookup_rel = if ctx.relation_arity.contains_key(&candidate_snap) {
-        candidate_snap
-    } else {
-        buffer_rel.clone()
-    };
+    // Read directly from the canonical view, not snap. The wave column
+    // does the cycle-breaking; the snap-based strata setup imposed a
+    // one-outer-iter delay per nesting level, which makes initial
+    // expressions and rule cascades take many iters to propagate.
+    // Phase 60c: drop snap reads entirely; user rules read view with
+    // `wave < K` filter.
+    let lookup_rel = view_rel.clone();
     let mut lookup_args: Vec<Expr> = Vec::with_capacity(args.len());
     for a in args {
         // Buffer columns mirror the constructor's input sorts directly
