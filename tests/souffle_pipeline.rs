@@ -88,6 +88,75 @@ fn strata_run_n_commutativity_pipeline() {
     }
 }
 
+/// Verify the fork-exposed `IterCounter` relation is reachable from a
+/// translator-emitted .dl. We tack an extra `.printsize IterCounter` and
+/// `.output IterCounter` onto the smoke-strata program, run souffle, and
+/// confirm `IterCounter` shows up with the expected per-iter counter
+/// values. This is the foundation for the generation-column work
+/// (souffle-generation-column-design.md) — user rules will later join
+/// against `IterCounter(K)` for wave-based bounded iteration.
+#[test]
+fn iter_counter_visible_in_emitted_dl() {
+    let Some(bin) = souffle_bin() else {
+        eprintln!("skipping: souffle binary not found");
+        return;
+    };
+    // (run 1) program — translator emits outer-saturate = 3 (= N + 2).
+    let source = r#"
+        (sort Math)
+        (constructor Add (i64 i64) Math)
+        (Add 1 2)
+        (rule ((Add a b))
+              ((union (Add a b) (Add b a)))
+             :name "commutativity")
+        (run 1)
+    "#;
+    let mut egraph = EGraph::new_with_term_encoding().with_souffle_compat_strata();
+    let commands = egraph.resolve_program(None, source).expect("resolve");
+    let program = souffle_translator::translate(&commands).expect("translate");
+    // The translator should have declared IterCounter alongside the
+    // outer-saturate pragma.
+    assert!(
+        program.relations.iter().any(|r| r.name == "IterCounter"),
+        "translator should declare IterCounter when outer-saturate is set"
+    );
+    let mut dl = emit::emit(&program);
+    // Append a printsize + output for IterCounter so we can observe the
+    // values across outer iterations.
+    dl.push_str("\n.output IterCounter(IO=stdout)\n");
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = format!("/tmp/souffle-iter-counter-{pid}-{nanos}.dl");
+    std::fs::write(&path, &dl).expect("write");
+    let output = std::process::Command::new("timeout")
+        .arg("10")
+        .arg(&bin)
+        .arg(&path)
+        .output()
+        .expect("spawn souffle");
+    assert!(
+        output.status.success(),
+        "souffle failed:\nstderr: {}\n.dl:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        dl
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // IterCounter rows across outer iters: 0 (iter 1 start), 1, 2. With
+    // outer-saturate = 3 the loop exits after 3 iters, so we should see
+    // at least values 0, 1, 2 appear in IterCounter's output (one per
+    // iter, single-row each time, refreshed at the start).
+    for expected in ["0", "1", "2"] {
+        assert!(
+            stdout.contains(expected),
+            "IterCounter should expose value {expected} during the outer-saturate \
+             loop; got stdout:\n{stdout}"
+        );
+    }
+}
+
 #[test]
 fn full_pipeline_smoke() {
     let Some(bin) = souffle_bin() else {
