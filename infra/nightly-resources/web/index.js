@@ -114,7 +114,7 @@ function renderTable() {
 
   const rows = benchmarks.map((b) => ({
     Benchmark: b.benchmark_name,
-    "Wall Time (s)": b.wall_time_s,
+    "Wall Time (s)": b.wall_time_s.toFixed(2),
     "Rules (ms)": b.report.rule_ms,
     "Extraction (ms)": b.report.extraction_ms,
     "Other (ms)": b.report.other_ms,
