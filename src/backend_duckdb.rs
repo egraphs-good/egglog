@@ -52,6 +52,21 @@ pub struct DuckdbBackend {
     /// `""` is always considered valid. Used to reject rules that
     /// reference undefined rulesets.
     known_rulesets: hashbrown::HashSet<String>,
+    /// Per-function metadata that print-size uses to decide what to
+    /// display, mirroring egglog's reference logic in
+    /// `EGraph::print_size`. We filter functions with
+    /// `internal_hidden || internal_let` and rewrite the displayed
+    /// name to `term_constructor` when set (which is how
+    /// `@<Ctor>View` tables map back to the user's `Ctor` name
+    /// post-term-encoding).
+    function_meta: hashbrown::HashMap<String, FnMeta>,
+}
+
+#[derive(Debug, Clone)]
+struct FnMeta {
+    internal_hidden: bool,
+    internal_let: bool,
+    term_constructor: Option<String>,
 }
 
 impl DuckdbBackend {
@@ -72,6 +87,7 @@ impl DuckdbBackend {
             eq_sort_ctor: hashbrown::HashSet::default(),
             combined_rulesets: hashbrown::HashMap::default(),
             known_rulesets: hashbrown::HashSet::default(),
+            function_meta: hashbrown::HashMap::default(),
         })
     }
 
@@ -206,6 +222,18 @@ impl DuckdbBackend {
         //     encoding so the user-facing IDs aren't reused. These
         //     still need real EqSort allocation because the emitted
         //     view/UF tables key on the IDs.
+        // Record per-function metadata so print-size can mirror
+        // egglog's filter (`!internal_hidden && !internal_let`) and
+        // use `term_constructor` as the displayed name when set.
+        self.function_meta.insert(
+            decl.name.clone(),
+            FnMeta {
+                internal_hidden: decl.internal_hidden,
+                internal_let: decl.internal_let,
+                term_constructor: decl.term_constructor.clone(),
+            },
+        );
+
         if decl.subtype == FunctionSubtype::Constructor {
             let is_helper = decl.internal_hidden && !decl.unextractable;
             if is_helper {
@@ -765,43 +793,36 @@ impl DuckdbBackend {
                 println!("({n}: {count})");
             }
             None => {
-                // Match egglog's behavior: report sizes of
-                // user-visible functions only. After term encoding,
-                // user names map to their view tables; internal
-                // tables (UF, term, deferred-action helpers, fresh
-                // sym names, etc.) carry the `@` prefix and are
-                // hidden. For each user-level name `foo`, report the
-                // size of `@fooView` instead of `foo` itself, since
-                // the view has the canonicalized count.
-                // Hide internal tables: `@`-prefixed (term encoding's
-                // helpers, view tables, etc.) and `$`-prefixed
-                // (user globals, lifted to nullary constructors —
-                // egglog hides these from print-size too).
-                let user_names: Vec<&str> = self
+                // Mirror egglog's `EGraph::print_size`: iterate
+                // every registered function, drop those marked
+                // `:internal-hidden` or `:internal-let`, and for the
+                // rest display under `term_constructor` if set (the
+                // view table's pointer back to the user-visible
+                // ctor name).
+                let mut entries: Vec<(String, String)> = self
                     .registered
                     .iter()
-                    .map(|s| s.as_str())
-                    .filter(|n| !n.starts_with('@') && !n.starts_with('$'))
+                    .filter_map(|n| {
+                        let meta = self.function_meta.get(n)?;
+                        if meta.internal_hidden || meta.internal_let {
+                            return None;
+                        }
+                        let display = meta
+                            .term_constructor
+                            .clone()
+                            .unwrap_or_else(|| n.clone());
+                        Some((display, n.clone()))
+                    })
                     .collect();
-                let mut sorted: Vec<&str> = user_names.clone();
-                sorted.sort();
-                for (i, n) in sorted.iter().enumerate() {
-                    // Prefer the view-table count if it exists.
-                    let view_name = format!("@{n}View");
-                    let count_name: &str = if self.registered.contains(&view_name) {
-                        // Owned String; we'll need an owned variant.
-                        // (small allocation, fine for print-size.)
-                        Box::leak(view_name.into_boxed_str())
-                    } else {
-                        n
-                    };
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                for (i, (display, count_name)) in entries.iter().enumerate() {
                     let count = self
                         .db
                         .count(count_name)
                         .map_err(DuckdbBackendError::Backend)?;
                     let prefix = if i == 0 { "(" } else { " " };
-                    let suffix = if i + 1 == sorted.len() { ")" } else { "" };
-                    println!("{prefix}({n} {count}){suffix}");
+                    let suffix = if i + 1 == entries.len() { ")" } else { "" };
+                    println!("{prefix}({display} {count}){suffix}");
                 }
             }
         }
