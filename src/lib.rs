@@ -702,7 +702,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.external_id(),
+                    p.external_id(crate::Context::Full),
                     translated_args,
                 ))
             }
@@ -1926,8 +1926,8 @@ struct BackendRule<'a> {
     /// (b) rules with the `:naive` option,
     /// (c) `EGraph::seminaive == false` (the global opt-out).
     /// Combined with whether we're in the query or action phase, this
-    /// picks the [`crate::Context`] used to select primitive
-    /// registrations by `selection_ctx` at each call site.
+    /// picks the [`crate::Context`] used to select a primitive's
+    /// context-specific runtime id at each call site.
     seminaive: bool,
 }
 
@@ -1999,10 +1999,10 @@ impl<'a> BackendRule<'a> {
         args: &[core::ResolvedAtomTerm],
         ctx: crate::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
-        // The typechecker has already picked the context-best
-        // registration via `ResolvedCall::from_resolution`; we just
-        // use its id directly.
-        let resolved_id = prim.external_id();
+        // The typechecker has already checked that this primitive is
+        // valid in `ctx`; pick the runtime id that stamps the same ctx
+        // onto the state wrapper when invoked.
+        let resolved_id = prim.external_id(ctx);
 
         let mut qe_args = self.args(args);
 
@@ -2026,24 +2026,21 @@ impl<'a> BackendRule<'a> {
                     ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
                 }
             } else if let Some(possible) = self.type_info.get_prims(name) {
-                let mut ps: Vec<_> = possible.iter().collect();
-                ps.retain(|p| {
-                    self.type_info
-                        .get_sorts::<FunctionSort>()
-                        .into_iter()
-                        .any(|f| {
-                            let types: Vec<_> = prim
-                                .input()
-                                .iter()
-                                .skip(1)
-                                .chain(f.inputs())
-                                .chain([&f.output()])
-                                .cloned()
-                                .collect();
-                            p.accept(&types, self.type_info)
-                        })
-                });
-                // Bake every signature-matching registration. The
+                let fn_sort = Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any())
+                    .unwrap_or_else(|_| panic!("expected `unstable-fn` to return a function sort"));
+                let types: Vec<_> = prim
+                    .input()
+                    .iter()
+                    .skip(1)
+                    .cloned()
+                    .chain(fn_sort.inputs().iter().cloned())
+                    .chain(std::iter::once(fn_sort.output()))
+                    .collect();
+                let ps: Vec<_> = possible
+                    .iter()
+                    .filter(|p| p.accept(&types, self.type_info))
+                    .collect();
+                // Bake every exact-signature registration. The
                 // build-site `ctx` here is intentionally unused: the
                 // *application*-time context (carried on `state.ctx`
                 // by the wrapping HOF body) selects which candidate
@@ -2052,10 +2049,32 @@ impl<'a> BackendRule<'a> {
                 // was constructed in (e.g. a `let`-bound function value
                 // built at top-level `Full` couldn't be applied later
                 // from a `Read` query).
-                let _ = ctx;
-                assert!(!ps.is_empty(), "no callable for {name}");
-                let candidates: Vec<_> = ps.into_iter().map(|p| (p.id, p.selection_ctx)).collect();
-                ResolvedFunctionId::Primitive { candidates }
+                // Per application context, zero matching runtime ids means
+                // the wrapped primitive is not callable there and will hit
+                // the mismatch path later; one id is the dispatch target; more
+                // than one is ambiguous and should panic.
+                let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+                    let mut matching_ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
+                    match (matching_ids.next(), matching_ids.next()) {
+                        (None, _) => None,
+                        (Some(id), None) => Some(id),
+                        (Some(_), Some(_)) => {
+                            let sig: Vec<_> = types.iter().map(|s| s.name().to_string()).collect();
+                            panic!(
+                                "Ambiguous primitive resolution for {name:?} in unstable-fn \
+                                 context {runtime_ctx:?} with wrapped signature [{}]: {} \
+                                 registrations accept this call",
+                                sig.join(", "),
+                                matching_ids.count() + 2,
+                            )
+                        }
+                    }
+                });
+                assert!(
+                    context_ids.iter().any(|(_, id)| id.is_some()),
+                    "no callable for {name}"
+                );
+                ResolvedFunctionId::Primitive { context_ids }
             } else {
                 panic!("no callable for {name}");
             };

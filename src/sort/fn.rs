@@ -13,6 +13,7 @@
 use std::sync::Mutex;
 
 use crate::exec_state::Internal;
+use enum_map::EnumMap;
 
 use super::*;
 
@@ -455,15 +456,14 @@ pub enum ResolvedFunctionId {
     /// context except `Pure` (where it would be an untracked
     /// seminaive read).
     Function(egglog_bridge::TableAction),
-    /// Wraps a primitive. Carries every signature-matching
-    /// registration the typechecker found at build time, paired with
-    /// its `selection_ctx`. At dispatch time `FunctionContainer::apply`
-    /// picks the candidate whose `selection_ctx` matches the
-    /// application context — so the runtime selection is independent
-    /// of the build-site context, and an `unstable-fn` value may flow
-    /// freely from one context to another.
+    /// Wraps a primitive. Carries the unique exact-signature runtime
+    /// id found for each context at build time. At dispatch time
+    /// `FunctionContainer::apply` picks the id for the application
+    /// context — so the runtime selection is independent of the
+    /// build-site context, and an `unstable-fn` value may flow freely
+    /// from one context to another.
     Primitive {
-        candidates: Vec<(ExternalFunctionId, crate::Context)>,
+        context_ids: EnumMap<crate::Context, Option<ExternalFunctionId>>,
     },
 }
 
@@ -553,17 +553,11 @@ impl FunctionContainer {
                     mismatch(state)
                 }
             }
-            ResolvedFunctionId::Primitive { candidates } => {
-                // Pick the registration whose `selection_ctx` equals
-                // the application ctx. Each `add_*_primitive` commits
-                // disjoint singletons across the trait's valid ctxs,
-                // so exactly one candidate matches.
-                debug_assert!(
-                    candidates.iter().filter(|(_, c)| *c == ctx).count() <= 1,
-                    "more than one primitive candidate matches ctx {ctx:?}"
-                );
-                match candidates.iter().find(|(_, c)| *c == ctx) {
-                    Some((id, _)) => state.call_external_func(*id, &args),
+            ResolvedFunctionId::Primitive { context_ids } => {
+                // Pick the runtime id whose context matches the
+                // application ctx.
+                match context_ids[ctx] {
+                    Some(id) => state.call_external_func(id, &args),
                     None => mismatch(state),
                 }
             }

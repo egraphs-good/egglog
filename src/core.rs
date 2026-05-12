@@ -64,8 +64,13 @@ impl SpecializedPrimitive {
     }
 
     /// Get the external function ID of this primitive
-    pub(crate) fn external_id(&self) -> ExternalFunctionId {
-        self.prim_with_id.id
+    pub(crate) fn external_id(&self, ctx: crate::Context) -> ExternalFunctionId {
+        self.prim_with_id.context_ids[ctx].unwrap_or_else(|| {
+            panic!(
+                "primitive {:?} is not valid in context {ctx:?}",
+                self.prim_with_id.primitive.name()
+            )
+        })
     }
 
     /// Get the validator function of this primitive, if any
@@ -76,7 +81,7 @@ impl SpecializedPrimitive {
 
 impl PartialEq for SpecializedPrimitive {
     fn eq(&self, other: &Self) -> bool {
-        self.prim_with_id.id == other.prim_with_id.id
+        self.prim_with_id.context_ids == other.prim_with_id.context_ids
     }
 }
 
@@ -84,7 +89,7 @@ impl Eq for SpecializedPrimitive {}
 
 impl Hash for SpecializedPrimitive {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.prim_with_id.id.hash(state);
+        self.prim_with_id.context_ids.hash(state);
     }
 }
 
@@ -155,17 +160,16 @@ impl ResolvedCall {
             }
         }
 
-        // For a given (signature, context) pair, exactly one
-        // registration must match. Each `add_*_primitive` call commits
-        // one id per context the trait permits, with disjoint
-        // `selection_ctx` values. If two primitives accept the same
-        // signature in the same context, registration was ambiguous
-        // (e.g. the same primitive added twice); panic here rather
-        // than silently picking one.
+        // For a given (signature, context) pair, exactly one primitive
+        // definition must match. Each definition carries the runtime ids
+        // for the contexts it permits. If two definitions accept the
+        // same signature in the same context, registration was
+        // ambiguous (e.g. the same primitive added twice); panic here
+        // rather than silently picking one.
         if let Some(primitives) = typeinfo.get_prims(head) {
             let matches: Vec<_> = primitives
                 .iter()
-                .filter(|p| p.selection_ctx == ctx && p.accept(types, typeinfo))
+                .filter(|p| p.context_ids[ctx].is_some() && p.accept(types, typeinfo))
                 .collect();
             match matches.as_slice() {
                 [] => {}

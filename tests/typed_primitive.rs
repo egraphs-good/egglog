@@ -4,11 +4,13 @@
 //! Covers:
 //! - Pure / write / read / full primitives accepted only in their
 //!   respective valid contexts (typechecker rejects others).
-//! - `unstable-fn` over a constructor in a query context is filtered
-//!   (does NOT mint an eclass), but works in actions.
-//! - `unstable-fn` over a custom function is filtered in rule queries.
-//! - Two same-signature registrations: ambiguity is rejected
-//!   (regression guard).
+//! - Higher-order primitive values carry runtime ids for every context where
+//!   the wrapped primitive is valid; application in other contexts hits the
+//!   mismatch path.
+//! - `unstable-fn` over constructors and custom functions preserves the
+//!   existing function/container runtime checks.
+//! - Duplicate same-signature primitive registrations are ambiguous for direct
+//!   calls and higher-order primitive dispatch.
 
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
@@ -386,13 +388,10 @@ fn full_primitive_accepted_only_in_global_action() {
 
 // --- duplicate registration regression ---
 
-/// Two same-name same-signature primitives registered separately
-/// pass the constraint-builder context filter (both are valid in
-/// every context) and the typechecker doesn't reject equivalent XOR
-/// branches when the surrounding constraints pin the sort assignment.
-/// `ResolvedCall::from_resolution` catches this on the use site by
-/// requiring exactly one match for `(name, signature, context)` and
-/// panicking with a clear message otherwise.
+/// Direct primitive resolution requires exactly one matching registration for
+/// `(name, signature, context)`. Two independently registered pure primitives
+/// both carry valid runtime ids for every context, so a same-signature direct
+/// call is ambiguous instead of silently picking one registration.
 #[test]
 #[should_panic(expected = "Ambiguous primitive resolution")]
 fn two_same_signature_registrations_panic_on_use() {
@@ -403,18 +402,33 @@ fn two_same_signature_registrations_panic_on_use() {
     let _ = egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))");
 }
 
+/// `unstable-fn` over a primitive must preserve the same exact-one ambiguity
+/// rule as direct primitive calls. The wrapped value records valid runtime ids
+/// per application context, and duplicate same-signature registrations are
+/// ambiguous for every context where more than one runtime id matches.
+#[test]
+#[should_panic(expected = "Ambiguous primitive resolution")]
+fn unstable_fn_duplicate_primitive_registration_panics_on_build() {
+    let mut egraph = EGraph::default();
+    egraph.add_pure_primitive(PureEcho("dup-echo"), None);
+    egraph.add_pure_primitive(PureEcho("dup-echo"), None);
+
+    let _ = egraph.parse_and_run_program(
+        None,
+        "(sort Fn (UnstableFn (i64) i64))\n\
+         (let $f (unstable-fn \"dup-echo\"))\n\
+         (check (= (unstable-app $f 7) 7))",
+    );
+}
+
 // --- 4x4 unstable-app dispatch matrix ---
 //
-// `ResolvedFunctionId::Primitive` is built only on the `unstable-fn` path
-// (`src/lib.rs` around L2103), and at dispatch time
-// `FunctionContainer::apply` (`src/sort/fn.rs` around L560-569)
-// picks the candidate whose `selection_ctx` equals the application
-// ctx. For each registration kind we wrap a uniform (i64)->i64
-// echo primitive in `unstable-fn` and apply it from each of the
-// four application contexts, asserting the outcome matches the
-// trait's `valid_contexts`. Dispatch succeeds iff the application
-// ctx is in the trait's valid set; otherwise the pre-registered
-// panic surfaces as an Err.
+// `unstable-fn` over a primitive builds a per-context runtime id table, and
+// `unstable-app` selects the id for the application context. For each
+// registration kind we wrap a uniform (i64)->i64 echo primitive and apply it
+// from all four application contexts. Dispatch succeeds iff the application
+// context has a runtime id; otherwise the pre-registered mismatch panic
+// surfaces as an error.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppCtx {

@@ -9,6 +9,7 @@ use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar,
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use egglog_bridge::ActionRegistry;
+use enum_map::EnumMap;
 use std::sync::{Arc, RwLock};
 
 // `ExternalFunction` wrapper for `PurePrim`. Holds the primitive
@@ -155,14 +156,12 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 #[derive(Clone)]
 pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn Primitive>,
-    pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
-    /// The single context this registration was created for. Each
-    /// `add_*_primitive` call commits one registration per context
-    /// the trait permits, so the constraint solver filters by
-    /// `selection_ctx == ambient_ctx` to pick exactly one id per
-    /// call site.
-    pub(crate) selection_ctx: Context,
+    /// Runtime entrypoints for the contexts this primitive is valid in.
+    /// The primitive definition is stored once, while each context keeps
+    /// its own backend id so higher-order dispatch can still recover the
+    /// application context at runtime.
+    pub(crate) context_ids: EnumMap<Context, Option<ExternalFunctionId>>,
 }
 
 impl PrimitiveWithId {
@@ -330,11 +329,15 @@ impl EGraph {
         });
     }
 
-    /// Shared registration engine. Registers `x` once per `Context` in
-    /// `valid_ctxs`, with each wrapper carrying its specific context
-    /// stamped onto the state wrapper at invoke time. The typechecker's
-    /// `selection_ctx` filter picks exactly one candidate at each call
-    /// site.
+    /// Shared registration engine. Stores one primitive definition, plus
+    /// one runtime id per valid [`Context`]. Each wrapper carries its
+    /// specific context stamped onto the state wrapper at invoke time.
+    ///
+    /// The typechecker filters by the context-id mask at each call site;
+    /// an `unstable-fn` value built around the primitive bakes *all*
+    /// signature-matching context ids, and `FunctionContainer::apply`
+    /// picks the one whose context matches the application ctx — so
+    /// values flow freely across contexts.
     fn register_per_context<T, F>(
         &mut self,
         x: T,
@@ -347,51 +350,22 @@ impl EGraph {
     {
         let primitive: Arc<dyn Primitive> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
-        for &ctx in valid_ctxs {
-            let id = self
-                .backend
-                .register_external_func(build_wrapper(x.clone(), ctx));
-            self.commit_primitive(PendingPrimitive {
-                primitive: primitive.clone(),
-                id,
-                validator: validator.clone(),
-                selection_ctx: ctx,
-                name: name.clone(),
-            });
-        }
-    }
-
-    fn commit_primitive(&mut self, entry: PendingPrimitive) {
-        let PendingPrimitive {
-            primitive,
-            id,
-            validator,
-            selection_ctx,
-            name,
-        } = entry;
+        let context_ids = EnumMap::from_fn(|ctx| {
+            valid_ctxs.contains(&ctx).then(|| {
+                self.backend
+                    .register_external_func(build_wrapper(x.clone(), ctx))
+            })
+        });
         self.type_info
             .primitives
             .entry(name)
             .or_default()
             .push(PrimitiveWithId {
                 primitive,
-                id,
                 validator,
-                selection_ctx,
+                context_ids,
             });
     }
-}
-
-/// A primitive that's been registered with the bridge but not yet
-/// pushed into the `TypeInfo` registry. The four `add_*_primitive`
-/// helpers commit one of these per [`Context`] variant the trait
-/// supports.
-struct PendingPrimitive {
-    primitive: Arc<dyn Primitive>,
-    id: ExternalFunctionId,
-    validator: Option<PrimitiveValidator>,
-    selection_ctx: Context,
-    name: String,
 }
 
 impl EGraph {
@@ -1010,7 +984,7 @@ impl TypeInfo {
         self.primitives
             .values()
             .flat_map(|v| v.iter())
-            .any(|p| p.id == id && p.validator.is_some())
+            .any(|p| p.context_ids.iter().any(|(_, pid)| *pid == Some(id)) && p.validator.is_some())
     }
 
     pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
