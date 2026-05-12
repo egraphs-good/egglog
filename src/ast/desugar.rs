@@ -122,7 +122,7 @@ pub(crate) fn desugar_command(
                 rule_name
             } else {
                 rewrite.name.clone()
-            };            
+            };
             desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)
         }
         Command::BiRewrite(ruleset, rewrite) => {
@@ -361,7 +361,7 @@ fn desugar_birewrite(
         name
     } else {
         rewrite.name.clone()
-    };    
+    };
     let rw2 = Rewrite {
         span,
         lhs: rewrite.rhs.clone(),
@@ -369,16 +369,22 @@ fn desugar_birewrite(
         conditions: rewrite.conditions.clone(),
         name: rewrite_name.clone(),
     };
-    desugar_rewrite(ruleset.clone(), format!("{rewrite_name}=>"), rewrite, false, parser)
-        .into_iter()
-        .chain(desugar_rewrite(
-            ruleset,
-            format!("{rewrite_name}<="),
-            rw2,
-            false,
-            parser,
-        ))
-        .collect()
+    desugar_rewrite(
+        ruleset.clone(),
+        format!("{rewrite_name}=>"),
+        rewrite,
+        false,
+        parser,
+    )
+    .into_iter()
+    .chain(desugar_rewrite(
+        ruleset,
+        format!("{rewrite_name}<="),
+        rw2,
+        false,
+        parser,
+    ))
+    .collect()
 }
 
 /// Desugar relation by making a new sort and a constructor for it.
