@@ -762,8 +762,15 @@ struct BindingInfo {
 impl BindingInfo {
     /// Initializes the atom-related metadata in the [`BindingInfo`].    
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        let node = Arc::new(TrieNode::new(subset));
-        self.subsets.insert(atom, node);
+        if let Some(slot) = self.subsets.get_mut(atom)
+            && let Some(node) = Arc::get_mut(slot)
+        {
+            node.cached_subsets.take();
+            node.cached_children.take();
+            node.subset = subset;
+            return;
+        }
+        self.subsets.insert(atom, Arc::new(TrieNode::new(subset)));
     }
 
     fn insert_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
@@ -957,6 +964,8 @@ impl<'a> JoinState<'a> {
                 if self.exec_state.should_stop() {
                     return;
                 }
+                // TODO: `supports_parallel_drain`` is a hack because currently
+                // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
                 if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
@@ -2148,8 +2157,12 @@ fn sort_plan_by_size_inner(
     // We prioritize variables by
     //
     //   (1) how many times an atom with this variable has been refined,
-    //   (2) then by how many relations joins on this variable
-    //   (3) then by the cardinality of the variable to be enumerated
+    //   (2) then by the cardinality of the variable to be enumerated (smaller → earlier)
+    //   (3) then by how many relations join on this variable (more → earlier)
+    //
+    // Estimate size is second so that stages with very small cardinality (e.g. FunDep
+    // consequents with exactly 1 value) are run before multi-relation stages that happen
+    // to have a larger current estimate.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo,
                   times_refined: &DenseIdMap<AtomId, i64>| {
@@ -2167,8 +2180,8 @@ fn sort_plan_by_size_inner(
         };
         (
             -refine,
-            -num_intersected_rels(join_stage),
             estimate_size(join_stage, binding_info),
+            -num_intersected_rels(join_stage),
         )
     };
 
