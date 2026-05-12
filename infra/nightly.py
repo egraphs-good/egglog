@@ -89,8 +89,6 @@ def run_benchmarks(benchmark_dir):
   results = []
   failing_benchmarks = []
   for benchmark in benchmarks:
-    if len(results) > 10:
-      break
     relative_path = benchmark.relative_to(benchmark_dir)
     suite_name = str(relative_path.parent)
     benchmark_name = relative_path.name
