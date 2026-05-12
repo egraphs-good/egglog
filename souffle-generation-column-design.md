@@ -114,6 +114,59 @@ become next iter's delta. So egglog also does *one logical pass per
 from within-iter cascading. Good — that matches the generation-column
 design exactly.
 
+## Encoder rule-emission site map (intel from Explore agents, 2026-05)
+
+Twenty distinct view-touching emission sites in `src/proofs/proof_encoding.rs`,
+across 7 rule categories. Most are **SYSTEM** rules (write/read the canonical
+view); the small handful of **USER** sites is where the wave-filter must
+attach.
+
+| Lines | Category | Direction | Path |
+|---|---|---|---|
+| 577 | view decl | — | `term_and_view` |
+| 333, 339 | delete/subsume body reads | SYSTEM read | `delete_and_subsume` |
+| 334, 340 | delete/subsume head writes | SYSTEM write | `delete_and_subsume` |
+| 374-375, 421-422, 437-438 | merge body reads | SYSTEM read | `handle_merge_fn` |
+| 411, 440 | merge head writes (set/delete) | SYSTEM write | `handle_merge_fn` |
+| 462-463 | congruence body | SYSTEM read | `handle_congruence` |
+| 606-607, 613-614 | drain head | SYSTEM write | `term_and_view` (strata only) |
+| 719 (via 1186) | rebuild body | SYSTEM read | `rebuild_rule` |
+| 769 (via update_view) | rebuild head set | SYSTEM write | `rebuild_rule` |
+| 780 | rebuild head delete | SYSTEM write | `rebuild_rule` |
+| **824** | **custom-fn user-rule read** | **USER read** | `instrument_fact_expr` |
+| **939** | **constructor user-rule read** | **USER read** | `instrument_fact_expr` |
+| **1165** | **user-rule head write** | **USER write** | `add_term_and_view` |
+
+User reads use `view_name_for_user_read` (resolves to `_snap` under strata,
+canonical otherwise). User writes use `view_name_for_user_write` (resolves
+to `_buffer` under strata).
+
+## Affected snapshots
+
+Just one: `src/proofs/snapshots/egglog__proofs__proof_tests__tests__doc_example_add_function1.snap`.
+16 `__AddView` references; all need an extra trailing arg.
+
+Test that produces it: `doc_example_add_function1()` in
+`src/proofs/proof_tests.rs:29`.
+
+## Translator-side user/system detection
+
+The encoder doesn't put an explicit AST flag on rules, but **`rule.ruleset`**
+is reliable. System rules always land in one of these 6 rulesets (defined
+in `EncodingNames` in `proof_encoding_helpers.rs`):
+
+- `path_compress_ruleset_name`
+- `single_parent_ruleset_name`
+- `uf_function_index_ruleset_name`
+- `rebuilding_ruleset_name`
+- `rebuilding_cleanup_ruleset_name`
+- `delete_subsume_ruleset_name`
+
+User rules either have an empty ruleset or one the user declared. They
+**never** use the 6 above. The translator's `translate_rule` should check
+`rule.ruleset` against this set: hit ⇒ system (pass wave through), miss ⇒
+user (emit `IterCounter(K)` body atom and `wave < K` filter, head wave = K).
+
 ## Implementation plan
 
 ### 1. Fork: expose iteration counter
