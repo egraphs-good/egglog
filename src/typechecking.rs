@@ -423,7 +423,9 @@ impl EGraph {
                 ResolvedNCommand::Function(resolved)
             }
             NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
-                rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
+                rule: self
+                    .type_info
+                    .typecheck_rule(symbol_gen, rule, self.seminaive)?,
             },
             NCommand::Sort {
                 span,
@@ -813,6 +815,7 @@ impl TypeInfo {
         &self,
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
+        global_seminaive: bool,
     ) -> Result<ResolvedRule, TypeError> {
         let Rule {
             span,
@@ -824,13 +827,17 @@ impl TypeInfo {
         } = rule;
         let mut constraints = vec![];
 
-        // A `:naive` rule disables seminaive evaluation, so it can use
-        // primitives that read or write the database in either the
-        // query or the action — the same surface as global commands.
-        let (query_ctx, action_ctx) = if *naive {
-            (Context::Read, Context::Full)
-        } else {
+        // This rule runs without seminaive if either the rule-local
+        // `:naive` option or the global `EGraph::seminaive == false`
+        // applies. Both must widen primitive-context selection to
+        // Read/Full so primitives that read or write the database can
+        // run; mirrors the backend's `self.seminaive && !rule.naive`
+        // check at rule-build time.
+        let seminaive = global_seminaive && !*naive;
+        let (query_ctx, action_ctx) = if seminaive {
             (Context::Pure, Context::Write)
+        } else {
+            (Context::Read, Context::Full)
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);

@@ -105,3 +105,36 @@ fn rule_action_using_unstable_fn_custom_function_requires_naive() {
     );
     egraph2.parse_and_run_program(None, &good).unwrap();
 }
+
+/// Global `EGraph::seminaive = false` (the `--naive` CLI flag) must
+/// widen rule contexts to `Read`/`Full` for typechecking just like
+/// rule-local `:naive` does — otherwise a primitive registered as
+/// `FullPrim` (e.g. `unstable-multiset-fill-index`) typechecks under
+/// `:naive` but errors under `--naive` even though the backend
+/// lowering already runs the rule naively.
+#[test]
+fn global_naive_widens_rule_context_same_as_local_naive() {
+    let program = "
+(datatype Math (Num i64))
+(sort Maths (MultiSet Math))
+(let $xs (multiset-of (Num 1) (Num 2)))
+
+(constructor product (Maths) Math)
+(let $zz (product $xs))
+
+(function ms-count (Maths Math) i64 :merge (+ old new))
+(sort MSIndexFn (UnstableFn (Maths Math) i64))
+
+;; No rule-local `:naive`; relies on the global setting.
+(rule
+    ((= outer (product inner)))
+    ((unstable-multiset-fill-index inner (unstable-fn \"ms-count\"))))
+
+(run 1)
+(check (= 1 (ms-count $xs (Num 1))))
+";
+
+    let mut egraph = EGraph::default();
+    egraph.seminaive = false;
+    egraph.parse_and_run_program(None, program).unwrap();
+}
