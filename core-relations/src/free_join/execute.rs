@@ -11,7 +11,7 @@ use crate::{
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
-    row_buffer::RowBuffer,
+    row_buffer::{RowBuffer, SmallValueVec},
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
