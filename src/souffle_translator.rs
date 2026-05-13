@@ -428,20 +428,15 @@ fn emit_run_limit(ctx: &Ctx, p: &mut Program) {
     let Some(n) = ctx.user_run_count else {
         return;
     };
-    // `outer-saturate = N + 2`. The "+2" accounts for two
-    // outer-iteration prefixes before user rules can produce their N
-    // intended rounds:
-    //   iter 1: drain initial facts into the canonical view (snap was
-    //           empty at this iter's start, so no user rule fires).
-    //   iter 2: snap := canonical (init terms only). User rules fire
-    //           against init; their let-lookup body atoms reference
-    //           snap too, so only let-vars matching iter-1 init terms
-    //           resolve. New writes go to buffer.
-    //   iters 3..N+2: N rounds where snap reflects the canonical view
-    //                 from the previous round, including all
-    //                 let-created terms; user rules fire freely.
+    // `outer-saturate = N + 1`. iter 0 is the init-cascade pass (with
+    // the fake_rule snap-strip from `translate_rule`, the entire tree
+    // of initial expressions populates view in iter 0). User rules
+    // fire at iter 1..N, matching default egglog's `(run N)` exactly.
+    // Souffle's `outer-saturate` count is the number of body
+    // executions (iters), so N+1 covers init (iter 0) plus N rule
+    // rounds.
     p.pragmas
-        .push(("outer-saturate".into(), (n + 2).to_string()));
+        .push(("outer-saturate".into(), (n + 1).to_string()));
     // Declare `IterCounter(n: number)`. The fork's outer-saturate
     // implementation clears this at the start of each outer iter and
     // inserts a single row holding the current iter counter value
