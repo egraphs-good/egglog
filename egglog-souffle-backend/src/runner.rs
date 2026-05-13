@@ -88,7 +88,7 @@ pub fn run(program: &Program, manifest: &Manifest) -> Result<RunOutput, RunError
     std::fs::write(&path, &dl).map_err(|e| RunError::Io(e.to_string()))?;
 
     let output = Command::new("timeout")
-        .arg("10")
+        .arg("60")
         .arg(&bin)
         .arg(&path)
         .output()

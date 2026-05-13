@@ -270,7 +270,14 @@ fn diff_mul_at_run4_minimal() {
     let out = souffle_translator::translate_with_manifest(&commands).expect("translate");
     let mut dl = emit(&out.program);
     dl.push_str("\n.output Eg_MulView_canonical(IO=stdout)\n");
+    dl.push_str("\n.output Eg_DiffView_canonical(IO=stdout)\n");
     dl.push_str("\n.output Eg_UF_Math(IO=stdout)\n");
+    dl.push_str("\n.output Eg_SinView_canonical(IO=stdout)\n");
+    dl.push_str("\n.output Eg_CosView_canonical(IO=stdout)\n");
+    dl.push_str("\n.output Eg_IntegralView_canonical(IO=stdout)\n");
+    dl.push_str("\n.output Eg_ConstView_canonical(IO=stdout)\n");
+    dl.push_str("\n.output Eg_VarView_canonical(IO=stdout)\n");
+    dl.push_str("\n.output Eg_NotLeader_Math(IO=stdout)\n");
     let path = format!("/tmp/souffle-mul-r4-{}.dl", std::process::id());
     std::fs::write(&path, &dl).expect("write");
     let bin = runner::find_souffle_binary().unwrap();
@@ -285,16 +292,19 @@ fn diff_mul_at_run4_minimal() {
     eprintln!("wrote /tmp/souffle-mul-r4.txt ({} bytes)", stdout.len());
 
     // Also dump default's Mul table via (print-function Mul N).
-    let mut def_eg = EGraph::default();
-    def_eg.ensure_no_reserved_symbols(false);
-    let prog = format!("{minimal}\n(run 4)\n(print-function Mul 500)\n");
-    let results = def_eg.parse_and_run_program(None, &prog).expect("default");
-    let mut buf = String::new();
-    for r in &results {
-        buf.push_str(&format!("{r}\n"));
+    for n in &[3, 4] {
+        let mut def_eg = EGraph::default();
+        def_eg.ensure_no_reserved_symbols(false);
+        let prog = format!("{minimal}\n(run {n})\n(print-function Mul 500)\n");
+        let results = def_eg.parse_and_run_program(None, &prog).expect("default");
+        let mut buf = String::new();
+        for r in &results {
+            buf.push_str(&format!("{r}\n"));
+        }
+        let path = format!("/tmp/default-mul-r{n}.txt");
+        std::fs::write(&path, &buf).expect("write");
+        eprintln!("wrote {} ({} bytes)", path, buf.len());
     }
-    std::fs::write("/tmp/default-mul-r4.txt", &buf).expect("write");
-    eprintln!("wrote /tmp/default-mul-r4.txt ({} bytes)", buf.len());
 }
 
 /// Remove TWO rules at once from math-microbench to find a minimal
@@ -586,7 +596,7 @@ fn per_iter_parity_low_runs() {
         eprintln!("skipping: souffle binary not found");
         return;
     }
-    for n in 0..=5 {
+    for n in 0..=7 {
         let (def_add, def_mul) = default_sizes_after_run(n);
         let (sf_add, sf_mul, _stdout) = souffle_sizes_after_run(n);
         eprintln!(

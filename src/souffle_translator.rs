@@ -291,6 +291,42 @@ fn emit_printsize_directives(ctx: &Ctx, p: &mut Program) {
 /// entries as UF chains form.
 fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
     let uf_math = format!("Eg_UF_{MATH}");
+    // A Math record `c` is a TRUE leader iff UF has NO non-self entry
+    // `UF(c, d, _)` with `c != d`. Stale self-loops persist in UF
+    // (self-loop init at record creation; later unions add a non-self
+    // entry without removing the self-loop), so `UF(c, c, _)` alone
+    // isn't a reliable "is c a leader" check — canonical projection
+    // would fire with stale leaders, producing canonical rows that
+    // default egglog's congruence-based merging would have collapsed.
+    //
+    // Emit a `NotLeader` relation and use `!NotLeader(c_l)` in canonical
+    // body to require true leaders.
+    let not_leader = "Eg_NotLeader_Math".to_string();
+    p.relations.push(RelationDecl {
+        name: not_leader.clone(),
+        columns: vec![("c".into(), MATH.into())],
+    });
+    p.clauses.push(Clause::rule(
+        Atom {
+            relation: not_leader.clone(),
+            args: vec![Expr::Var("__c".into())],
+        },
+        vec![
+            IrLit::Atom(Atom {
+                relation: uf_math.clone(),
+                args: vec![
+                    Expr::Var("__c".into()),
+                    Expr::Var("__d".into()),
+                    Expr::Wildcard,
+                ],
+            }),
+            IrLit::Constraint(
+                BinaryOp::Ne,
+                Expr::Var("__c".into()),
+                Expr::Var("__d".into()),
+            ),
+        ],
+    ));
     let view_names: Vec<String> = ctx.view_for_user.values().cloned().collect();
     for view in view_names {
         let Some(decl) = p.relations.iter().find(|r| r.name == view) else {
@@ -334,9 +370,13 @@ fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
                     relation: uf_math.clone(),
                     args: vec![
                         Expr::Var(leader.clone()),
-                        Expr::Var(leader),
+                        Expr::Var(leader.clone()),
                         Expr::Wildcard,
                     ],
+                }));
+                body.push(IrLit::Neg(Atom {
+                    relation: not_leader.clone(),
+                    args: vec![Expr::Var(leader)],
                 }));
             } else {
                 head_args.push(Expr::Var(format!("__c{i}")));
@@ -349,38 +389,45 @@ fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
             },
             body,
         ));
-        // Subsumption per Math column: when canonical has two rows
-        // that agree on all columns except the chosen Math column,
-        // and the two values are in the same UF eclass, keep the
-        // leader version. Without this, canonical accumulates stale
-        // c0/c1/c2 entries as UF chains form — Datalog is
-        // monotonic, so once a stale (c0_l, c1_l, c2_l) is derived
-        // it persists unless a subsumption removes it.
-        for math_idx in 0..cols.len() {
-            if cols[math_idx].1 != MATH {
-                continue;
-            }
+        // Multi-column subsumption: for each non-empty subset of Math
+        // columns, emit a subsumption rule that fires when those
+        // columns are all UF-related to the dominating row's leader
+        // values (and the OTHER columns are identical). This handles
+        // multi-column congruence chains — e.g., when a Mul row has
+        // both c1 and c2 non-leader and the leader version of both
+        // exists in another row, subsume the stale row.
+        let math_indices: Vec<usize> = (0..cols.len())
+            .filter(|&i| cols[i].1 == MATH)
+            .collect();
+        let n_math = math_indices.len();
+        // Iterate non-empty subsets via bitmask.
+        for mask in 1u32..(1 << n_math) {
             let mut dom_args: Vec<Expr> = (0..cols.len())
                 .map(|i| Expr::Var(format!("__d{i}")))
                 .collect();
             let mut dominating_args: Vec<Expr> = dom_args.clone();
-            dom_args[math_idx] = Expr::Var("__dx".into());
-            dominating_args[math_idx] = Expr::Var("__dy".into());
-            let dom_body = vec![
-                IrLit::Atom(Atom {
-                    relation: uf_math.clone(),
-                    args: vec![
-                        Expr::Var("__dx".into()),
-                        Expr::Var("__dy".into()),
-                        Expr::Wildcard,
-                    ],
-                }),
-                IrLit::Constraint(
-                    BinaryOp::Ne,
-                    Expr::Var("__dx".into()),
-                    Expr::Var("__dy".into()),
-                ),
-            ];
+            let mut dom_body: Vec<IrLit> = Vec::new();
+            for (k, &math_idx) in math_indices.iter().enumerate() {
+                if (mask >> k) & 1 == 1 {
+                    let dx = format!("__dx{math_idx}");
+                    let dy = format!("__dy{math_idx}");
+                    dom_args[math_idx] = Expr::Var(dx.clone());
+                    dominating_args[math_idx] = Expr::Var(dy.clone());
+                    dom_body.push(IrLit::Atom(Atom {
+                        relation: uf_math.clone(),
+                        args: vec![
+                            Expr::Var(dx.clone()),
+                            Expr::Var(dy.clone()),
+                            Expr::Wildcard,
+                        ],
+                    }));
+                    dom_body.push(IrLit::Constraint(
+                        BinaryOp::Ne,
+                        Expr::Var(dx),
+                        Expr::Var(dy),
+                    ));
+                }
+            }
             p.clauses.push(Clause::subsume(
                 Atom {
                     relation: canonical_name.clone(),
