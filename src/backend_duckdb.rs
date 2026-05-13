@@ -33,6 +33,13 @@ pub struct DuckBackendConfig {
     /// instead of a JOIN. Skips the singleparent / path_compress /
     /// uf_function_index rulesets at run time. Experimental.
     pub native_uf: bool,
+    /// Run the encoder in proof-tracking mode. The term-encoded
+    /// program then threads explicit proofs through every union and
+    /// rewrite, exercising a different control-flow path through the
+    /// encoder. Set by tests to confirm the duckdb-side optimizations
+    /// (inline-congruence, native UF, hash-cons) don't regress proof
+    /// mode.
+    pub proofs: bool,
 }
 
 pub struct DuckdbBackend {
@@ -58,6 +65,14 @@ pub struct DuckdbBackend {
     /// fresh IDs via the duckdb sequence. Distinct from regular
     /// functions: those are read-back via subqueries.
     eq_sort_ctor: hashbrown::HashSet<String>,
+    /// Sort names declared as `(sort X (Pair A B))`. The bridge
+    /// stores values of such a sort as a DuckDB STRUCT with `first`
+    /// and `second` fields. Used by `sort_to_column_ty` to pick the
+    /// right `ColumnTy`. Term encoding's proof mode emits a
+    /// per-eq-sort `Pair<sort> := (Pair sort proof)` so the
+    /// `uf_function_<sort>` table can return `(leader, proof)`
+    /// in one column.
+    pair_sorts: hashbrown::HashSet<String>,
     /// Combined ruleset name → list of member ruleset names. Lets us
     /// expand `(run combined)` to fire all member rules in one
     /// iteration.
@@ -99,7 +114,17 @@ impl DuckdbBackend {
         // those into ordinary relational rules. We turn it on
         // unconditionally — the cost on programs that don't need it
         // (pure Datalog like path.egg) is small extra setup.
-        let typechecker = EGraph::default().with_term_encoding_enabled();
+        //
+        // When `config.proofs` is on we use the proof-tracking
+        // typechecker instead. `new_with_proofs()` enables term
+        // encoding internally, so the duckdb-side schema is still
+        // the term-encoded layout — just with proof terms threaded
+        // through unions and rewrites.
+        let typechecker = if config.proofs {
+            EGraph::new_with_proofs()
+        } else {
+            EGraph::default().with_term_encoding_enabled()
+        };
         let mut db = duck::EGraph::new()?;
         if config.native_uf {
             db.enable_native_uf();
@@ -112,6 +137,7 @@ impl DuckdbBackend {
             sorts: hashbrown::HashMap::default(),
             is_relation: hashbrown::HashMap::default(),
             eq_sort_ctor: hashbrown::HashSet::default(),
+            pair_sorts: hashbrown::HashSet::default(),
             combined_rulesets: hashbrown::HashMap::default(),
             known_rulesets: hashbrown::HashSet::default(),
             function_meta: hashbrown::HashMap::default(),
@@ -259,9 +285,21 @@ impl DuckdbBackend {
             // relation-desugar patterns. Sorts themselves don't need
             // any DDL — we don't model EqSort UF on this backend yet.
             GenericNCommand::Sort {
-                name, unionable, ..
+                name,
+                unionable,
+                presort_and_args,
+                ..
             } => {
                 self.sorts.insert(name.clone(), *unionable);
+                // `(sort X (Pair A B))` registers X as a Pair sort.
+                // The bridge stores those as DuckDB STRUCT columns;
+                // `sort_to_column_ty` checks this set so columns of
+                // type X get the right schema.
+                if let Some((presort, _)) = presort_and_args {
+                    if presort == "Pair" {
+                        self.pair_sorts.insert(name.clone());
+                    }
+                }
                 Ok(())
             }
             // A function declaration in the resolved IR.
@@ -329,7 +367,7 @@ impl DuckdbBackend {
             .schema
             .input
             .iter()
-            .map(|s| sort_to_column_ty(s))
+            .map(|s| self.sort_to_column_ty(s))
             .collect::<Result<Vec<_>, _>>()?;
         let output_sort = &decl.schema.output;
 
@@ -359,7 +397,46 @@ impl DuckdbBackend {
         );
 
         if decl.subtype == FunctionSubtype::Constructor {
-            let is_helper = decl.internal_hidden && !decl.unextractable;
+            // Term encoding emits two *kinds* of `:internal-hidden`
+            // constructors that both come in without
+            // `:unextractable`, but they want very different backend
+            // treatment:
+            //
+            //   1. cleanup-marker helpers (`@to_delete_X`, the per-
+            //      merge `cleanup_constructor`): rows are inserted
+            //      purely for existence; the output ID is never read
+            //      in expression position. Cheaper to register as a
+            //      relation (no ID allocation, PK over inputs).
+            //   2. proof constructors (`@Trans`, `@Sym`, `@Congr`,
+            //      `@Fiat`, `@Rule`, `@Merge`, `@PCons`, `@PNil`):
+            //      proof mode threads these through expressions, so
+            //      `(let p (@Trans p1 p2))` reads the ID. They need
+            //      real eq-sort allocation.
+            //
+            // Distinguish by output sort: kind 1 outputs a fresh
+            // per-merge sort (`mergecleanupsort<N>`), kind 2 outputs
+            // the proof sorts (`proof_datatype`, `proof_list_sort`)
+            // from the encoder. Treat anything with a proof-sort
+            // output as a real constructor regardless of the
+            // `internal-hidden` flag.
+            let proof_names = &self.typechecker.proof_state.proof_names;
+            // Sorts that proof-mode constructors produce values in.
+            // Anything outputting one of these is read in expression
+            // position somewhere downstream, so the `is_helper`
+            // relation shortcut would be wrong:
+            //   - `proof_datatype` / `proof_list_sort`: built by
+            //     `@Trans`, `@Sym`, `@PCons`, `@PNil`, etc.; read by
+            //     `(pair-second (uf_function_<sort> x))` in
+            //     `@rebuild_rule`.
+            //   - `ast_sort`: built by per-sort `Ast<S>`
+            //     constructors and read in proof terms wherever a
+            //     term is tagged with its AST.
+            let outputs_proof_sort = output_sort == &proof_names.proof_datatype
+                || output_sort == &proof_names.proof_list_sort
+                || output_sort == &proof_names.ast_sort;
+            let is_helper = decl.internal_hidden
+                && !decl.unextractable
+                && !outputs_proof_sort;
             if is_helper {
                 as_relation = true;
             } else {
@@ -425,7 +502,7 @@ impl DuckdbBackend {
                 .map_err(DuckdbBackendError::Backend)?;
             self.is_relation.insert(decl.name.clone(), true);
         } else {
-            let output_ty = sort_to_column_ty(output_sort)?;
+            let output_ty = self.sort_to_column_ty(output_sort)?;
             let merge_mode = merge.unwrap_or(duck::MergeMode::Old);
             self.db
                 .add_function(&decl.name, &inputs, output_ty, merge_mode)
@@ -599,10 +676,45 @@ impl DuckdbBackend {
                     Ok(duck::Literal::I64(v))
                 }
             }
-            GenericExpr::Call(_, ResolvedCall::Primitive(_), _) => {
-                Err(DuckdbBackendError::Unsupported(format!(
-                    "primitive call in top-level expression: {e}"
-                )))
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                // Top-level lets emitted by the proof encoder use a
+                // handful of arithmetic / ordering primitives over
+                // already-allocated globals (e.g.
+                // `(let @v999 (ordering-max @v1 @v2))`). Evaluate
+                // these in-Rust by recursively folding each arg to a
+                // literal, then applying the primitive. Anything we
+                // don't recognize still falls through to the
+                // "unsupported" error below.
+                let lits = args
+                    .iter()
+                    .map(|a| self.eval_top_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let pname = p.name();
+                let apply_i64_pair = |op: &str, f: fn(i64, i64) -> i64| -> Result<duck::Literal, DuckdbBackendError> {
+                    if lits.len() != 2 {
+                        return Err(DuckdbBackendError::Unsupported(format!(
+                            "primitive `{op}` at top level: expected 2 args, got {}",
+                            lits.len()
+                        )));
+                    }
+                    let (duck::Literal::I64(a), duck::Literal::I64(b)) = (&lits[0], &lits[1])
+                    else {
+                        return Err(DuckdbBackendError::Unsupported(format!(
+                            "primitive `{op}` at top level: non-i64 args {lits:?}"
+                        )));
+                    };
+                    Ok(duck::Literal::I64(f(*a, *b)))
+                };
+                match pname {
+                    "ordering-max" => apply_i64_pair("ordering-max", i64::max),
+                    "ordering-min" => apply_i64_pair("ordering-min", i64::min),
+                    "+" => apply_i64_pair("+", |a, b| a.wrapping_add(b)),
+                    "-" => apply_i64_pair("-", |a, b| a.wrapping_sub(b)),
+                    "*" => apply_i64_pair("*", |a, b| a.wrapping_mul(b)),
+                    _ => Err(DuckdbBackendError::Unsupported(format!(
+                        "primitive call in top-level expression: {e}"
+                    ))),
+                }
             }
         }
     }
@@ -995,7 +1107,21 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn sort_to_column_ty(sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
+impl DuckdbBackend {
+    /// Look up the DuckDB column type for an egglog sort name,
+    /// consulting `pair_sorts` so that a `(sort X (Pair A B))`
+    /// declaration earlier in the program steers `X` to the
+    /// `PairI64` column type. Falls back to `sort_to_column_ty_bare`
+    /// for plain primitive / EqSort names.
+    fn sort_to_column_ty(&self, sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
+        if self.pair_sorts.contains(sort) {
+            return Ok(duck::ColumnTy::PairI64);
+        }
+        sort_to_column_ty_bare(sort)
+    }
+}
+
+fn sort_to_column_ty_bare(sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
     match sort {
         "i64" => Ok(duck::ColumnTy::I64),
         "bool" => Ok(duck::ColumnTy::Bool),

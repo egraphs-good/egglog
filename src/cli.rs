@@ -146,6 +146,7 @@ pub fn cli(mut egraph: EGraph) {
                 let mut backend = egglog::backend_duckdb::DuckdbBackend::new_with_config(
                     egglog::backend_duckdb::DuckBackendConfig {
                         native_uf: args.duck_native_uf,
+                        proofs: false,
                     },
                 )
                 .unwrap_or_else(|err| {

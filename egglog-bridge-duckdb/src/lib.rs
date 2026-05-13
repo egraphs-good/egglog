@@ -311,6 +311,13 @@ pub enum ColumnTy {
     Bool,
     F64,
     Str,
+    /// A pair of two i64s, stored as a DuckDB `STRUCT(first BIGINT,
+    /// second BIGINT)`. Used by the term encoding's proof mode to
+    /// bundle `(leader_id, proof_id)` as the output of the
+    /// `uf_function_<sort>` table. The bridge exposes three SQL
+    /// primitives that operate on this type: `pair`, `pair-first`,
+    /// and `pair-second`.
+    PairI64,
 }
 
 impl ColumnTy {
@@ -320,6 +327,7 @@ impl ColumnTy {
             ColumnTy::Bool => "BOOLEAN",
             ColumnTy::F64 => "DOUBLE",
             ColumnTy::Str => "VARCHAR",
+            ColumnTy::PairI64 => "STRUCT(first BIGINT, second BIGINT)",
         }
     }
 }
@@ -1132,6 +1140,17 @@ impl EGraph {
     /// Compile and store a rule. Compilation produces one SQL
     /// statement per (variant × action).
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
+        // Under `--duck-native-uf` the UF-maintenance rulesets are
+        // skipped at every iter (the native UF maintains the same
+        // invariants in-memory). Compile-time, some of their rules
+        // use primitives the bridge doesn't yet support (notably
+        // `pair` / `pair-first` / `pair-second` that proof-mode's
+        // UF function index emits). Skipping the compile for those
+        // rules outright avoids a hard error on programs that would
+        // never execute the rules anyway.
+        if self.native_uf_enabled && is_uf_maintenance_ruleset(&rule.ruleset) {
+            return Ok(());
+        }
         let mut compiled = compile::compile_rule(&rule, &self.functions)?;
         // Body tables = distinct Atom::Func names. The watermark gate
         // reads this set to decide whether the rule has anything new

@@ -157,7 +157,26 @@ impl Run {
         // same should_fail handling, the same `(print-size)`
         // appendage. It only swaps the executor.
         if self.duckdb {
-            let mut backend = DuckdbBackend::new()
+            // When `self.proofs` is set in a duckdb run, wire it
+            // into the backend config so the encoder runs in
+            // proof-tracking mode. This exercises the same control
+            // flow proof-mode reference runs do, but on the DuckDB
+            // executor — catches regressions where backend-side
+            // optimizations (inline-congruence, native UF, hash-cons)
+            // skip cases that the proof encoder relies on.
+            // Native UF and proof mode are not yet compatible: the
+            // proof encoder declares `uf_function_<sort>` as
+            // returning `(Pair sort proof)`, and rebuild rules read
+            // out the leader via `(pair-first p)`. Native UF
+            // replaces those reads with a UDF that returns just the
+            // leader as `i64`, which doesn't satisfy the encoder's
+            // pair type. Until native UF learns to return Pair
+            // values in proof mode, keep them apart in tests.
+            let config = egglog::backend_duckdb::DuckBackendConfig {
+                proofs: self.proofs,
+                native_uf: false,
+            };
+            let mut backend = DuckdbBackend::new_with_config(config)
                 .unwrap_or_else(|e| panic!("DuckdbBackend init failed: {e}"));
             return match backend.parse_and_run_program(filename, &program) {
                 Ok(msgs) => {
@@ -423,6 +442,80 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         if duckdb_supported {
             push_trial(Run {
                 duckdb: true,
+                ..run.clone()
+            });
+        }
+
+        // duckdb + proofs: run files through the proof-tracking
+        // encoder on the DuckDB backend. The encoder threads proof
+        // terms (`@Trans`, `@Merge`, `@PNil`, …) through unions and
+        // rewrites; the backend takes a different path through
+        // `translate_expr` for those constructors. Useful as a
+        // regression guard for our optimizations against proof
+        // mode's code paths.
+        //
+        // The files in `DUCKDB_PROOFS_KNOWN_GAP` all trip a single
+        // remaining backend gap: the proof encoder writes a
+        // congruence union as `(set (pname l s)
+        // (Trans p1 (Sym p2)))`, which the rule compiler lowers to
+        // `INSERT INTO pname (... , c2, ts) SELECT ..., (SELECT c2
+        // FROM @_trans WHERE c0=p1 AND c1=...) , ?2 FROM body`. That
+        // subquery is a *lookup* — it expects the `Trans` term to
+        // already exist. Term-mode without proofs doesn't hit this
+        // because the proof column is just `()`. With proofs the
+        // encoder relies on rule actions to allocate the proof term
+        // on demand (hash-cons inside `Call` expression position),
+        // which `term_sql` doesn't do today. mm is here for the
+        // same reason. Closing this gap is a separate refactor of
+        // `compile::term_sql`'s `FuncCall` branch — it would need to
+        // emit a `LEFT JOIN allocate_or_lookup` instead of a bare
+        // `SELECT … LIMIT 1`.
+        const DUCKDB_PROOFS_KNOWN_GAP: &[&str] = &[
+            "math-microbenchmark.egg",
+            "eqsolve.egg",
+            "eqsat-basic.egg",
+            "unify.egg",
+            "antiunify.egg",
+            "matrix.egg",
+            "naturals.egg",
+            "rw-analysis.egg",
+            "typecheck.egg",
+            "points-to.egg",
+            "combinators.egg",
+            "resolution.egg",
+            "path-union.egg",
+            "unification-points-to.egg",
+            "fibonacci-demand.egg",
+            "complex-merge-func.egg",
+            "proof-extract-cost.egg",
+            "internal_let.egg",
+            "repro-define.egg",
+            "integer_math.egg",
+            "rectangle.egg",
+            "repro-querybug2.egg",
+            "repro-querybug4.egg",
+            "repro-querybug.egg",
+            "repro-silly-panic.egg",
+            "repro-filter-bug.egg",
+            "subsume-relation.egg",
+            "intersection.egg",
+            "repro-typecheck-term-encoding.egg",
+            "until.egg",
+            "subsume.egg",
+            "birewrite.egg",
+            "calc.egg",
+            "name-resolution.egg",
+            "merge-during-rebuild.egg",
+            "push-pop.egg",
+        ];
+        let duckdb_proofs_supported = !should_fail
+            && !requires_proofs
+            && file_supports_proofs(&run.path)
+            && !DUCKDB_PROOFS_KNOWN_GAP.iter().any(|f| run.path.ends_with(f));
+        if duckdb_proofs_supported {
+            push_trial(Run {
+                duckdb: true,
+                proofs: true,
                 ..run.clone()
             });
         }

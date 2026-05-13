@@ -1164,6 +1164,44 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
             ))
         }
         "guard" => unop(""),
+        // Pair container primitives. The term encoder uses these in
+        // proof mode: `uf_function_<sort>` returns a
+        // `(Pair sort proof)`, and rebuild rules read out the
+        // leader with `(pair-first p)`. The bridge represents Pair
+        // as a DuckDB STRUCT with `first` / `second` BIGINT fields.
+        "pair" => {
+            if args.len() != 2 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `pair` expects 2 args, got {}",
+                    args.len()
+                ));
+            }
+            // `struct_pack` keeps the field names attached so later
+            // `.first` / `.second` access on the result is just a
+            // typed field reference and DuckDB's planner can fold it.
+            Ok(format!(
+                "struct_pack(first := {}, second := {})",
+                args[0], args[1]
+            ))
+        }
+        "pair-first" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `pair-first` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("({}).first", args[0]))
+        }
+        "pair-second" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `pair-second` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("({}).second", args[0]))
+        }
         _ => Err(anyhow!("rule {rule_name}: unknown primitive `{op}`")),
     }
 }
