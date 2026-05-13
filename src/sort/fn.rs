@@ -144,7 +144,7 @@ impl Sort for FunctionSort {
         &self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+    fn column_ty(&self, _backend: &dyn egglog_backend_trait::Backend) -> ColumnTy {
         ColumnTy::Id
     }
 

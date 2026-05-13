@@ -52,7 +52,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> &str;
 
     /// Returns the backend-specific column type. See [`ColumnTy`].
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
+    fn column_ty(&self, backend: &dyn egglog_backend_trait::Backend) -> ColumnTy;
 
     /// return the inner sorts if a container sort
     /// remember that containers can contain containers
@@ -168,7 +168,7 @@ impl Sort for EqSort {
         &self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+    fn column_ty(&self, _backend: &dyn egglog_backend_trait::Backend) -> ColumnTy {
         ColumnTy::Id
     }
 
