@@ -284,15 +284,11 @@ impl EGraph {
     where
         T: WritePrim + Clone,
     {
-        let registry = self.backend.action_registry().clone();
-        self.register_per_context(x, validator, WriteState::valid_contexts(), move |x, ctx| {
-            Box::new(RegistryPrimWrapper::<T, WrapWrite> {
-                prim: x,
-                registry: registry.clone(),
-                ctx,
-                _wrap: std::marker::PhantomData,
-            })
-        });
+        self.register_registry_primitive::<T, WrapWrite>(
+            x,
+            validator,
+            WriteState::valid_contexts(),
+        );
     }
 
     /// Register a [`ReadPrim`]. Pass `None` for the validator if not
@@ -301,15 +297,7 @@ impl EGraph {
     where
         T: ReadPrim + Clone,
     {
-        let registry = self.backend.action_registry().clone();
-        self.register_per_context(x, validator, ReadState::valid_contexts(), move |x, ctx| {
-            Box::new(RegistryPrimWrapper::<T, WrapRead> {
-                prim: x,
-                registry: registry.clone(),
-                ctx,
-                _wrap: std::marker::PhantomData,
-            })
-        });
+        self.register_registry_primitive::<T, WrapRead>(x, validator, ReadState::valid_contexts());
     }
 
     /// Register a [`FullPrim`]. Pass `None` for the validator if not
@@ -318,9 +306,21 @@ impl EGraph {
     where
         T: FullPrim + Clone,
     {
+        self.register_registry_primitive::<T, WrapFull>(x, validator, FullState::valid_contexts());
+    }
+
+    fn register_registry_primitive<T, S>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+        valid_ctxs: &[Context],
+    ) where
+        T: Primitive + Clone,
+        S: RegistryWrap<T> + 'static,
+    {
         let registry = self.backend.action_registry().clone();
-        self.register_per_context(x, validator, FullState::valid_contexts(), move |x, ctx| {
-            Box::new(RegistryPrimWrapper::<T, WrapFull> {
+        self.register_per_context(x, validator, valid_ctxs, move |x, ctx| {
+            Box::new(RegistryPrimWrapper::<T, S> {
                 prim: x,
                 registry: registry.clone(),
                 ctx,

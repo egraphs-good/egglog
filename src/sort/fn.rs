@@ -451,10 +451,9 @@ pub enum ResolvedFunctionId {
     /// eclass the user asked for, so the call is rejected outright.
     Constructor(egglog_bridge::TableAction),
     /// Wraps a `(function …)` lookup — any non-constructor function,
-    /// regardless of its `:merge` strategy. Pure read returning `None`
-    /// on miss. `FunctionContainer::apply` allows this in every
-    /// context except `Pure` (where it would be an untracked
-    /// seminaive read).
+    /// regardless of its `:merge` strategy. `FunctionContainer::apply`
+    /// allows this only in DB-read-capable contexts (`Read`/`Full`);
+    /// `Pure` and `Write` would be untracked seminaive reads.
     Function(egglog_bridge::TableAction),
     /// Wraps a primitive. Carries the unique exact-signature runtime
     /// id found for each context at build time. At dispatch time
@@ -511,22 +510,19 @@ impl PurePrim for Apply {
 
 impl FunctionContainer {
     /// Apply the wrapped function. `state` is always a `PureState`
-    /// (the type every primitive's `apply` receives); the real
-    /// surrounding context is carried separately in `ctx`, and
-    /// read/write capabilities are reached through `raw_exec_state()`
-    /// gated by the `ctx`-derived checks below.
+    /// (the type every primitive's `apply` receives). The surrounding
+    /// context is stamped onto that state by the primitive wrapper, so
+    /// callers do not pass a second copy of the same context.
     pub(crate) fn apply<'a, 'db>(
         &self,
         state: &mut crate::PureState<'a, 'db>,
-        ctx: crate::Context,
         args: &[Value],
     ) -> Option<Value>
     where
         'db: 'a,
     {
+        let ctx = state.ctx();
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        // See [`Context`] for why each capability is admitted only in
-        // these contexts.
         let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
         let can_read = matches!(ctx, crate::Context::Read | crate::Context::Full);
         let panic_id = self.3;

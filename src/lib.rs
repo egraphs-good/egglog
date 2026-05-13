@@ -2025,7 +2025,7 @@ impl<'a> BackendRule<'a> {
                     ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
                     ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
                 }
-            } else if let Some(possible) = self.type_info.get_prims(name) {
+            } else {
                 let fn_sort = Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any())
                     .unwrap_or_else(|_| panic!("expected `unstable-fn` to return a function sort"));
                 let types: Vec<_> = prim
@@ -2036,10 +2036,6 @@ impl<'a> BackendRule<'a> {
                     .chain(fn_sort.inputs().iter().cloned())
                     .chain(std::iter::once(fn_sort.output()))
                     .collect();
-                let ps: Vec<_> = possible
-                    .iter()
-                    .filter(|p| p.accept(&types, self.type_info))
-                    .collect();
                 // Bake every exact-signature registration. The
                 // build-site `ctx` here is intentionally unused: the
                 // *application*-time context (carried on `state.ctx`
@@ -2049,25 +2045,21 @@ impl<'a> BackendRule<'a> {
                 // was constructed in (e.g. a `let`-bound function value
                 // built at top-level `Full` couldn't be applied later
                 // from a `Read` query).
-                // Per application context, zero matching runtime ids means
-                // the wrapped primitive is not callable there and will hit
-                // the mismatch path later; one id is the dispatch target; more
-                // than one is ambiguous and should panic.
+                let ps: Vec<_> = self
+                    .type_info
+                    .get_prims(name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|p| p.accept(&types, self.type_info))
+                    .collect();
                 let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
-                    let mut matching_ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
-                    match (matching_ids.next(), matching_ids.next()) {
+                    let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
+                    match (ids.next(), ids.next()) {
                         (None, _) => None,
                         (Some(id), None) => Some(id),
-                        (Some(_), Some(_)) => {
-                            let sig: Vec<_> = types.iter().map(|s| s.name().to_string()).collect();
-                            panic!(
-                                "Ambiguous primitive resolution for {name:?} in unstable-fn \
-                                 context {runtime_ctx:?} with wrapped signature [{}]: {} \
-                                 registrations accept this call",
-                                sig.join(", "),
-                                matching_ids.count() + 2,
-                            )
-                        }
+                        (Some(_), Some(_)) => panic!(
+                            "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                        ),
                     }
                 });
                 assert!(
@@ -2075,8 +2067,6 @@ impl<'a> BackendRule<'a> {
                     "no callable for {name}"
                 );
                 ResolvedFunctionId::Primitive { context_ids }
-            } else {
-                panic!("no callable for {name}");
             };
             let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
 

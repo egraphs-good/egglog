@@ -160,40 +160,23 @@ impl ResolvedCall {
             }
         }
 
-        // For a given (signature, context) pair, exactly one primitive
-        // definition must match. Each definition carries the runtime ids
-        // for the contexts it permits. If two definitions accept the
-        // same signature in the same context, registration was
-        // ambiguous (e.g. the same primitive added twice); panic here
-        // rather than silently picking one.
-        if let Some(primitives) = typeinfo.get_prims(head) {
-            let matches: Vec<_> = primitives
-                .iter()
-                .filter(|p| p.context_ids[ctx].is_some() && p.accept(types, typeinfo))
-                .collect();
-            match matches.as_slice() {
-                [] => {}
-                [picked] => {
-                    let (out, inp) = types.split_last().unwrap();
-                    return ResolvedCall::Primitive(SpecializedPrimitive {
-                        prim_with_id: (*picked).clone(),
-                        input: inp.to_vec(),
-                        output: out.clone(),
-                    });
-                }
-                multiple => {
-                    let sig: Vec<_> = types.iter().map(|s| s.name().to_string()).collect();
-                    panic!(
-                        "Ambiguous primitive resolution for {head:?} in context {ctx:?} \
-                         with signature [{}]: {} registrations accept this call. \
-                         Each (name, signature, context) tuple must map to a unique \
-                         primitive — was {head:?} registered more than once with the \
-                         same type?",
-                        sig.join(", "),
-                        multiple.len(),
-                    );
-                }
+        let mut primitives = typeinfo
+            .get_prims(head)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.context_ids[ctx].is_some() && p.accept(types, typeinfo));
+        if let Some(picked) = primitives.next() {
+            if primitives.next().is_some() {
+                panic!(
+                    "Ambiguous primitive resolution for {head:?} in direct call context {ctx:?}"
+                );
             }
+            let (out, inp) = types.split_last().unwrap();
+            return ResolvedCall::Primitive(SpecializedPrimitive {
+                prim_with_id: picked.clone(),
+                input: inp.to_vec(),
+                output: out.clone(),
+            });
         }
 
         panic!("No resolution for {head:?} in context {ctx:?}");

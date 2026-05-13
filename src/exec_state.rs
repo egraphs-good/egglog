@@ -195,7 +195,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     ) -> Option<Value> {
         let ctx = self.ctx();
         let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
-        fc.apply(&mut pure, ctx, args)
+        fc.apply(&mut pure, args)
     }
 }
 
