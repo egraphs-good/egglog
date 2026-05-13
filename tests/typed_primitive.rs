@@ -14,8 +14,8 @@ use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::sort::I64Sort;
 use egglog::{
-    EGraph, FullPrim, FullState, Primitive, PurePrim, PureState, Read, ReadPrim, ReadState,
-    Value, WritePrim, WriteState, prelude::*,
+    EGraph, FullPrim, FullState, Primitive, PurePrim, PureState, Read, ReadPrim, ReadState, Value,
+    WritePrim, WriteState, prelude::*,
 };
 
 // --- shared test fixtures ---
