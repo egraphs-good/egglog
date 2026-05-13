@@ -200,19 +200,32 @@ pub fn translate_with_manifest(
     emit_live_views(&ctx, &mut p);
     emit_snapshot_directives(&mut p);
     emit_run_limit(&ctx, &mut p);
-    emit_printsize_directives(&mut p);
-    let manifest = build_manifest(&ctx);
+    emit_canonical_views(&ctx, &mut p);
+    emit_printsize_directives(&ctx, &mut p);
+    let manifest = build_manifest(&ctx, &p);
     Ok(TranslateOutput { program: p, manifest })
 }
 
 /// Build a Manifest from the translator's context, applying the emitter's
 /// sanitize pass to internal IR names so consumers see the names that
-/// will appear in souffle's stdout.
-fn build_manifest(ctx: &Ctx) -> Manifest {
+/// will appear in souffle's stdout. Redirects view names to their
+/// `_canonical` projection when one was emitted — that's the relation
+/// runners should read for an egglog-equivalent row count.
+fn build_manifest(ctx: &Ctx, p: &Program) -> Manifest {
+    let declared: std::collections::HashSet<&str> =
+        p.relations.iter().map(|r| r.name.as_str()).collect();
     let view_relations: Vec<(String, String)> = ctx
         .view_for_user
         .iter()
-        .map(|(user, view)| (user.clone(), egglog_souffle_backend::emit::sanitize(view)))
+        .map(|(user, view)| {
+            let canonical = format!("{view}_canonical");
+            let target = if declared.contains(canonical.as_str()) {
+                canonical
+            } else {
+                view.clone()
+            };
+            (user.clone(), egglog_souffle_backend::emit::sanitize(&target))
+        })
         .collect();
     let check_relations: Vec<String> = ctx
         .check_relations
@@ -226,7 +239,24 @@ fn build_manifest(ctx: &Ctx) -> Manifest {
 /// user would care about inspecting (view tables and UF tables), skipping
 /// internal scaffolding (`_buffer`, `_snap`, `_live`, `to_delete_*`,
 /// `to_subsume_*`).
-fn emit_printsize_directives(p: &mut Program) {
+fn emit_printsize_directives(ctx: &Ctx, p: &mut Program) {
+    // When a view has a `_canonical` projection, print that one (it's
+    // the egglog-equivalent count). Skip the raw view's printsize since
+    // the raw view holds non-canonical duplicates the encoder used to
+    // subsume but we now don't (canonical is computed via projection
+    // instead).
+    let has_canonical: std::collections::HashSet<String> = ctx
+        .view_for_user
+        .values()
+        .filter_map(|view| {
+            let canonical = format!("{view}_canonical");
+            if p.relations.iter().any(|r| r.name == canonical) {
+                Some(view.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
     let names: Vec<String> = p
         .relations
         .iter()
@@ -238,10 +268,133 @@ fn emit_printsize_directives(p: &mut Program) {
                 && !n.ends_with("_live")
                 && !n.contains("to_delete_")
                 && !n.contains("to_subsume_")
+                && !has_canonical.contains(n)
         })
         .collect();
     for n in names {
         p.directives.push(Directive::PrintSize(n));
+    }
+}
+
+/// For each user view that has UF-typed inputs/output (i.e., the
+/// constructor takes/returns Math-record values), emit a
+/// `<view>_canonical` relation derived by projecting each Math column
+/// through the UF leader. The encoder's rebuild rule still runs
+/// (it canonicalizes the raw view via subsumption, with souffle's
+/// usual 1-iter lag on intermediate iters), and `_canonical` is the
+/// stable print-size view that matches default egglog exactly. Per-
+/// Math-column subsumption clauses below clean up stale canonical
+/// entries as UF chains form.
+fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
+    let uf_math = format!("Eg_UF_{MATH}");
+    let view_names: Vec<String> = ctx.view_for_user.values().cloned().collect();
+    for view in view_names {
+        let Some(decl) = p.relations.iter().find(|r| r.name == view) else {
+            continue;
+        };
+        let cols = decl.columns.clone();
+        let canonical_name = format!("{view}_canonical");
+        // Declare canonical with the same shape as view.
+        p.relations.push(RelationDecl {
+            name: canonical_name.clone(),
+            columns: cols.clone(),
+        });
+        // Build the derivation rule:
+        //   canonical(c0_l, c1_l, ..., out) :-
+        //     view(c0, c1, ..., out),
+        //     UF(ci, ci_l, _)  -- for each Math-typed column.
+        let mut body: Vec<IrLit> = Vec::new();
+        let raw_args: Vec<Expr> = (0..cols.len())
+            .map(|i| Expr::Var(format!("__c{i}")))
+            .collect();
+        body.push(IrLit::Atom(Atom {
+            relation: view.clone(),
+            args: raw_args,
+        }));
+        let mut head_args: Vec<Expr> = Vec::with_capacity(cols.len());
+        for (i, (_name, ty)) in cols.iter().enumerate() {
+            if ty == MATH {
+                let raw = format!("__c{i}");
+                let leader = format!("__c{i}_l");
+                head_args.push(Expr::Var(leader.clone()));
+                // UF lookup: raw → leader.
+                body.push(IrLit::Atom(Atom {
+                    relation: uf_math.clone(),
+                    args: vec![
+                        Expr::Var(raw),
+                        Expr::Var(leader.clone()),
+                        Expr::Wildcard,
+                    ],
+                }));
+                // Require leader to be its own ultimate leader (UF
+                // self-loop) — filters out non-final leaders before
+                // UF subsumption catches up. Without this filter the
+                // canonical projection over-counts during intermediate
+                // outer iters when UF transitivity has fired but
+                // self-loop subsumption hasn't yet.
+                body.push(IrLit::Atom(Atom {
+                    relation: uf_math.clone(),
+                    args: vec![
+                        Expr::Var(leader.clone()),
+                        Expr::Var(leader),
+                        Expr::Wildcard,
+                    ],
+                }));
+            } else {
+                head_args.push(Expr::Var(format!("__c{i}")));
+            }
+        }
+        p.clauses.push(Clause::rule(
+            Atom {
+                relation: canonical_name.clone(),
+                args: head_args,
+            },
+            body,
+        ));
+        // Subsumption per Math column: when canonical has two rows
+        // that agree on all columns except the chosen Math column,
+        // and the two values are in the same UF eclass, keep the
+        // leader version. Without this, canonical accumulates stale
+        // c0/c1/c2 entries as UF chains form — Datalog is
+        // monotonic, so once a stale (c0_l, c1_l, c2_l) is derived
+        // it persists unless a subsumption removes it.
+        for math_idx in 0..cols.len() {
+            if cols[math_idx].1 != MATH {
+                continue;
+            }
+            let mut dom_args: Vec<Expr> = (0..cols.len())
+                .map(|i| Expr::Var(format!("__d{i}")))
+                .collect();
+            let mut dominating_args: Vec<Expr> = dom_args.clone();
+            dom_args[math_idx] = Expr::Var("__dx".into());
+            dominating_args[math_idx] = Expr::Var("__dy".into());
+            let dom_body = vec![
+                IrLit::Atom(Atom {
+                    relation: uf_math.clone(),
+                    args: vec![
+                        Expr::Var("__dx".into()),
+                        Expr::Var("__dy".into()),
+                        Expr::Wildcard,
+                    ],
+                }),
+                IrLit::Constraint(
+                    BinaryOp::Ne,
+                    Expr::Var("__dx".into()),
+                    Expr::Var("__dy".into()),
+                ),
+            ];
+            p.clauses.push(Clause::subsume(
+                Atom {
+                    relation: canonical_name.clone(),
+                    args: dom_args,
+                },
+                Atom {
+                    relation: canonical_name.clone(),
+                    args: dominating_args,
+                },
+                dom_body,
+            ));
+        }
     }
 }
 
@@ -969,15 +1122,19 @@ fn translate_check(
     }
     let mut body = bodies.into_iter().next().unwrap();
     let head = Atom { relation: rel.clone(), args: vec![Expr::Number(0)] };
-    // The encoder produces check facts that read `<R>_snap`, but snap is
-    // a frozen-at-outer-iter-start view, so it lags the canonical view
-    // by one outer iteration. Checks need to observe the FINAL state,
-    // so rewrite snap references back to the canonical view here.
+    // The encoder produces check facts that read `<R>_snap`. Rewrite to
+    // `<R>_canonical` — that's the canonical projection through UF (one
+    // row per eclass-canonical (inputs, output) tuple), which is what
+    // checks of e.g. `(= (Add 1 2) (Add 2 1))` need: after a commutativity
+    // union, both terms get the same canonical c2. Reading the raw `<R>`
+    // wouldn't work because we no longer mutate it for canonicalization
+    // (rebuild rule is skipped); raw c2 columns can differ even when
+    // their eclasses are unified.
     for lit in &mut body {
         if let IrLit::Atom(a) = lit
             && let Some(stripped) = a.relation.strip_suffix("_snap")
         {
-            a.relation = stripped.to_string();
+            a.relation = format!("{stripped}_canonical");
         }
     }
     // Pull in any let-buffer lookups the body's vars need (mirrors the
