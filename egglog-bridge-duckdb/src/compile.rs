@@ -45,6 +45,57 @@ fn action_target(a: &Action) -> Option<String> {
     }
 }
 
+/// Mark each body atom as demotable iff it is a function-table
+/// lookup whose function has a registered native union-find UDF
+/// (`info.native_uf_udf == Some(_)`), the inputs are bound by an
+/// earlier body atom, and the output is a fresh `Var`. The compiler
+/// will emit a scalar UDF call binding the output var rather than
+/// adding a join atom.
+///
+/// Walks the body greedily in source order. A demoted atom only
+/// contributes its output binding, so later atoms that depend on
+/// it can still resolve.
+fn compute_native_uf_demote(
+    body: &[Atom],
+    functions: &HashMap<String, FunctionInfo>,
+) -> Vec<bool> {
+    let mut demote = vec![false; body.len()];
+    let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (i, atom) in body.iter().enumerate() {
+        match atom {
+            Atom::Func { name, args } => {
+                let info = match functions.get(name) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let inputs_bound = args[..info.inputs_len].iter().all(|t| match t {
+                    Term::Var(v) => bound.contains(v),
+                    _ => true,
+                });
+                let output_fresh = info.inputs_len + 1 == args.len()
+                    && matches!(&args[info.inputs_len], Term::Var(v) if !bound.contains(v));
+                if info.native_uf_udf.is_some() && inputs_bound && output_fresh {
+                    demote[i] = true;
+                    if let Term::Var(v) = &args[info.inputs_len] {
+                        bound.insert(v.clone());
+                    }
+                } else {
+                    for arg in args {
+                        if let Term::Var(v) = arg {
+                            bound.insert(v.clone());
+                        }
+                    }
+                }
+            }
+            Atom::Bind { var, .. } => {
+                bound.insert(var.clone());
+            }
+            Atom::Filter(_) => {}
+        }
+    }
+    demote
+}
+
 pub(crate) fn compile_rule(
     rule: &Rule,
     functions: &HashMap<String, FunctionInfo>,
@@ -118,11 +169,20 @@ pub(crate) fn compile_rule(
         }
     }
 
+    // Native-UF demote plan: body atoms against `:merge ordering-min`
+    // functions get rewritten as scalar UDF calls
+    // (`duck_uf_<sort>_find(input)`) rather than join atoms. They
+    // don't contribute to the seminaive triangulation either —
+    // dropping them from `func_atom_indices` removes the variants
+    // that would have focused on them. Empty `Vec<bool>` (all
+    // false) when `--duck-native-uf` is off.
+    let demote = compute_native_uf_demote(&rule.body, functions);
+
     let func_atom_indices: Vec<usize> = rule
         .body
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| matches!(a, Atom::Func { .. }).then_some(i))
+        .filter_map(|(i, a)| (matches!(a, Atom::Func { .. }) && !demote[i]).then_some(i))
         .collect();
 
     if rule.actions.is_empty() {
@@ -136,7 +196,46 @@ pub(crate) fn compile_rule(
     // exactly one "first new" atom), so no dedup is needed. Cuts
     // the per-iter statement count by ~K× without changing the
     // total join work.
-    let variants = vec![compile_fused_variant(rule, &func_atom_indices, functions)?];
+    let mut variants = vec![compile_fused_variant(
+        rule,
+        &func_atom_indices,
+        functions,
+        &demote,
+        None,
+    )?];
+    // For each distinct table referenced by a demoted atom, emit
+    // one gated "UF-changed" recovery variant: scan the body with
+    // no `>= ?1` lower bound, look up canonical roots via UDF,
+    // canonicalize stale rows. The runner runs this only when the
+    // gated table's watermark has advanced since this rule last
+    // ran — saves work when nothing has unified.
+    let mut demote_tables: Vec<String> = Vec::new();
+    for (i, atom) in rule.body.iter().enumerate() {
+        if !demote[i] {
+            continue;
+        }
+        if let Atom::Func { name, .. } = atom {
+            if !demote_tables.iter().any(|n| n == name) {
+                demote_tables.push(name.clone());
+            }
+        }
+    }
+    for gated in &demote_tables {
+        // Native-UF gating: writes that affect the demoted atom's
+        // canonicalization land in the corresponding pname (raw UF)
+        // table, not the function-form table itself. Derive pname
+        // by the term-encoding naming convention so the runner can
+        // skip the gated variant when nothing new has unified this
+        // iteration.
+        let gate_pname = gated.strip_suffix('f').unwrap_or(gated.as_str()).to_string();
+        variants.push(compile_fused_variant(
+            rule,
+            &func_atom_indices,
+            functions,
+            &demote,
+            Some(&gate_pname),
+        )?);
+    }
     Ok(CompiledRule {
         name: rule.name.clone(),
         ruleset: rule.ruleset.clone(),
@@ -159,9 +258,12 @@ fn compile_fused_variant(
     rule: &Rule,
     func_atom_indices: &[usize],
     functions: &HashMap<String, FunctionInfo>,
+    demote: &[bool],
+    gate_table: Option<&str>,
 ) -> Result<CompiledVariant> {
     // 1) Build the body's FROM/WHERE and a binding for body vars.
-    let (from, base_where_parts, mut binding) = walk_body(&rule.body, &rule.name)?;
+    let (from, base_where_parts, mut binding) =
+        walk_body(&rule.body, &rule.name, functions, demote)?;
     // No Func atoms → use a 1-row dummy as FROM source.
     let from = if from.is_empty() {
         "(SELECT 1) __empty__".to_string()
@@ -190,16 +292,32 @@ fn compile_fused_variant(
 
     // The K seminaive partitions, expressed as per-focus WHERE
     // clauses (built from the shared body WHERE + per-focus ts
-    // predicates). Empty body (no Func atom) → one branch with no
-    // ts predicates: the rule still fires every iteration.
-    let branch_wheres: Vec<String> = if func_atom_indices.is_empty() {
+    // predicates). For gated variants, no `>= ?1` lower bound: the
+    // variant is triggered by an external watermark and wants a
+    // full scan. Empty body → one branch with no ts predicates.
+    let branch_wheres: Vec<String> = if gate_table.is_some() {
+        // Gated: full scan of non-demoted Func atoms with only the
+        // upper-bound `< ?2` filter (avoid seeing rows inserted by
+        // this same iteration).
+        let mut parts = base_where_parts.clone();
+        for (i, atom) in rule.body.iter().enumerate() {
+            if !matches!(atom, Atom::Func { .. }) {
+                continue;
+            }
+            if demote.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            parts.push(format!("t{i}.ts < ?2"));
+        }
+        vec![format_where(&parts)]
+    } else if func_atom_indices.is_empty() {
         vec![where_clause.clone()]
     } else {
         func_atom_indices
             .iter()
             .map(|&focus| {
                 let mut parts = base_where_parts.clone();
-                parts.extend(ts_predicates_for_focus(&rule.body, focus));
+                parts.extend(ts_predicates_for_focus(&rule.body, focus, demote));
                 format_where(&parts)
             })
             .collect()
@@ -231,6 +349,7 @@ fn compile_fused_variant(
             materialize: None,
             temp_table: None,
             actions,
+            gate_table: gate_table.map(str::to_string),
         });
     }
 
@@ -417,6 +536,7 @@ fn compile_fused_variant(
         materialize: Some(materialize),
         temp_table: Some(temp_table),
         actions: action_sqls,
+        gate_table: gate_table.map(str::to_string),
     })
 }
 
@@ -443,7 +563,12 @@ pub(crate) fn compile_body_select(
             }
         }
     }
-    let (from, where_parts, _binding) = walk_body(atoms, "<check>")?;
+    // `(check ...)` runs against the current state; no native-UF
+    // demote applies (we want the literal join, not a UDF lookup
+    // bypass) so all-false `demote`.
+    let no_demote = vec![false; atoms.len()];
+    let (from, where_parts, _binding) =
+        walk_body(atoms, "<check>", functions, &no_demote)?;
     let where_clause = format_where(&where_parts);
     if from.is_empty() {
         // No function atoms: a pure-primitive `(check (= 1 1))`-style
@@ -473,9 +598,40 @@ fn try_walk_atom(
     from_parts: &mut Vec<String>,
     where_parts: &mut Vec<String>,
     rule_name: &str,
+    functions: &HashMap<String, FunctionInfo>,
+    demoted: bool,
 ) -> Result<bool> {
     match atom {
         Atom::Func { name, args } => {
+            if demoted {
+                // Native-UF demote: emit a scalar UDF call binding
+                // the output var instead of adding a join atom. The
+                // compute_native_uf_demote pre-pass already verified
+                // shape (inputs bound, single fresh output Var), but
+                // the worklist may not have processed the dependency
+                // yet on this pass — defer if any input var is still
+                // unbound.
+                let info = &functions[name];
+                if !args[..info.inputs_len].iter().all(|t| match t {
+                    Term::Var(v) => binding.contains_key(v),
+                    _ => true,
+                }) {
+                    return Ok(false);
+                }
+                let udf = info
+                    .native_uf_udf
+                    .as_ref()
+                    .expect("demoted atom must have native_uf_udf set");
+                let arg_sqls: Vec<String> = args[..info.inputs_len]
+                    .iter()
+                    .map(|t| term_sql(t, binding, rule_name))
+                    .collect::<Result<_>>()?;
+                let call = format!("{}({})", udf, arg_sqls.join(", "));
+                if let Term::Var(v) = &args[info.inputs_len] {
+                    binding.insert(v.clone(), call);
+                }
+                return Ok(true);
+            }
             let alias = format!("t{i}");
             from_parts.push(format!("{} {alias}", q(name)));
             for (col, term) in args.iter().enumerate() {
@@ -568,10 +724,16 @@ fn term_vars_all_bound(t: &Term, binding: &HashMap<String, String>) -> bool {
 /// Returned strings reference table aliases `t{i}` for each Func
 /// atom; they're meant to be AND-combined with the body's own WHERE
 /// parts (which `walk_body` builds and returns unbounded).
-fn ts_predicates_for_focus(atoms: &[Atom], focus_idx: usize) -> Vec<String> {
+/// Demoted atoms (those that become scalar UDF calls) don't have a
+/// `tN` alias and are skipped — caller passes `demote` matching the
+/// per-atom plan used by `walk_body`.
+fn ts_predicates_for_focus(atoms: &[Atom], focus_idx: usize, demote: &[bool]) -> Vec<String> {
     let mut parts = Vec::new();
     for (i, atom) in atoms.iter().enumerate() {
         if !matches!(atom, Atom::Func { .. }) {
+            continue;
+        }
+        if demote.get(i).copied().unwrap_or(false) {
             continue;
         }
         match i.cmp(&focus_idx) {
@@ -593,6 +755,8 @@ fn ts_predicates_for_focus(atoms: &[Atom], focus_idx: usize) -> Vec<String> {
 fn walk_body(
     atoms: &[Atom],
     rule_name: &str,
+    functions: &HashMap<String, FunctionInfo>,
+    demote: &[bool],
 ) -> Result<(String, Vec<String>, HashMap<String, String>)> {
     let mut binding: HashMap<String, String> = HashMap::new();
     let mut from_parts: Vec<String> = Vec::new();
@@ -617,6 +781,8 @@ fn walk_body(
                 &mut from_parts,
                 &mut where_parts,
                 rule_name,
+                functions,
+                demote.get(i).copied().unwrap_or(false),
             )?;
             if ok {
                 made_progress = true;
