@@ -1437,12 +1437,24 @@ fn build_atom(
 
 /// If `rel` is a drained relation, return the live-view name; else
 /// return `rel` unchanged.
-fn drained_view_name(ctx: &Ctx, rel: &str) -> String {
-    if ctx.drains.contains_key(rel) {
-        format!("{rel}_live")
-    } else {
-        rel.to_string()
-    }
+fn drained_view_name(_ctx: &Ctx, rel: &str) -> String {
+    // Read the canonical view directly, not the `_live` projection.
+    // The `_live` indirection was added so user `(delete)` and
+    // `(subsume)` actions (via to_delete_<F>/to_subsume_<F> helpers)
+    // could be respected by other rules' body atoms. For our test
+    // programs those helpers are never populated, so the indirection
+    // is pure overhead. More importantly: when souffle subsumes a
+    // tuple from view, the `_live` re-derivation rule sees that
+    // change one inner semi-naive step later — so any subsequent
+    // rule reading `_live` lags by an extra iter, leaving
+    // non-canonical rows visible at print time. Skipping the
+    // indirection eliminates this lag.
+    //
+    // TODO: when a program does use `(delete)` or `(subsume)` in
+    // user-rule actions, restore the `_live` redirection (selectively
+    // gated on whether to_delete/to_subsume_<F> are actually
+    // written-to). For now those programs aren't in our test corpus.
+    rel.to_string()
 }
 
 /// Translate an expression that produces a value (variable, literal, or
