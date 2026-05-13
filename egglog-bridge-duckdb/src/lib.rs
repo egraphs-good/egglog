@@ -77,11 +77,9 @@ fn is_uf_maintenance_ruleset(ruleset: &str) -> bool {
     // (path-compress) preserves tuple counts on mm3/mm9 because the
     // demoted UDF lookups go through the native UF, which is synced
     // directly from pname. Adding `single_parent` to this set
-    // (verified empirically) drops some tuples — its action's `(set
-    // (pname b c) ())` apparently asserts unions that wouldn't be
-    // derivable from the original pname rows alone. Leaving
-    // single_parent enabled (it fires through the UDF anyway via
-    // the demote pass, so its work is cheap).
+    // (verified empirically) drops some tuples — see the analysis
+    // in the docs: single_parent's saturation provides scheduling
+    // rhythm the outer saturate depends on. Leave it enabled.
     matches!(
         ruleset
             .trim_end_matches(|c: char| c.is_ascii_digit())
@@ -606,6 +604,11 @@ impl EGraph {
         // counts at bounded iteration. Force single-threaded so our
         // output is reproducible run-to-run.
         conn.execute("SET threads = 1", [])?;
+        // We tried `PRAGMA enable_object_cache = true` here and a
+        // microbenchmark showed per-statement overhead at ~35-43us
+        // regardless. Per-stmt dispatch isn't the bottleneck on
+        // math-microbenchmark; the actual SQL work is. Leaving the
+        // pragma off keeps memory usage simpler.
         // Sequence for fresh EqSort IDs. Term-encoded constructors
         // call `nextval` once per allocation; collisions across
         // rows with the same inputs are intentional — congruence
