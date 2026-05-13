@@ -34,29 +34,29 @@ async function load() {
 }
 
 function renderSummary() {
-  let ruleMs = 0;
-  let extractMs = 0;
-  let otherMs = 0;
+  let ruleMicros = 0;
+  let extractMicros = 0;
+  let otherMicros = 0;
 
   for (const reportSummary of GLOBAL_DATA.data.passing_benchmarks) {
-    ruleMs += reportSummary.report.rule_ms;
-    extractMs += reportSummary.report.extraction_ms;
-    otherMs += reportSummary.report.other_ms;
+    ruleMicros += reportSummary.report.rule_micros;
+    extractMicros += reportSummary.report.extraction_micros;
+    otherMicros += reportSummary.report.other_micros;
   }
 
   const numPassing = GLOBAL_DATA.data.passing_benchmarks.length;
   const numFailing = GLOBAL_DATA.data.failing_benchmarks.length;
   const totalTime = GLOBAL_DATA.data.passing_benchmarks
-    .map((x) => x.wall_time_s)
+    .map((x) => x.wall_time_micros)
     .reduce((a, b) => a + b, 0);
 
   document.querySelector("#summary-text").textContent =
     `Passing Benchmarks: ${numPassing} | ` +
     `Failing Benchmarks: ${numFailing} | ` +
-    `Nightly time: ${totalTime.toFixed(1)} s | ` +
-    `Rule running: ${(ruleMs / 1000).toFixed(1)} s | ` +
-    `Extraction: ${(extractMs / 1000).toFixed(1)} s | ` +
-    `Other: ${(otherMs / 1000).toFixed(1)} s`;
+    `Nightly time: ${totalTime} μs | ` +
+    `Rule running: ${ruleMicros} μs | ` +
+    `Extraction: ${extractMicros} μs | ` +
+    `Other: ${otherMicros} μs`;
 }
 
 function renderSuiteSelectors() {
@@ -95,7 +95,7 @@ function renderTable() {
     (x) => x.suite_name === STATE.activeSuite,
   );
   const totalTime = benchmarks
-    .map((x) => x.wall_time_s)
+    .map((x) => x.wall_time_micros)
     .reduce((a, b) => a + b, 0);
 
   document.querySelector("#active-suite-summary").innerHTML = `
@@ -106,18 +106,18 @@ function renderTable() {
 
   const columns = [
     "Benchmark",
-    "Wall Time (s)",
-    "Rules (ms)",
-    "Extraction (ms)",
-    "Other (ms)",
+    "Wall Time (μs)",
+    "Rules (μs)",
+    "Extraction (μs)",
+    "Other (μs)",
   ];
 
   const rows = benchmarks.map((b) => ({
     Benchmark: b.benchmark_name,
-    "Wall Time (s)": b.wall_time_s.toFixed(2),
-    "Rules (ms)": b.report.rule_ms,
-    "Extraction (ms)": b.report.extraction_ms,
-    "Other (ms)": b.report.other_ms,
+    "Wall Time (μs)": b.wall_time_micros,
+    "Rules (μs)": b.report.rule_micros,
+    "Extraction (μs)": b.report.extraction_micros,
+    "Other (μs)": b.report.other_micros,
   }));
 
   const tableDiv = document.querySelector("#active-suite-table");
