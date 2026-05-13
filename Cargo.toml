@@ -5,6 +5,7 @@ members = [
   "core-relations",
   "duckdb-spike",
   "egglog-ast",
+  "egglog-backend-trait",
   "egglog-bridge",
   "egglog-bridge-duckdb",
   "numeric-id",
@@ -73,6 +74,7 @@ libtest-mimic = "0.8"
 ######################
 egglog-core-relations = { path = "core-relations", version = "2.0.0" }
 egglog-ast = { path = "egglog-ast", version = "2.0.0" }
+egglog-backend-trait = { path = "egglog-backend-trait", version = "2.0.0" }
 egglog-bridge = { path = "egglog-bridge", version = "2.0.0" }
 egglog-bridge-duckdb = { path = "egglog-bridge-duckdb", version = "2.0.0" }
 egglog-concurrency = { path = "concurrency", version = "2.0.0" }

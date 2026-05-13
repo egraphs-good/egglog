@@ -1,0 +1,20 @@
+[package]
+name = "egglog-backend-trait"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Backend trait for egglog: unifies the in-memory and DuckDB backends behind a single dyn-compatible interface."
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[dependencies]
+# Pulled in for the types we re-export and reference in the trait signatures.
+# Once the bridge implements this trait, the dep direction will flip; for now
+# we use the bridge as the source of truth for FunctionId / ColumnTy / QueryEntry
+# / MergeFn / DefaultVal / FunctionConfig / FunctionRow / RuleId.
+egglog-bridge = { workspace = true }
+egglog-core-relations = { workspace = true }
+egglog-reports = { workspace = true }
+egglog-numeric-id = { workspace = true }
+anyhow = { workspace = true }
