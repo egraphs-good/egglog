@@ -428,8 +428,94 @@ fn emit_snapshot_directives(p: &mut Program) {
             })
         })
         .collect();
-    for (snap, source) in snap_pairs {
-        p.directives.push(Directive::Snapshot { snap, source });
+    for (snap, source) in &snap_pairs {
+        p.directives.push(Directive::Snapshot {
+            snap: snap.clone(),
+            source: source.clone(),
+        });
+    }
+    // Souffle's semi-naive doesn't generate @delta versions for body
+    // atoms in upstream strata. Each `<R>_snap` is refreshed externally
+    // by the fork at outer-iter boundaries (Clear + merge from
+    // canonical), but if `<R>_snap` lives in its own upstream stratum
+    // (no rule writes it), user rules reading it get a "full" body-atom
+    // version only — no @delta. So when `<R>_snap` gains a row at iter
+    // K start and the rule's other body atoms have empty delta, the
+    // rule fails to fire on the new snap row.
+    //
+    // Fix: emit one rule per `<R>_snap` that puts it in the user-rule
+    // SCC. The rule must (a) survive `MinimiseProgram.removeRedundantClauses`
+    // (it removes any rule whose body literal `==` head), (b) add no
+    // new rows to snap, (c) have a body atom from the user-rule SCC.
+    //
+    // Trick: head pins the gen-column ("out") to literal 0 (the only
+    // value `out` ever takes in snap) while the body uses a wildcard
+    // there — so head and body atoms differ syntactically. The gate
+    // `UF(c_math, c_math, _)` only fires on rows whose first Math
+    // column has a UF self-loop (always true post-canonical-refresh),
+    // so the head's tuple is identical to the body's existing tuple
+    // and no new rows appear. The `UF` body atom is in the user-rule
+    // SCC, forcing souffle to place `<R>_snap` there too — which gives
+    // user rules a proper `@delta_<R>_snap` version on iter K's new
+    // snap rows.
+    //
+    // IR names use `@` prefix; emit.rs sanitizes to `Eg_`. Look up
+    // declarations by IR name, but emit body atoms with the post-
+    // sanitize name (emit's sanitize is a no-op on non-`@` names).
+    let uf_math = format!("Eg_UF_{MATH}");
+    let uf_decl_name = format!("@UF_{MATH}");
+    let uf_declared = p
+        .relations
+        .iter()
+        .any(|r| r.name == uf_math || r.name == uf_decl_name);
+    if !uf_declared {
+        return;
+    }
+    for (snap, _) in &snap_pairs {
+        let decl = match p.relations.iter().find(|r| &r.name == snap) {
+            Some(d) => d.clone(),
+            None => continue,
+        };
+        let cols = decl.columns.clone();
+        // Find the first Math column to gate on.
+        let math_idx = match cols.iter().position(|(_, ty)| ty == MATH) {
+            Some(i) => i,
+            None => continue,
+        };
+        let last = cols.len() - 1;
+        let body_args: Vec<Expr> = (0..cols.len())
+            .map(|i| Expr::Var(format!("__snaploop_{i}")))
+            .collect();
+        let head_args: Vec<Expr> = (0..cols.len())
+            .map(|i| {
+                if i == last {
+                    Expr::Number(0)
+                } else {
+                    Expr::Var(format!("__snaploop_{i}"))
+                }
+            })
+            .collect();
+        let body = vec![
+            IrLit::Atom(Atom {
+                relation: snap.clone(),
+                args: body_args,
+            }),
+            IrLit::Atom(Atom {
+                relation: uf_math.clone(),
+                args: vec![
+                    Expr::Var(format!("__snaploop_{math_idx}")),
+                    Expr::Var(format!("__snaploop_{math_idx}")),
+                    Expr::Wildcard,
+                ],
+            }),
+        ];
+        p.clauses.push(Clause::rule(
+            Atom {
+                relation: snap.clone(),
+                args: head_args,
+            },
+            body,
+        ));
     }
 }
 
