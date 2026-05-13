@@ -28,7 +28,7 @@ pub struct RunReport {
 struct TimingStep {
     name: String,
     tags: Vec<String>,
-    #[serde(with = "serde_millis")]
+    #[serde(serialize_with = "serialize_duration_total")]
     total: Duration,
     #[serde(serialize_with = "serialize_duration_breakdown")]
     breakdown: Vec<Duration>,
@@ -122,11 +122,18 @@ impl Display for TimingStep {
     }
 }
 
+fn serialize_duration_total<S>(total: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    total.as_micros().serialize(serializer)
+}
+
 fn serialize_duration_breakdown<S>(breakdown: &[Duration], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let breakdown_millis: Vec<_> = breakdown.iter().map(Duration::as_millis).collect();
+    let breakdown_millis: Vec<_> = breakdown.iter().map(Duration::as_micros).collect();
     breakdown_millis.serialize(serializer)
 }
 
