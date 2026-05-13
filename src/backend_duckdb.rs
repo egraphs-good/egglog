@@ -22,9 +22,23 @@ use egglog_bridge_duckdb as duck;
 
 /// Programs run via this backend report tuple counts for these
 /// function names back to the caller.
+/// CLI-supplied configuration for the duckdb backend. Keep this
+/// small and explicit; per the project's "CLI flags, not env vars"
+/// convention, new toggles go here.
+#[derive(Debug, Clone, Default)]
+pub struct DuckBackendConfig {
+    /// `--duck-native-uf`: maintain term-encoding's UF
+    /// (`@_u_f___<sort>f` function-form) as an in-process union-find
+    /// data structure, with reads going through a DuckDB scalar UDF
+    /// instead of a JOIN. Skips the singleparent / path_compress /
+    /// uf_function_index rulesets at run time. Experimental.
+    pub native_uf: bool,
+}
+
 pub struct DuckdbBackend {
     typechecker: EGraph,
     db: duck::EGraph,
+    config: DuckBackendConfig,
     /// Function/relation names registered in the duckdb backend so
     /// far. Used to skip re-registration if we encounter the same
     /// declaration twice (e.g. via `Push`/`Pop` — currently a no-op).
@@ -75,6 +89,10 @@ struct FnMeta {
 
 impl DuckdbBackend {
     pub fn new() -> anyhow::Result<Self> {
+        Self::new_with_config(DuckBackendConfig::default())
+    }
+
+    pub fn new_with_config(config: DuckBackendConfig) -> anyhow::Result<Self> {
         // Term encoding is mandatory for the DuckDB backend: any
         // program with `(datatype ...)`, `(union ...)`, or custom
         // merges only makes sense after the term-encoding pass turns
@@ -82,9 +100,14 @@ impl DuckdbBackend {
         // unconditionally — the cost on programs that don't need it
         // (pure Datalog like path.egg) is small extra setup.
         let typechecker = EGraph::default().with_term_encoding_enabled();
+        let mut db = duck::EGraph::new()?;
+        if config.native_uf {
+            db.enable_native_uf();
+        }
         Ok(Self {
             typechecker,
-            db: duck::EGraph::new()?,
+            db,
+            config: config.clone(),
             registered: hashbrown::HashSet::default(),
             sorts: hashbrown::HashMap::default(),
             is_relation: hashbrown::HashMap::default(),
@@ -152,6 +175,13 @@ impl DuckdbBackend {
                 "[duck/perf] rule firings skipped by watermark gate: {}",
                 self.db.rules_skipped()
             );
+            if self.config.native_uf {
+                eprintln!(
+                    "[duck/perf] native UF: {} table(s), {} union assertion(s) synced",
+                    self.db.native_uf_table_count(),
+                    self.db.native_uf_unions_synced(),
+                );
+            }
 
             // Per-ruleset and top-N per-rule breakdowns.
             let per_rule = self.db.perf_per_rule();

@@ -71,6 +71,15 @@ struct Args {
     /// are not yet supported; see `src/backend_duckdb.rs` for current scope.
     #[clap(long = "duckdb")]
     duckdb_backend: bool,
+    /// Use a native union-find data structure for the term-encoding
+    /// UF function (`@_u_f___<sort>f`) instead of a SQL table. The
+    /// table-backed UF requires three maintenance rulesets
+    /// (singleparent, path_compress, uf_function_index) that together
+    /// dominate runtime on saturating workloads; the native UF
+    /// replaces them with O(α(n)) memory ops behind a DuckDB UDF.
+    /// `--duckdb` only; off by default.
+    #[clap(long = "duck-native-uf")]
+    duck_native_uf: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -134,11 +143,15 @@ pub fn cli(mut egraph: EGraph) {
             // encoding, etc., still apply for the parts we support)
             // but dispatch each ResolvedNCommand to DuckDB.
             if args.duckdb_backend {
-                let mut backend =
-                    egglog::backend_duckdb::DuckdbBackend::new().unwrap_or_else(|err| {
-                        log::error!("failed to start DuckDB backend: {err}");
-                        std::process::exit(1);
-                    });
+                let mut backend = egglog::backend_duckdb::DuckdbBackend::new_with_config(
+                    egglog::backend_duckdb::DuckBackendConfig {
+                        native_uf: args.duck_native_uf,
+                    },
+                )
+                .unwrap_or_else(|err| {
+                    log::error!("failed to start DuckDB backend: {err}");
+                    std::process::exit(1);
+                });
                 if let Err(err) = backend.run_program(
                     Some(input.to_str().unwrap().into()),
                     &program,

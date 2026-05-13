@@ -7,7 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-duckdb = { version = "1.5", features = ["bundled"] }
+duckdb = { version = "1.5", features = ["bundled", "vtab", "vscalar"] }
 anyhow = "1"
 
 [[example]]

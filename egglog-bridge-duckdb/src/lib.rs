@@ -15,8 +15,65 @@
 //!   `ON CONFLICT` clauses depending on merge mode.
 
 use anyhow::{Result, anyhow};
+use duckdb::core::{DataChunkHandle, LogicalTypeHandle, LogicalTypeId};
+use duckdb::vscalar::{ScalarFunctionSignature, VScalar};
+use duckdb::vtab::arrow::WritableVector;
 use duckdb::{Connection, ToSql};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+pub mod uf;
+use uf::UfTable;
+
+/// DuckDB scalar UDF that wraps `UfTable::find_ro`. Registered as
+/// `duck_uf_<sort>_find(x BIGINT) -> BIGINT` for each native-UF
+/// function. Uses the read-only walk (no path compression) so the
+/// UDF can run from inside a SELECT without taking a write lock
+/// on the table; we re-compress periodically off the hot path.
+struct UfFindScalar;
+
+impl VScalar for UfFindScalar {
+    type State = Arc<Mutex<UfTable>>;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let input_vec = input.flat_vector(0);
+        let inputs = input_vec.as_slice_with_len::<i64>(n);
+        let mut output_vec = output.flat_vector();
+        let outputs = output_vec.as_mut_slice::<i64>();
+        let uf = state.lock().unwrap();
+        for i in 0..n {
+            outputs[i] = uf.find_ro(inputs[i]);
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// Sanitize a function name for use as a DuckDB UDF identifier.
+/// Same scheme as the temp-table naming: `@` → empty, `_` doubled,
+/// non-alnum → `_`.
+fn sanitize_for_udf(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    out
+}
 
 mod compile;
 
@@ -406,6 +463,41 @@ pub struct EGraph {
     /// Count of rule firings short-circuited by the watermark gate.
     /// Surfaced by `DUCK_PERF_DUMP`.
     rules_skipped: u64,
+    /// Whether `--duck-native-uf` is in effect for this `EGraph`.
+    /// Set once by `enable_native_uf` before any tables/rules are
+    /// registered; everything downstream branches on this.
+    native_uf_enabled: bool,
+    /// Per-sort native union-find tables, keyed by the egglog
+    /// function name they're standing in for (the `:merge
+    /// (ordering-min old new)` function emitted by term encoding).
+    /// The corresponding SQL table is still created — writes flow
+    /// through it so other rulesets that haven't been ported can
+    /// still read it via JOIN — but a DuckDB scalar UDF
+    /// (`duck_uf_<sanitized_name>_find`) is also registered that
+    /// lets queries look up the canonical root in O(α(n)) memory.
+    ///
+    /// `Arc<Mutex>` so the UDF (which DuckDB stores for the lifetime
+    /// of the connection) can lock state for find/union. We pin
+    /// DuckDB to a single thread (`SET threads = 1`) for determinism
+    /// so contention is nil — the Mutex is for shared ownership.
+    native_ufs: HashMap<String, Arc<Mutex<UfTable>>>,
+    /// For each native-UF function name, the corresponding raw UF
+    /// (pname) table name. Term encoding always emits the pair
+    /// `@UF_<sort>` (relation-style, holds raw union assertions)
+    /// and `@UF_<sort>f` (function-form, ordering-min merge); we
+    /// derive pname by stripping a trailing `f` at native-UF
+    /// registration time and store it explicitly so the sync
+    /// scanner doesn't have to re-derive on every iteration.
+    native_uf_pname: HashMap<String, String>,
+    /// Per native-UF function, the maximum `ts` we've already
+    /// pulled into the in-memory union-find. The sync scan reads
+    /// only rows newer than this on each iteration.
+    last_uf_sync_ts: HashMap<String, i64>,
+    /// Diagnostic counter: total rows pulled into native UFs across
+    /// all syncs. Surfaced via `DUCK_PERF_DUMP` (under the native-uf
+    /// flag) so we can see the work the SQL → memory bridge is
+    /// doing.
+    native_uf_unions_synced: u64,
 }
 
 struct CompiledRule {
@@ -481,7 +573,99 @@ impl EGraph {
             rule_to_ruleset: HashMap::new(),
             table_watermarks: HashMap::new(),
             rules_skipped: 0,
+            native_uf_enabled: false,
+            native_ufs: HashMap::new(),
+            native_uf_pname: HashMap::new(),
+            last_uf_sync_ts: HashMap::new(),
+            native_uf_unions_synced: 0,
         })
+    }
+
+    /// Turn on the native union-find path. Must be called before
+    /// any tables or rules are registered — `declare` checks this
+    /// flag when it sees a `:merge (ordering-min old new)` function
+    /// to decide whether to also spin up a `UfTable` + UDF.
+    pub fn enable_native_uf(&mut self) {
+        self.native_uf_enabled = true;
+    }
+
+    /// Currently registered native union-find tables, for read-only
+    /// inspection (testing, diagnostics). Mutating these directly
+    /// would skip the queue + drain protocol; callers that need to
+    /// add unions should go through the SQL path.
+    pub fn native_uf_table_count(&self) -> usize {
+        self.native_ufs.len()
+    }
+
+    /// Total rows of union assertions pulled into native UFs since
+    /// this `EGraph` was created. Surfaced by `DUCK_PERF_DUMP`.
+    pub fn native_uf_unions_synced(&self) -> u64 {
+        self.native_uf_unions_synced
+    }
+
+    /// Pull every union assertion newer than the last sync from
+    /// each native UF's corresponding pname (raw UF) table, apply
+    /// them via the queue + drain protocol, and advance the
+    /// per-UF watermark.
+    ///
+    /// The find UDF reads from each `UfTable` via `find_ro`; this
+    /// method is what keeps that read view consistent with whatever
+    /// rule actions have written into the SQL pname tables. The
+    /// runner calls it at the top of each iteration so any UDF
+    /// invocations within that iteration's rules see fresh state.
+    fn sync_native_ufs(&mut self) -> Result<()> {
+        if self.native_ufs.is_empty() {
+            return Ok(());
+        }
+        // Snapshot names to avoid double-borrowing self.
+        let names: Vec<String> = self.native_ufs.keys().cloned().collect();
+        for uf_name in names {
+            let pname = match self.native_uf_pname.get(&uf_name) {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+            // Watermark check: if pname's max-ts watermark hasn't
+            // advanced past what we synced, there's nothing new.
+            let pname_wm = self.table_watermarks.get(&pname).copied().unwrap_or(0);
+            let last_synced = self
+                .last_uf_sync_ts
+                .get(&uf_name)
+                .copied()
+                .unwrap_or(-1);
+            if pname_wm <= last_synced {
+                continue;
+            }
+            let sql = format!(
+                "SELECT c0, c1, ts FROM {} WHERE ts > {}",
+                q(&pname),
+                last_synced,
+            );
+            let uf_arc = self.native_ufs[&uf_name].clone();
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut rows = stmt.query([])?;
+            let mut max_ts_seen = last_synced;
+            let mut count: u64 = 0;
+            {
+                let mut uf = uf_arc.lock().unwrap();
+                while let Some(row) = rows.next()? {
+                    let a: i64 = row.get(0)?;
+                    let b: i64 = row.get(1)?;
+                    let ts: i64 = row.get(2)?;
+                    uf.enqueue_union(a, b);
+                    if ts > max_ts_seen {
+                        max_ts_seen = ts;
+                    }
+                    count += 1;
+                }
+                if count > 0 {
+                    uf.drain_pending();
+                }
+            }
+            self.native_uf_unions_synced =
+                self.native_uf_unions_synced.wrapping_add(count);
+            self.last_uf_sync_ts.insert(uf_name, max_ts_seen);
+        }
+        Ok(())
     }
 
     /// Bump `table`'s watermark to `ts` if `ts` is newer than the
@@ -771,6 +955,38 @@ impl EGraph {
         // Insert-heavy analytical workloads on DuckDB don't want
         // OLTP-style auxiliary indexes — the columnar storage and
         // zone maps already cover the access patterns we use.
+        // Native-UF registration. We attach a UfTable + scalar UDF
+        // when the function has `:merge (ordering-min old new)` —
+        // term encoding emits exactly one such function per eq-sort
+        // (the function-form UF, `@_u_f___<sort>f`). The SQL table
+        // is still created above; writes go through it so the
+        // existing rulesets see them. The UDF is for fast reads.
+        if self.native_uf_enabled && info.merge == Some(MergeMode::Min) {
+            // pname (raw UF) is what term encoding writes raw union
+            // assertions into. It's declared *before* the function-
+            // form table and follows the `@UF_<sort>` / `@UF_<sort>f`
+            // naming convention: pname is the function name with a
+            // trailing `f` stripped. Resolve and check up front so
+            // we don't half-register if the convention is broken.
+            let pname = name
+                .strip_suffix('f')
+                .ok_or_else(|| anyhow!(
+                    "native UF {name}: name doesn't end in `f`; can't derive pname"
+                ))?;
+            if !self.functions.contains_key(pname) {
+                return Err(anyhow!(
+                    "native UF {name}: expected pname `{pname}` to be declared first"
+                ));
+            }
+            let uf = Arc::new(Mutex::new(UfTable::new()));
+            let udf_name = format!("duck_uf_{}_find", sanitize_for_udf(name));
+            self.conn
+                .register_scalar_function_with_state::<UfFindScalar>(&udf_name, &uf)
+                .map_err(|e| anyhow!("failed to register UF UDF {udf_name}: {e}"))?;
+            self.native_ufs.insert(name.to_string(), uf);
+            self.native_uf_pname
+                .insert(name.to_string(), pname.to_string());
+        }
         self.functions.insert(name.to_string(), info);
         Ok(())
     }
@@ -877,6 +1093,11 @@ impl EGraph {
     /// "run all rules". Returns total rows inserted.
     pub fn run_iteration_in_set(&mut self, allowed: &[&str]) -> Result<usize> {
         let allow_all = allowed.is_empty();
+        // Pull every new union assertion from the SQL pname tables
+        // into the native UFs (no-op when `--duck-native-uf` is off).
+        // Must happen before any rule in this iteration so UDF reads
+        // see fresh state.
+        self.sync_native_ufs()?;
         // Build the iteration with the existing single-ruleset path
         // by using a closure on the rule list. Mirrors run_iteration_in
         // but checks set membership.
@@ -911,6 +1132,7 @@ impl EGraph {
     /// `None`). Returns total rows inserted across rules and
     /// variants.
     pub fn run_iteration_in(&mut self, ruleset: Option<&str>) -> Result<usize> {
+        self.sync_native_ufs()?;
         self.next_ts += 1;
         let cur = self.next_ts;
         let mut total: usize = 0;
