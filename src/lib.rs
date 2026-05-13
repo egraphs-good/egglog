@@ -363,8 +363,10 @@ impl Default for EGraph {
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
 
-        // support get-size! macro for Herbie
+        // support get-size! macro, custom scheduler for Herbie
         eg.add_primitive(get_size_prim::GetSizePrimitive);
+        eg.add_command("run-schedule".into(), Arc::new(RunExtendedSchedule))
+            .unwrap();
 
         eg
     }
