@@ -952,17 +952,29 @@ fn compile_materialized_action(
                     q(target)
                 ));
             }
-            let key_cols: Vec<String> =
-                (0..key_args.len()).map(|i| format!("c{i}")).collect();
             let key_select: Vec<String> = key_args
                 .iter()
                 .map(|t| term_sql(t, mat_binding, rule_name))
                 .collect::<Result<_>>()?;
+            // Reshape `DELETE WHERE (cols) IN (SELECT … FROM temp)`
+            // into `DELETE FROM target USING (SELECT …) __d WHERE
+            // target.cN = __d.dN`. DuckDB's tuple-IN subquery
+            // sometimes falls back to a full scan; the USING-join
+            // form gives the optimizer a clear hash-join shape and
+            // lets it pick the PK index on `target` for lookup.
+            let proj_cols: Vec<String> = key_select
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| format!("{expr} AS d{i}"))
+                .collect();
+            let join_preds: Vec<String> = (0..key_select.len())
+                .map(|i| format!("{}.c{i} = __d.d{i}", q(target)))
+                .collect();
             Ok(format!(
-                "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {from})",
+                "DELETE FROM {} USING (SELECT {} FROM {from}) __d WHERE {}",
                 q(target),
-                key_cols.join(", "),
-                key_select.join(", "),
+                proj_cols.join(", "),
+                join_preds.join(" AND "),
             ))
         }
         Action::LetExpr { .. } => {
