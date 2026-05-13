@@ -198,9 +198,13 @@ pub fn translate_with_manifest(
         translate_command(cmd, &mut ctx, &mut p)?;
     }
     emit_live_views(&ctx, &mut p);
-    emit_snapshot_directives(&mut p);
     emit_run_limit(&ctx, &mut p);
     emit_canonical_views(&ctx, &mut p);
+    // Snapshot directives need to see `<view>_canonical` relations
+    // (emitted by `emit_canonical_views` just above) — they prefer
+    // canonical sources over raw view for snap refresh so user rules
+    // read canonical c2 values, not lagging raw ones.
+    emit_snapshot_directives(&mut p);
     emit_printsize_directives(&ctx, &mut p);
     let manifest = build_manifest(&ctx, &p);
     Ok(TranslateOutput { program: p, manifest })
@@ -326,12 +330,6 @@ fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
                         Expr::Wildcard,
                     ],
                 }));
-                // Require leader to be its own ultimate leader (UF
-                // self-loop) — filters out non-final leaders before
-                // UF subsumption catches up. Without this filter the
-                // canonical projection over-counts during intermediate
-                // outer iters when UF transitivity has fired but
-                // self-loop subsumption hasn't yet.
                 body.push(IrLit::Atom(Atom {
                     relation: uf_math.clone(),
                     args: vec![
@@ -399,19 +397,35 @@ fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
 }
 
 /// For each `<R>_snap` relation declared by the encoder, emit a
-/// `.snapshot <R>_snap(of = "<R>")` directive. The souffle fork
-/// refreshes `<R>_snap := <R>` at the start of each outer-saturate
-/// iteration, which breaks the user-rule ↔ canonical-view cycle
-/// without us having to manually wire deltas.
+/// `.snapshot <R>_snap(of = "<source>")` directive. The fork refreshes
+/// `<R>_snap := <source>` at the start of each outer-saturate iteration.
+///
+/// Source choice: prefer `<R>_canonical` when present (so user-rule body
+/// atoms on snap see canonical c2 values for pattern-matching across
+/// nested terms — without this, rules like
+/// `(Integral (Mul a b) x)` skip iterations when the outer's bound
+/// c2 differs from the inner's c2 due to rebuild's subsumption lag).
+/// Falls back to raw `<R>` for snap relations whose source has no
+/// canonical projection (e.g., non-wave-bearing function tables).
 fn emit_snapshot_directives(p: &mut Program) {
+    let declared: std::collections::HashSet<String> =
+        p.relations.iter().map(|r| r.name.clone()).collect();
     let snap_pairs: Vec<(String, String)> = p
         .relations
         .iter()
         .filter_map(|r| {
-            r.name
-                .strip_suffix("_snap")
-                .filter(|src| p.relations.iter().any(|other| other.name == *src))
-                .map(|src| (r.name.clone(), src.to_string()))
+            r.name.strip_suffix("_snap").and_then(|src| {
+                if !declared.contains(src) {
+                    return None;
+                }
+                let canonical = format!("{src}_canonical");
+                let source = if declared.contains(&canonical) {
+                    canonical
+                } else {
+                    src.to_string()
+                };
+                Some((r.name.clone(), source))
+            })
         })
         .collect();
     for (snap, source) in snap_pairs {
