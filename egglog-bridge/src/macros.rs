@@ -1,9 +1,6 @@
 use hashbrown::HashMap;
 
-use crate::{
-    ColumnTy, FunctionId, QueryEntry, RuleBuilder,
-    rule::{Variable, VariableId},
-};
+use crate::{ColumnTy, FunctionId, QueryEntry, RuleBuilder, Variable, VariableId};
 
 #[macro_export]
 #[doc(hidden)]

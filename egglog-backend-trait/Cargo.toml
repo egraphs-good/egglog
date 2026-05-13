@@ -9,11 +9,14 @@ license = { workspace = true }
 readme = { workspace = true }
 
 [dependencies]
-# Pulled in for the types we re-export and reference in the trait signatures.
-# Once the bridge implements this trait, the dep direction will flip; for now
-# we use the bridge as the source of truth for FunctionId / ColumnTy / QueryEntry
-# / MergeFn / DefaultVal / FunctionConfig / FunctionRow / RuleId.
-egglog-bridge = { workspace = true }
+# The trait crate is the home for the basic id and config types used by
+# Backend impls. It depends only on the neutral lower-level crates:
+#   - core-relations: defines Value, BaseValueId, ExternalFunctionId,
+#     ExecutionState, ExternalFunction, BaseValue, ContainerValue,
+#     ContainerValueId — these are already backend-neutral.
+#   - egglog-reports: defines IterationReport / ReportLevel.
+#   - egglog-numeric-id: provides the define_id! macro and NumericId trait
+#     used to define FunctionId / RuleId / VariableId newtypes.
 egglog-core-relations = { workspace = true }
 egglog-reports = { workspace = true }
 egglog-numeric-id = { workspace = true }

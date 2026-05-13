@@ -16,12 +16,14 @@
 //!   internal data IR and submits them to the existing `compile_rule`
 //!   pipeline on `build()`. Frontend code (`BackendRule` in
 //!   `src/lib.rs::EGraph`) is unchanged in shape.
-//! - **No types move crates.** `FunctionId`, `RuleId`, `ColumnTy`,
-//!   `QueryEntry`, `MergeFn`, `DefaultVal`, `FunctionConfig`, and
-//!   `FunctionRow` remain in `egglog-bridge`. `Value`, `BaseValueId`,
-//!   `ContainerValueId`, `ExecutionState`, `ExternalFunction`, and
-//!   `ExternalFunctionId` remain in `egglog-core-relations`. This crate
-//!   re-exports them so callers only need one import.
+//! - **Basic id and config types live here.** As of Phase 2 Commit 3,
+//!   `FunctionId`, `RuleId`, `ColumnTy`, `FunctionRow`, `FunctionConfig`,
+//!   `MergeFn`, `DefaultVal`, `QueryEntry`, `Variable`, and `VariableId` are
+//!   defined in this crate. `egglog-bridge` re-exports them so existing
+//!   callers continue to work. `Value`, `BaseValueId`, `ContainerValueId`,
+//!   `ExecutionState`, `ExternalFunction`, and `ExternalFunctionId` remain in
+//!   `egglog-core-relations` (already a neutral crate) and are re-exported
+//!   here for caller convenience.
 //! - **`Backend` is `Send + Sync` and dyn-compatible.** Methods that need
 //!   `T: BaseValue` or `C: ContainerValue` are factored onto
 //!   [`BaseValuePool`] and [`ContainerPool`], which expose Any-based dynamic
@@ -31,15 +33,6 @@
 //!   The reference backend already derives `Clone`; DuckDB will need a
 //!   bespoke `clone_boxed` (e.g. database snapshot or replay buffer) when
 //!   it implements this trait.
-//!
-//! ## Phase 1 scope
-//!
-//! This crate ships **trait definitions only**. There are no implementations
-//! here, and no callers in the rest of the workspace have been updated.
-//! Subsequent commits add a passthrough impl on `egglog_bridge::EGraph`
-//! (Phase 2 Commit 4), then on `egglog_bridge_duckdb::EGraph`
-//! (Phase 2 Commits 9–13). See `docs/backend_trait_design.md` for the
-//! full design rationale and the per-method DuckDB notes.
 //!
 //! ## What is intentionally NOT in this trait
 //!
@@ -58,18 +51,14 @@ use std::any::{Any, TypeId};
 
 use anyhow::Result;
 
+use egglog_numeric_id::define_id;
+
 // ---------------------------------------------------------------------------
 // Re-exports
 // ---------------------------------------------------------------------------
 //
-// Types that stay in their home crates and are re-exported here for caller
-// convenience. The trait surface refers to these names directly — there is no
-// separate copy in this crate. Once the bridge implements the trait, the dep
-// direction will flip; until then, the bridge is the source of truth.
-
-pub use egglog_bridge::{
-    ColumnTy, DefaultVal, FunctionConfig, FunctionId, FunctionRow, MergeFn, QueryEntry, RuleId,
-};
+// Types that live in neutral lower-level crates and are re-exported here for
+// caller convenience.
 
 pub use egglog_core_relations::{
     BaseValue, BaseValueId, ContainerValue, ContainerValueId, ExecutionState, ExternalFunction,
@@ -77,6 +66,131 @@ pub use egglog_core_relations::{
 };
 
 pub use egglog_reports::{IterationReport, ReportLevel};
+
+// ---------------------------------------------------------------------------
+// Basic id types
+// ---------------------------------------------------------------------------
+//
+// Each backend interprets these handles in its own internal map. The trait
+// promises only "we return one to you, you give it back". The bridge's
+// internal `TableId` / `core_relations::RuleId` are separate types not
+// surfaced through the trait.
+
+define_id!(pub RuleId, u32, "An egglog-style rule");
+define_id!(pub FunctionId, u32, "An id representing an egglog function");
+
+// ---------------------------------------------------------------------------
+// ColumnTy
+// ---------------------------------------------------------------------------
+
+/// The type of a column (or `QueryEntry`): either an eq-sort / container id,
+/// or a base value (with the [`BaseValueId`] identifying which base type).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum ColumnTy {
+    Id,
+    Base(BaseValueId),
+}
+
+// ---------------------------------------------------------------------------
+// FunctionConfig / DefaultVal / MergeFn
+// ---------------------------------------------------------------------------
+
+/// Properties of a function added to an [`Backend`].
+pub struct FunctionConfig {
+    /// The function's schema. The last column in the schema is the return type.
+    pub schema: Vec<ColumnTy>,
+    /// The behavior of the function when lookups are made on keys not currently present.
+    pub default: DefaultVal,
+    /// How to resolve FD conflicts for the function.
+    pub merge: MergeFn,
+    /// The function's name
+    pub name: String,
+    /// Whether or not subsumption is enabled for this function.
+    pub can_subsume: bool,
+}
+
+/// How defaults are computed for the given function.
+#[derive(Copy, Clone)]
+pub enum DefaultVal {
+    /// Generate a fresh UF id.
+    FreshId,
+    /// Cause an egglog-level panic if a lookup fails.
+    Fail,
+    /// Insert a constant of some kind.
+    Const(Value),
+}
+
+/// How to resolve FD conflicts for a table.
+pub enum MergeFn {
+    /// Panic if the old and new values don't match.
+    AssertEq,
+    /// Use congruence to resolve FD conflicts.
+    UnionId,
+    /// The output of a merge is determined by applying the given ExternalFunction to the result
+    /// of the argument merge functions.
+    Primitive(ExternalFunctionId, Vec<MergeFn>),
+    /// The output of a merge is determined by looking up the value for the given function and the
+    /// given arguments in the egraph.
+    Function(FunctionId, Vec<MergeFn>),
+    /// Always return the old value for the given function.
+    Old,
+    /// Always return the new value for the given function.
+    New,
+    /// Always overwrite the new value for the given function with a constant. This is more useful
+    /// as a "base case" in a more complicated merge function (e.g. one that clamps a value between
+    /// 1 and 100) than it is as a standalone merge function.
+    Const(Value),
+}
+
+// ---------------------------------------------------------------------------
+// FunctionRow
+// ---------------------------------------------------------------------------
+
+/// A struct representing the content of a row in a function table
+#[derive(Clone, Debug)]
+pub struct FunctionRow<'a> {
+    pub vals: &'a [Value],
+    pub subsumed: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Variable / VariableId / QueryEntry
+// ---------------------------------------------------------------------------
+
+define_id!(pub VariableId, u32, "A variable in an egglog query");
+
+/// A variable in a rule body / RHS, with an optional display name for
+/// debugging.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Variable {
+    pub id: VariableId,
+    pub name: Option<Box<str>>,
+}
+
+impl Variable {
+    /// Construct an unnamed variable from a [`VariableId`].
+    pub fn from_id(id: VariableId) -> Self {
+        Variable { id, name: None }
+    }
+}
+
+/// A reference in a rule body or RHS: either a variable or a typed constant.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum QueryEntry {
+    Var(Variable),
+    Const {
+        val: Value,
+        // Constants can have a type plumbed through, particularly if they
+        // correspond to a base value constant in egglog.
+        ty: ColumnTy,
+    },
+}
+
+impl From<Variable> for QueryEntry {
+    fn from(var: Variable) -> Self {
+        QueryEntry::Var(var)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The `Backend` trait

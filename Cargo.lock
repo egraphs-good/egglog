@@ -991,7 +991,6 @@ name = "egglog-backend-trait"
 version = "2.0.0"
 dependencies = [
  "anyhow",
- "egglog-bridge",
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",
@@ -1003,6 +1002,7 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "dyn-clone",
+ "egglog-backend-trait",
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",

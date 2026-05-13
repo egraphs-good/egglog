@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::core_relations;
 use crate::core_relations::{
     ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, QueryBuilder,
-    RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
+    RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, WriteVal,
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use anyhow::Context;
@@ -19,25 +19,23 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::{CachedPlanInfo, NOT_SUBSUMED, RowVals, SUBSUMED, SchemaMath};
-use crate::{ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp};
+use crate::{
+    ColumnTy, DefaultVal, EGraph, FunctionId, QueryEntry, Result, RuleId, RuleInfo, Timestamp,
+    Variable, VariableId,
+};
 
-define_id!(pub VariableId, u32, "A variable in an egglog query");
+// `Variable`, `VariableId`, and `QueryEntry` are now defined in
+// `egglog-backend-trait` and re-exported from `crate::`. Only the bridge's
+// internal helpers (`AtomId`, `DstVar`, the `VariableId::to_var` constructor
+// renamed to a free function `id_to_var`) remain here.
 define_id!(pub AtomId, u32, "an atom in an egglog query");
 pub(crate) type DstVar = core_relations::QueryEntry;
 
-impl VariableId {
-    fn to_var(self) -> Variable {
-        Variable {
-            id: self,
-            name: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Variable {
-    pub id: VariableId,
-    pub name: Option<Box<str>>,
+/// Construct an unnamed [`Variable`] from a [`VariableId`]. (Was
+/// `VariableId::to_var` before the type was moved to the trait crate; kept as
+/// a free function so this crate can keep using the same shape internally.)
+fn id_to_var(id: VariableId) -> Variable {
+    Variable { id, name: None }
 }
 
 #[derive(Debug, Error)]
@@ -52,23 +50,6 @@ enum RuleBuilderError {
 struct VarInfo {
     ty: ColumnTy,
     name: Option<Box<str>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum QueryEntry {
-    Var(Variable),
-    Const {
-        val: Value,
-        // Constants can have a type plumbed through, particularly if they
-        // correspond to a base value constant in egglog.
-        ty: ColumnTy,
-    },
-}
-
-impl From<Variable> for QueryEntry {
-    fn from(var: Variable) -> Self {
-        QueryEntry::Var(var)
-    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -512,14 +493,10 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
-        let res = self
-            .query
-            .vars
-            .push(VarInfo {
-                ty: info.ret_ty(),
-                name: None,
-            })
-            .to_var();
+        let res = id_to_var(self.query.vars.push(VarInfo {
+            ty: info.ret_ty(),
+            name: None,
+        }));
         let table = info.table;
         let id_counter = self.query.id_counter;
         let schema_math = SchemaMath {

@@ -17,10 +17,9 @@ use std::{
 };
 
 use crate::core_relations::{
-    BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
-    CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
-    MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
+    BaseValue, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues, CounterId,
+    Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId, MergeVal,
+    Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_core_relations as core_relations;
@@ -38,17 +37,18 @@ pub(crate) mod rule;
 #[cfg(test)]
 mod tests;
 
-pub use rule::{Function, QueryEntry, RuleBuilder};
+pub use rule::{Function, RuleBuilder};
+
+// Re-export the basic id and config types from the neutral trait crate so
+// existing callers (and the frontend in `src/lib.rs`) continue to find them
+// at `egglog_bridge::FunctionId` / `egglog_bridge::ColumnTy` / etc.
+pub use egglog_backend_trait::{
+    ColumnTy, DefaultVal, FunctionConfig, FunctionId, FunctionRow, MergeFn, QueryEntry, RuleId,
+    Variable, VariableId,
+};
+
 use thiserror::Error;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum ColumnTy {
-    Id,
-    Base(BaseValueId),
-}
-
-define_id!(pub RuleId, u32, "An egglog-style rule");
-define_id!(pub FunctionId, u32, "An id representing an egglog function");
 define_id!(pub(crate) Timestamp, u32, "An abstract timestamp used to track execution of egglog rules");
 impl Timestamp {
     fn to_value(self) -> Value {
@@ -103,20 +103,6 @@ impl Default for EGraph {
             report_level: Default::default(),
         }
     }
-}
-
-/// Properties of a function added to an [`EGraph`].
-pub struct FunctionConfig {
-    /// The function's schema. The last column in the schema is the return type.
-    pub schema: Vec<ColumnTy>,
-    /// The behavior of the function when lookups are made on keys not currently present.
-    pub default: DefaultVal,
-    /// How to resolve FD conflicts for the function.
-    pub merge: MergeFn,
-    /// The function's name
-    pub name: String,
-    /// Whether or not subsumption is enabled for this function.
-    pub can_subsume: bool,
 }
 
 impl EGraph {
@@ -420,8 +406,8 @@ impl EGraph {
         let next_func_id = self.funcs.next_id();
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
-        merge.fill_deps(self, &mut read_deps, &mut write_deps);
-        let merge_fn = merge.to_callback(schema_math, &name, self);
+        merge_fn_fill_deps(&merge, self, &mut read_deps, &mut write_deps);
+        let merge_fn = merge_fn_to_callback(&merge, schema_math, &name, self);
         let table = SortedWritesTable::new(
             n_args,
             n_cols,
@@ -861,156 +847,129 @@ impl FunctionInfo {
     }
 }
 
-/// How defaults are computed for the given function.
-#[derive(Copy, Clone)]
-pub enum DefaultVal {
-    /// Generate a fresh UF id.
-    FreshId,
-    /// Cause an egglog-level panic if a lookup fails.
-    Fail,
-    /// Insert a constant of some kind.
-    Const(Value),
-}
-
-/// How to resolve FD conflicts for a table.
-pub enum MergeFn {
-    /// Panic if the old and new values don't match.
-    AssertEq,
-    /// Use congruence to resolve FD conflicts.
-    UnionId,
-    /// The output of a merge is determined by applying the given ExternalFunction to the result
-    /// of the argument merge functions.
-    Primitive(ExternalFunctionId, Vec<MergeFn>),
-    /// The output of a merge is determined by looking up the value for the given function and the
-    /// given arguments in the egraph.
-    Function(FunctionId, Vec<MergeFn>),
-    /// Always return the old value for the given function.
-    Old,
-    /// Always return the new value for the given function.
-    New,
-    /// Always overwrite the new value for the given function with a constant. This is more useful
-    /// as a "base case" in a more complicated merge function (e.g. one that clamps a value between
-    /// 1 and 100) than it is as a standalone merge function.
-    Const(Value),
-}
-
-impl MergeFn {
-    fn fill_deps(
-        &self,
-        egraph: &EGraph,
-        read_deps: &mut IndexSet<TableId>,
-        write_deps: &mut IndexSet<TableId>,
-    ) {
-        use MergeFn::*;
-        match self {
-            Primitive(_, args) => {
-                args.iter()
-                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
-                write_deps.insert(egraph.uf_table);
-            }
-            Function(func, args) => {
-                read_deps.insert(egraph.funcs[*func].table);
-                write_deps.insert(egraph.funcs[*func].table);
-                args.iter()
-                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
-            }
-            UnionId => {
-                write_deps.insert(egraph.uf_table);
-            }
-            AssertEq | Old | New | Const(..) => {}
+// `DefaultVal` and `MergeFn` are now defined in `egglog-backend-trait`; the
+// re-export above brings them back into this module's path. The bridge-only
+// helpers (`fill_deps`, `to_callback`, `resolve`) live as free functions
+// here so that they can keep using `EGraph` internals.
+fn merge_fn_fill_deps(
+    merge: &MergeFn,
+    egraph: &EGraph,
+    read_deps: &mut IndexSet<TableId>,
+    write_deps: &mut IndexSet<TableId>,
+) {
+    use MergeFn::*;
+    match merge {
+        Primitive(_, args) => {
+            args.iter()
+                .for_each(|arg| merge_fn_fill_deps(arg, egraph, read_deps, write_deps));
+            write_deps.insert(egraph.uf_table);
         }
+        Function(func, args) => {
+            read_deps.insert(egraph.funcs[*func].table);
+            write_deps.insert(egraph.funcs[*func].table);
+            args.iter()
+                .for_each(|arg| merge_fn_fill_deps(arg, egraph, read_deps, write_deps));
+        }
+        UnionId => {
+            write_deps.insert(egraph.uf_table);
+        }
+        AssertEq | Old | New | Const(..) => {}
     }
+}
 
-    fn to_callback(
-        &self,
-        schema_math: SchemaMath,
-        function_name: &str,
-        egraph: &mut EGraph,
-    ) -> Box<core_relations::MergeFn> {
-        let resolved = self.resolve(function_name, egraph);
+fn merge_fn_to_callback(
+    merge: &MergeFn,
+    schema_math: SchemaMath,
+    function_name: &str,
+    egraph: &mut EGraph,
+) -> Box<core_relations::MergeFn> {
+    let resolved = merge_fn_resolve(merge, function_name, egraph);
 
-        Box::new(move |state, cur, new, out| {
-            let timestamp = new[schema_math.ts_col()];
+    Box::new(move |state, cur, new, out| {
+        let timestamp = new[schema_math.ts_col()];
 
-            let mut changed = false;
+        let mut changed = false;
 
-            let ret_val = {
-                let cur = cur[schema_math.ret_val_col()];
-                let new = new[schema_math.ret_val_col()];
-                let out = resolved.run(state, cur, new, timestamp);
-                changed |= cur != out;
-                out
-            };
+        let ret_val = {
+            let cur = cur[schema_math.ret_val_col()];
+            let new = new[schema_math.ret_val_col()];
+            let out = resolved.run(state, cur, new, timestamp);
+            changed |= cur != out;
+            out
+        };
 
-            let subsume = schema_math.subsume.then(|| {
-                let cur = cur[schema_math.subsume_col()];
-                let new = new[schema_math.subsume_col()];
-                let out = combine_subsumed(cur, new);
-                changed |= cur != out;
-                out
-            });
-            if changed {
-                out.extend_from_slice(new);
-                schema_math.write_table_row(
-                    out,
-                    RowVals {
-                        timestamp,
-                        subsume,
-                        ret_val: Some(ret_val),
-                    },
-                );
-            }
+        let subsume = schema_math.subsume.then(|| {
+            let cur = cur[schema_math.subsume_col()];
+            let new = new[schema_math.subsume_col()];
+            let out = combine_subsumed(cur, new);
+            changed |= cur != out;
+            out
+        });
+        if changed {
+            out.extend_from_slice(new);
+            schema_math.write_table_row(
+                out,
+                RowVals {
+                    timestamp,
+                    subsume,
+                    ret_val: Some(ret_val),
+                },
+            );
+        }
 
-            changed
-        })
-    }
+        changed
+    })
+}
 
-    fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> ResolvedMergeFn {
-        match self {
-            MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
-            MergeFn::Old => ResolvedMergeFn::Old,
-            MergeFn::New => ResolvedMergeFn::New,
-            MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
+fn merge_fn_resolve(
+    merge: &MergeFn,
+    function_name: &str,
+    egraph: &mut EGraph,
+) -> ResolvedMergeFn {
+    match merge {
+        MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
+        MergeFn::Old => ResolvedMergeFn::Old,
+        MergeFn::New => ResolvedMergeFn::New,
+        MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
+            panic: egraph.new_panic(format!(
+                "Illegal merge attempted for function {function_name}"
+            )),
+        },
+        MergeFn::UnionId => ResolvedMergeFn::UnionId {
+            uf_table: egraph.uf_table,
+        },
+        // NB: The primitive and function-based merge functions heap allocate a single callback
+        // for each layer of nesting. This introduces a bit of overhead, particularly for cases
+        // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
+        // this function if that overhead shows up.
+        MergeFn::Primitive(prim, args) => ResolvedMergeFn::Primitive {
+            prim: *prim,
+            args: args
+                .iter()
+                .map(|arg| merge_fn_resolve(arg, function_name, egraph))
+                .collect::<Vec<_>>(),
+            panic: egraph.new_panic(format!(
+                "Merge function for {function_name} primitive call failed"
+            )),
+        },
+        MergeFn::Function(func, args) => {
+            let func_info = &egraph.funcs[*func];
+            assert_eq!(
+                func_info.schema.len(),
+                args.len() + 1,
+                "Merge function for {function_name} must match function arity for {}",
+                func_info.name
+            );
+            ResolvedMergeFn::Function {
+                func: TableAction::new(egraph, *func),
                 panic: egraph.new_panic(format!(
-                    "Illegal merge attempted for function {function_name}"
+                    "Lookup on {} failed in the merge function for {function_name}",
+                    func_info.name
                 )),
-            },
-            MergeFn::UnionId => ResolvedMergeFn::UnionId {
-                uf_table: egraph.uf_table,
-            },
-            // NB: The primitive and function-based merge functions heap allocate a single callback
-            // for each layer of nesting. This introduces a bit of overhead, particularly for cases
-            // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
-            // this function if that overhead shows up.
-            MergeFn::Primitive(prim, args) => ResolvedMergeFn::Primitive {
-                prim: *prim,
                 args: args
                     .iter()
-                    .map(|arg| arg.resolve(function_name, egraph))
+                    .map(|arg| merge_fn_resolve(arg, function_name, egraph))
                     .collect::<Vec<_>>(),
-                panic: egraph.new_panic(format!(
-                    "Merge function for {function_name} primitive call failed"
-                )),
-            },
-            MergeFn::Function(func, args) => {
-                let func_info = &egraph.funcs[*func];
-                assert_eq!(
-                    func_info.schema.len(),
-                    args.len() + 1,
-                    "Merge function for {function_name} must match function arity for {}",
-                    func_info.name
-                );
-                ResolvedMergeFn::Function {
-                    func: TableAction::new(egraph, *func),
-                    panic: egraph.new_panic(format!(
-                        "Lookup on {} failed in the merge function for {function_name}",
-                        func_info.name
-                    )),
-                    args: args
-                        .iter()
-                        .map(|arg| arg.resolve(function_name, egraph))
-                        .collect::<Vec<_>>(),
-                }
             }
         }
     }
@@ -1403,12 +1362,8 @@ struct RowVals<T> {
     ret_val: Option<T>,
 }
 
-/// A struct representing the content of a row in a function table
-#[derive(Clone, Debug)]
-pub struct FunctionRow<'a> {
-    pub vals: &'a [Value],
-    pub subsumed: bool,
-}
+// `FunctionRow` is now defined in `egglog-backend-trait`; the re-export at
+// the top of this module brings it back into `egglog_bridge::FunctionRow`.
 
 impl SchemaMath {
     fn write_table_row<T: Clone>(
