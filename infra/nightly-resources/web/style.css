@@ -12,6 +12,21 @@ body {
 .page {
   width: 100%;
   padding: 24px;
+  position: relative;
+}
+
+#time-display-selector {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  display: flex;
+  gap: 12px;
+  border: 1px solid #ccc;
+  padding: 8px 12px;
+}
+
+#time-display-selector legend {
+  padding: 0 4px;
 }
 
 h1 {

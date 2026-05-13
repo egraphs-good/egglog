@@ -2,6 +2,7 @@ import { convertToTable } from "./table.js";
 
 const STATE = {
   activeSuite: null,
+  timeDisplay: "raw",
 };
 
 const GLOBAL_DATA = {
@@ -21,16 +22,49 @@ async function load() {
   }
 
   GLOBAL_DATA.data = await response.json();
+  statusNode.textContent = "Loaded data/data.json";
+
   GLOBAL_DATA.suites = [
     ...new Set(GLOBAL_DATA.data.passing_benchmarks.map((x) => x.suite_name)),
   ].sort();
   STATE.activeSuite = GLOBAL_DATA.suites[0] ?? null;
 
-  statusNode.textContent = "Loaded data/data.json";
-  renderSummary();
+  // Set up interactive elements
+  setupSuiteSelectors();
+  setupTimeDisplaySelector();
 
-  renderSuiteSelectors();
-  renderTable();
+  render();
+}
+
+function setupTimeDisplaySelector() {
+  for (const radio of document.querySelectorAll('input[name="time-display"]')) {
+    radio.addEventListener("change", () => {
+      if (radio.checked) {
+        STATE.timeDisplay = radio.value;
+        render();
+      }
+    });
+  }
+}
+
+function displayTime(rawValue) {
+  const ONE_MIN = 60000000;
+  const ONE_SEC = 1000000;
+  const ONE_MILLI = 1000;
+  if (STATE.timeDisplay === "raw") {
+    return `${rawValue} μs`;
+  } else {
+    console.assert(STATE.timeDisplay === "readable");
+    if (rawValue >= ONE_MIN) {
+      return `${(rawValue / ONE_MIN).toFixed(2)} min`;
+    } else if (rawValue >= ONE_SEC) {
+      return `${(rawValue / ONE_SEC).toFixed(2)} s`;
+    } else if (rawValue >= ONE_MILLI) {
+      return `${(rawValue / ONE_MILLI).toFixed(2)} ms`;
+    } else {
+      return `${rawValue} μs`;
+    }
+  }
 }
 
 function renderSummary() {
@@ -53,13 +87,13 @@ function renderSummary() {
   document.querySelector("#summary-text").textContent =
     `Passing Benchmarks: ${numPassing} | ` +
     `Failing Benchmarks: ${numFailing} | ` +
-    `Nightly time: ${totalTime} μs | ` +
-    `Rule running: ${ruleMicros} μs | ` +
-    `Extraction: ${extractMicros} μs | ` +
-    `Other: ${otherMicros} μs`;
+    `Nightly time: ${displayTime(totalTime)} | ` +
+    `Rule running: ${displayTime(ruleMicros)} | ` +
+    `Extraction: ${displayTime(extractMicros)} | ` +
+    `Other: ${displayTime(otherMicros)}`;
 }
 
-function renderSuiteSelectors() {
+function setupSuiteSelectors() {
   document.querySelector("#suite-tabs").innerHTML = GLOBAL_DATA.suites
     .map(
       (suite) =>
@@ -104,23 +138,22 @@ function renderTable() {
     <p>${benchmarks.length} benchmarks | ${totalTime} s</p>
   </div>`;
 
-  const columns = [
-    "Benchmark",
-    "Wall Time (μs)",
-    "Rules (μs)",
-    "Extraction (μs)",
-    "Other (μs)",
-  ];
+  const columns = ["Benchmark", "Wall Time", "Rules", "Extraction", "Other"];
 
   const rows = benchmarks.map((b) => ({
     Benchmark: b.benchmark_name,
-    "Wall Time (μs)": b.wall_time_micros,
-    "Rules (μs)": b.report.rule_micros,
-    "Extraction (μs)": b.report.extraction_micros,
-    "Other (μs)": b.report.other_micros,
+    "Wall Time": displayTime(b.wall_time_micros),
+    Rules: displayTime(b.report.rule_micros),
+    Extraction: displayTime(b.report.extraction_micros),
+    Other: displayTime(b.report.other_micros),
   }));
 
   const tableDiv = document.querySelector("#active-suite-table");
   tableDiv.innerHTML = "";
   tableDiv.appendChild(convertToTable(columns, rows));
+}
+
+function render() {
+  renderSummary();
+  renderTable();
 }
