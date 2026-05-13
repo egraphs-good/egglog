@@ -15,30 +15,46 @@
 //! the underlying `BaseValues` / `ContainerValues` and dispatches to the
 //! existing inherent methods.
 //!
-//! ## Known limitation: `register_type_dyn` / `register_val_dyn`
+//! ## Dyn registration paths
 //!
 //! `BaseValues::register_type<P>` is generic over `P: BaseValue` and cannot
-//! be implemented through a pure `TypeId` API — constructing the typed
-//! intern table requires knowing `P` at compile time. The bridge's
-//! `BridgeBaseValuePool::register_type_dyn` therefore currently panics with
-//! a clear `unimplemented!` message. Callers in the frontend register
-//! base-value types through the concrete `EGraph::base_values_mut()` API,
-//! which is unchanged by this commit. Once `EGraph::backend` becomes
-//! `Box<dyn Backend>` (Commit 8), we will need to revisit this; the
-//! likely fix is to expose a closure-based registration API on the trait
-//! or to thread the generic registration through a different surface.
+//! be invoked through a pure `TypeId` API alone — constructing the typed
+//! intern table requires knowing `P` at compile time. Approach (a) from
+//! the Phase 1 design doc resolves this by routing registration through a
+//! caller-supplied factory closure (see
+//! `BaseValues::register_type_dyn` in core-relations and the
+//! `BridgeBaseValuePool::register_type_dyn` impl below). The
+//! `pool_register_type<T>` helper in `egglog-backend-trait` builds the
+//! factory for the typed table and hands it through; the bridge's wrapper
+//! forwards to the new core-relations API.
 //!
-//! The same applies to `ContainerPool::register_val_dyn`.
+//! `intern_dyn` and `unwrap_dyn` use the parallel
+//! `BaseValues::intern_dyn_by_id` / `unwrap_dyn_by_id` helpers, which in
+//! turn dispatch through `DynamicInternTable`'s `intern_dyn` /
+//! `unwrap_dyn` methods on the registered typed table.
+//!
+//! ### Containers: read-only dyn dispatch only
+//!
+//! `ContainerPool`'s read-only methods (`get_dyn`, `for_each_dyn`, `size`,
+//! `has_container_type`) are wired through the new
+//! `ContainerValues::{get_dyn, for_each_dyn, size_dyn, has_container_type}`
+//! helpers. `register_val_dyn` still returns an error: the bridge's
+//! container `register_val<C>` requires a live `ExecutionState` plus
+//! access to the egraph's id counter and the UF-aware merge closure that
+//! `EGraph::register_container_ty<C>` provides, neither of which is
+//! reachable from a `&mut ContainerValues` alone. Container registration
+//! continues to go through the concrete `EGraph::register_container_ty<C>`
+//! / `EGraph::get_container_value<C>` APIs.
 
 use std::any::{Any, TypeId};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use egglog_backend_trait::{
     Backend, BaseValuePool, ColumnTy, ContainerPool, ExternalFunction, ExternalFunctionId,
     FunctionConfig, FunctionId, FunctionRow, IterationReport, QueryEntry, ReportLevel, RuleId,
     RuleBuilderOps, Value, Variable,
 };
-use egglog_core_relations::{BaseValueId, BaseValues, ContainerValues};
+use egglog_core_relations::{BaseValueId, BaseValues, ContainerValues, DynamicInternTable};
 
 use crate::EGraph;
 
@@ -161,61 +177,31 @@ impl<'a> RuleBuilderOps for BridgeRuleBuilderOps<'a> {
 struct BaseValuesAsPool(BaseValues);
 
 impl BaseValuePool for BaseValuesAsPool {
-    fn register_type_dyn(&mut self, _type_id: TypeId) -> BaseValueId {
-        // See file-level docs: `BaseValues::register_type<P>` is generic
-        // over P. There is no way to construct the typed intern table from
-        // just a `TypeId`. Until the trait grows a closure-based
-        // registration API (a future commit), callers must register base
-        // value types through the concrete `EGraph::base_values_mut()` API.
-        unimplemented!(
-            "BridgeBaseValuePool::register_type_dyn is not implementable from a bare TypeId; \
-             use the concrete egglog_bridge::EGraph::base_values_mut().register_type::<T>() API \
-             until the trait is extended (see backend_impl.rs file docs)."
-        )
+    fn register_type_dyn(
+        &mut self,
+        type_id: TypeId,
+        factory: Box<dyn FnOnce() -> Box<dyn DynamicInternTable>>,
+    ) -> BaseValueId {
+        self.0.register_type_dyn(type_id, factory)
     }
 
     fn get_ty_by_type_id(&self, type_id: TypeId) -> BaseValueId {
         self.0.get_ty_by_id(type_id)
     }
 
-    fn intern_dyn(&self, _ty: BaseValueId, _value: Box<dyn Any + Send + Sync>) -> Value {
-        // Same limitation as `register_type_dyn`: the typed intern table
-        // stored at `BaseValueId` is a `BaseInternTable<P>` whose `P` is not
-        // recoverable from `&dyn Any` without runtime dispatch we haven't
-        // wired through.
-        unimplemented!(
-            "BridgeBaseValuePool::intern_dyn requires a typed intern path that the bridge's \
-             current BaseValues API does not expose. Use the concrete \
-             EGraph::base_values().get::<T>(x) helper, or call pool_get<T> after we extend \
-             core-relations to expose a typed dyn interner."
-        )
+    fn intern_dyn(&self, ty: BaseValueId, value: Box<dyn Any + Send + Sync>) -> Value {
+        // Deref the box to a `&dyn Any` and feed it through the typed
+        // table's dyn-dispatch intern path.
+        let any_ref: &dyn Any = &*value;
+        self.0.intern_dyn_by_id(ty, any_ref)
     }
 
-    fn unwrap_dyn(&self, _ty: BaseValueId, _val: Value) -> Box<dyn Any + Send + Sync> {
-        // Same limitation as `intern_dyn`.
-        unimplemented!(
-            "BridgeBaseValuePool::unwrap_dyn requires the typed unwrap path that the bridge's \
-             current BaseValues API does not expose. Use the concrete \
-             EGraph::base_values().unwrap::<T>(v) helper."
-        )
+    fn unwrap_dyn(&self, ty: BaseValueId, val: Value) -> Box<dyn Any + Send + Sync> {
+        self.0.unwrap_dyn_by_id(ty, val)
     }
 
     fn has_ty(&self, type_id: TypeId) -> bool {
-        // `BaseValues::type_ids` is private, so we approximate "has this
-        // type" by attempting the lookup and catching the panic. Since
-        // `get_ty_by_id` panics on missing types, that would be a footgun
-        // here. Instead, we expose this via a small upstream change in a
-        // future commit; for now, conservatively return `true` for any
-        // built-in type that the bridge always registers (i64, f64, bool,
-        // Unit, String). This is **incomplete** but suffices for the
-        // Phase 2 Commit 4 unit tests; the full fix lands when the
-        // BaseValues API exposes `has_type(TypeId) -> bool`.
-        //
-        // For now, defer to the trait crate's documented invariant: callers
-        // should only invoke `has_ty` for types they registered. Always
-        // returning `true` matches that invariant defensively.
-        let _ = type_id;
-        true
+        self.0.has_ty_by_id(type_id)
     }
 }
 
@@ -228,26 +214,16 @@ impl BaseValuePool for BaseValuesAsPool {
 struct ContainerValuesAsPool(ContainerValues);
 
 impl ContainerPool for ContainerValuesAsPool {
-    fn has_container_type(&self, _type_id: TypeId) -> bool {
-        // `ContainerValues::container_ids` is private; same situation as
-        // `has_ty` above. The Phase 2 Commit 4 unit tests don't exercise
-        // this path; flagged as a future cleanup.
-        true
+    fn has_container_type(&self, type_id: TypeId) -> bool {
+        self.0.has_container_type(type_id)
     }
 
     fn enabled(&self) -> bool {
         true
     }
 
-    fn get_dyn(&self, _ty: TypeId, _val: Value) -> Option<Box<dyn Any + Send + Sync>> {
-        // The bridge's `ContainerValues::get_val<C>` is generic; same
-        // dispatch problem as `BridgeBaseValuePool::unwrap_dyn`. Callers
-        // currently use the concrete `EGraph::container_values()` API.
-        unimplemented!(
-            "BridgeContainerPool::get_dyn requires a typed dyn dispatch the current \
-             ContainerValues API does not expose; use \
-             EGraph::container_values().get_val::<C>(v) instead."
-        )
+    fn get_dyn(&self, ty: TypeId, val: Value) -> Option<Box<dyn Any + Send + Sync>> {
+        self.0.get_dyn(ty, val)
     }
 
     fn register_val_dyn(
@@ -255,27 +231,26 @@ impl ContainerPool for ContainerValuesAsPool {
         _ty: TypeId,
         _value: Box<dyn Any + Send + Sync>,
     ) -> Result<Value> {
-        unimplemented!(
-            "BridgeContainerPool::register_val_dyn requires a typed dyn dispatch the current \
-             ContainerValues API does not expose; use \
-             EGraph::get_container_value::<C>(c) instead."
-        )
+        // See file-level docs: registration of container values requires
+        // a live `ExecutionState`, the egraph's id counter, and the
+        // UF-aware merge closure. None of these are reachable from a bare
+        // `&mut ContainerValues`. Callers must continue to use the
+        // concrete `egglog_bridge::EGraph::get_container_value::<C>` API
+        // (which is what `EGraph::with_execution_state` + the typed
+        // `ContainerValues::register_val<C>` does today).
+        Err(anyhow!(
+            "BridgeContainerPool::register_val_dyn is not supported on the bridge wrapper: \
+             container registration requires an ExecutionState and the egraph's id counter; \
+             use egglog_bridge::EGraph::get_container_value::<C>(c) instead."
+        ))
     }
 
-    fn for_each_dyn(
-        &self,
-        _ty: TypeId,
-        _f: &mut dyn FnMut(Value, &dyn Any),
-    ) {
-        unimplemented!(
-            "BridgeContainerPool::for_each_dyn requires a typed dyn dispatch the current \
-             ContainerValues API does not expose."
-        )
+    fn for_each_dyn(&self, ty: TypeId, f: &mut dyn FnMut(Value, &dyn Any)) {
+        self.0.for_each_dyn(ty, f)
     }
 
-    fn size(&self, _ty: TypeId) -> usize {
-        // Same as above.
-        0
+    fn size(&self, ty: TypeId) -> usize {
+        self.0.size_dyn(ty)
     }
 }
 
@@ -328,6 +303,32 @@ impl Backend for EGraph {
 
     fn add_term(&mut self, func: FunctionId, inputs: &[Value]) -> Value {
         EGraph::add_term(self, func, inputs)
+    }
+
+    fn insert_rows(&mut self, table: FunctionId, rows: &[Vec<Value>]) {
+        // Wraps `with_execution_state` around a loop of `TableAction::insert`.
+        // Mirrors the body that used to live at `src/lib.rs:1611` (input_file
+        // bulk insert for non-Constructor functions) and `src/scheduler.rs:225`
+        // (scheduler match canonicalization). The frontend calls
+        // `flush_updates` afterward.
+        let table_action = crate::TableAction::new(self, table);
+        self.with_execution_state(|es| {
+            for row in rows.iter() {
+                table_action.insert(es, row.iter().copied());
+            }
+        });
+    }
+
+    fn lookup_constructor_rows(&mut self, table: FunctionId, rows: &[Vec<Value>]) {
+        // Wraps `with_execution_state` around a loop of `TableAction::lookup`.
+        // Mirrors the body that used to live at `src/lib.rs:1618` (input_file
+        // bulk insert for Constructor functions).
+        let table_action = crate::TableAction::new(self, table);
+        self.with_execution_state(|es| {
+            for row in rows.iter() {
+                table_action.lookup(es, row);
+            }
+        });
     }
 
     fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {
@@ -452,6 +453,16 @@ impl Backend for EGraph {
     fn clone_boxed(&self) -> Box<dyn Backend> {
         Box::new(self.clone())
     }
+
+    // -- bridge-only escape hatch ------------------------------------------
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,5 +534,131 @@ mod tests {
     fn dyn_backend_clone() {
         let backend: Box<dyn Backend> = Box::new(EGraph::default());
         let _cloned: Box<dyn Backend> = backend.clone();
+    }
+
+    /// Exercise the dyn-aware `BaseValuePool` path end-to-end on `i64`:
+    /// register the type through `pool_register_type<T>`, intern a value
+    /// through `pool_get<T>`, and unwrap it through `pool_unwrap<T>`.
+    ///
+    /// `i64` uses `MAY_UNBOX = true` with an intern-table fallback for
+    /// values whose top bit is set; we cover both the inline and the
+    /// interned path to confirm the dyn dispatch reaches the typed table.
+    #[test]
+    fn dyn_base_value_pool_register_intern_unwrap_i64() {
+        use egglog_backend_trait::{pool_get, pool_get_ty, pool_register_type, pool_unwrap};
+
+        let mut backend: Box<dyn Backend> = Box::new(EGraph::default());
+
+        // Register i64 through the dyn-friendly helper.
+        let pool = backend.base_value_pool_mut();
+        let id_via_dyn = pool_register_type::<i64>(pool);
+        // Re-registering returns the same id (idempotent).
+        let id_again = pool_register_type::<i64>(pool);
+        assert_eq!(id_via_dyn, id_again);
+
+        // has_ty reports registration.
+        assert!(backend.base_value_pool().has_ty(TypeId::of::<i64>()));
+
+        // Inline path: small i64 round-trips via MAY_UNBOX without touching
+        // the typed intern table.
+        let inline_pool = backend.base_value_pool();
+        let small: i64 = 42;
+        let small_val = pool_get::<i64>(inline_pool, small);
+        let small_back: i64 = pool_unwrap::<i64>(inline_pool, small_val);
+        assert_eq!(small_back, small);
+
+        // Interned-path coverage: an i64 whose top bit is set forces the
+        // intern-table fallback in `BaseInternTable::intern`. The fallback
+        // is exercised by `pool_get<T>` because `try_box` returns `None`
+        // for these values.
+        let big: i64 = 0x80_00_00_00i64 | 0x12_34_56_78; // top bit set
+        let big_val = pool_get::<i64>(inline_pool, big);
+        let big_back: i64 = pool_unwrap::<i64>(inline_pool, big_val);
+        assert_eq!(big_back, big);
+
+        // Same value should intern to the same id.
+        let big_val2 = pool_get::<i64>(inline_pool, big);
+        assert_eq!(big_val, big_val2);
+
+        // The trait-level `intern_dyn` / `unwrap_dyn` accept boxed values.
+        // Confirm those round-trip through the bridge wrapper as well.
+        let id_for_i64 = pool_get_ty::<i64>(inline_pool);
+        let boxed: Box<dyn Any + Send + Sync> = Box::new(big);
+        let via_intern = inline_pool.intern_dyn(id_for_i64, boxed);
+        assert_eq!(via_intern, big_val);
+        let unboxed = inline_pool.unwrap_dyn(id_for_i64, via_intern);
+        let unboxed_i64 = *unboxed
+            .downcast::<i64>()
+            .expect("unwrap_dyn returned wrong type");
+        assert_eq!(unboxed_i64, big);
+    }
+
+    /// Confirm a non-`MAY_UNBOX` base value (`String`) also round-trips
+    /// through the dyn registration / intern / unwrap path.
+    #[test]
+    fn dyn_base_value_pool_register_intern_unwrap_string() {
+        use egglog_backend_trait::{pool_get, pool_register_type, pool_unwrap};
+
+        let mut backend: Box<dyn Backend> = Box::new(EGraph::default());
+        let _id = pool_register_type::<String>(backend.base_value_pool_mut());
+
+        let pool = backend.base_value_pool();
+        let s = String::from("hello");
+        let v = pool_get::<String>(pool, s.clone());
+        // Re-interning the same string returns the same id.
+        let v2 = pool_get::<String>(pool, s.clone());
+        assert_eq!(v, v2);
+
+        let back: String = pool_unwrap::<String>(pool, v);
+        assert_eq!(back, s);
+    }
+
+    /// `Backend::as_any` must downcast successfully to the concrete
+    /// backend type — this is the path call sites in `src/prelude.rs`
+    /// will use to reach `TableAction::new` / `UnionAction::new` in
+    /// Commit 8.
+    #[test]
+    fn dyn_backend_as_any_downcasts_to_bridge_egraph() {
+        let backend: Box<dyn Backend> = Box::new(EGraph::default());
+        let downcast = backend.as_any().downcast_ref::<EGraph>();
+        assert!(
+            downcast.is_some(),
+            "as_any must downcast to the concrete bridge EGraph type"
+        );
+    }
+
+    /// `as_any_mut` must also downcast.
+    #[test]
+    fn dyn_backend_as_any_mut_downcasts_to_bridge_egraph() {
+        let mut backend: Box<dyn Backend> = Box::new(EGraph::default());
+        let downcast = backend.as_any_mut().downcast_mut::<EGraph>();
+        assert!(
+            downcast.is_some(),
+            "as_any_mut must downcast to the concrete bridge EGraph type"
+        );
+    }
+
+    /// Confirm `has_ty` reports `false` for an unregistered type and
+    /// `true` after registration.
+    ///
+    /// Uses `num_rational::Rational64` (re-exported via the bridge's
+    /// `num-rational` dep) since `BaseValue` is implemented for it in
+    /// core-relations and the bridge does not auto-register it.
+    #[test]
+    fn dyn_base_value_pool_has_ty() {
+        use egglog_backend_trait::pool_register_type;
+
+        let mut backend: Box<dyn Backend> = Box::new(EGraph::default());
+        assert!(
+            !backend
+                .base_value_pool()
+                .has_ty(TypeId::of::<num_rational::Rational64>())
+        );
+        let _ = pool_register_type::<num_rational::Rational64>(backend.base_value_pool_mut());
+        assert!(
+            backend
+                .base_value_pool()
+                .has_ty(TypeId::of::<num_rational::Rational64>())
+        );
     }
 }

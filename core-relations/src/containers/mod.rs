@@ -220,6 +220,46 @@ impl ContainerValues {
         });
         id
     }
+
+    /// True iff a container type with the given `TypeId` is registered.
+    pub fn has_container_type(&self, type_id: TypeId) -> bool {
+        self.container_ids.get(&type_id).is_some()
+    }
+
+    /// Dyn-dispatched lookup. Returns `None` if `type_id` is unregistered or
+    /// the value is not present.
+    ///
+    /// The returned box contains a clone of the registered Rust container.
+    /// Used by `egglog-backend-trait::ContainerPool::get_dyn`.
+    pub fn get_dyn(&self, type_id: TypeId, val: Value) -> Option<Box<dyn Any + Send + Sync>> {
+        let id = self.container_ids.get(&type_id)?;
+        let env = self.data.get(id)?;
+        env.get_dyn(val)
+    }
+
+    /// Dyn-dispatched iteration over the registered values of the container
+    /// type identified by `type_id`. No-op if the type is unregistered.
+    pub fn for_each_dyn(&self, type_id: TypeId, f: &mut dyn FnMut(Value, &dyn Any)) {
+        let Some(id) = self.container_ids.get(&type_id) else {
+            return;
+        };
+        let Some(env) = self.data.get(id) else {
+            return;
+        };
+        env.for_each_dyn(f);
+    }
+
+    /// Number of registered values for the given container type. Returns 0
+    /// if the type is unregistered.
+    pub fn size_dyn(&self, type_id: TypeId) -> usize {
+        let Some(id) = self.container_ids.get(&type_id) else {
+            return 0;
+        };
+        let Some(env) = self.data.get(id) else {
+            return 0;
+        };
+        env.size_dyn()
+    }
 }
 
 /// A trait implemented by container types.
@@ -252,6 +292,16 @@ pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary;
+    /// Look up the container value associated with `val`, returning a clone
+    /// of the underlying container as a boxed `Any`. Returns `None` if no
+    /// entry is registered.
+    fn get_dyn(&self, val: Value) -> Option<Box<dyn Any + Send + Sync>>;
+    /// Iterate `(value, &container)` pairs across the env's table. The
+    /// closure receives the container as `&dyn Any` of the env's underlying
+    /// concrete container type.
+    fn for_each_dyn(&self, f: &mut dyn FnMut(Value, &dyn Any));
+    /// Number of registered values in this container env.
+    fn size_dyn(&self) -> usize;
 }
 
 // Implements `Clone` for `Box<dyn DynamicContainerEnv>`.
@@ -276,6 +326,24 @@ struct ContainerEnv<C: Eq + Hash> {
 impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_dyn(&self, val: Value) -> Option<Box<dyn Any + Send + Sync>> {
+        let guard = self.get_container(val)?;
+        let cloned: C = (*guard).clone();
+        Some(Box::new(cloned))
+    }
+
+    fn for_each_dyn(&self, f: &mut dyn FnMut(Value, &dyn Any)) {
+        for ent in self.to_id.iter() {
+            let container: &C = ent.key();
+            let val: Value = *ent.value();
+            f(val, container as &dyn Any);
+        }
+    }
+
+    fn size_dyn(&self) -> usize {
+        self.to_id.len()
     }
 
     fn apply_rebuild(

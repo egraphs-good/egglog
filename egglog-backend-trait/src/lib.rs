@@ -61,8 +61,8 @@ use egglog_numeric_id::define_id;
 // caller convenience.
 
 pub use egglog_core_relations::{
-    BaseValue, BaseValueId, ContainerValue, ContainerValueId, ExecutionState, ExternalFunction,
-    ExternalFunctionId, Value,
+    BaseValue, BaseValueId, ContainerValue, ContainerValueId, DynamicInternTable, ExecutionState,
+    ExternalFunction, ExternalFunctionId, Value,
 };
 
 pub use egglog_reports::{IterationReport, ReportLevel};
@@ -217,6 +217,42 @@ impl From<Variable> for QueryEntry {
 /// `T: BaseValue` or `C: ContainerValue` live on the
 /// [`BaseValuePool`] / [`ContainerPool`] sub-traits, which use Any-based
 /// dynamic dispatch internally.
+///
+/// ## Bridge-only escape hatch via [`Backend::as_any`]
+///
+/// A handful of frontend constructs — most notably `TableAction::new` /
+/// `UnionAction::new` used inside `rust_rule` and `query` primitive
+/// `apply()` bodies in `src/prelude.rs` — depend on bridge-specific state
+/// (`egglog_bridge::EGraph`) that does not fit cleanly behind the trait
+/// surface. The Phase 1 design (see `docs/backend_trait_design.md`,
+/// "How `TableAction` and `UnionAction` are handled") explicitly keeps
+/// these types as bridge inherent methods rather than lifting them onto
+/// the trait.
+///
+/// To let callers reach the bridge-specific state when the backend field
+/// is `Box<dyn Backend>`, the trait exposes an `Any`-based downcast pair:
+///
+/// ```ignore
+/// // Inside a primitive that needs TableAction:
+/// let bridge = self
+///     .backend
+///     .as_any()
+///     .downcast_ref::<egglog_bridge::EGraph>()
+///     .expect("table actions are bridge-only");
+/// let action = egglog_bridge::TableAction::new(bridge, func_id);
+/// ```
+///
+/// The DuckDB backend's `as_any` returns a different concrete type
+/// (`egglog_bridge_duckdb::EGraph`); the downcast to
+/// `&egglog_bridge::EGraph` therefore fails on DuckDB. This is correct: the
+/// primitives that go through this path (`rust_rule` / `query` table-lookup
+/// helpers) are gated by [`Backend::supports_inline_table_lookups`] and
+/// are documented as unsupported on DuckDB in v1.
+///
+/// Using `&dyn Any` keeps this trait crate from having to name
+/// `egglog_bridge::EGraph` directly, which would re-introduce the
+/// `egglog-bridge ↔ egglog-backend-trait` dependency cycle that Phase 2
+/// Commit 3 deliberately broke.
 pub trait Backend: Send + Sync {
     // -- table lifecycle ----------------------------------------------------
 
@@ -292,6 +328,34 @@ pub trait Backend: Send + Sync {
     /// Wraps `egglog_bridge::EGraph::add_term`. On DuckDB this maps to an
     /// `INSERT ... RETURNING` against the function's table.
     fn add_term(&mut self, func: FunctionId, inputs: &[Value]) -> Value;
+
+    /// Stage a batch of complete rows into `table`.
+    ///
+    /// Each entry in `rows` is the full row for the table (key columns
+    /// followed by the value column, where applicable). The rows are staged
+    /// against a single internal execution state; callers should invoke
+    /// [`Backend::flush_updates`] afterward to merge them into the database.
+    ///
+    /// Unlike [`Backend::add_values`], this is scoped to a single table and
+    /// does not call `flush_updates` itself, which makes it suitable for
+    /// scenarios that interleave many table-level insertions before a final
+    /// flush (e.g. parsing an input file, scheduler match dispatch).
+    ///
+    /// The bridge's impl wraps `with_execution_state` around a loop of
+    /// `TableAction::insert` calls.
+    fn insert_rows(&mut self, table: FunctionId, rows: &[Vec<Value>]);
+
+    /// Stage a batch of constructor-style lookup-or-insert rows.
+    ///
+    /// Each entry in `rows` is a key for the constructor `table` (without the
+    /// output column); the bridge calls `TableAction::lookup` per row, which
+    /// either returns the existing output or allocates a fresh id. As with
+    /// [`Backend::insert_rows`], callers should invoke
+    /// [`Backend::flush_updates`] afterward.
+    ///
+    /// The bridge's impl wraps `with_execution_state` around a loop of
+    /// `TableAction::lookup` calls.
+    fn lookup_constructor_rows(&mut self, table: FunctionId, rows: &[Vec<Value>]);
 
     /// Get the canonical representative of `val` according to `ty`.
     ///
@@ -461,6 +525,29 @@ pub trait Backend: Send + Sync {
     /// implementation (database snapshot / replay buffer); see
     /// `docs/backend_trait_design.md` for the chosen strategy.
     fn clone_boxed(&self) -> Box<dyn Backend>;
+
+    // -- bridge-only escape hatch ------------------------------------------
+
+    /// Return `&self` as `&dyn Any`, enabling callers to downcast to the
+    /// concrete backend type (e.g. `&egglog_bridge::EGraph`).
+    ///
+    /// This is the supported path for invoking bridge-only inherent
+    /// methods such as `TableAction::new` / `UnionAction::new` from
+    /// frontend code whose `backend` field is a `Box<dyn Backend>`. See the
+    /// trait-level documentation for the rationale (Any-based downcast
+    /// keeps the trait crate free of `egglog-bridge` dependencies, avoiding
+    /// a dependency cycle).
+    ///
+    /// Implementations are expected to be one-liners: `fn as_any(&self) ->
+    /// &dyn Any { self }`. The trait can't supply a default body because
+    /// `dyn Backend` is not `Sized` and `&dyn Any` requires `Self: 'static
+    /// + Sized` — but every concrete backend type satisfies both, so each
+    /// impl trivially provides the body.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Mutable counterpart of [`Backend::as_any`]. Implementations are
+    /// expected to return `self`.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl Clone for Box<dyn Backend> {
@@ -607,15 +694,23 @@ pub trait RuleBuilderOps {
 /// inline into SQL columns where possible, and exotic types fall back to
 /// an in-memory intern table identical to the bridge's.
 pub trait BaseValuePool: Send + Sync {
-    /// Register a new base-value type using its `TypeId`. The pool is
-    /// responsible for storing a typed intern table for `P` keyed on the
-    /// returned [`BaseValueId`]. Implementations may construct the typed
-    /// table using a downcast helper provided by the caller; see the
-    /// `pool_register_type<T>` free function for the typical use.
+    /// Register a new base-value type using its `TypeId` plus a factory
+    /// that constructs a fresh typed intern table for the type.
     ///
-    /// Wraps `BaseValues::register_type` (called via the caller's generic
-    /// adapter).
-    fn register_type_dyn(&mut self, type_id: TypeId) -> BaseValueId;
+    /// The factory is invoked at most once: if a type with the same
+    /// `TypeId` is already registered, the existing [`BaseValueId`] is
+    /// returned and the factory is dropped.
+    ///
+    /// Callers typically use [`pool_register_type`], the generic-over-`T`
+    /// helper below, which constructs the appropriate factory and threads
+    /// it through.
+    ///
+    /// Wraps `BaseValues::register_type_dyn` on the bridge side.
+    fn register_type_dyn(
+        &mut self,
+        type_id: TypeId,
+        factory: Box<dyn FnOnce() -> Box<dyn DynamicInternTable>>,
+    ) -> BaseValueId;
 
     /// Look up the `BaseValueId` for a registered base-value type by its
     /// Rust `TypeId`.
@@ -647,11 +742,14 @@ pub trait BaseValuePool: Send + Sync {
 /// Generic helper: register a `T: BaseValue` with the pool and return its
 /// [`BaseValueId`]. Equivalent to `BaseValues::register_type::<T>`.
 ///
-/// This sits outside the trait so the trait remains dyn-compatible.
-/// Implementations of [`BaseValuePool`] are free to recognize the `TypeId`
-/// of common types and pre-initialize their intern tables.
+/// This sits outside the trait so the trait remains dyn-compatible. It
+/// builds the typed intern-table factory closure that
+/// [`BaseValuePool::register_type_dyn`] requires.
 pub fn pool_register_type<T: BaseValue>(pool: &mut dyn BaseValuePool) -> BaseValueId {
-    pool.register_type_dyn(TypeId::of::<T>())
+    pool.register_type_dyn(
+        TypeId::of::<T>(),
+        Box::new(|| egglog_core_relations::new_intern_table::<T>()),
+    )
 }
 
 /// Generic helper: look up the `BaseValueId` for `T: BaseValue`.

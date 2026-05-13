@@ -79,6 +79,25 @@ impl BaseValues {
         id
     }
 
+    /// Register a base value type given its [`TypeId`] and a factory closure
+    /// that produces a fresh typed intern table. Used by the trait-crate-level
+    /// `BaseValuePool::register_type_dyn` to route from a dyn-friendly API
+    /// back to the typed `BaseInternTable<P>` constructor without exposing
+    /// `P: BaseValue` to the caller.
+    ///
+    /// If a type with the given `TypeId` is already registered, returns the
+    /// existing `BaseValueId` and discards the factory.
+    pub fn register_type_dyn(
+        &mut self,
+        type_id: TypeId,
+        factory: Box<dyn FnOnce() -> Box<dyn DynamicInternTable>>,
+    ) -> BaseValueId {
+        let next_id = BaseValueId::from_usize(self.type_ids.len());
+        let id = *self.type_ids.entry(type_id).or_insert(next_id);
+        self.tables.get_or_insert(id, factory);
+        id
+    }
+
     /// Get the [`BaseValueId`] for the given base value type `P`.
     pub fn get_ty<P: BaseValue>(&self) -> BaseValueId {
         self.type_ids[&TypeId::of::<P>()]
@@ -87,6 +106,12 @@ impl BaseValues {
     /// Get the [`BaseValueId`] for the given base value type id.
     pub fn get_ty_by_id(&self, id: TypeId) -> BaseValueId {
         self.type_ids[&id]
+    }
+
+    /// Like [`BaseValues::get_ty_by_id`] but returns `None` if the type was
+    /// never registered.
+    pub fn has_ty_by_id(&self, id: TypeId) -> bool {
+        self.type_ids.contains_key(&id)
     }
 
     /// Get a [`Value`] representing the given base value `p`.
@@ -121,15 +146,64 @@ impl BaseValues {
             .unwrap();
         table.get(v)
     }
+
+    /// Intern a base value through dynamic dispatch.
+    ///
+    /// `val` must be a `&P` whose `TypeId` matches the type previously
+    /// registered under `id`. The caller is responsible for honoring the
+    /// `P::MAY_UNBOX` short-circuit; this method always goes through the
+    /// intern table.
+    ///
+    /// Used by `egglog-backend-trait`'s `BaseValuePool::intern_dyn`.
+    pub fn intern_dyn_by_id(&self, id: BaseValueId, val: &dyn Any) -> Value {
+        self.tables
+            .get(id)
+            .expect("types must be registered before interning via intern_dyn_by_id")
+            .intern_dyn(val)
+    }
+
+    /// Unwrap a base value through dynamic dispatch.
+    ///
+    /// Returns a `Box<dyn Any + Send + Sync>` holding a value of the
+    /// registered Rust type for `id`. Used by `egglog-backend-trait`'s
+    /// `BaseValuePool::unwrap_dyn`.
+    pub fn unwrap_dyn_by_id(&self, id: BaseValueId, v: Value) -> Box<dyn Any + Send + Sync> {
+        self.tables
+            .get(id)
+            .expect("types must be registered before unwrapping via unwrap_dyn_by_id")
+            .unwrap_dyn(v)
+    }
 }
 
-trait DynamicInternTable: Any + dyn_clone::DynClone + Send + Sync {
+/// Dynamic dispatch entry-point used by [`BaseValues`] to manage typed
+/// intern tables behind a `TypeId`-keyed registry.
+///
+/// `intern_dyn` and `unwrap_dyn` provide a `&dyn Any`-based path from a
+/// `BaseValueId` (without knowing the underlying `P: BaseValue` at compile
+/// time) into the typed [`BaseInternTable<P>`]. This is what
+/// `egglog-backend-trait::BaseValuePool` rides on.
+pub trait DynamicInternTable: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn print_value(&self, val: Value, f: &mut fmt::Formatter) -> fmt::Result;
+    /// Intern a value provided as `&dyn Any`. The concrete type must match
+    /// the table's underlying `P: BaseValue`.
+    fn intern_dyn(&self, val: &dyn Any) -> Value;
+    /// Read a value from the table by its `Value` handle, returning a boxed
+    /// `dyn Any` whose concrete type is the table's underlying `P`.
+    fn unwrap_dyn(&self, v: Value) -> Box<dyn Any + Send + Sync>;
 }
 
 // Implements `Clone` for `Box<dyn DynamicInternTable>`.
 dyn_clone::clone_trait_object!(DynamicInternTable);
+
+/// Construct a fresh boxed [`DynamicInternTable`] for the given
+/// `P: BaseValue`. Used by the trait-crate-level helper
+/// `pool_register_type<T>` to supply a factory closure to
+/// [`BaseValues::register_type_dyn`] without exposing `BaseInternTable<P>`
+/// directly.
+pub fn new_intern_table<P: BaseValue>() -> Box<dyn DynamicInternTable> {
+    Box::new(BaseInternTable::<P>::default())
+}
 
 #[derive(Clone)]
 struct BaseInternTable<P> {
@@ -152,6 +226,17 @@ impl<P: BaseValue> DynamicInternTable for BaseInternTable<P> {
     fn print_value(&self, val: Value, f: &mut fmt::Formatter) -> fmt::Result {
         let p = self.get(val);
         write!(f, "{p:?}")
+    }
+
+    fn intern_dyn(&self, val: &dyn Any) -> Value {
+        let p = val
+            .downcast_ref::<P>()
+            .expect("intern_dyn called with wrong concrete type for this BaseInternTable");
+        self.intern(p.clone())
+    }
+
+    fn unwrap_dyn(&self, v: Value) -> Box<dyn Any + Send + Sync> {
+        Box::new(self.get(v))
     }
 }
 

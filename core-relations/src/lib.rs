@@ -23,7 +23,10 @@ pub(crate) mod uf;
 mod tests;
 
 pub use action::{ExecutionState, MergeVal, QueryEntry, WriteVal};
-pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed};
+pub use base_values::{
+    BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed, DynamicInternTable,
+    new_intern_table,
+};
 pub use common::Value;
 pub use containers::{ContainerRebuildSummary, ContainerValue, ContainerValueId, ContainerValues};
 pub use free_join::{
