@@ -73,13 +73,14 @@ impl VScalar for UfFindScalar {
 ///   - `uf_function_index` — mirrors raw pname into the function-
 ///      form UF table; superseded by the native UF + UDF.
 fn is_uf_maintenance_ruleset(ruleset: &str) -> bool {
-    // Tested: skipping `uf_function_index` and `parent`
-    // (path-compress) preserves tuple counts on mm3/mm9 because the
-    // demoted UDF lookups go through the native UF, which is synced
-    // directly from pname. Adding `single_parent` to this set
-    // (verified empirically) drops some tuples — see the analysis
-    // in the docs: single_parent's saturation provides scheduling
-    // rhythm the outer saturate depends on. Leave it enabled.
+    // We can safely skip uf_function_index and parent (path-compress)
+    // because the demoted UDF lookups go through the native UF.
+    // single_parent stays — even with displaced-count feeding
+    // `rules_affected` (so the saturate keeps iterating), skipping
+    // it gives the system a different convergence path that
+    // reaches a different fixpoint, presumably because it changes
+    // when congruence sees particular view rows. See the
+    // single_parent investigation notes — root cause TBD.
     matches!(
         ruleset
             .trim_end_matches(|c: char| c.is_ascii_digit())
@@ -668,10 +669,11 @@ impl EGraph {
     /// rule actions have written into the SQL pname tables. The
     /// runner calls it at the top of each iteration so any UDF
     /// invocations within that iteration's rules see fresh state.
-    fn sync_native_ufs(&mut self) -> Result<()> {
+    fn sync_native_ufs(&mut self) -> Result<usize> {
         if self.native_ufs.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
+        let mut total_displaced: usize = 0;
         // Snapshot names to avoid double-borrowing self.
         let names: Vec<String> = self.native_ufs.keys().cloned().collect();
         for uf_name in names {
@@ -714,13 +716,15 @@ impl EGraph {
                 }
                 if count > 0 {
                     uf.drain_pending();
+                    let drained = uf.drain_displaced();
+                    total_displaced += drained.len();
                 }
             }
             self.native_uf_unions_synced =
                 self.native_uf_unions_synced.wrapping_add(count);
             self.last_uf_sync_ts.insert(uf_name, max_ts_seen);
         }
-        Ok(())
+        Ok(total_displaced)
     }
 
     /// Bump `table`'s watermark to `ts` if `ts` is newer than the
@@ -1156,14 +1160,22 @@ impl EGraph {
         // Pull every new union assertion from the SQL pname tables
         // into the native UFs (no-op when `--duck-native-uf` is off).
         // Must happen before any rule in this iteration so UDF reads
-        // see fresh state.
-        self.sync_native_ufs()?;
+        // see fresh state. The return value is the count of IDs
+        // displaced by this sync; we feed it into `rules_affected`
+        // so the outer saturate (which uses that counter as its
+        // "did anything change" signal in
+        // `backend_duckdb::Saturate`) keeps iterating while there
+        // are still unions to propagate — required when we skip
+        // rulesets like @single_parent whose pname churn was the
+        // only source of the signal before.
+        let synced_displaced = self.sync_native_ufs()?;
+        self.rules_affected = self.rules_affected.wrapping_add(synced_displaced as u64);
         // Build the iteration with the existing single-ruleset path
         // by using a closure on the rule list. Mirrors run_iteration_in
         // but checks set membership.
         self.next_ts += 1;
         let cur = self.next_ts;
-        let mut total: usize = 0;
+        let mut total: usize = synced_displaced;
         let last_run_ats: HashMap<String, i64> = self.last_run_at.clone();
         let skip_uf_maintenance = self.native_uf_enabled;
         for rule in &self.rules {
@@ -1196,10 +1208,11 @@ impl EGraph {
     /// `None`). Returns total rows inserted across rules and
     /// variants.
     pub fn run_iteration_in(&mut self, ruleset: Option<&str>) -> Result<usize> {
-        self.sync_native_ufs()?;
+        let synced_displaced = self.sync_native_ufs()?;
+        self.rules_affected = self.rules_affected.wrapping_add(synced_displaced as u64);
         self.next_ts += 1;
         let cur = self.next_ts;
-        let mut total: usize = 0;
+        let mut total: usize = synced_displaced;
         let last_run_ats: HashMap<String, i64> = self.last_run_at.clone();
         let skip_uf_maintenance = self.native_uf_enabled;
         for rule in &self.rules {
