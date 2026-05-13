@@ -291,42 +291,6 @@ fn emit_printsize_directives(ctx: &Ctx, p: &mut Program) {
 /// entries as UF chains form.
 fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
     let uf_math = format!("Eg_UF_{MATH}");
-    // A Math record `c` is a TRUE leader iff UF has NO non-self entry
-    // `UF(c, d, _)` with `c != d`. Stale self-loops persist in UF
-    // (self-loop init at record creation; later unions add a non-self
-    // entry without removing the self-loop), so `UF(c, c, _)` alone
-    // isn't a reliable "is c a leader" check — canonical projection
-    // would fire with stale leaders, producing canonical rows that
-    // default egglog's congruence-based merging would have collapsed.
-    //
-    // Emit a `NotLeader` relation and use `!NotLeader(c_l)` in canonical
-    // body to require true leaders.
-    let not_leader = "Eg_NotLeader_Math".to_string();
-    p.relations.push(RelationDecl {
-        name: not_leader.clone(),
-        columns: vec![("c".into(), MATH.into())],
-    });
-    p.clauses.push(Clause::rule(
-        Atom {
-            relation: not_leader.clone(),
-            args: vec![Expr::Var("__c".into())],
-        },
-        vec![
-            IrLit::Atom(Atom {
-                relation: uf_math.clone(),
-                args: vec![
-                    Expr::Var("__c".into()),
-                    Expr::Var("__d".into()),
-                    Expr::Wildcard,
-                ],
-            }),
-            IrLit::Constraint(
-                BinaryOp::Ne,
-                Expr::Var("__c".into()),
-                Expr::Var("__d".into()),
-            ),
-        ],
-    ));
     let view_names: Vec<String> = ctx.view_for_user.values().cloned().collect();
     for view in view_names {
         let Some(decl) = p.relations.iter().find(|r| r.name == view) else {
@@ -370,13 +334,9 @@ fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
                     relation: uf_math.clone(),
                     args: vec![
                         Expr::Var(leader.clone()),
-                        Expr::Var(leader.clone()),
+                        Expr::Var(leader),
                         Expr::Wildcard,
                     ],
-                }));
-                body.push(IrLit::Neg(Atom {
-                    relation: not_leader.clone(),
-                    args: vec![Expr::Var(leader)],
                 }));
             } else {
                 head_args.push(Expr::Var(format!("__c{i}")));
@@ -389,18 +349,14 @@ fn emit_canonical_views(ctx: &Ctx, p: &mut Program) {
             },
             body,
         ));
-        // Multi-column subsumption: for each non-empty subset of Math
-        // columns, emit a subsumption rule that fires when those
-        // columns are all UF-related to the dominating row's leader
-        // values (and the OTHER columns are identical). This handles
-        // multi-column congruence chains — e.g., when a Mul row has
-        // both c1 and c2 non-leader and the leader version of both
-        // exists in another row, subsume the stale row.
+        // Subsumption rules: one per non-empty subset of Math columns
+        // that differ. Each rule asserts inequality (`dx != dy`) for
+        // the math columns in the subset, ensuring souffle doesn't
+        // waste cycles on all-self-loop iterations.
         let math_indices: Vec<usize> = (0..cols.len())
             .filter(|&i| cols[i].1 == MATH)
             .collect();
         let n_math = math_indices.len();
-        // Iterate non-empty subsets via bitmask.
         for mask in 1u32..(1 << n_math) {
             let mut dom_args: Vec<Expr> = (0..cols.len())
                 .map(|i| Expr::Var(format!("__d{i}")))
@@ -518,17 +474,32 @@ fn emit_snapshot_directives(p: &mut Program) {
     if !uf_declared {
         return;
     }
+    // Emit a tiny "active" relation gated by UF non-emptiness. The
+    // snap-in-SCC rule below joins on `__active(0)` instead of doing
+    // a per-row UF self-loop check — much cheaper, and still creates
+    // the SCC cycle (snap → __active → UF_Math → ... → user-rule heads
+    // → snap).
+    let active_rel = "Eg_active_marker".to_string();
+    p.relations.push(RelationDecl {
+        name: active_rel.clone(),
+        columns: vec![("k".into(), "number".into())],
+    });
+    p.clauses.push(Clause::rule(
+        Atom {
+            relation: active_rel.clone(),
+            args: vec![Expr::Number(0)],
+        },
+        vec![IrLit::Atom(Atom {
+            relation: uf_math.clone(),
+            args: vec![Expr::Wildcard, Expr::Wildcard, Expr::Wildcard],
+        })],
+    ));
     for (snap, _) in &snap_pairs {
         let decl = match p.relations.iter().find(|r| &r.name == snap) {
             Some(d) => d.clone(),
             None => continue,
         };
         let cols = decl.columns.clone();
-        // Find the first Math column to gate on.
-        let math_idx = match cols.iter().position(|(_, ty)| ty == MATH) {
-            Some(i) => i,
-            None => continue,
-        };
         let last = cols.len() - 1;
         let body_args: Vec<Expr> = (0..cols.len())
             .map(|i| Expr::Var(format!("__snaploop_{i}")))
@@ -548,12 +519,8 @@ fn emit_snapshot_directives(p: &mut Program) {
                 args: body_args,
             }),
             IrLit::Atom(Atom {
-                relation: uf_math.clone(),
-                args: vec![
-                    Expr::Var(format!("__snaploop_{math_idx}")),
-                    Expr::Var(format!("__snaploop_{math_idx}")),
-                    Expr::Wildcard,
-                ],
+                relation: active_rel.clone(),
+                args: vec![Expr::Number(0)],
             }),
         ];
         p.clauses.push(Clause::rule(

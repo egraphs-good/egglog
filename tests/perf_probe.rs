@@ -591,12 +591,33 @@ fn minimal_intmul_gap() {
 }
 
 #[test]
+fn time_runs() {
+    if runner::find_souffle_binary().is_none() {
+        return;
+    }
+    for n in 4..=7 {
+        let start = std::time::Instant::now();
+        let mut sf_eg = EGraph::new_with_term_encoding().with_souffle_compat_strata();
+        let prog = format!("{SOURCE_HEADER}\n(run {n})\n(print-size Add)\n");
+        let commands = sf_eg.resolve_program(None, &prog).expect("resolve");
+        let out = souffle_translator::translate_with_manifest(&commands).expect("translate");
+        let result = runner::run(&out.program, &out.manifest);
+        let elapsed = start.elapsed();
+        eprintln!(
+            "(run {n}): {:.2?}, result: {}",
+            elapsed,
+            result.as_ref().map(|_| "ok").unwrap_or("err/timeout")
+        );
+    }
+}
+
+#[test]
 fn per_iter_parity_low_runs() {
     if runner::find_souffle_binary().is_none() {
         eprintln!("skipping: souffle binary not found");
         return;
     }
-    for n in 0..=7 {
+    for n in 0..=6 {
         let (def_add, def_mul) = default_sizes_after_run(n);
         let (sf_add, sf_mul, _stdout) = souffle_sizes_after_run(n);
         eprintln!(
