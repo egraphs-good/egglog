@@ -73,19 +73,11 @@ impl VScalar for UfFindScalar {
 ///   - `uf_function_index` — mirrors raw pname into the function-
 ///      form UF table; superseded by the native UF + UDF.
 fn is_uf_maintenance_ruleset(ruleset: &str) -> bool {
-    // We can safely skip uf_function_index and parent (path-compress)
-    // because the demoted UDF lookups go through the native UF.
-    // single_parent stays — even with displaced-count feeding
-    // `rules_affected` (so the saturate keeps iterating), skipping
-    // it gives the system a different convergence path that
-    // reaches a different fixpoint, presumably because it changes
-    // when congruence sees particular view rows. See the
-    // single_parent investigation notes — root cause TBD.
     matches!(
         ruleset
             .trim_end_matches(|c: char| c.is_ascii_digit())
             .trim_start_matches('@'),
-        "uf_function_index" | "parent"
+        "uf_function_index" | "parent" | "single_parent"
     )
 }
 
@@ -1062,11 +1054,37 @@ impl EGraph {
         // Body tables = distinct Atom::Func names. The watermark gate
         // reads this set to decide whether the rule has anything new
         // to look at on a given iteration.
+        //
+        // Native-UF substitution: when a body atom references a
+        // function with a registered native UF (e.g.
+        // `@_u_f___mathf`), the corresponding SQL table is no
+        // longer written to — rule actions go through the union
+        // UDF or land in the raw pname table. So its watermark
+        // never advances, and gating on it would permanently
+        // block the rule after its first run. We substitute pname
+        // (the raw UF, where union assertions land) so the gate
+        // tracks the table that actually receives writes. Caused
+        // a silent miss before this fix: rebuild rules would skip
+        // because the @UF_*f watermark stayed at 0 even as new
+        // unions accumulated in the native UF.
         let mut bt: Vec<String> = Vec::new();
         for atom in &rule.body {
             if let Atom::Func { name, .. } = atom {
-                if !bt.iter().any(|n| n == name) {
-                    bt.push(name.clone());
+                let effective = if let Some(info) = self.functions.get(name) {
+                    if info.native_uf_udf.is_some() {
+                        // Map @UF_<sort>f -> @UF_<sort> (pname).
+                        self.native_uf_pname
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| name.clone())
+                    } else {
+                        name.clone()
+                    }
+                } else {
+                    name.clone()
+                };
+                if !bt.iter().any(|n| n == &effective) {
+                    bt.push(effective);
                 }
             }
         }
@@ -1240,6 +1258,7 @@ impl EGraph {
             )?;
             self.last_run_at.insert(rule.name.clone(), cur);
         }
+        let _ = synced_displaced;
         Ok(total)
     }
 
