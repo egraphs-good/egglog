@@ -153,6 +153,7 @@ mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
 egglog-core-relations = { workspace = true }
 egglog-ast = { workspace = true }
+egglog-backend-trait = { workspace = true }
 egglog-bridge = { workspace = true }
 egglog-bridge-duckdb = { workspace = true }
 egglog-numeric-id = { workspace = true }

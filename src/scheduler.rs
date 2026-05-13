@@ -1,10 +1,8 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use core_relations::{ExecutionState, ExternalFunction, Value};
-use egglog_bridge::{
-    ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId, TableAction,
-};
+use core_relations::{ExternalFunction, Value};
+use egglog_bridge::{ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId};
 use egglog_reports::RunReport;
 use numeric_id::define_id;
 
@@ -101,24 +99,34 @@ impl Matches {
         self.all_chosen = true;
     }
 
-    /// Apply the chosen matches and return the residual matches.
-    fn instantiate(
-        mut self,
-        state: &mut ExecutionState<'_>,
-        table_action: &TableAction,
-    ) -> Vec<Value> {
+    /// Materialize the chosen matches as rows to insert into the decided
+    /// table, and return them along with the residual (unchosen) matches.
+    ///
+    /// Each emitted row is the match tuple plus a trailing `unit` value (the
+    /// decided table's relation-style output column).
+    ///
+    /// The caller is responsible for inserting `rows_to_insert` into the
+    /// decided table — typically via [`crate::EGraph::backend`]'s
+    /// `insert_rows`.
+    fn instantiate(mut self, unit: Value) -> (Vec<Vec<Value>>, Vec<Value>) {
         let tuple_len = self.tuple_len();
-        let unit = state.base_values().get(());
+        let mut rows_to_insert: Vec<Vec<Value>> = Vec::new();
 
         if self.all_chosen {
             for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                let mut out = Vec::with_capacity(row.len() + 1);
+                out.extend_from_slice(row);
+                out.push(unit);
+                rows_to_insert.push(out);
             }
-            vec![]
+            (rows_to_insert, vec![])
         } else {
             for idx in self.chosen.iter() {
                 let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                let mut out = Vec::with_capacity(row.len() + 1);
+                out.extend_from_slice(row);
+                out.push(unit);
+                rows_to_insert.push(out);
             }
 
             // swap remove the chosen matches
@@ -139,7 +147,7 @@ impl Matches {
             }
             self.matches.truncate(p * tuple_len);
 
-            self.matches
+            (rows_to_insert, self.matches)
         }
     }
 }
@@ -221,22 +229,26 @@ impl EGraph {
             .run_rules(&query_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        // Step 3: let the scheduler decide which matches need to be kept
-        self.backend.with_execution_state(|state| {
-            for (rule_id, _rule) in rules.iter() {
-                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+        // Step 3: let the scheduler decide which matches need to be kept.
+        // The bulk per-rule insertion that used to happen inside a single
+        // `with_execution_state` is now expressed as repeated
+        // `Backend::insert_rows` calls; the scheduler's `instantiate` no
+        // longer touches the execution state.
+        let unit = self.backend.base_values().get(());
+        for (rule_id, _rule) in rules.iter() {
+            let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
-                let matches: Vec<Value> =
-                    std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                rule_info.should_seek =
-                    record
-                        .scheduler
-                        .filter_matches(rule_id, ruleset, &mut matches);
-                let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
-            }
-        });
+            let matches: Vec<Value> =
+                std::mem::take(rule_info.matches.lock().unwrap().as_mut());
+            let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+            rule_info.should_seek =
+                record
+                    .scheduler
+                    .filter_matches(rule_id, ruleset, &mut matches);
+            let (rows_to_insert, residual) = matches.instantiate(unit);
+            self.backend.insert_rows(rule_info.decided, &rows_to_insert);
+            *rule_info.matches.lock().unwrap() = residual;
+        }
         self.backend.flush_updates();
 
         // Step 4: run the action rules

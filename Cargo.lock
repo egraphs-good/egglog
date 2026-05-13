@@ -945,6 +945,7 @@ dependencies = [
  "dyn-clone",
  "egglog-add-primitive",
  "egglog-ast",
+ "egglog-backend-trait",
  "egglog-bridge",
  "egglog-bridge-duckdb",
  "egglog-core-relations",

@@ -51,6 +51,7 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
+use egglog_backend_trait::Backend;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
@@ -1605,22 +1606,11 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
-
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    table_action.insert(es, row.iter().copied());
-                }
-                Some(unit_val)
-            });
+            self.backend.insert_rows(func.backend_id, &parsed_contents);
         } else {
-            self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    table_action.lookup(es, row);
-                }
-                Some(unit_val)
-            });
+            self.backend
+                .lookup_constructor_rows(func.backend_id, &parsed_contents);
         }
 
         self.backend.flush_updates();
@@ -1926,9 +1916,16 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.with_execution_state(|state| {
-            self.backend.container_values().register_val::<T>(x, state)
-        })
+        // The bridge's `get_container_value` already wraps the
+        // `with_execution_state` + `register_val::<T>` sequence (it also
+        // idempotently registers the type). Since
+        // `container_register_val<C>` on the trait routes through
+        // `register_val_dyn`, which is `unimplemented!()` on the bridge under
+        // the current Phase 2 state, we call the bridge's concrete method
+        // directly here. When `EGraph::backend` becomes `Box<dyn Backend>`
+        // in Commit 8, this site will need a typed container-registration
+        // path on the trait.
+        self.backend.get_container_value::<T>(x)
     }
 
     /// Get the size of a function in the e-graph.
