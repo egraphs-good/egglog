@@ -370,8 +370,20 @@ impl DuckdbBackend {
                 // input with distinct IDs are allowed; the
                 // congruence + rebuild rules emitted by term
                 // encoding unify them later.
+                // Look up the pname (raw UF table) associated with
+                // this constructor's output sort. The term encoder
+                // installs the mapping in `proof_state.uf_parent`
+                // when it emits the per-sort UF declaration. With it,
+                // the bridge can emit an inline-congruence INSERT at
+                // end-of-iter and skip `@congruence_rule*` rules.
+                let pname = self
+                    .typechecker
+                    .proof_state
+                    .uf_parent
+                    .get(output_sort)
+                    .cloned();
                 self.db
-                    .add_eq_sort_constructor(&decl.name, &inputs)
+                    .add_eq_sort_constructor(&decl.name, &inputs, pname.as_deref())
                     .map_err(DuckdbBackendError::Backend)?;
                 // is_relation = false so body atoms `(Add a b)` add
                 // a wildcard for the ID column to match the table
@@ -395,8 +407,21 @@ impl DuckdbBackend {
         }
 
         if as_relation {
+            // For a view relation emitted by term encoding (decl
+            // has `:internal-term-constructor T`), the last column
+            // is the canonical-term ID of sort `output_of(T)`. The
+            // sort name is the last entry of `schema.input` (since
+            // the view's inputs are `T`'s inputs ++ `T`'s output
+            // sort). Pass the matching pname so inline-congruence
+            // fires for this view.
+            let view_pname: Option<String> = decl.term_constructor.as_deref().and_then(|_| {
+                decl.schema
+                    .input
+                    .last()
+                    .and_then(|s| self.typechecker.proof_state.uf_parent.get(s.as_str()).cloned())
+            });
             self.db
-                .add_relation(&decl.name, &inputs)
+                .add_relation_with_pname(&decl.name, &inputs, view_pname.as_deref())
                 .map_err(DuckdbBackendError::Backend)?;
             self.is_relation.insert(decl.name.clone(), true);
         } else {

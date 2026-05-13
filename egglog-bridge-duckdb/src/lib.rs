@@ -81,6 +81,31 @@ fn is_uf_maintenance_ruleset(ruleset: &str) -> bool {
     )
 }
 
+/// Term encoding emits a `congruence_rule<N>` per EqSort constructor
+/// that self-joins the constructor's view to find same-input/different-
+/// id pairs and unions them. The backend can do the same work in one
+/// SQL statement at the end of each iteration — see
+/// `emit_inline_congruence` — so under `--duck-native-uf` we skip the
+/// encoding-emitted rule entirely.
+fn is_congruence_rule_name(rule_name: &str) -> bool {
+    rule_name
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_start_matches('@')
+        == "congruence_rule"
+}
+
+/// Term-encoded rebuild lives in a ruleset named `rebuilding<N>`
+/// (the `<N>` is a `symbol_gen.fresh` suffix). The runner uses this
+/// to know when an iteration just finished rebuilding — that's when
+/// inline-congruence can profitably scan for new dupes created by
+/// the rebuild rule's canonicalizing INSERTs.
+fn is_rebuilding_ruleset(ruleset: &str) -> bool {
+    ruleset
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_start_matches('@')
+        == "rebuilding"
+}
+
 /// Sanitize a function name for use as a DuckDB UDF identifier.
 /// Same scheme as the temp-table naming: `@` → empty, `_` doubled,
 /// non-alnum → `_`.
@@ -451,6 +476,14 @@ pub struct FunctionInfo {
     /// The rule compiler demotes body atoms against this function
     /// to scalar UDF calls instead of joining the SQL table.
     pub native_uf_udf: Option<String>,
+    /// For an EqSort constructor under `--duck-native-uf`, the name
+    /// of the raw UF (`pname`) table that union assertions land in.
+    /// When set, the runner emits an *inline congruence* SQL at the
+    /// end of each iteration: pairs of rows with matching inputs but
+    /// different IDs are read out of this view and pushed into pname
+    /// as `(max, min)` union assertions. Replaces the
+    /// `@congruence_rule*` rules emitted by term encoding.
+    pub eq_sort_pname: Option<String>,
 }
 
 impl FunctionInfo {
@@ -529,6 +562,14 @@ pub struct EGraph {
     /// pulled into the in-memory union-find. The sync scan reads
     /// only rows newer than this on each iteration.
     last_uf_sync_ts: HashMap<String, i64>,
+    /// Per eq-sort view, the `ts` through which inline-congruence
+    /// has already scanned. Inline-cong's "new" side restricts to
+    /// rows with `ts >= last_inline_cong_at AND ts < cur`, matching
+    /// the seminaive triangulation that `@congruence_rule` did in
+    /// the encoding. Without this, pairs that come from top-level
+    /// `insert_terms` (which never line up with any `cur`) get
+    /// silently skipped.
+    last_inline_cong_at: HashMap<String, i64>,
     /// Diagnostic counter: total rows pulled into native UFs across
     /// all syncs. Surfaced via `DUCK_PERF_DUMP` (under the native-uf
     /// flag) so we can see the work the SQL → memory bridge is
@@ -625,6 +666,7 @@ impl EGraph {
             native_ufs: HashMap::new(),
             native_uf_pname: HashMap::new(),
             last_uf_sync_ts: HashMap::new(),
+            last_inline_cong_at: HashMap::new(),
             native_uf_unions_synced: 0,
         })
     }
@@ -892,6 +934,30 @@ impl EGraph {
     /// Register a relation (no output column). Inserts use
     /// `ON CONFLICT DO NOTHING` — duplicates are silently dropped.
     pub fn add_relation(&mut self, name: &str, inputs: &[ColumnTy]) -> Result<()> {
+        self.add_relation_with_pname(name, inputs, None)
+    }
+
+    /// Like `add_relation` but tags the relation with a pname for
+    /// inline-congruence. Used by the DuckDB frontend for the
+    /// `@_X_view` relations emitted by term encoding: the view is a
+    /// `(inputs…, id)` relation that stores canonical e-nodes, and
+    /// same-input/different-id rows must be unified through the
+    /// associated pname. When `pname` is `Some(_)` and the runner is
+    /// in `--duck-native-uf` mode, the equivalent of
+    /// `@congruence_rule<N>` runs as an end-of-iter SQL.
+    pub fn add_relation_with_pname(
+        &mut self,
+        name: &str,
+        inputs: &[ColumnTy],
+        pname: Option<&str>,
+    ) -> Result<()> {
+        let pname_resolved = pname.and_then(|p| {
+            if self.functions.contains_key(p) {
+                Some(p.to_string())
+            } else {
+                None
+            }
+        });
         self.declare(
             name,
             FunctionInfo {
@@ -900,6 +966,7 @@ impl EGraph {
                 merge: None,
                 eq_sort_ctor: false,
                 native_uf_udf: None,
+                eq_sort_pname: pname_resolved,
             },
         )
     }
@@ -924,6 +991,7 @@ impl EGraph {
                 merge: Some(merge),
                 eq_sort_ctor: false,
                 native_uf_udf: None,
+                eq_sort_pname: None,
             },
         )
     }
@@ -939,9 +1007,22 @@ impl EGraph {
         &mut self,
         name: &str,
         inputs: &[ColumnTy],
+        pname: Option<&str>,
     ) -> Result<()> {
         let mut cols = inputs.to_vec();
         cols.push(ColumnTy::I64); // the EqSort ID column
+        // The pname must already be declared so the runner can emit
+        // the inline-congruence INSERT against a real table. If the
+        // caller passes a name we haven't seen, we can't honor the
+        // optimization safely — drop it back to None and let the
+        // term encoding's `@congruence_rule*` handle congruence.
+        let pname_resolved = pname.and_then(|p| {
+            if self.functions.contains_key(p) {
+                Some(p.to_string())
+            } else {
+                None
+            }
+        });
         self.declare(
             name,
             FunctionInfo {
@@ -950,6 +1031,7 @@ impl EGraph {
                 merge: None,
                 eq_sort_ctor: true,
                 native_uf_udf: None,
+                eq_sort_pname: pname_resolved,
             },
         )?;
         Ok(())
@@ -1242,6 +1324,14 @@ impl EGraph {
             if skip_uf_maintenance && is_uf_maintenance_ruleset(&rule.ruleset) {
                 continue;
             }
+            // Inline-congruence backend optimization: under native
+            // UF, the runner emits the equivalent SQL after every
+            // iter via `emit_inline_congruence`. The encoding's
+            // `congruence_rule<N>` would do the same work, so skip
+            // it to avoid duplicate scans.
+            if skip_uf_maintenance && is_congruence_rule_name(&rule.name) {
+                continue;
+            }
             let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
             total += run_rule_variants(
                 rule,
@@ -1258,7 +1348,126 @@ impl EGraph {
             )?;
             self.last_run_at.insert(rule.name.clone(), cur);
         }
+        // After rules fire, run the inline-congruence pass over
+        // every EqSort constructor table that received new rows
+        // this iteration. The encoding's `@congruence_rule*` rules
+        // are skipped above; this is where their work lands instead.
+        //
+        // Only fire on rulesets that can produce new view rows: the
+        // user's iter (`ruleset = None`) and `@rebuilding` (where
+        // the rebuild rule canonicalizes view rows). Other rulesets
+        // (cleanup, single_parent, parent, uf_function_index) only
+        // delete or push to pname, never insert into views, so the
+        // emit would scan empty `v1` sets repeatedly.
+        let should_emit_cong = self.native_uf_enabled
+            && (ruleset.is_none() || ruleset.is_some_and(is_rebuilding_ruleset));
+        if should_emit_cong {
+            total += self.emit_inline_congruence(cur)?;
+        }
         let _ = synced_displaced;
+        Ok(total)
+    }
+
+    /// For each EqSort constructor with a registered pname whose
+    /// table watermark advanced this iter, INSERT into the pname any
+    /// same-input/different-id pair as a `(max, min, cur)` union
+    /// assertion. Returns the total rows inserted across all tables.
+    ///
+    /// Semantics match the term encoding's `@congruence_rule<N>`
+    /// scanning new view rows against the current view, with
+    /// `ON CONFLICT DO NOTHING` to dedupe pairs that two
+    /// `v1`/`v2` orderings would otherwise emit twice.
+    fn emit_inline_congruence(&mut self, cur: i64) -> Result<usize> {
+        let mut total: usize = 0;
+        // Snapshot the eligible (view, pname, inputs_len) triples so
+        // we don't hold a borrow on `self.functions` during execute.
+        // A function is eligible iff it has a pname registered and
+        // can hold same-input/different-id rows (i.e. it has an ID
+        // column). For both `eq_sort_ctor` and view relations the ID
+        // is the last column.
+        let entries: Vec<(String, String, usize)> = self
+            .functions
+            .iter()
+            .filter_map(|(name, info)| {
+                let pname = info.eq_sort_pname.clone()?;
+                if info.cols.len() < 2 {
+                    return None;
+                }
+                // For eq_sort_ctor (term tables) `inputs_len` is the
+                // input arity; the ID is at index `inputs_len`. For
+                // view relations there is no separate output column —
+                // all `cols` are part of the row; the ID sits at the
+                // last position by convention (term encoding emits
+                // views shaped as `(inputs…, id)`).
+                let inputs_len = if info.eq_sort_ctor {
+                    info.inputs_len
+                } else {
+                    info.cols.len() - 1
+                };
+                if inputs_len == 0 {
+                    return None;
+                }
+                // Skip if no inserts since the last inline-cong scan.
+                // `wm` is the max-ever `ts` of any insert into this
+                // view; `last_at` is the upper end of the previous
+                // scan window. If `wm < last_at` the scan range is
+                // guaranteed empty. (Note: NOT `wm < cur` — the
+                // view's last write might be from a few iters ago and
+                // we'd still want to pick up pairs that involve it
+                // until they've been scanned.)
+                let wm = self.table_watermarks.get(name).copied().unwrap_or(0);
+                let last_at = self
+                    .last_inline_cong_at
+                    .get(name)
+                    .copied()
+                    .unwrap_or(0);
+                if wm < last_at {
+                    return None;
+                }
+                Some((name.clone(), pname, inputs_len))
+            })
+            .collect();
+        for (view, pname, inputs_len) in entries {
+            let id_col = inputs_len; // ID is at index `inputs_len`.
+            let join_preds: Vec<String> = (0..inputs_len)
+                .map(|i| format!("v1.c{i} = v2.c{i}"))
+                .collect();
+            // Seminaive triangulation: `v1` is the "new since last
+            // scan" side (`ts >= last_inline_cong_at`); `v2` covers
+            // everything earlier-or-equal (`ts < cur`, since the
+            // current iter's rows are accounted for via `v1`). The
+            // pair (v1=old, v2=new) is the same pair as (v1=new,
+            // v2=old) with the two halves swapped, so we don't need
+            // to emit a second branch — `ON CONFLICT DO NOTHING` on
+            // pname dedupes if v1 and v2 are both new.
+            let last_at = self
+                .last_inline_cong_at
+                .get(&view)
+                .copied()
+                .unwrap_or(0);
+            let sql = format!(
+                "INSERT INTO {} (c0, c1, ts) \
+                 SELECT GREATEST(v1.c{id_col}, v2.c{id_col}), \
+                        LEAST(v1.c{id_col}, v2.c{id_col}), \
+                        ?2 \
+                 FROM {} v1, {} v2 \
+                 WHERE v1.ts >= ?1 AND v1.ts < ?2 AND v2.ts < ?2 \
+                   AND v1.c{id_col} <> v2.c{id_col} \
+                   AND {} \
+                 ON CONFLICT DO NOTHING",
+                q(&pname),
+                q(&view),
+                q(&view),
+                join_preds.join(" AND "),
+            );
+            let n = exec_bound(&self.conn, &sql, last_at, cur)?;
+            if n > 0 {
+                self.rules_affected = self.rules_affected.wrapping_add(n as u64);
+                self.bump_watermark(&pname, cur);
+                total += n;
+            }
+            self.last_inline_cong_at.insert(view, cur);
+        }
         Ok(total)
     }
 
