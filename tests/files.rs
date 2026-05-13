@@ -454,64 +454,20 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         // regression guard for our optimizations against proof
         // mode's code paths.
         //
-        // The files in `DUCKDB_PROOFS_KNOWN_GAP` all trip a single
-        // remaining backend gap: the proof encoder writes a
-        // congruence union as `(set (pname l s)
-        // (Trans p1 (Sym p2)))`, which the rule compiler lowers to
-        // `INSERT INTO pname (... , c2, ts) SELECT ..., (SELECT c2
-        // FROM @_trans WHERE c0=p1 AND c1=...) , ?2 FROM body`. That
-        // subquery is a *lookup* — it expects the `Trans` term to
-        // already exist. Term-mode without proofs doesn't hit this
-        // because the proof column is just `()`. With proofs the
-        // encoder relies on rule actions to allocate the proof term
-        // on demand (hash-cons inside `Call` expression position),
-        // which `term_sql` doesn't do today. mm is here for the
-        // same reason. Closing this gap is a separate refactor of
-        // `compile::term_sql`'s `FuncCall` branch — it would need to
-        // emit a `LEFT JOIN allocate_or_lookup` instead of a bare
-        // `SELECT … LIMIT 1`.
-        const DUCKDB_PROOFS_KNOWN_GAP: &[&str] = &[
-            "math-microbenchmark.egg",
-            "eqsolve.egg",
-            "eqsat-basic.egg",
-            "unify.egg",
-            "antiunify.egg",
-            "matrix.egg",
-            "naturals.egg",
-            "rw-analysis.egg",
-            "typecheck.egg",
-            "points-to.egg",
-            "combinators.egg",
-            "resolution.egg",
-            "path-union.egg",
-            "unification-points-to.egg",
-            "fibonacci-demand.egg",
-            "complex-merge-func.egg",
-            "proof-extract-cost.egg",
-            "internal_let.egg",
-            "repro-define.egg",
-            "integer_math.egg",
-            "rectangle.egg",
-            "repro-querybug2.egg",
-            "repro-querybug4.egg",
-            "repro-querybug.egg",
-            "repro-silly-panic.egg",
-            "repro-filter-bug.egg",
-            "subsume-relation.egg",
-            "intersection.egg",
-            "repro-typecheck-term-encoding.egg",
-            "until.egg",
-            "subsume.egg",
-            "birewrite.egg",
-            "calc.egg",
-            "name-resolution.egg",
-            "merge-during-rebuild.egg",
-            "push-pop.egg",
-        ];
-        let duckdb_proofs_supported = !should_fail
+        // Mirror the plain-duckdb skips: `(push)/(pop)` aren't a
+        // duckdb feature, so files relying on them would diverge
+        // from the shared snapshot just because every run gets
+        // appended onto the previous run's state.
+        let mut duckdb_proofs_supported = !should_fail
             && !requires_proofs
-            && file_supports_proofs(&run.path)
-            && !DUCKDB_PROOFS_KNOWN_GAP.iter().any(|f| run.path.ends_with(f));
+            && file_supports_proofs(&run.path);
+        if duckdb_proofs_supported {
+            if let Ok(src) = std::fs::read_to_string(&run.path) {
+                if src.contains("(push") || src.contains("(pop") {
+                    duckdb_proofs_supported = false;
+                }
+            }
+        }
         if duckdb_proofs_supported {
             push_trial(Run {
                 duckdb: true,

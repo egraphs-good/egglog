@@ -96,10 +96,130 @@ fn compute_native_uf_demote(
     demote
 }
 
+/// Lift inline `Term::FuncCall`s that target an EqSort constructor
+/// (or its term-encoded view) into explicit `LetCtor` actions, so
+/// the existing hash-cons machinery in the materialized path can
+/// allocate-or-reuse an ID for them instead of doing a bare lookup.
+///
+/// Term encoding's proof mode is the only thing that currently emits
+/// nested calls here — e.g. the congruence rule's
+/// `(set (pname l s) (Trans p1 (Sym p2)))`. Without this lift the
+/// nested `(Trans …)` and `(Sym …)` compile to scalar subqueries
+/// against `@_trans` / `@_sym`, which return NULL when the proof
+/// term has never been constructed; the NULL then hits the
+/// `NOT NULL` constraint on `pname.c2`. After lifting, each nested
+/// call becomes a fresh `LetCtor` that the materialized path knows
+/// how to hash-cons-or-allocate.
+///
+/// Only Calls whose target is `eq_sort_ctor` get lifted: regular
+/// functions still resolve via a lookup, which is what the encoder
+/// expects for them.
+fn lift_nested_eq_sort_calls(
+    rule: &Rule,
+    functions: &HashMap<String, FunctionInfo>,
+) -> Rule {
+    let mut counter: usize = 0;
+    let mut new_actions: Vec<Action> = Vec::with_capacity(rule.actions.len());
+    for action in &rule.actions {
+        let mut lifted = action.clone();
+        match &mut lifted {
+            Action::Insert { args, .. } | Action::Delete { key_args: args, .. } => {
+                let new_args = args
+                    .iter()
+                    .cloned()
+                    .map(|t| lift_term(t, &rule.name, &mut counter, &mut new_actions, functions))
+                    .collect();
+                *args = new_args;
+            }
+            Action::LetCtor { args, .. } => {
+                let new_args = args
+                    .iter()
+                    .cloned()
+                    .map(|t| lift_term(t, &rule.name, &mut counter, &mut new_actions, functions))
+                    .collect();
+                *args = new_args;
+            }
+            Action::LetExpr { expr, .. } => {
+                *expr = lift_term(
+                    expr.clone(),
+                    &rule.name,
+                    &mut counter,
+                    &mut new_actions,
+                    functions,
+                );
+            }
+            Action::Panic { .. } => {}
+        }
+        new_actions.push(lifted);
+    }
+    Rule {
+        name: rule.name.clone(),
+        ruleset: rule.ruleset.clone(),
+        body: rule.body.clone(),
+        actions: new_actions,
+    }
+}
+
+/// Recursively lift FuncCalls in `term`. Lifted calls become
+/// `LetCtor` actions pushed to `out` in dependency order (innermost
+/// first, outermost last), and the call site is replaced with a
+/// `Var` reference to the lifted name. Calls whose target is *not*
+/// an `eq_sort_ctor` are left in place — they read existing
+/// function rows.
+fn lift_term(
+    term: Term,
+    rule_name: &str,
+    counter: &mut usize,
+    out: &mut Vec<Action>,
+    functions: &HashMap<String, FunctionInfo>,
+) -> Term {
+    match term {
+        Term::FuncCall { name, args } => {
+            let lifted_args: Vec<Term> = args
+                .into_iter()
+                .map(|a| lift_term(a, rule_name, counter, out, functions))
+                .collect();
+            let is_eq_sort_ctor = functions
+                .get(&name)
+                .map(|i| i.eq_sort_ctor)
+                .unwrap_or(false);
+            if is_eq_sort_ctor {
+                let var = format!("__lifted_{rule_name}_{}", *counter);
+                *counter += 1;
+                out.push(Action::LetCtor {
+                    var: var.clone(),
+                    name,
+                    args: lifted_args,
+                });
+                Term::Var(var)
+            } else {
+                Term::FuncCall {
+                    name,
+                    args: lifted_args,
+                }
+            }
+        }
+        Term::Prim(op, args) => {
+            let lifted_args: Vec<Term> = args
+                .into_iter()
+                .map(|a| lift_term(a, rule_name, counter, out, functions))
+                .collect();
+            Term::Prim(op, lifted_args)
+        }
+        other => other,
+    }
+}
+
 pub(crate) fn compile_rule(
     rule: &Rule,
     functions: &HashMap<String, FunctionInfo>,
 ) -> Result<CompiledRule> {
+    // Rewrite the rule before validation/compilation so any nested
+    // eq-sort constructor calls in action positions become explicit
+    // `LetCtor`s (hash-cons-or-allocate). See
+    // `lift_nested_eq_sort_calls` for why.
+    let rule_owned = lift_nested_eq_sort_calls(rule, functions);
+    let rule = &rule_owned;
     // Validate function-table atoms.
     for atom in &rule.body {
         if let Atom::Func { name, args } = atom {
