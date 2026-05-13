@@ -2,7 +2,7 @@ import { convertToTable } from "./table.js";
 
 const STATE = {
   activeSuite: null,
-  timeDisplay: "raw",
+  timeDisplay: "readable",
 };
 
 const GLOBAL_DATA = {
