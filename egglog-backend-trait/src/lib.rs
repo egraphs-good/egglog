@@ -241,8 +241,15 @@ pub trait Backend: Send + Sync {
     ///
     /// Wraps `egglog_bridge::EGraph::for_each`.
     ///
-    /// Default impl delegates to [`Backend::for_each_while`].
-    fn for_each<'a>(&'a self, table: FunctionId, f: &mut dyn FnMut(FunctionRow<'a>)) {
+    /// The closure's `FunctionRow` is borrowed from a transient per-call
+    /// buffer (a `TaggedRowBuffer` in the bridge; a row cursor in DuckDB).
+    /// The HRTB lifetime `for<'r>` reflects that the row reference is
+    /// scoped to the closure invocation, not the outer `&self` borrow.
+    fn for_each(
+        &self,
+        table: FunctionId,
+        f: &mut dyn for<'r> FnMut(FunctionRow<'r>),
+    ) {
         // The default implementation cannot be written here without a wrapper
         // because the closure types differ. Implementations should override
         // this to avoid the boolean threading overhead; the no-default
@@ -258,10 +265,12 @@ pub trait Backend: Send + Sync {
     /// Iterate over rows in `table`, stopping early when `f` returns `false`.
     ///
     /// Wraps `egglog_bridge::EGraph::for_each_while`.
-    fn for_each_while<'a>(
-        &'a self,
+    ///
+    /// See [`Backend::for_each`] for why the closure uses an HRTB.
+    fn for_each_while(
+        &self,
         table: FunctionId,
-        f: &mut dyn FnMut(FunctionRow<'a>) -> bool,
+        f: &mut dyn for<'r> FnMut(FunctionRow<'r>) -> bool,
     );
 
     // -- direct access ------------------------------------------------------

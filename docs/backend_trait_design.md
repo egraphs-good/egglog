@@ -77,8 +77,8 @@ method. DuckDB-side notes are in the `notes` column.
 | `add_table(FunctionConfig) -> FunctionId` | `EGraph::add_table` | DuckDB: maps to `add_function` / `add_relation` / `add_eq_sort_constructor`; errors on `MergeFn::Function` / `MergeFn::Primitive` (gated by `supports_complex_merge`). |
 | `table_size(FunctionId) -> usize` | `EGraph::table_size` | DuckDB: `db.count`. |
 | `approx_table_size(FunctionId) -> usize` | `EGraph::approx_table_size` | DuckDB: same as `table_size` (estimate not needed). |
-| `for_each(FunctionId, &mut dyn FnMut(FunctionRow))` | `EGraph::for_each` | DuckDB: cursor over `SELECT * FROM <table>`. |
-| `for_each_while(FunctionId, &mut dyn FnMut(FunctionRow) -> bool)` | `EGraph::for_each_while` | DuckDB: same cursor, break on false. Per-row buffer carries `vals: &[Value]` borrowed from a scratch slot inside the impl. |
+| `for_each(FunctionId, &mut dyn for<'r> FnMut(FunctionRow<'r>))` | `EGraph::for_each` | DuckDB: cursor over `SELECT * FROM <table>`. The HRTB lifetime on the closure is required because the bridge borrows each row from a transient `TaggedRowBuffer`; the per-iteration borrow is not tied to `&self`. |
+| `for_each_while(FunctionId, &mut dyn for<'r> FnMut(FunctionRow<'r>) -> bool)` | `EGraph::for_each_while` | DuckDB: same cursor, break on false. Per-row buffer carries `vals: &[Value]` borrowed from a scratch slot inside the impl. |
 | `lookup_id(FunctionId, &[Value]) -> Option<Value>` | `EGraph::lookup_id` | DuckDB: `SELECT cN FROM t WHERE c0=… LIMIT 1`. |
 | `add_values(Box<dyn Iterator<...>>)` | `EGraph::add_values` | DuckDB: multi-row `INSERT … VALUES`. |
 | `add_term(FunctionId, &[Value]) -> Value` | `EGraph::add_term` | DuckDB: `INSERT … RETURNING` against the term table. |
@@ -267,25 +267,35 @@ check already excludes every container-using program from DuckDB combos,
 so these error paths are programmer-error guards rather than routine code
 paths.
 
-## Type re-exports
+## Type re-exports / origins
 
-The trait crate re-exports the existing types rather than redefining
-them:
+As of Phase 2 Commit 3, the basic id and config types live in
+`egglog-backend-trait`; `egglog-bridge` depends on the trait crate and
+re-exports them. The other types live in their neutral lower-level
+homes and are re-exported through the trait crate for caller convenience:
 
-| Re-exported | From |
-|---|---|
-| `FunctionId`, `RuleId`, `ColumnTy`, `QueryEntry`, `MergeFn`, `DefaultVal`, `FunctionConfig`, `FunctionRow` | `egglog-bridge` |
-| `Value`, `BaseValueId`, `ContainerValueId`, `BaseValue`, `ContainerValue`, `ExecutionState`, `ExternalFunction`, `ExternalFunctionId` | `egglog-core-relations` |
-| `IterationReport`, `ReportLevel` | `egglog-reports` |
+| Type | Defined in | Re-exported from `egglog-backend-trait`? |
+|---|---|---|
+| `FunctionId`, `RuleId`, `ColumnTy`, `QueryEntry`, `Variable`, `VariableId`, `MergeFn`, `DefaultVal`, `FunctionConfig`, `FunctionRow` | `egglog-backend-trait` (as of C3) | (origin) |
+| `Value`, `BaseValueId`, `ContainerValueId`, `BaseValue`, `ContainerValue`, `ExecutionState`, `ExternalFunction`, `ExternalFunctionId` | `egglog-core-relations` | yes (`pub use`) |
+| `IterationReport`, `ReportLevel` | `egglog-reports` | yes (`pub use`) |
 
 Callers will normally
 `use egglog_backend_trait::{Backend, FunctionId, Value, ...}` and never
-need to import from the underlying crates directly.
+need to import from the underlying crates directly. Existing callers
+that imported from `egglog_bridge::{FunctionId, ColumnTy, …}` continue
+to compile because `egglog-bridge` keeps a matching set of `pub use`
+re-exports.
 
-After Phase 2, the dep direction flips: `egglog-bridge` will depend on
-`egglog-backend-trait` to import the trait, and the type definitions
-will be `pub use egglog_backend_trait::{FunctionId, …}`. That dep-flip
-is a Phase 2 commit; Phase 1 keeps `egglog-bridge` as the origin.
+### Bridge-only methods on the moved types
+
+Before C3, `MergeFn` had an inherent `impl` block in `egglog-bridge`
+(`fill_deps`, `to_callback`, `resolve`) that referenced bridge-internal
+state (`EGraph`, `TableId`, `core_relations::MergeFn`). Inherent impls
+can only be defined in the crate that owns the type, so these methods
+became private free functions in `egglog-bridge` (`merge_fn_fill_deps`,
+`merge_fn_to_callback`, `merge_fn_resolve`). Likewise `VariableId::to_var`
+became the private free function `id_to_var` in `egglog-bridge/src/rule.rs`.
 
 ## How `TableAction` and `UnionAction` are handled
 
@@ -405,6 +415,40 @@ compile and test.
    `EGraph::default()` constructs `Box::new(egglog_bridge::EGraph::default())`
    directly, and `EGraph::with_duckdb()` is parallel. No need for a
    factory trait in v1.
+
+## Trait-signature adjustments made during Phase 2 implementation
+
+These are changes made after Phase 1 shipped that the design above has
+already been updated to reflect; they're recorded here for traceability.
+
+1. **`for_each` / `for_each_while` use an HRTB on the row lifetime**
+   (changed in Commit 4). The original Phase 1 signature was
+   `fn for_each<'a>(&'a self, table, &mut dyn FnMut(FunctionRow<'a>))`,
+   tying the row borrow to `&self`. In practice the bridge borrows each
+   `FunctionRow` from a per-call `TaggedRowBuffer` whose lifetime is
+   strictly shorter than `&self`. The correct shape is
+   `&mut dyn for<'r> FnMut(FunctionRow<'r>)`. The DuckDB impl will need
+   the same shape (rows come from a per-row scratch buffer).
+
+2. **`BaseValuePool::register_type_dyn` / `intern_dyn` / `unwrap_dyn`,
+   and `ContainerPool::register_val_dyn` / `get_dyn` / `for_each_dyn`,
+   are `unimplemented!()` in the bridge** (Commit 4). They cannot be
+   implemented through a pure `TypeId` API because the underlying
+   `BaseValues::register_type<P>` / `ContainerValues::register_val<C>`
+   are generic over `P: BaseValue` / `C: ContainerValue` and need the
+   typed factory at compile time. For now the frontend continues to use
+   the concrete `EGraph::base_values_mut().register_type::<T>()` API
+   directly. A future commit (slotted between Commit 7 and Commit 8)
+   will either:
+
+   - extend `egglog-core-relations::BaseValues` / `ContainerValues` with
+     a typed dyn dispatch table (e.g. an extension trait on
+     `DynamicInternTable` exposing `intern_dyn` / `unwrap_dyn`), so the
+     bridge wrapper can forward to it; or
+   - move `BaseValuePool` / `ContainerPool` registration off the trait
+     and onto a separate setup-time API.
+
+   Tracked as an open issue for Commit 6/7 (see report).
 
 ## What gets built in Phase 2
 
