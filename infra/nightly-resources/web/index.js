@@ -142,15 +142,22 @@ function renderTable() {
 
   const rows = benchmarks.map((b) => ({
     Benchmark: b.benchmark_name,
-    "Wall Time": displayTime(b.wall_time_micros),
-    Rules: displayTime(b.report.rule_micros),
-    Extraction: displayTime(b.report.extraction_micros),
-    Other: displayTime(b.report.other_micros),
+    "Wall Time": b.wall_time_micros,
+    Rules: b.report.rule_micros,
+    Extraction: b.report.extraction_micros,
+    Other: b.report.other_micros,
   }));
+
+  const displayFns = {
+    "Wall Time": displayTime,
+    Rules: displayTime,
+    Extraction: displayTime,
+    Other: displayTime,
+  };
 
   const tableDiv = document.querySelector("#active-suite-table");
   tableDiv.innerHTML = "";
-  tableDiv.appendChild(convertToTable(columns, rows));
+  tableDiv.appendChild(convertToTable(columns, rows, displayFns));
 }
 
 function render() {

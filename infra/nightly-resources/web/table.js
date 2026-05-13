@@ -14,10 +14,15 @@
  * Extra values are ignored. Missing values are displayed as `-` in the table
  * If empty, a table with only the header row will be returned
  *
+ * @param {Object} [displayFns]
+ * Optional map from column name -> formatter function (rawValue) => string.
+ * Sorting still uses the raw value from `rows`; rendering uses the formatted
+ * string. Columns not listed are rendered as-is.
+ *
  * @return An HTML <table> DOM element
  * Sortable by column, defaults to sorted by first column
  */
-export function convertToTable(columns, rows) {
+export function convertToTable(columns, rows, displayFns = {}) {
   const table = document.createElement("table");
 
   const STATE = {
@@ -83,7 +88,14 @@ export function convertToTable(columns, rows) {
       const tr = document.createElement("tr");
       for (const column of columns) {
         const td = document.createElement("td");
-        td.textContent = row[column] ?? "-"; // We want to leave 0 and "" intact, so don't use ||
+        const rawValue = row[column];
+        if (rawValue === undefined || rawValue === null) {
+          td.textContent = "-";
+        } else if (displayFns[column]) {
+          td.textContent = displayFns[column](rawValue);
+        } else {
+          td.textContent = rawValue;
+        }
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
