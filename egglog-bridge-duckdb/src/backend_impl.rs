@@ -488,13 +488,28 @@ impl Backend for EGraph {
                 // trait side we don't have the sort name, only the
                 // `BaseValueId`. Use the pool to compare against the
                 // Unit type id.
-                let merge_mode = match config.merge {
+                let merge_mode = match &config.merge {
                     MergeFn::Old | MergeFn::AssertEq => Some(MergeMode::Old),
                     MergeFn::New => Some(MergeMode::New),
                     MergeFn::UnionId => Some(MergeMode::Min),
-                    MergeFn::Const(_)
-                    | MergeFn::Primitive(_, _)
-                    | MergeFn::Function(_, _) => {
+                    MergeFn::Primitive(ext_id, _) => {
+                        // The term encoder emits `:merge (ordering-min
+                        // old new)` for the function-form union-find
+                        // table (`@UF_<Sort>f`). The frontend lowers
+                        // that to a `Primitive` referencing the
+                        // `ordering-min` external. Without recognizing
+                        // it, the duckdb conflict clause falls back to
+                        // `DO NOTHING`, which silently drops UFf
+                        // upserts and leaves singleparent unable to
+                        // canonicalize — observed as an infinite
+                        // `(8,13) ↔ (13,8)` toggle in @UF_Math while
+                        // @UF_Mathf stays stale at (8,8)/(13,13).
+                        match self.backend_external_funcs.name(*ext_id) {
+                            Some("ordering-min") => Some(MergeMode::Min),
+                            _ => Some(MergeMode::Old),
+                        }
+                    }
+                    MergeFn::Const(_) | MergeFn::Function(_, _) => {
                         // Per Phase 1 design: complex merges are gated
                         // out by `supports_complex_merge` (`false`).
                         // Fall back to Old for unreachable code paths.
@@ -912,7 +927,7 @@ impl Backend for EGraph {
             eprintln!(
                 "[duck/run_rules] names={:?} delta={}",
                 names,
-                after - before
+                after - before,
             );
         }
 
