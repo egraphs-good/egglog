@@ -357,13 +357,12 @@ impl SchedulerRuleInfo {
 
         // Step 1: build the query rule
         let qrule_id = {
-            let bridge = egraph
-                .backend
-                .as_any_mut()
-                .downcast_mut::<egglog_bridge::EGraph>()
-                .expect("rule construction is bridge-only");
+            let backend_ptr: *const dyn egglog_backend_trait::Backend = &*egraph.backend;
+            let rb = egraph.backend.new_rule(name, true);
             let mut qrule_builder = BackendRule::new(
-                bridge.new_rule(name, true),
+                rb,
+                // SAFETY: see `EGraph::add_rule` for the disjoint-reborrow rationale.
+                unsafe { &*backend_ptr },
                 &egraph.functions,
                 &egraph.type_info,
             );
@@ -376,19 +375,18 @@ impl SchedulerRuleInfo {
                 collect_matches,
                 &entries,
                 ColumnTy::Base(unit_type),
-                || "collect_matches".to_string(),
+                "collect_matches".to_string(),
             );
             qrule_builder.build()
         };
 
         // Step 2: build the action rule
-        let bridge = egraph
-            .backend
-            .as_any_mut()
-            .downcast_mut::<egglog_bridge::EGraph>()
-            .expect("rule construction is bridge-only");
+        let backend_ptr: *const dyn egglog_backend_trait::Backend = &*egraph.backend;
+        let rb = egraph.backend.new_rule(name, false);
         let mut arule_builder = BackendRule::new(
-            bridge.new_rule(name, false),
+            rb,
+            // SAFETY: see `EGraph::add_rule` for the disjoint-reborrow rationale.
+            unsafe { &*backend_ptr },
             &egraph.functions,
             &egraph.type_info,
         );

@@ -797,8 +797,8 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
         )
     }
 
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.base_values_mut().register_type::<T::Base>();
+    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
+        egglog_backend_trait::pool_register_type::<T::Base>(backend.base_value_pool_mut());
     }
 
     fn value_type(&self) -> Option<TypeId> {
@@ -866,8 +866,18 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         ColumnTy::Id
     }
 
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<T::Container>();
+    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
+        // Container sorts are only registered on the reference bridge.
+        // The DuckDB backend has `supports_containers() == false`; any
+        // program reaching here on duckdb is upstream-gated by
+        // `program_supports_proofs` and won't actually use the
+        // container.
+        if let Some(bridge) = backend
+            .as_any_mut()
+            .downcast_mut::<egglog_bridge::EGraph>()
+        {
+            bridge.register_container_ty::<T::Container>();
+        }
     }
 
     fn value_type(&self) -> Option<TypeId> {

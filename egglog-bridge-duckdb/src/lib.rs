@@ -744,6 +744,31 @@ impl EGraph {
         self.native_uf_enabled = true;
     }
 
+    /// Associate a primitive name with a previously registered
+    /// [`egglog_backend_trait::ExternalFunctionId`]. The frontend's
+    /// typechecker calls this after `register_external_func` when the
+    /// backend is duckdb, so the duckdb rule-builder can later
+    /// translate `ExternalFunctionId` references into
+    /// `Term::Prim(name, ...)` calls in the duck IR.
+    ///
+    /// No-op for unknown ids.
+    pub fn set_external_func_name(
+        &mut self,
+        id: egglog_backend_trait::ExternalFunctionId,
+        name: String,
+    ) {
+        self.backend_external_funcs.set_name(id, name);
+    }
+
+    /// Look up the primitive name associated with `id`, if any.
+    /// Returns `None` for unregistered or unnamed ids.
+    pub fn external_func_name(
+        &self,
+        id: egglog_backend_trait::ExternalFunctionId,
+    ) -> Option<&str> {
+        self.backend_external_funcs.name(id)
+    }
+
     /// Currently registered native union-find tables, for read-only
     /// inspection (testing, diagnostics). Mutating these directly
     /// would skip the queue + drain protocol; callers that need to

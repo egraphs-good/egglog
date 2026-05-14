@@ -60,12 +60,70 @@
 
 use anyhow::{Result, anyhow};
 use egglog_backend_trait::{
-    ColumnTy, ExternalFunctionId, FunctionId, QueryEntry, RuleBuilderOps, RuleId, Variable,
-    VariableId,
+    BaseValueId, BaseValuePool, ColumnTy, ExternalFunctionId, FunctionId, QueryEntry,
+    RuleBuilderOps, RuleId, Value, Variable, VariableId,
 };
 use egglog_numeric_id::NumericId;
 
+use crate::base_values::DuckdbBaseValuePool;
 use crate::{Action, Atom, EGraph, Literal, Rule, Term};
+
+/// Decode a `Value` of base type `ty` into a duck-side [`Literal`] by
+/// consulting the [`BaseValuePool`]. Supported types: `i64`, `bool`,
+/// `f64`, `String`, `()`, `BigInt`, `BigRat`. Unsupported types yield
+/// an error.
+fn decode_base_const(
+    pool: &DuckdbBaseValuePool,
+    val: Value,
+    ty: BaseValueId,
+) -> Result<Term> {
+    use ordered_float::OrderedFloat;
+    use std::any::TypeId;
+    let pool_dyn: &dyn BaseValuePool = pool;
+    // Try common types. Order chosen for frequency in test programs.
+    if pool_dyn.has_ty(TypeId::of::<i64>())
+        && ty == pool_dyn.get_ty_by_type_id(TypeId::of::<i64>())
+    {
+        let v = egglog_backend_trait::pool_unwrap::<i64>(pool_dyn, val);
+        return Ok(Term::Lit(Literal::I64(v)));
+    }
+    if pool_dyn.has_ty(TypeId::of::<bool>())
+        && ty == pool_dyn.get_ty_by_type_id(TypeId::of::<bool>())
+    {
+        let v = egglog_backend_trait::pool_unwrap::<bool>(pool_dyn, val);
+        return Ok(Term::Lit(Literal::Bool(v)));
+    }
+    if pool_dyn.has_ty(TypeId::of::<()>())
+        && ty == pool_dyn.get_ty_by_type_id(TypeId::of::<()>())
+    {
+        // Unit values: emit a sentinel i64(0) per the duck IR's
+        // existing handling of unit constants.
+        return Ok(Term::Lit(Literal::I64(0)));
+    }
+    type FBoxed = egglog_core_relations::Boxed<OrderedFloat<f64>>;
+    if pool_dyn.has_ty(TypeId::of::<FBoxed>())
+        && ty == pool_dyn.get_ty_by_type_id(TypeId::of::<FBoxed>())
+    {
+        let v = egglog_backend_trait::pool_unwrap::<FBoxed>(pool_dyn, val);
+        return Ok(Term::Lit(Literal::F64((*v).into_inner())));
+    }
+    if pool_dyn.has_ty(TypeId::of::<egglog_core_relations::Boxed<String>>())
+        && ty == pool_dyn
+            .get_ty_by_type_id(TypeId::of::<egglog_core_relations::Boxed<String>>())
+    {
+        let v = egglog_backend_trait::pool_unwrap::<egglog_core_relations::Boxed<String>>(
+            pool_dyn, val,
+        );
+        return Ok(Term::Lit(Literal::Str((*v).clone())));
+    }
+    // BigInt/BigRat etc. fall through to an error path the caller
+    // can route into deferred_err.
+    Err(anyhow!(
+        "DuckRuleBuilderOps: decoding a base-value constant of BaseValueId({}) into a \
+         duck Literal is not yet supported (i64/bool/Unit/f64/String are wired)",
+        ty.rep()
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // DuckRuleBuilderOps
@@ -93,6 +151,27 @@ pub(crate) struct DuckRuleBuilderOps<'a> {
     /// `build()` time, we accumulate any deferred error here and
     /// surface it from `build`.
     deferred_err: Option<anyhow::Error>,
+    /// Duck-side variable names that have been bound (by a body atom's
+    /// output, an `Atom::Bind`, or an `Action::LetExpr` / `LetCtor`).
+    /// Used by `query_prim` to decide between a `Bind` (fresh var) and
+    /// a `Filter` (assert-eq) translation, mirroring the bridge's
+    /// `inner.grounded` semantics.
+    bound_vars: std::collections::HashSet<String>,
+    /// Inline expansions for variables that were minted by `lookup` /
+    /// `call_external_func` but whose result we never bind through an
+    /// `Action::LetExpr`. Reason: DuckDB's `compile.rs` materializes
+    /// rule actions into a single SELECT, and SQL forbids referencing
+    /// sibling SELECT-list aliases (so `SELECT f(t.c0) AS v, g(v) AS w
+    /// FROM t` would fail). Instead we *inline* the lookup's
+    /// `Term::FuncCall { … }` directly into the args of any later
+    /// action that references it. Each entry maps `VariableId.rep()`
+    /// to the `Term` to substitute. When `entries_to_terms` translates
+    /// a `QueryEntry::Var(v)` whose id is in this map, it returns the
+    /// stored term instead of `Term::Var(name)`. Recursion handles
+    /// chains: a stored `Term::FuncCall` may itself contain
+    /// `Term::Var(other)` references, which the substitution walks
+    /// transitively.
+    inline_terms: std::collections::HashMap<u32, Term>,
 }
 
 impl<'a> DuckRuleBuilderOps<'a> {
@@ -112,6 +191,29 @@ impl<'a> DuckRuleBuilderOps<'a> {
             rule,
             fresh_counter: 1_000_000_000, // above any expected VariableId
             deferred_err: None,
+            bound_vars: std::collections::HashSet::new(),
+            inline_terms: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Recursively expand any `Term::Var` references through
+    /// `inline_terms`. Used by `entries_to_terms` so that a lookup
+    /// whose result is then used as an arg to another action gets
+    /// inlined as a `Term::FuncCall` rather than left as a dangling
+    /// `Term::Var`. Bounded by the number of stored inlines (each
+    /// lookup adds one); cycles cannot occur because we only insert
+    /// into `inline_terms` with fresh ids.
+    fn inline_term(&self, t: Term) -> Term {
+        match t {
+            Term::Var(_) => t, // names; inlining is keyed on Variable ids in entry_to_term
+            Term::Lit(_) => t,
+            Term::Prim(op, args) => {
+                Term::Prim(op, args.into_iter().map(|a| self.inline_term(a)).collect())
+            }
+            Term::FuncCall { name, args } => Term::FuncCall {
+                name,
+                args: args.into_iter().map(|a| self.inline_term(a)).collect(),
+            },
         }
     }
 
@@ -133,19 +235,28 @@ impl<'a> DuckRuleBuilderOps<'a> {
     /// `QueryEntry::Var` → `Term::Var(name)`.
     /// `QueryEntry::Const` with `ColumnTy::Id` → `Term::Lit(I64(...))`
     /// using the value's `u32` representation cast to `i64`.
-    /// `QueryEntry::Const` with `ColumnTy::Base(_)` → error (decoding
-    /// requires the `BaseValuePool` wiring from Commit 11).
+    /// `QueryEntry::Const` with `ColumnTy::Base(_)` → decode the
+    /// concrete typed primitive via the base value pool and emit the
+    /// corresponding duck `Literal`. Supported types: `i64`, `bool`,
+    /// `f64`, `String`, `()`. Unsupported types yield an error.
     fn entry_to_term(&self, entry: &QueryEntry) -> Result<Term> {
         match entry {
-            QueryEntry::Var(v) => Ok(Term::Var(Self::var_name(v))),
+            QueryEntry::Var(v) => {
+                // If this variable was minted by a `lookup` /
+                // `call_external_func` whose result we stored inline,
+                // substitute its `Term::FuncCall` here. Otherwise
+                // emit a plain `Term::Var`. The inline path
+                // recursively expands so chained lookups land as
+                // nested calls in the action's args.
+                if let Some(inline) = self.inline_terms.get(&v.id.rep()) {
+                    Ok(self.inline_term(inline.clone()))
+                } else {
+                    Ok(Term::Var(Self::var_name(v)))
+                }
+            }
             QueryEntry::Const { val, ty } => match ty {
                 ColumnTy::Id => Ok(Term::Lit(Literal::I64(val.rep() as i64))),
-                ColumnTy::Base(_) => Err(anyhow!(
-                    "DuckRuleBuilderOps: decoding a base-value constant \
-                     requires the BaseValuePool wiring scheduled for Phase 2 \
-                     Commit 11; got a QueryEntry::Const of type \
-                     ColumnTy::Base(_)"
-                )),
+                ColumnTy::Base(bv) => decode_base_const(&self.egraph.backend_base_value_pool, *val, *bv),
             },
         }
     }
@@ -219,52 +330,125 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         entries: &[QueryEntry],
         is_subsumed: Option<bool>,
     ) -> Result<()> {
-        if is_subsumed.is_some() {
+        // DuckDB does not model subsumption: every row is implicitly
+        // non-subsumed. `Some(false)` (filter to non-subsumed rows)
+        // therefore needs no filter — the SELECT already covers it.
+        // `Some(true)` (filter to subsumed rows) cannot be satisfied
+        // by any row and is rejected as an unsupported feature.
+        if is_subsumed == Some(true) {
             return Err(anyhow!(
-                "DuckRuleBuilderOps::query_table: subsumption filter is not supported on the \
-                 DuckDB backend (Backend::supports_subsumption returns false)"
+                "DuckRuleBuilderOps::query_table: filtering to subsumed rows is not supported \
+                 on the DuckDB backend (Backend::supports_subsumption returns false)"
             ));
         }
         let name = self.lookup_function_name(func).to_string();
         let args = self.entries_to_terms(entries)?;
+        // Body Func atoms bind every variable used as an argument.
+        for arg in &args {
+            if let Term::Var(v) = arg {
+                self.bound_vars.insert(v.clone());
+            }
+        }
         self.rule.body.push(Atom::Func { name, args });
         Ok(())
     }
 
     fn query_prim(
         &mut self,
-        _func: ExternalFunctionId,
-        _entries: &[QueryEntry],
+        func: ExternalFunctionId,
+        entries: &[QueryEntry],
         _ret_ty: ColumnTy,
     ) -> Result<()> {
-        // External primitives go through a name registry that is
-        // wired up in Phase 2 Commit 12. Until then, the trait
-        // surface has no way to map an `ExternalFunctionId` to a
-        // duckdb-side primitive name; report an error.
-        Err(anyhow!(
-            "DuckRuleBuilderOps::query_prim: external primitives are not yet wired through the \
-             DuckDB trait surface (deferred to Phase 2 Commit 12)"
-        ))
+        // The bridge's `query_prim` semantics: the last entry is the
+        // expected return value. If it's a fresh variable, bind it to
+        // the call's result; otherwise, assert the call's result equals
+        // the entry. We translate accordingly into duck IR.
+        let name = self
+            .egraph
+            .external_func_name(func)
+            .ok_or_else(|| {
+                anyhow!(
+                    "DuckRuleBuilderOps::query_prim: ExternalFunctionId({}) has no associated \
+                     primitive name (was set_external_func_name called?)",
+                    func.rep()
+                )
+            })?
+            .to_string();
+        let translated = entries
+            .iter()
+            .map(|e| self.entry_to_term(e))
+            .collect::<Result<Vec<_>>>()?;
+        // Split into args and expected return value.
+        let mut translated = translated;
+        let expected = translated.pop().ok_or_else(|| {
+            anyhow!("DuckRuleBuilderOps::query_prim: must specify a return value")
+        })?;
+        let call = Term::prim(name, translated);
+        // If the last entry is a fresh variable (i.e. one we haven't
+        // yet bound), translate to a Bind; otherwise translate to a
+        // Filter asserting equality.
+        match (&expected, entries.last().unwrap()) {
+            (Term::Var(varname), QueryEntry::Var(v)) if !self.bound_vars.contains(varname) => {
+                self.bound_vars.insert(varname.clone());
+                let _ = v;
+                self.rule.body.push(Atom::Bind {
+                    var: varname.clone(),
+                    expr: call,
+                });
+            }
+            _ => {
+                // Assert equality: emit a filter `call = expected`.
+                self.rule.body.push(Atom::Filter(Term::prim(
+                    "=",
+                    vec![call, expected],
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn call_external_func(
         &mut self,
-        _func: ExternalFunctionId,
-        _args: &[QueryEntry],
+        func: ExternalFunctionId,
+        args: &[QueryEntry],
         _ret_ty: ColumnTy,
         _panic_msg: String,
     ) -> QueryEntry {
-        // Infallible signature; defer the error to build() so callers
-        // who never finish the rule don't trip over it.
-        if self.deferred_err.is_none() {
-            self.deferred_err = Some(anyhow!(
-                "DuckRuleBuilderOps::call_external_func: external primitives are not yet wired \
-                 through the DuckDB trait surface (deferred to Phase 2 Commit 12)"
-            ));
-        }
-        // Return a dummy variable so the caller can keep building.
-        let var = self.alloc_var(Some("__ext_unimpl"));
-        QueryEntry::Var(var)
+        let name = match self.egraph.external_func_name(func) {
+            Some(n) => n.to_string(),
+            None => {
+                if self.deferred_err.is_none() {
+                    self.deferred_err = Some(anyhow!(
+                        "DuckRuleBuilderOps::call_external_func: ExternalFunctionId({}) has \
+                         no associated primitive name (was set_external_func_name called?)",
+                        func.rep()
+                    ));
+                }
+                let var = self.alloc_var(Some("__ext_no_name"));
+                return QueryEntry::Var(var);
+            }
+        };
+        let translated_args: Vec<Term> = match args
+            .iter()
+            .map(|e| self.entry_to_term(e))
+            .collect::<Result<_>>()
+        {
+            Ok(v) => v,
+            Err(e) => {
+                if self.deferred_err.is_none() {
+                    self.deferred_err = Some(e);
+                }
+                Vec::new()
+            }
+        };
+        let result = self.alloc_var(Some(&format!("call_{}", sanitize(&name))));
+        // Inline the primitive call into `inline_terms` for the same
+        // reason `lookup` does — see `lookup`'s comment. Subsequent
+        // actions get the call substituted into their args directly,
+        // sidestepping the sibling-SELECT-list-alias restriction.
+        self.inline_terms
+            .insert(result.id.rep(), Term::prim(name, translated_args));
+        QueryEntry::Var(result)
     }
 
     fn lookup(
@@ -274,15 +458,20 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         _panic_msg: String,
     ) -> QueryEntry {
         // `lookup` reads a function's output column for the given
-        // input args. On DuckDB this is a `Term::FuncCall { name,
-        // args }` bound to a fresh variable via an `Action::LetExpr`.
+        // input args. On the duck side we **inline** this — record
+        // the `Term::FuncCall { name, args }` against a fresh
+        // `Variable` id; when a later action's `entries_to_terms`
+        // sees `QueryEntry::Var(v)` with `v.id` in `inline_terms`,
+        // it substitutes the stored term directly.
         //
-        // Subsequent actions can then reference `var`.
-        //
-        // Note: this is an *action*, not a body atom. The bridge's
-        // `lookup` is an RHS construct; on the bridge side it appears
-        // in actions only. The duck-side compile pipeline handles
-        // `Action::LetExpr` accordingly.
+        // Why not emit `Action::LetExpr`? `compile.rs` materializes
+        // a rule's actions into a single SELECT, and SQL forbids
+        // referencing sibling SELECT-list aliases — so chained
+        // lookups (`v2 = g(v1)` after `v1 = f(x)`) would compile
+        // to `SELECT f(t.c0) AS v1, g(v1) AS v2 FROM t`, which
+        // DuckDB rejects with "unbound variable v1". Inlining
+        // sidesteps the chain entirely; the substitution produces
+        // `g(f(t.c0))` directly in the args of the consuming action.
         let name = self.lookup_function_name(func).to_string();
         let args = match self.entries_to_terms(entries) {
             Ok(a) => a,
@@ -294,19 +483,22 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
             }
         };
         let var = self.alloc_var(Some("lookup"));
-        let var_name = Self::var_name(&var);
-        self.rule.actions.push(Action::LetExpr {
-            var: var_name,
-            expr: Term::FuncCall { name, args },
-        });
+        self.inline_terms
+            .insert(var.id.rep(), Term::FuncCall { name, args });
         QueryEntry::Var(var)
     }
 
     fn subsume(&mut self, _func: FunctionId, _entries: &[QueryEntry]) -> Result<()> {
-        Err(anyhow!(
-            "DuckRuleBuilderOps::subsume: subsumption is not supported on the DuckDB backend \
-             (Backend::supports_subsumption returns false)"
-        ))
+        // DuckDB does not model subsumption (`Backend::supports_subsumption
+        // == false`). Term-encoded rules may still emit `subsume` for
+        // hash-cons / canonicalization bookkeeping; treat such requests
+        // as no-ops on duckdb. Behaviorally this is a known degradation
+        // — subsumed rows continue to match — but it matches the
+        // legacy duckdb pipeline, which also silently drops subsume.
+        // Programs that rely on subsumption for correctness are
+        // upstream-gated by `program_supports_proofs` and never reach
+        // the duckdb backend.
+        Ok(())
     }
 
     fn set(&mut self, func: FunctionId, entries: &[QueryEntry]) {
@@ -378,8 +570,22 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
             return Err(e);
         }
 
-        // Register the rule with the existing pipeline.
+        // If every action got silently dropped (e.g. the rule consisted
+        // entirely of subsume calls, which are no-ops on duckdb), skip
+        // the `add_rule` call entirely — `add_rule` insists on at least
+        // one action, but a no-op rule is just an empty rule. Allocate
+        // a "freed"-style slot so the returned RuleId is valid but
+        // running it does nothing.
         let name = rule.name.clone();
+        if rule.actions.is_empty() {
+            let idx = egraph.backend_rule_names.len() as u32;
+            // Mark the slot freed (None) so run_rules treats it as a
+            // no-op (filter out unknown names).
+            egraph.backend_rule_names.push(None);
+            return Ok(RuleId::new(idx));
+        }
+
+        // Register the rule with the existing pipeline.
         egraph
             .add_rule(rule)
             .map_err(|e| anyhow!("DuckRuleBuilderOps::build: add_rule failed: {e}"))?;
@@ -489,9 +695,11 @@ mod tests {
         );
     }
 
-    /// Subsume must error at the call site.
+    /// Subsume is a silent no-op on duckdb (matching the legacy
+    /// pipeline). The trait surface contract is that this does not
+    /// error.
     #[test]
-    fn trait_rule_subsume_errors() {
+    fn trait_rule_subsume_is_noop() {
         let mut backend: Box<dyn Backend> =
             Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
         let r = backend.add_table(FunctionConfig {
@@ -502,16 +710,18 @@ mod tests {
             can_subsume: true,
         });
 
-        let mut rb = backend.new_rule("subsume_err", true);
+        let mut rb = backend.new_rule("subsume_noop", true);
         let x = QueryEntry::Var(TraitVar {
             id: VariableId::new(0),
             name: Some("x".into()),
         });
-        let err = rb.subsume(r, &[x]);
-        assert!(err.is_err(), "subsume should error on duckdb");
+        // Should silently succeed.
+        rb.subsume(r, &[x]).expect("subsume should no-op on duckdb");
     }
 
-    /// `query_table` with `is_subsumed = Some(_)` must error.
+    /// `query_table` with `is_subsumed = Some(true)` must error;
+    /// `Some(false)` is accepted (DuckDB has no subsumption, so every
+    /// row is implicitly non-subsumed).
     #[test]
     fn trait_rule_query_table_with_subsumed_errors() {
         let mut backend: Box<dyn Backend> =
@@ -529,8 +739,13 @@ mod tests {
             id: VariableId::new(0),
             name: Some("x".into()),
         });
-        let err = rb.query_table(r, &[x], Some(false));
-        assert!(err.is_err(), "query_table with subsumed filter must error");
+        // Some(false) is the common no-op filter that BackendRule emits
+        // for every body atom; DuckDB accepts it.
+        rb.query_table(r, &[x.clone()], Some(false))
+            .expect("query_table with Some(false) should succeed");
+        // Some(true) is unsupported.
+        let err = rb.query_table(r, &[x], Some(true));
+        assert!(err.is_err(), "query_table with Some(true) must error");
     }
 
     /// `union` is unsupported in v1 and defers the error to

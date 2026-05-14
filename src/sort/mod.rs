@@ -65,7 +65,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         }
     }
 
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph);
+    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -172,7 +172,7 @@ impl Sort for EqSort {
         ColumnTy::Id
     }
 
-    fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
+    fn register_type(&self, _backend: &mut dyn egglog_backend_trait::Backend) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self

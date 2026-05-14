@@ -1033,6 +1033,7 @@ dependencies = [
  "egglog-core-relations",
  "egglog-numeric-id",
  "log",
+ "ordered-float",
 ]
 
 [[package]]

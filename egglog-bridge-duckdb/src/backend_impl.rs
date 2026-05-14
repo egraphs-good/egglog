@@ -79,6 +79,7 @@ use egglog_backend_trait::{
 };
 use egglog_numeric_id::NumericId;
 
+use crate::base_values::DuckdbBaseValuePool;
 use crate::{ColumnTy as DuckColumnTy, EGraph, Literal, MergeMode, q};
 
 // ---------------------------------------------------------------------------
@@ -154,8 +155,48 @@ impl ContainerPool for DuckdbContainerPool {
 /// **TODO (Commit 14):** revisit when a real `Box<dyn Backend>`
 /// caller exercises `add_table` and we see what column kinds the
 /// frontend actually asks for.
-fn trait_col_ty_to_duck(_ty: ColumnTy, _pool: &dyn BaseValuePool) -> DuckColumnTy {
-    DuckColumnTy::I64
+fn trait_col_ty_to_duck(ty: ColumnTy, pool: &dyn BaseValuePool) -> DuckColumnTy {
+    use ordered_float::OrderedFloat;
+    use std::any::TypeId;
+    match ty {
+        ColumnTy::Id => DuckColumnTy::I64,
+        ColumnTy::Base(bv) => {
+            // Probe the pool's registered TypeIds in the same order
+            // as `decode_base_const` in rule_builder.rs. Each branch
+            // checks whether `bv` is the registered id for that
+            // concrete `BaseValue` type and, if so, returns the
+            // matching DuckDB column kind. Falls back to `I64` for
+            // unknown / unregistered base types (which is also what
+            // egglog-bridge does for them — see `BaseValue::sql_ty`).
+            if pool.has_ty(TypeId::of::<i64>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<i64>())
+            {
+                return DuckColumnTy::I64;
+            }
+            if pool.has_ty(TypeId::of::<bool>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<bool>())
+            {
+                return DuckColumnTy::Bool;
+            }
+            type FBoxed = egglog_core_relations::Boxed<OrderedFloat<f64>>;
+            if pool.has_ty(TypeId::of::<FBoxed>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<FBoxed>())
+            {
+                return DuckColumnTy::F64;
+            }
+            type SBoxed = egglog_core_relations::Boxed<String>;
+            if pool.has_ty(TypeId::of::<SBoxed>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<SBoxed>())
+            {
+                return DuckColumnTy::Str;
+            }
+            // Unit and any other registered base types: store as i64.
+            // This includes BigInt / BigRat / Rational64 which the
+            // bridge interns; their `Value` is an intern-table index
+            // that fits in i64.
+            DuckColumnTy::I64
+        }
+    }
 }
 
 /// Decode an egglog [`Value`] into a duckdb-side [`Literal`] for
@@ -166,9 +207,114 @@ fn trait_col_ty_to_duck(_ty: ColumnTy, _pool: &dyn BaseValuePool) -> DuckColumnT
 /// is `Literal::I64(value.rep() as i64)`. The `pool` parameter is
 /// reserved for the future refined mapping (see the TODO on
 /// `trait_col_ty_to_duck`).
+/// Decode a `Value` for a duck-side column of [`DuckColumnTy`] into
+/// the appropriate [`Literal`]. Used by `insert_row_inner` so a
+/// row whose column was registered as `STR`/`BOOL`/`F64` gets the
+/// matching SQL literal (not `Literal::I64(value.rep() as i64)`,
+/// which would produce a SQL type-conversion error).
+fn duck_value_to_literal(
+    val: Value,
+    col: DuckColumnTy,
+    pool: &DuckdbBaseValuePool,
+) -> Literal {
+    use ordered_float::OrderedFloat;
+    use std::any::TypeId;
+    let pool_dyn: &dyn BaseValuePool = pool;
+    match col {
+        DuckColumnTy::I64 => {
+            // Could be an eq-sort id (high bits clear) or an interned
+            // i64 base value (high bit set per MAY_UNBOX) or an
+            // arbitrary BaseValueId-indexed handle. The `rep() as i64`
+            // cast preserves the bits losslessly; the SQL layer
+            // sees `BIGINT` regardless. For i64 base values, unbox.
+            if pool_dyn.has_ty(TypeId::of::<i64>()) {
+                let id = pool_dyn.get_ty_by_type_id(TypeId::of::<i64>());
+                // If `val` was interned in the i64 pool, `pool_unwrap`
+                // returns the original i64. Otherwise the `rep()`
+                // cast is the right fallback. We can't tell here
+                // which one it is without the column's trait
+                // `ColumnTy::Base(id)`, so prefer the unwrap when
+                // the high bit is set (intern-table convention).
+                let raw = val.rep();
+                if raw & (1 << 31) != 0 {
+                    let i = egglog_backend_trait::pool_unwrap::<i64>(pool_dyn, val);
+                    let _ = id;
+                    return Literal::I64(i);
+                }
+            }
+            Literal::I64(val.rep() as i64)
+        }
+        DuckColumnTy::Bool => {
+            if pool_dyn.has_ty(TypeId::of::<bool>()) {
+                let b = egglog_backend_trait::pool_unwrap::<bool>(pool_dyn, val);
+                return Literal::Bool(b);
+            }
+            Literal::Bool(val.rep() != 0)
+        }
+        DuckColumnTy::F64 => {
+            type FBoxed = egglog_core_relations::Boxed<OrderedFloat<f64>>;
+            if pool_dyn.has_ty(TypeId::of::<FBoxed>()) {
+                let v = egglog_backend_trait::pool_unwrap::<FBoxed>(pool_dyn, val);
+                return Literal::F64((*v).into_inner());
+            }
+            Literal::F64(val.rep() as f64)
+        }
+        DuckColumnTy::Str => {
+            type SBoxed = egglog_core_relations::Boxed<String>;
+            if pool_dyn.has_ty(TypeId::of::<SBoxed>()) {
+                let v = egglog_backend_trait::pool_unwrap::<SBoxed>(pool_dyn, val);
+                return Literal::Str((*v).clone());
+            }
+            // Fallback: stringify the bits. Almost certainly wrong
+            // but at least doesn't trigger a SQL type cast error.
+            Literal::Str(format!("v{}", val.rep()))
+        }
+        DuckColumnTy::PairI64 => {
+            // Pair columns are not emitted via trait `add_table`
+            // (only via duck-internal registration), so this branch
+            // shouldn't be reachable from `insert_row_inner`.
+            panic!("duck_value_to_literal: PairI64 unexpected in trait-driven insert path")
+        }
+    }
+}
+
 #[allow(dead_code)]
-fn value_to_literal(val: Value, _ty: ColumnTy, _pool: &dyn BaseValuePool) -> Literal {
-    Literal::I64(val.rep() as i64)
+fn value_to_literal(val: Value, ty: ColumnTy, pool: &dyn BaseValuePool) -> Literal {
+    use ordered_float::OrderedFloat;
+    use std::any::TypeId;
+    match ty {
+        ColumnTy::Id => Literal::I64(val.rep() as i64),
+        ColumnTy::Base(bv) => {
+            if pool.has_ty(TypeId::of::<i64>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<i64>())
+            {
+                let v = egglog_backend_trait::pool_unwrap::<i64>(pool, val);
+                return Literal::I64(v);
+            }
+            if pool.has_ty(TypeId::of::<bool>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<bool>())
+            {
+                let v = egglog_backend_trait::pool_unwrap::<bool>(pool, val);
+                return Literal::Bool(v);
+            }
+            type FBoxed = egglog_core_relations::Boxed<OrderedFloat<f64>>;
+            if pool.has_ty(TypeId::of::<FBoxed>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<FBoxed>())
+            {
+                let v = egglog_backend_trait::pool_unwrap::<FBoxed>(pool, val);
+                return Literal::F64((*v).into_inner());
+            }
+            type SBoxed = egglog_core_relations::Boxed<String>;
+            if pool.has_ty(TypeId::of::<SBoxed>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<SBoxed>())
+            {
+                let v = egglog_backend_trait::pool_unwrap::<SBoxed>(pool, val);
+                return Literal::Str((*v).clone());
+            }
+            // Fallback: treat as i64 (intern-table index).
+            Literal::I64(val.rep() as i64)
+        }
+    }
 }
 
 /// Convert a DuckDB row value into a [`Value`] for surfacing through
@@ -248,15 +394,18 @@ impl EGraph {
             );
         }
 
-        // Every column maps to `BIGINT` in the current trait→duck
-        // mapping (see `trait_col_ty_to_duck`), so the encoding is
-        // uniformly `Literal::I64(value.rep() as i64)`. When the
-        // mapping is refined in Commit 14 we'll dispatch on
-        // `info.cols[i]` to pick `Bool`/`F64`/`Str` literals; for now
-        // the cast is the entire decode.
+        // Decode each value through the schema's `DuckColumnTy` so
+        // String/Bool/F64 columns receive the right `Literal` kind.
+        // We don't have the trait `ColumnTy` here (the duck-side
+        // `FunctionInfo.cols` already lost it), so re-derive the
+        // duck literal kind from `info.cols[i]`.
         let lits: Vec<Literal> = row
             .iter()
-            .map(|v| Literal::I64(v.rep() as i64))
+            .enumerate()
+            .map(|(i, v)| {
+                let col_ty = info.cols[i];
+                duck_value_to_literal(*v, col_ty, &self.backend_base_value_pool)
+            })
             .collect();
 
         self.insert(&name, &lits)

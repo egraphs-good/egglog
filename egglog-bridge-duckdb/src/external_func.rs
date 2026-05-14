@@ -92,6 +92,13 @@ pub(crate) enum ExternalFuncSlot {
 #[derive(Default)]
 pub(crate) struct DuckdbExternalFuncRegistry {
     slots: Vec<ExternalFuncSlot>,
+    /// Per-id primitive name. `None` for slots that have no name
+    /// associated (anonymous panic sentinels, freed slots). The name
+    /// is the egglog-level operator (e.g. `"+"`, `"!="`, `"value-eq"`).
+    /// Phase 2 Commit 14 wires this up so the duckdb rule-builder can
+    /// translate `ExternalFunctionId` references to duck `Term::Prim`
+    /// calls.
+    names: Vec<Option<String>>,
 }
 
 impl DuckdbExternalFuncRegistry {
@@ -102,6 +109,7 @@ impl DuckdbExternalFuncRegistry {
     ) -> ExternalFunctionId {
         let idx = self.slots.len();
         self.slots.push(ExternalFuncSlot::Func(func));
+        self.names.push(None);
         ExternalFunctionId::from_usize(idx)
     }
 
@@ -109,6 +117,7 @@ impl DuckdbExternalFuncRegistry {
     pub(crate) fn add_panic(&mut self, message: String) -> ExternalFunctionId {
         let idx = self.slots.len();
         self.slots.push(ExternalFuncSlot::Panic(message));
+        self.names.push(None);
         ExternalFunctionId::from_usize(idx)
     }
 
@@ -121,6 +130,28 @@ impl DuckdbExternalFuncRegistry {
         if let Some(slot) = self.slots.get_mut(idx) {
             *slot = ExternalFuncSlot::Freed;
         }
+        if let Some(slot_name) = self.names.get_mut(idx) {
+            *slot_name = None;
+        }
+    }
+
+    /// Associate a primitive name with the slot at `id`. Used by the
+    /// frontend's typechecker (post-`register_external_func`) so the
+    /// duckdb rule-builder can emit `Term::Prim(name, ...)` when the
+    /// id is referenced from a rule body.
+    pub(crate) fn set_name(&mut self, id: ExternalFunctionId, name: String) {
+        let idx = id.rep() as usize;
+        if idx >= self.names.len() {
+            self.names.resize(idx + 1, None);
+        }
+        self.names[idx] = Some(name);
+    }
+
+    /// Look up the primitive name stored at `id`. Returns `None` if no
+    /// name was associated (e.g. the slot is anonymous, has been
+    /// freed, or is a deferred-panic sentinel).
+    pub(crate) fn name(&self, id: ExternalFunctionId) -> Option<&str> {
+        self.names.get(id.rep() as usize)?.as_deref()
     }
 
     /// Borrow the slot at `id`. Returns `None` for out-of-range ids;

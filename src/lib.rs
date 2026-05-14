@@ -348,10 +348,19 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        Self::with_backend(Box::new(egglog_bridge::EGraph::default()))
+    }
+}
+
+impl EGraph {
+    /// Build a frontend `EGraph` around the given backend trait object.
+    /// This is the shared backbone of [`EGraph::default`] and
+    /// [`EGraph::with_duckdb_backend`].
+    fn with_backend(backend: Box<dyn egglog_backend_trait::Backend>) -> Self {
         let mut parser = Parser::default();
         let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
-            backend: Box::new(egglog_bridge::EGraph::default()),
+            backend,
             parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -431,6 +440,46 @@ impl Default for EGraph {
             .insert("".into(), Ruleset::Rules(Default::default()));
 
         eg
+    }
+
+    /// Construct an `EGraph` whose backend is the DuckDB-backed
+    /// [`egglog_bridge_duckdb::EGraph`] driven through the
+    /// [`egglog_backend_trait::Backend`] trait.
+    ///
+    /// This is the entry point exercised by `tests/files.rs`'s duckdb
+    /// path after Phase 2 Commit 14. It performs the same sort /
+    /// primitive registration as [`EGraph::default`] but the underlying
+    /// storage and rule execution route through DuckDB.
+    ///
+    /// Term encoding (or proof-tracking term encoding) is enabled
+    /// unconditionally: the DuckDB backend is term-encoding only.
+    pub fn with_duckdb_backend(
+        config: backend_duckdb::DuckBackendConfig,
+    ) -> anyhow::Result<Self> {
+        let mut db = egglog_bridge_duckdb::EGraph::new()?;
+        if config.native_uf {
+            db.enable_native_uf();
+        }
+        let backend: Box<dyn egglog_backend_trait::Backend> = Box::new(db);
+        let mut eg = Self::with_backend(backend);
+
+        // Term encoding requires a separate typechecker EGraph for
+        // re-typechecking after the encoder runs. The duckdb backend
+        // cannot be cloned (its `Connection` is not trivially
+        // cloneable), so we instead build a bridge-backed typechecker
+        // that mirrors the same sort + primitive registration done
+        // above. This mirrors what `backend_duckdb::DuckdbBackend`'s
+        // legacy pipeline did internally.
+        let typechecker = if config.proofs {
+            EGraph::new_with_proofs()
+        } else {
+            EGraph::default().with_term_encoding_enabled()
+        };
+        eg.proof_state.original_typechecking = Some(Box::new(typechecker));
+        if config.proofs {
+            eg.proof_state.proofs_enabled = true;
+        }
+        Ok(eg)
     }
 }
 
@@ -1074,13 +1123,24 @@ impl EGraph {
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
-            let bridge = self
-                .backend
-                .as_any_mut()
-                .downcast_mut::<egglog_bridge::EGraph>()
-                .expect("rule construction is bridge-only");
+            // Construct the trait-routed rule builder. The lifetime
+            // separately borrows `&mut self.backend` for the builder
+            // and `&self.backend` for column-ty / pool reads — these
+            // overlap, so we route the read-only borrow through a raw
+            // pointer reborrow inside an unsafe block. Both pointers
+            // are derived from the same `Box<dyn Backend>` and are
+            // never aliased mutably while the builder is alive: the
+            // builder only borrows `&mut Self`'s internal state, never
+            // `BaseValuePool` mutably.
+            let backend_ptr: *const dyn egglog_backend_trait::Backend = &*self.backend;
+            let rb = self.backend.new_rule(&rule.name, self.seminaive);
             let mut translator = BackendRule::new(
-                bridge.new_rule(&rule.name, self.seminaive),
+                rb,
+                // SAFETY: the rule builder's internal `&mut Backend`
+                // borrow does not touch the `BaseValuePool` / column-
+                // ty lookups, so the disjoint reborrow is sound for
+                // the duration of `query`/`actions`/`build`.
+                unsafe { &*backend_ptr },
                 &self.functions,
                 &self.type_info,
             );
@@ -1119,13 +1179,12 @@ impl EGraph {
         let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
         let id = {
-            let bridge = self
-                .backend
-                .as_any_mut()
-                .downcast_mut::<egglog_bridge::EGraph>()
-                .expect("rule construction is bridge-only");
+            let backend_ptr: *const dyn egglog_backend_trait::Backend = &*self.backend;
+            let rb = self.backend.new_rule("eval_actions", false);
             let mut translator = BackendRule::new(
-                bridge.new_rule("eval_actions", false),
+                rb,
+                // SAFETY: see `add_rule` for the disjoint-reborrow rationale.
+                unsafe { &*backend_ptr },
                 &self.functions,
                 &self.type_info,
             );
@@ -1219,13 +1278,12 @@ impl EGraph {
         let actions = actions.to_core_actions(&mut ctx)?.0;
 
         let id = {
-            let bridge = self
-                .backend
-                .as_any_mut()
-                .downcast_mut::<egglog_bridge::EGraph>()
-                .expect("rule construction is bridge-only");
+            let backend_ptr: *const dyn egglog_backend_trait::Backend = &*self.backend;
+            let rb = self.backend.new_rule("eval_resolved_expr", false);
             let mut translator = BackendRule::new(
-                bridge.new_rule("eval_resolved_expr", false),
+                rb,
+                // SAFETY: see `add_rule` for the disjoint-reborrow rationale.
+                unsafe { &*backend_ptr },
                 &self.functions,
                 &self.type_info,
             );
@@ -1236,7 +1294,7 @@ impl EGraph {
                 ext_id,
                 &[arg],
                 egglog_bridge::ColumnTy::Base(unit_id),
-                || "this function will never panic".to_string(),
+                "this function will never panic".to_string(),
             );
 
             translator.build()
@@ -1293,22 +1351,22 @@ impl EGraph {
             })));
 
         let id = {
-            let bridge = self
-                .backend
-                .as_any_mut()
-                .downcast_mut::<egglog_bridge::EGraph>()
-                .expect("rule construction is bridge-only");
+            let backend_ptr: *const dyn egglog_backend_trait::Backend = &*self.backend;
+            let rb = self.backend.new_rule("check_facts", false);
             let mut translator = BackendRule::new(
-                bridge.new_rule("check_facts", false),
+                rb,
+                // SAFETY: see `add_rule` for the disjoint-reborrow rationale.
+                unsafe { &*backend_ptr },
                 &self.functions,
                 &self.type_info,
             );
             translator.query(&query, true);
-            translator
-                .rb
-                .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
-                    "this function will never panic".to_string()
-                });
+            translator.rb.call_external_func(
+                ext_id,
+                &[],
+                egglog_bridge::ColumnTy::Id,
+                "this function will never panic".to_string(),
+            );
             translator.build()
         };
         let _ = self.backend.run_rules(&[id]).unwrap();
@@ -2034,7 +2092,8 @@ impl EGraph {
 }
 
 struct BackendRule<'a> {
-    rb: egglog_bridge::RuleBuilder<'a>,
+    rb: Box<dyn egglog_backend_trait::RuleBuilderOps + 'a>,
+    backend: &'a dyn egglog_backend_trait::Backend,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
@@ -2042,12 +2101,14 @@ struct BackendRule<'a> {
 
 impl<'a> BackendRule<'a> {
     fn new(
-        rb: egglog_bridge::RuleBuilder<'a>,
+        rb: Box<dyn egglog_backend_trait::RuleBuilderOps + 'a>,
+        backend: &'a dyn egglog_backend_trait::Backend,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
+            backend,
             functions,
             type_info,
             entries: Default::default(),
@@ -2058,10 +2119,11 @@ impl<'a> BackendRule<'a> {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
-                core::GenericAtomTerm::Var(_, v) => self
-                    .rb
-                    .new_var_named(v.sort.column_ty(self.rb.egraph()), &v.name),
-                core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
+                core::GenericAtomTerm::Var(_, v) => {
+                    let ty = v.sort.column_ty(self.backend);
+                    self.rb.new_var_named(ty, &v.name)
+                }
+                core::GenericAtomTerm::Literal(_, l) => literal_to_entry_dyn(self.backend, l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }
@@ -2081,12 +2143,22 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
+            // `unstable-fn` is a bridge-only feature: it lives on the
+            // ResolvedFunction container and requires a `TableAction`
+            // that the trait surface doesn't expose. DuckDB programs
+            // never reach this branch because `FunctionSort`
+            // containers are gated out at upstream typechecking.
+            let bridge = self
+                .backend
+                .as_any()
+                .downcast_ref::<egglog_bridge::EGraph>()
+                .expect("unstable-fn requires the bridge backend");
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
                 ResolvedFunctionId::Lookup(egglog_bridge::TableAction::new(
-                    self.rb.egraph(),
+                    bridge,
                     self.func(f),
                 ))
             } else if let Some(possible) = self.type_info.get_prims(name) {
@@ -2114,7 +2186,7 @@ impl<'a> BackendRule<'a> {
             };
             let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
 
-            qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
+            qe_args[0] = bridge.base_value_constant(ResolvedFunction {
                 id,
                 partial_arcsorts,
                 name: name.clone(),
@@ -2124,7 +2196,7 @@ impl<'a> BackendRule<'a> {
         (
             prim.external_id(),
             qe_args,
-            prim.output().column_ty(self.rb.egraph()),
+            prim.output().column_ty(self.backend),
         )
     }
 
@@ -2166,20 +2238,25 @@ impl<'a> BackendRule<'a> {
                             let f = self.func(f);
                             let args = self.args(args);
                             let span = span.clone();
-                            self.rb.lookup(f, &args, move || {
-                                format!("{span}: lookup of function {name} failed")
-                            })
+                            self.rb.lookup(
+                                f,
+                                &args,
+                                format!("{span}: lookup of function {name} failed"),
+                            )
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
                             let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
-                            self.rb.call_external_func(p, &args, ty, move || {
-                                format!("{span}: call of primitive {name} failed")
-                            })
+                            self.rb.call_external_func(
+                                p,
+                                &args,
+                                ty,
+                                format!("{span}: call of primitive {name} failed"),
+                            )
                         }
                     };
-                    self.entries.insert(v, y.into());
+                    self.entries.insert(v, y);
                 }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
@@ -2203,7 +2280,11 @@ impl<'a> BackendRule<'a> {
                         let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
-                            Change::Subsume if can_subsume => self.rb.subsume(f, &args),
+                            Change::Subsume if can_subsume => {
+                                self.rb
+                                    .subsume(f, &args)
+                                    .map_err(|e| Error::BackendError(format!("subsume failed: {e}")))?;
+                            }
                             Change::Subsume => {
                                 return Err(Error::SubsumeMergeError(name, span.clone()));
                             }
@@ -2222,17 +2303,40 @@ impl<'a> BackendRule<'a> {
     }
 
     fn build(self) -> egglog_bridge::RuleId {
-        self.rb.build()
+        self.rb.build().expect("rule build failed")
     }
 }
 
-fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
+/// Trait-routed literal-to-entry helper. Constructs a typed
+/// `QueryEntry::Const` via the backend's `BaseValuePool` so the
+/// caller doesn't need to downcast to the concrete bridge.
+fn literal_to_entry_dyn(
+    backend: &dyn egglog_backend_trait::Backend,
+    l: &Literal,
+) -> QueryEntry {
+    use egglog_backend_trait::{pool_get, pool_get_ty};
+    let pool = backend.base_value_pool();
     match l {
-        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
-        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
-        Literal::Unit => egraph.base_value_constant::<()>(()),
+        Literal::Int(x) => {
+            let val = pool_get::<i64>(pool, *x);
+            backend.base_value_constant_dyn(val, pool_get_ty::<i64>(pool))
+        }
+        Literal::Float(x) => {
+            let val = pool_get::<sort::F>(pool, x.into());
+            backend.base_value_constant_dyn(val, pool_get_ty::<sort::F>(pool))
+        }
+        Literal::String(x) => {
+            let val = pool_get::<sort::S>(pool, sort::S::new(x.clone()));
+            backend.base_value_constant_dyn(val, pool_get_ty::<sort::S>(pool))
+        }
+        Literal::Bool(x) => {
+            let val = pool_get::<bool>(pool, *x);
+            backend.base_value_constant_dyn(val, pool_get_ty::<bool>(pool))
+        }
+        Literal::Unit => {
+            let val = pool_get::<()>(pool, ());
+            backend.base_value_constant_dyn(val, pool_get_ty::<()>(pool))
+        }
     }
 }
 

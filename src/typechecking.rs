@@ -145,7 +145,7 @@ impl EGraph {
 
     /// Add a user-defined sort to the e-graph.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
-        sort.register_type(self.bridge_mut());
+        sort.register_type(&mut *self.backend);
 
         let name = sort.name();
         match self.type_info.sorts.entry(name.to_owned()) {
@@ -185,6 +185,20 @@ impl EGraph {
 
         let primitive = Arc::new(x.clone());
         let id = self.backend.register_external_func(Box::new(Wrapper(x)));
+        // If the backend is the DuckDB-backed one, register the
+        // primitive's user-visible name so the duckdb rule-builder
+        // can later translate `ExternalFunctionId` references into
+        // `Term::Prim(name, …)` calls in the duck IR. The trait
+        // surface itself doesn't carry the name; this side channel
+        // bridges the gap until a more general primitive-naming
+        // mechanism lands.
+        if let Some(duck) = self
+            .backend
+            .as_any_mut()
+            .downcast_mut::<egglog_bridge_duckdb::EGraph>()
+        {
+            duck.set_external_func_name(id, primitive.name().to_owned());
+        }
         self.type_info
             .primitives
             .entry(primitive.name().to_owned())
