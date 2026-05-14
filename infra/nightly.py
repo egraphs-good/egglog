@@ -28,19 +28,21 @@ def main(benchmark_dir):
   data_out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 def run_command(cmd):
-  started = time.perf_counter()
+  started = time.perf_counter_ns()
   cmd_result = subprocess.run(
     cmd,
     cwd=POACH_ROOT,
     capture_output=True,
     text=True # decode stderr/stdout as string instead of raw bytes
   )
+  # Clock granularity is ~50-100 ns.
+  # Report as micros to avoid reporting false precision.
+  time_micros = (time.perf_counter_ns() - started) // 1000
   if cmd_result.returncode != 0:
-    time_seconds = time.perf_counter() - started
-    print(f"Command failed after {time_seconds:.2f}s: {' '.join(cmd)}", file=sys.stderr)
     return {
       "cmd": cmd,
-      "status": "error"
+      "status": "error",
+      "wall_time_micros": time_micros
     }
 
   report = json.loads(cmd_result.stderr)
@@ -49,30 +51,30 @@ def run_command(cmd):
     "cmd": " ".join(cmd),
     "status": "success",
     "report": summarize_report(report),
-    "wall_time_s": time.perf_counter() - started
+    "wall_time_micros": time_micros
   }
   
 def summarize_report(report):
   # aggregate timing steps by type
-  rule_ms = 0
-  extraction_ms = 0
-  other_ms = 0
-  total_ms = 0
+  rule_micros = 0
+  extraction_micros = 0
+  other_micros = 0
+  total_micros = 0
   for time_step in report["timings"]:
-    total_ms += time_step["total"]
+    total_micros += time_step["total"]
     if "running_rules" in time_step["tags"]:
-      rule_ms += time_step["total"]
+      rule_micros += time_step["total"]
     elif "extraction" in time_step["tags"]:
-      extraction_ms += time_step["total"]
+      extraction_micros += time_step["total"]
     else:
-      other_ms += time_step["total"]
+      other_micros += time_step["total"]
 
   # No sizes in vanilla egglog reports
 
   return {
-    "rule_ms": rule_ms,
-    "extraction_ms": extraction_ms,
-    "other_ms": other_ms,
+    "rule_micros": rule_micros,
+    "extraction_micros": extraction_micros,
+    "other_micros": other_micros,
     "timing_steps": len(report["timings"])
   }
 
