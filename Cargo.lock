@@ -1030,6 +1030,7 @@ dependencies = [
  "anyhow",
  "duckdb",
  "egglog-backend-trait",
+ "egglog-core-relations",
  "egglog-numeric-id",
  "log",
 ]

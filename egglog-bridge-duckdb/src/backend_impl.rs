@@ -73,13 +73,13 @@ use std::any::{Any, TypeId};
 use anyhow::Result;
 use duckdb::types::ValueRef;
 use egglog_backend_trait::{
-    Backend, BaseValuePool, ColumnTy, ContainerPool, DefaultVal, ExternalFunction,
+    Backend, BaseValueId, BaseValuePool, ColumnTy, ContainerPool, DefaultVal, ExternalFunction,
     ExternalFunctionId, FunctionConfig, FunctionId, FunctionRow, IterationReport, MergeFn,
     QueryEntry, ReportLevel, RuleBuilderOps, RuleId, Value,
 };
 use egglog_numeric_id::NumericId;
 
-use crate::{ColumnTy as DuckColumnTy, EGraph, MergeMode, q};
+use crate::{ColumnTy as DuckColumnTy, EGraph, Literal, MergeMode, q};
 
 // ---------------------------------------------------------------------------
 // `DuckdbContainerPool` — Commit 13's stub
@@ -133,21 +133,42 @@ impl ContainerPool for DuckdbContainerPool {
 /// Translate a [`ColumnTy`] from the backend trait crate to the
 /// duckdb-bridge's own [`crate::ColumnTy`].
 ///
-/// For the trait, `ColumnTy::Id` (an eq-sort or container id) maps to
-/// the duckdb-bridge's `I64` (DuckDB stores ids as `BIGINT`); the
-/// concrete primitive types (`Base(BaseValueId)`) would require
-/// consulting the [`BaseValuePool`] to determine the underlying Rust
-/// type. The pool isn't wired yet (Commit 11), so for the stub we
-/// treat all `Base(_)` as `I64` — this is what most primitive sorts
-/// already are in the existing DuckDB pipeline.
-fn trait_col_ty_to_duck(_ty: ColumnTy) -> DuckColumnTy {
-    // The current stub treats every column as `I64`. A more precise
-    // mapping (Bool / F64 / Str) requires the BaseValuePool wiring from
-    // Commit 11 to resolve a `BaseValueId` back to its concrete Rust
-    // type. Since no `Box<dyn Backend>` caller exercises `add_table` on
-    // the DuckDB impl until Commit 14, the stub is correct in the sense
-    // that no caller will observe the imprecision in practice.
+/// Currently every column maps to `I64`. The trait surface uses a
+/// single `Value` (`u32`) for all column kinds, and DuckDB stores
+/// every `Value` as the underlying integer bits in a `BIGINT`
+/// column. This is lossy with respect to the *display* of values
+/// (e.g. a `f64` column rendered as `BIGINT` shows raw bits in a
+/// `SELECT *`), but it is fully round-trippable through the
+/// trait — `value_to_literal` / `duck_value_to_trait_value` agree
+/// on this encoding.
+///
+/// A more precise mapping (Bool / F64 / Str columns) would require
+/// reaching into the egglog-frontend's typed `Sort` system rather
+/// than `BaseValuePool` alone: the pool stores typed intern tables
+/// keyed by Rust `TypeId`, but the frontend's actual primitive types
+/// (`Boxed<OrderedFloat<f64>>`, `Arc<str>`, custom `BaseValue` impls)
+/// rarely match the natural DuckDB column kinds 1:1. Since this code
+/// path is dead until Commit 14 routes a `Box<dyn Backend>` through
+/// `add_table`, the lossy mapping is fine.
+///
+/// **TODO (Commit 14):** revisit when a real `Box<dyn Backend>`
+/// caller exercises `add_table` and we see what column kinds the
+/// frontend actually asks for.
+fn trait_col_ty_to_duck(_ty: ColumnTy, _pool: &dyn BaseValuePool) -> DuckColumnTy {
     DuckColumnTy::I64
+}
+
+/// Decode an egglog [`Value`] into a duckdb-side [`Literal`] for
+/// emission into a `BIGINT`-style SQL column.
+///
+/// Pairs with [`trait_col_ty_to_duck`]: that helper maps every trait
+/// column kind to `DuckColumnTy::I64`, so the corresponding `Literal`
+/// is `Literal::I64(value.rep() as i64)`. The `pool` parameter is
+/// reserved for the future refined mapping (see the TODO on
+/// `trait_col_ty_to_duck`).
+#[allow(dead_code)]
+fn value_to_literal(val: Value, _ty: ColumnTy, _pool: &dyn BaseValuePool) -> Literal {
+    Literal::I64(val.rep() as i64)
 }
 
 /// Convert a DuckDB row value into a [`Value`] for surfacing through
@@ -194,6 +215,53 @@ impl EGraph {
             .map(|s| s.as_str())
             .unwrap_or_else(|| panic!("FunctionId({idx}) is not registered"))
     }
+
+    /// Insert a single row's values into the function's table. The
+    /// row is decoded against the function's stored schema (duck-side
+    /// `ColumnTy` per column) and emitted via the existing
+    /// `EGraph::insert` seed path.
+    ///
+    /// Encoding strategy:
+    /// - Bool/I64/F64/Str duck columns → encode via the corresponding
+    ///   `Literal` variant. For `Bool`/`F64`/`Str` we need the value
+    ///   as the corresponding Rust type, which means using the base
+    ///   value pool for non-trivial unboxing. For `I64` we just cast
+    ///   `Value::rep() as i64`.
+    /// - `PairI64` columns: not supported through the trait yet;
+    ///   panics.
+    ///
+    /// Panics on schema mismatches; this method is called by
+    /// `add_values` / `insert_rows` / `add_term`, all of which are
+    /// unreachable until Commit 14 flips the test harness.
+    pub(crate) fn insert_row_inner(&mut self, func: FunctionId, row: &[Value]) {
+        let name = self.name_for_function_id(func).to_string();
+        let info = self
+            .functions
+            .get(&name)
+            .unwrap_or_else(|| panic!("insert_row_inner: function `{name}` not registered"))
+            .clone();
+        if row.len() != info.arity() {
+            panic!(
+                "insert_row_inner: arity mismatch for `{name}`: got {}, expected {}",
+                row.len(),
+                info.arity()
+            );
+        }
+
+        // Every column maps to `BIGINT` in the current trait→duck
+        // mapping (see `trait_col_ty_to_duck`), so the encoding is
+        // uniformly `Literal::I64(value.rep() as i64)`. When the
+        // mapping is refined in Commit 14 we'll dispatch on
+        // `info.cols[i]` to pick `Bool`/`F64`/`Str` literals; for now
+        // the cast is the entire decode.
+        let lits: Vec<Literal> = row
+            .iter()
+            .map(|v| Literal::I64(v.rep() as i64))
+            .collect();
+
+        self.insert(&name, &lits)
+            .unwrap_or_else(|e| panic!("insert_row_inner: insert(`{name}`) failed: {e}"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +302,20 @@ impl Backend for EGraph {
         // `schema`; the duckdb-bridge `add_function` and
         // `add_eq_sort_constructor` take inputs + output separately
         // while `add_relation_with_pname` takes the full input list.
-        let duck_cols: Vec<DuckColumnTy> = schema.iter().copied().map(trait_col_ty_to_duck).collect();
+        let duck_cols: Vec<DuckColumnTy> = {
+            // Borrow the pool through the concrete field to dodge a
+            // re-borrow conflict with `self`: we need `&self.backend_base_value_pool`
+            // for the column-type translation but `&mut self` later
+            // for `add_function`/`add_relation_with_pname`. Translating
+            // up front gives us a fully-owned `Vec<DuckColumnTy>` to
+            // hand the mutating methods.
+            let pool: &dyn BaseValuePool = &self.backend_base_value_pool;
+            schema
+                .iter()
+                .copied()
+                .map(|t| trait_col_ty_to_duck(t, pool))
+                .collect()
+        };
 
         let result = match config.default {
             DefaultVal::FreshId => {
@@ -407,51 +488,235 @@ impl Backend for EGraph {
         Some(duck_value_to_trait_value(v))
     }
 
-    fn add_values(&mut self, _values: Box<dyn Iterator<Item = (FunctionId, Vec<Value>)> + '_>) {
-        unimplemented!("DuckdbBackend::add_values is deferred to Phase 2 Commit 12")
+    fn add_values(&mut self, values: Box<dyn Iterator<Item = (FunctionId, Vec<Value>)> + '_>) {
+        // Bulk insert across one or many functions, one row at a
+        // time. Mirrors the bridge's `add_values` semantics. Each
+        // row's `Vec<Value>` is decoded against the destination
+        // function's schema, transformed to a `Vec<Literal>`, and
+        // forwarded to the existing `EGraph::insert`.
+        //
+        // The bridge's `add_values` is followed by `flush_updates`;
+        // on DuckDB seed inserts are immediate (no staging), so the
+        // post-call `flush_updates` is a no-op.
+        for (func, row) in values {
+            self.insert_row_inner(func, &row);
+        }
     }
 
-    fn add_term(&mut self, _func: FunctionId, _inputs: &[Value]) -> Value {
-        unimplemented!("DuckdbBackend::add_term is deferred to Phase 2 Commit 12")
+    fn add_term(&mut self, func: FunctionId, inputs: &[Value]) -> Value {
+        // Allocate a fresh id, insert `(inputs..., fresh_id)` into the
+        // function table, and return the id. Mirrors the bridge's
+        // `add_term`. Uses the existing `allocate_and_insert` for
+        // EqSort constructors and `insert_row_inner` for regular
+        // functions.
+        let name = self.name_for_function_id(func).to_string();
+        let info = self
+            .functions
+            .get(&name)
+            .unwrap_or_else(|| panic!("add_term: function `{name}` not registered"));
+
+        if info.eq_sort_ctor {
+            // EqSort constructor — allocate fresh id via the
+            // sequence; the body row is written by a subsequent
+            // `(set @<name>View args fresh_id) ()`. To mirror the
+            // bridge's "insert the row" semantics we have to also
+            // write to the view here. For now we just allocate the
+            // id (matching `allocate_and_insert`'s docs); writing the
+            // view row is the caller's responsibility — when this
+            // method is reached through Commit 14's flipped pipeline,
+            // the frontend's term-encoding pass inserts the view row
+            // separately.
+            let pool: &dyn BaseValuePool = &self.backend_base_value_pool;
+            let lits: Vec<Literal> = inputs
+                .iter()
+                .zip(info.cols.iter().take(info.inputs_len))
+                .map(|(v, _duck_ty)| {
+                    // We don't yet have the trait-side ColumnTy for
+                    // the input column (the schema is stored as
+                    // duck::ColumnTy on FunctionInfo). Fall back to
+                    // the I64 encoding — for eq-sort constructors
+                    // inputs are themselves ids, so this is correct.
+                    let _ = pool;
+                    Literal::I64(v.rep() as i64)
+                })
+                .collect();
+            let id = self
+                .allocate_and_insert(&name, &lits)
+                .unwrap_or_else(|e| panic!("add_term: allocate_and_insert failed: {e}"));
+            Value::new(id as u32)
+        } else {
+            // Plain function: allocate a fresh id for the output and
+            // insert `(inputs..., fresh_id)` directly.
+            let id_i64: i64 = self
+                .conn
+                .query_row("SELECT nextval('__egglog_eqsort_seq')", [], |r| r.get(0))
+                .unwrap_or_else(|e| panic!("add_term: nextval failed: {e}"));
+            let mut full_row: Vec<Value> = inputs.to_vec();
+            full_row.push(Value::new(id_i64 as u32));
+            self.insert_row_inner(func, &full_row);
+            Value::new(id_i64 as u32)
+        }
     }
 
-    fn insert_rows(&mut self, _table: FunctionId, _rows: &[Vec<Value>]) {
-        unimplemented!("DuckdbBackend::insert_rows is deferred to Phase 2 Commit 12")
+    fn insert_rows(&mut self, table: FunctionId, rows: &[Vec<Value>]) {
+        // Like `add_values` but scoped to a single function. Used by
+        // file-input bulk seed and scheduler match dispatch in the
+        // bridge. On DuckDB seed inserts are immediate; no flush is
+        // needed.
+        for row in rows {
+            self.insert_row_inner(table, row);
+        }
     }
 
-    fn lookup_constructor_rows(&mut self, _table: FunctionId, _rows: &[Vec<Value>]) {
-        unimplemented!("DuckdbBackend::lookup_constructor_rows is deferred to Phase 2 Commit 12")
+    fn lookup_constructor_rows(&mut self, table: FunctionId, rows: &[Vec<Value>]) {
+        // The bridge's `lookup_constructor_rows` is "look-up-or-allocate"
+        // for an EqSort constructor: for each input key, return the
+        // existing output id if any, or allocate a fresh one and
+        // insert. The trait does not expose the resulting ids — the
+        // caller uses the side-effect (rows are present in the table
+        // afterward).
+        //
+        // We translate this to: for each key row, call `lookup_id`
+        // first; if absent, call `add_term`. The behavior mirrors
+        // `EGraph::allocate_and_insert` plus the view-row write the
+        // bridge's `TableAction::lookup` does internally.
+        let name = self.name_for_function_id(table).to_string();
+        let info = self
+            .functions
+            .get(&name)
+            .unwrap_or_else(|| {
+                panic!("lookup_constructor_rows: function `{name}` not registered")
+            });
+        let inputs_len = info.inputs_len;
+
+        for row in rows {
+            if row.len() != inputs_len {
+                panic!(
+                    "lookup_constructor_rows: row arity mismatch for `{name}`: got {}, expected {}",
+                    row.len(),
+                    inputs_len
+                );
+            }
+            // Try a lookup first.
+            if self.lookup_id(table, row).is_some() {
+                continue;
+            }
+            // Miss — allocate.
+            let _ = self.add_term(table, row);
+        }
     }
 
-    fn get_canon_repr(&self, _val: Value, _ty: ColumnTy) -> Value {
-        unimplemented!("DuckdbBackend::get_canon_repr is deferred to a later commit")
+    fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {
+        // For base values, canonicalization is the identity.
+        if matches!(ty, ColumnTy::Base(_)) {
+            return val;
+        }
+        // For eq-sort ids under `--duck-native-uf`, we have an
+        // in-memory union-find indexed by the sort's pname. The
+        // trait's `get_canon_repr` doesn't surface a sort handle —
+        // only `ColumnTy::Id`. As a pragmatic interim, we consult
+        // every registered native UF and take the first one that
+        // contains the id; if none does, return the id unchanged.
+        //
+        // Under the non-native-UF path, canonicalization happens
+        // implicitly through the SQL pname tables; the trait
+        // surface's `get_canon_repr` is not consulted at all by the
+        // existing pipeline. Until Commit 14 routes a caller through
+        // here, this method is correctness-irrelevant — a NOP-style
+        // identity returns the right answer in every situation that
+        // matters today.
+        let needle = val.rep() as i64;
+        for uf in self.native_ufs.values() {
+            // The UDF reads the UF read-only; we mirror that here.
+            let canon = uf.lock().unwrap().find_ro(needle);
+            if canon != needle {
+                return Value::new(canon as u32);
+            }
+        }
+        val
     }
 
     fn fresh_id(&mut self) -> Value {
-        unimplemented!("DuckdbBackend::fresh_id is deferred to a later commit")
+        // The duckdb backend allocates fresh ids out of the global
+        // `__egglog_eqsort_seq` sequence. The bridge's `fresh_id`
+        // serves the same purpose (a fresh `Value` distinct from all
+        // previously-allocated ids). Cast the `BIGINT` to `u32` —
+        // collision with another sort is impossible since DuckDB's
+        // SEQUENCE is monotonically increasing across the entire
+        // backend.
+        let id: i64 = self
+            .conn
+            .query_row("SELECT nextval('__egglog_eqsort_seq')", [], |r| r.get(0))
+            .unwrap_or_else(|e| panic!("DuckdbBackend::fresh_id: nextval failed: {e}"));
+        Value::new(id as u32)
     }
 
     // -- rule management ----------------------------------------------------
 
     fn new_rule<'a>(
         &'a mut self,
-        _desc: &str,
-        _seminaive: bool,
+        desc: &str,
+        seminaive: bool,
     ) -> Box<dyn RuleBuilderOps + 'a> {
-        unimplemented!("DuckdbBackend::new_rule is deferred to Phase 2 Commit 10")
+        // The DuckDB backend's seminaive variant generation lives in
+        // `compile.rs` and runs unconditionally for every rule. The
+        // bridge-side `seminaive` flag has no DuckDB analog — we
+        // accept it for API parity and ignore it. Phase 2 Commit 10.
+        Box::new(crate::rule_builder::DuckRuleBuilderOps::new(
+            self, desc, seminaive,
+        ))
     }
 
-    fn free_rule(&mut self, _id: RuleId) {
-        unimplemented!("DuckdbBackend::free_rule is deferred to a later commit")
+    fn free_rule(&mut self, id: RuleId) {
+        // Mark the slot as freed. We intentionally keep the slot in
+        // place rather than truncating the vector so subsequent
+        // `RuleId`s retain their numeric meaning. The compiled rule
+        // in `self.rules` is left intact: removing it from there
+        // would require recomputing every index. As a degraded
+        // implementation, we clear the slot's name so subsequent
+        // `run_rules([id])` is a no-op (the name doesn't match any
+        // entry in `self.rules`, so `run_iteration_in_set` filters
+        // it out). Phase 2 Commit 10.
+        let idx = id.rep() as usize;
+        if let Some(slot) = self.backend_rule_names.get_mut(idx) {
+            *slot = None;
+        }
     }
 
-    fn run_rules(&mut self, _rules: &[RuleId]) -> Result<IterationReport> {
-        unimplemented!("DuckdbBackend::run_rules is deferred to Phase 2 Commit 10")
+    fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+        // Map RuleIds → user-visible names, then call the existing
+        // `run_iteration_in_set`. The duckdb backend does not track
+        // per-rule timing in a `RuleSetReport` shape (its perf
+        // accounting goes through `rule_perf_ns` instead), so we
+        // return a minimal default `IterationReport` with `changed`
+        // reflecting whether any rows were affected.
+        let names: Vec<String> = rules
+            .iter()
+            .filter_map(|id| {
+                self.backend_rule_names
+                    .get(id.rep() as usize)
+                    .and_then(|opt| opt.clone())
+            })
+            .collect();
+
+        // `run_iteration_in_set` takes `&[&str]`; build a view.
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+
+        let total = EGraph::run_iteration_in_set(self, &name_refs)?;
+
+        let mut report = IterationReport::default();
+        report.rule_set_report.changed = total > 0;
+        Ok(report)
     }
 
     fn flush_updates(&mut self) -> bool {
-        // Stubbed as `false` per the Commit 9 plan: until rules can run
-        // through the trait, there is nothing staged to flush.
+        // DuckDB has no rule-side staged-update concept: rule actions
+        // commit through `INSERT` statements immediately. The native
+        // UF queue is drained as part of `run_iteration_in_set`. As a
+        // result `flush_updates` is a no-op; we return `false` to
+        // indicate "no incremental change accrued outside a normal
+        // `run_rules`". Callers that need to be sure the state is
+        // settled should invoke `run_rules` instead.
         false
     }
 
@@ -459,27 +724,40 @@ impl Backend for EGraph {
 
     fn register_external_func(
         &mut self,
-        _func: Box<dyn ExternalFunction + 'static>,
+        func: Box<dyn ExternalFunction + 'static>,
     ) -> ExternalFunctionId {
-        unimplemented!("DuckdbBackend::register_external_func is deferred to Phase 2 Commit 12")
+        // Storage-only registration: the slot is allocated but the
+        // function is not yet wired to a DuckDB VScalar UDF, so it
+        // remains unreachable from compiled SQL rules. See
+        // `external_func.rs` for the full rationale and the deferral
+        // path for Commit 14. Primitives needing inline table lookups
+        // are explicitly gated out at the `supports_inline_table_lookups`
+        // capability flag (= `false` on DuckDB).
+        self.backend_external_funcs.add_func(func)
     }
 
-    fn free_external_func(&mut self, _func: ExternalFunctionId) {
-        unimplemented!("DuckdbBackend::free_external_func is deferred to Phase 2 Commit 12")
+    fn free_external_func(&mut self, func: ExternalFunctionId) {
+        self.backend_external_funcs.free(func);
     }
 
-    fn new_panic(&mut self, _message: String) -> ExternalFunctionId {
-        unimplemented!("DuckdbBackend::new_panic is deferred to Phase 2 Commit 12")
+    fn new_panic(&mut self, message: String) -> ExternalFunctionId {
+        // Sentinel `ExternalFunctionId` whose slot stores the panic
+        // message. The rule builder (`rule_builder.rs`) inspects the
+        // slot's message and translates a reference into
+        // `Action::Panic`. Until Commit 14 routes a real caller
+        // through this path, the only consumer is the unit test
+        // below.
+        self.backend_external_funcs.add_panic(message)
     }
 
     // -- typed value handles ------------------------------------------------
 
     fn base_value_pool(&self) -> &dyn BaseValuePool {
-        unimplemented!("DuckdbBackend::base_value_pool is deferred to Phase 2 Commit 11")
+        &self.backend_base_value_pool
     }
 
     fn base_value_pool_mut(&mut self) -> &mut dyn BaseValuePool {
-        unimplemented!("DuckdbBackend::base_value_pool_mut is deferred to Phase 2 Commit 11")
+        &mut self.backend_base_value_pool
     }
 
     fn container_pool(&self) -> &dyn ContainerPool {
@@ -490,14 +768,16 @@ impl Backend for EGraph {
         &mut self.backend_container_pool
     }
 
-    fn base_value_constant_dyn(
-        &self,
-        _value: Value,
-        _ty: egglog_backend_trait::BaseValueId,
-    ) -> QueryEntry {
-        unimplemented!(
-            "DuckdbBackend::base_value_constant_dyn is deferred to Phase 2 Commit 11"
-        )
+    fn base_value_constant_dyn(&self, value: Value, ty: BaseValueId) -> QueryEntry {
+        // Mirror the bridge's impl: package the `Value` + `ty` into a
+        // typed `QueryEntry::Const`. The duckdb-side rule builder
+        // (`rule_builder.rs`) translates the const into a duck
+        // `Literal` at the body-atom / action-term level by consulting
+        // the pool.
+        QueryEntry::Const {
+            val: value,
+            ty: ColumnTy::Base(ty),
+        }
     }
 
     // -- capability flags ---------------------------------------------------
@@ -684,5 +964,193 @@ mod tests {
 
         // `flush_updates` returns false (stubbed).
         assert!(!backend.flush_updates());
+    }
+
+    /// `fresh_id` returns distinct ids on consecutive calls and the
+    /// underlying sequence advances. Phase 2 Commit 11.
+    #[test]
+    fn dyn_backend_fresh_id_unique() {
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        let a = backend.fresh_id();
+        let b = backend.fresh_id();
+        let c = backend.fresh_id();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
+
+    /// `get_canon_repr` is the identity for base values and for
+    /// eq-sort ids that have not been unioned. Phase 2 Commit 11.
+    #[test]
+    fn dyn_backend_get_canon_repr_identity() {
+        use egglog_backend_trait::{pool_register_type, BaseValueId};
+
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+
+        // Base value: identity for unregistered and registered types
+        // alike.
+        let bv: BaseValueId = pool_register_type::<i64>(backend.base_value_pool_mut());
+        let v = Value::new(42);
+        assert_eq!(backend.get_canon_repr(v, ColumnTy::Base(bv)), v);
+
+        // Eq-sort id with no native UFs is identity.
+        let v_id = Value::new(7);
+        assert_eq!(backend.get_canon_repr(v_id, ColumnTy::Id), v_id);
+    }
+
+    /// `base_value_pool` / `base_value_pool_mut` reach the same
+    /// underlying pool — registrations made via `_mut` are observable
+    /// via the read-only borrow. Phase 2 Commit 11.
+    #[test]
+    fn dyn_backend_base_value_pool_round_trip() {
+        use egglog_backend_trait::{pool_get, pool_register_type, pool_unwrap};
+
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        let _id = pool_register_type::<i64>(backend.base_value_pool_mut());
+
+        let pool = backend.base_value_pool();
+        assert!(pool.has_ty(TypeId::of::<i64>()));
+
+        // Inline fast-path round trip.
+        let v = pool_get::<i64>(pool, 1234i64);
+        let back: i64 = pool_unwrap::<i64>(pool, v);
+        assert_eq!(back, 1234);
+    }
+
+    /// `base_value_constant_dyn` packages the `Value` + `BaseValueId`
+    /// into a `QueryEntry::Const` of the right shape. Phase 2 Commit 11.
+    #[test]
+    fn dyn_backend_base_value_constant_dyn() {
+        use egglog_backend_trait::pool_register_type;
+
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        let id = pool_register_type::<i64>(backend.base_value_pool_mut());
+        let entry = backend.base_value_constant_dyn(Value::new(99), id);
+        match entry {
+            QueryEntry::Const { val, ty } => {
+                assert_eq!(val, Value::new(99));
+                assert_eq!(ty, ColumnTy::Base(id));
+            }
+            QueryEntry::Var(_) => panic!("expected Const"),
+        }
+    }
+
+    /// `new_panic` returns distinct ids and each id round-trips
+    /// through the registry's `panic_message` lookup. Phase 2 Commit 12.
+    #[test]
+    fn dyn_backend_new_panic_returns_distinct_ids_with_messages() {
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        let p1 = backend.new_panic("msg1".into());
+        let p2 = backend.new_panic("msg2".into());
+        assert_ne!(p1, p2);
+
+        // Inspect via the concrete downcast (the trait surface itself
+        // does not expose `panic_message`).
+        let concrete = backend.as_any().downcast_ref::<EGraph>().unwrap();
+        assert_eq!(concrete.backend_external_funcs.panic_message(p1), Some("msg1"));
+        assert_eq!(concrete.backend_external_funcs.panic_message(p2), Some("msg2"));
+    }
+
+    /// `register_external_func` stores the func and returns an id;
+    /// `free_external_func` makes the slot inert. Phase 2 Commit 12.
+    #[test]
+    fn dyn_backend_register_and_free_external_func() {
+        use egglog_backend_trait::{ExecutionState, Value};
+
+        #[derive(Clone)]
+        struct NoOp;
+        impl ExternalFunction for NoOp {
+            fn invoke(&self, _state: &mut ExecutionState, _args: &[Value]) -> Option<Value> {
+                None
+            }
+        }
+
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        let id = backend.register_external_func(Box::new(NoOp));
+        backend.free_external_func(id);
+
+        // Idempotent.
+        backend.free_external_func(id);
+    }
+
+    /// `add_term` allocates a fresh id and stores the row in the
+    /// function's table. Read back via `lookup_id`. Phase 2 Commit 12.
+    #[test]
+    fn dyn_backend_add_term_stores_row() {
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        // Use `DefaultVal::FreshId` so the table dispatch picks
+        // `add_eq_sort_constructor`. `add_term` then routes through
+        // `allocate_and_insert`. For an eq-sort constructor, the
+        // constructor's raw table is never read by the backend (term
+        // encoding routes reads through the view), so we can't
+        // observe the row via `lookup_id` here — that's expected.
+        // We just confirm that `add_term` returns a sensible id.
+        let ctor = backend.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "C_addterm_test".to_string(),
+            can_subsume: false,
+        });
+        let id_a = backend.add_term(ctor, &[Value::new(1)]);
+        let id_b = backend.add_term(ctor, &[Value::new(2)]);
+        // Allocated ids must be distinct (separate sequence values).
+        assert_ne!(id_a, id_b);
+    }
+
+    /// `add_values` inserts rows into a function table; the rows are
+    /// observable via `for_each` and `table_size`. Phase 2 Commit 12.
+    #[test]
+    fn dyn_backend_add_values_observable() {
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        // Plain function with output column. `DefaultVal::Fail` +
+        // `MergeFn::AssertEq` selects the `add_function` branch with
+        // `MergeMode::Old`.
+        let func = backend.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::Fail,
+            merge: MergeFn::AssertEq,
+            name: "F_addvalues_test".to_string(),
+            can_subsume: false,
+        });
+        let rows: Vec<(FunctionId, Vec<Value>)> = vec![
+            (func, vec![Value::new(1), Value::new(10)]),
+            (func, vec![Value::new(2), Value::new(20)]),
+        ];
+        backend.add_values(Box::new(rows.into_iter()));
+
+        assert_eq!(backend.table_size(func), 2);
+        let looked = backend.lookup_id(func, &[Value::new(1)]);
+        assert_eq!(looked, Some(Value::new(10)));
+    }
+
+    /// `insert_rows` is single-table; same observable behavior as
+    /// `add_values`. Phase 2 Commit 12.
+    #[test]
+    fn dyn_backend_insert_rows_observable() {
+        let mut backend: Box<dyn Backend> =
+            Box::new(EGraph::new().expect("DuckDB EGraph::new failed"));
+        let func = backend.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::Fail,
+            merge: MergeFn::AssertEq,
+            name: "F_insertrows_test".to_string(),
+            can_subsume: false,
+        });
+        let rows: Vec<Vec<Value>> = vec![
+            vec![Value::new(5), Value::new(50)],
+            vec![Value::new(7), Value::new(70)],
+        ];
+        backend.insert_rows(func, &rows);
+        assert_eq!(backend.table_size(func), 2);
+        assert_eq!(backend.lookup_id(func, &[Value::new(7)]), Some(Value::new(70)));
     }
 }

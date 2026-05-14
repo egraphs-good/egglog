@@ -122,7 +122,10 @@ fn sanitize_for_udf(s: &str) -> String {
 }
 
 mod backend_impl;
+mod base_values;
 mod compile;
+mod external_func;
+mod rule_builder;
 
 /// Quote a SQL identifier with double quotes, escaping any embedded
 /// double quote. Necessary because egglog identifiers can contain
@@ -606,6 +609,31 @@ pub struct EGraph {
     /// exists so `Backend::container_pool` / `container_pool_mut` can
     /// return a `&dyn ContainerPool`.
     backend_container_pool: backend_impl::DuckdbContainerPool,
+    /// RuleId -> rule name registered through the trait. Populated by
+    /// `RuleBuilderOps::build` (see `rule_builder.rs`). Indexed by
+    /// `RuleId::rep()`. The corresponding compiled rule lives in
+    /// `self.rules`; this vector just remembers the user-visible name
+    /// per trait id so `run_rules`/`free_rule` can map an id back to
+    /// the duckdb-internal handle.
+    ///
+    /// `None` entries mark slots whose rule has been freed (via
+    /// `Backend::free_rule`).
+    backend_rule_names: Vec<Option<String>>,
+    /// In-process base-value pool. Stores typed intern tables for
+    /// every `BaseValue` type registered through the trait, including
+    /// `i64`/`bool`/`f64`/`String`/`Unit` and user-defined impls.
+    ///
+    /// Concrete DuckDB SQL columns store the `Value`'s `u32` as
+    /// `BIGINT`; the pool's `intern_dyn` / `unwrap_dyn` provide the
+    /// mapping between typed primitives and `Value`. Wraps
+    /// `egglog_core_relations::BaseValues` 1:1 — see
+    /// `base_values.rs`.
+    backend_base_value_pool: base_values::DuckdbBaseValuePool,
+    /// Storage for user-registered primitives + deferred-panic
+    /// sentinels. Indexed by `ExternalFunctionId::rep()`. See
+    /// `external_func.rs` for slot semantics. Wiring the stored
+    /// functions to live DuckDB UDFs is deferred to Commit 14.
+    backend_external_funcs: external_func::DuckdbExternalFuncRegistry,
 }
 
 struct CompiledRule {
@@ -702,6 +730,9 @@ impl EGraph {
             backend_function_names: Vec::new(),
             backend_report_level: egglog_backend_trait::ReportLevel::default(),
             backend_container_pool: backend_impl::DuckdbContainerPool,
+            backend_rule_names: Vec::new(),
+            backend_base_value_pool: base_values::DuckdbBaseValuePool::default(),
+            backend_external_funcs: external_func::DuckdbExternalFuncRegistry::default(),
         })
     }
 
