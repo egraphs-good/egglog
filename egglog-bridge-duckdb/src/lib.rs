@@ -121,6 +121,7 @@ fn sanitize_for_udf(s: &str) -> String {
     out
 }
 
+mod backend_impl;
 mod compile;
 
 /// Quote a SQL identifier with double quotes, escaping any embedded
@@ -583,6 +584,28 @@ pub struct EGraph {
     /// flag) so we can see the work the SQL → memory bridge is
     /// doing.
     native_uf_unions_synced: u64,
+    /// FunctionId -> registered table name. Populated by
+    /// `Backend::add_table`; indexed by `FunctionId::rep()`. Trait
+    /// callers receive numeric ids and we look up the underlying
+    /// duckdb table name through this vector.
+    ///
+    /// Only used by the (currently stubbed) `Backend` trait impl in
+    /// `backend_impl.rs`. The existing parallel pipeline in
+    /// `src/backend_duckdb.rs` registers tables by name through
+    /// `add_function` / `add_relation_with_pname` /
+    /// `add_eq_sort_constructor` directly and does not consult this
+    /// vector.
+    backend_function_names: Vec<String>,
+    /// Report verbosity, stored on behalf of
+    /// `Backend::set_report_level`. The trait impl is stub-shaped in
+    /// Phase 2 Commit 9; the field is here so the setter has a place
+    /// to write to without affecting the rest of the backend.
+    backend_report_level: egglog_backend_trait::ReportLevel,
+    /// Zero-sized stub `ContainerPool`. DuckDB does not support
+    /// containers (see `docs/backend_trait_design.md`); the field
+    /// exists so `Backend::container_pool` / `container_pool_mut` can
+    /// return a `&dyn ContainerPool`.
+    backend_container_pool: backend_impl::DuckdbContainerPool,
 }
 
 struct CompiledRule {
@@ -676,6 +699,9 @@ impl EGraph {
             last_uf_sync_ts: HashMap::new(),
             last_inline_cong_at: HashMap::new(),
             native_uf_unions_synced: 0,
+            backend_function_names: Vec::new(),
+            backend_report_level: egglog_backend_trait::ReportLevel::default(),
+            backend_container_pool: backend_impl::DuckdbContainerPool,
         })
     }
 

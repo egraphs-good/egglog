@@ -9,6 +9,9 @@ publish = false
 [dependencies]
 duckdb = { version = "1.5", features = ["bundled", "vtab", "vscalar"] }
 anyhow = "1"
+egglog-backend-trait = { workspace = true }
+egglog-numeric-id = { workspace = true }
+log = { workspace = true }
 
 [[example]]
 name = "transitive_closure"
