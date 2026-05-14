@@ -1,0 +1,75 @@
+.type Function <: symbol
+.type Instruction <: symbol
+.type Constant <: symbol
+.type Allocation <: symbol
+.type Variable <: symbol
+.type Operand = Constant | Variable
+.type Index <: number
+.type Type <: symbol
+
+// functions
+.decl function(func:Function)
+.input function(IO=file, filename="function.csv")
+.decl function_nparams(func:Function, total:number)
+.input function_nparams(IO=file, filename="function_nparams.csv")
+.decl function_param(func:Function, index:Index, param:Variable)
+.input function_param(IO=file, filename="function_param.csv")
+.decl instruction_in_function(instr:Instruction, func:Function)
+.input instruction_in_function(IO=file, filename="instruction_in_function.csv")
+
+// instructions
+.decl instruction_assigns_to(instr:Instruction, var:Variable)
+.input instruction_assigns_to(IO=file, filename="instruction_assigns_to.csv")
+.decl assign_instruction(?toVar: Variable, ?value: Operand)
+.input assign_instruction(IO=file, filename="assign_instruction.csv")
+.decl load_instruction(instr:Instruction)
+.input load_instruction(IO=file, filename="load_instruction.csv")
+.decl load_instruction_address(instr:Instruction, pointer:Operand)
+.input load_instruction_address(IO=file, filename="load_instruction_address.csv")
+.decl store_instruction_value(instr:Instruction, value:Operand)
+.input store_instruction_value(IO=file, filename="store_instruction_value.csv")
+.decl store_instruction_address(instr:Instruction, pointer:Operand)
+.input store_instruction_address(IO=file, filename="store_instruction_address.csv")
+
+.decl call_instruction_arg(instr:Instruction, i:Index, arg:Operand)
+.input call_instruction_arg(IO=file, filename="call_instruction_arg.csv")
+.decl call_instruction_fn_target(instr:Instruction, func:Function)
+.input call_instruction_fn_target(IO=file, filename="call_instruction_fn_target.csv")
+
+.decl ret_instruction(instr:Instruction)
+.input ret_instruction(IO=file, filename="ret_instruction.csv")
+.decl ret_instruction_value(instr:Instruction, val:Operand)
+.input ret_instruction_value(IO=file, filename="ret_instruction_value.csv")
+
+// allocation
+.decl unknown_location(?alloc:Allocation)
+unknown_location("*unknown*").
+
+.decl constant_points_to(?constant: Constant, ?alloc: Allocation)
+.input constant_points_to(IO=file, filename="constant_points_to.csv")
+.decl constant_ptr_points_to(?alloc: Allocation, ?ptrAlloc: Allocation)
+.input constant_ptr_points_to(IO=file, filename="constant_ptr_points_to.csv")
+.decl allocation_by_instruction(?insn:Instruction, ?alloc:Allocation)
+.input allocation_by_instruction(IO=file, filename="allocation_by_instruction.csv")
+.decl getelementptr_instruction_base(instr:Instruction, ptr:Operand)
+.input getelementptr_instruction_base(IO=file, filename="getelementptr_instruction_base.csv")
+
+// Analyses beyond basic
+// .decl callgraph_edge(callee: Function, caller: Instruction)
+// .input callgraph_edge(IO=file, filename="callgraph_edge.csv")
+// .decl function_param_not_by_value(?callee: Function, ?index: Index, ?param: Variable)
+// .input function_param_not_by_value(IO=file, filename="function_param_not_by_value.csv")
+// .decl actual_arg(?instr: Instruction, ?index: Index, ?argument: Operand)
+// .input actual_arg(IO=file, filename="actual_arg.csv")
+
+.type Path <: symbol
+.decl alloc_subregion_at_path(baseAlloc: Allocation, path: Path, subAlloc: Allocation)
+.input alloc_subregion_at_path(IO=file, filename="alloc_subregion_at_path.csv")
+.decl alloc_aliases(alloc1: Allocation, alloc2: Allocation)
+.input alloc_aliases(IO=file, filename="alloc_aliases.csv")
+.decl gep_var_points_to(var: Variable, alloc: Allocation)
+.input gep_var_points_to(IO=file, filename="gep_var_points_to.csv")
+.decl allocation(alloc:Allocation)
+.input allocation(IO=file, filename="allocation.csv")
+.decl alloc_matches(alloc1: Allocation, alloc2: Allocation)
+.input alloc_matches(IO=file, filename="alloc_matches.csv")

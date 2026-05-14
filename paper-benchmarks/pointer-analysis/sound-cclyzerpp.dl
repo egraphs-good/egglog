@@ -1,0 +1,141 @@
+#include "types.dl"
+
+.decl unify(a: Allocation, b: Allocation)
+
+.decl unify_expr(e: Operand, a: Allocation)
+.decl unify_ptr(a: Allocation, b: Allocation)
+
+.decl expr_points_to_choice(e: Operand, a: Allocation) choice-domain e
+.decl ptr_points_to_choice(a: Allocation, b: Allocation) choice-domain a
+
+.decl eql(a:Allocation, b:Allocation) eqrel
+
+eql(a, a) :- unify_expr(_, a).
+eql(a, a) :- allocation(a).
+
+eql(a, b) :-
+  expr_points_to_choice(e, a),
+  unify_expr(e, b),
+  ord(a) <= ord(b).
+
+eql(b, c) :-
+  ptr_points_to_choice(a, b),
+  unify_ptr(a, c),
+  ord(b) <= ord(c).
+
+unify(a, b) :- eql(a, b).
+unify(a, b) <= unify(c, b) :-
+    ord(c) <= ord(a).
+
+unify_expr(v, a) :- gep_var_points_to(v, a).
+expr_points_to_choice(e, a) :- unify_expr(e, a).
+ptr_points_to_choice(e, a) :- unify_ptr(e, a).
+
+// congruence
+unify_ptr(a, to) :-
+  ptr_points_to_choice(d, to),
+  // unify(r, a), unify(r, d).
+  eql(d, a).
+
+// constant
+unify_expr(e, a) :- constant_points_to(e, a).
+// constant_ptr
+unify_ptr(a, b) :- constant_ptr_points_to(a, b).
+// alloc
+unify_expr(v, a) :- allocation_by_instruction(i, a), instruction_assigns_to(i, v).
+
+// assign
+unify_expr(v, a) :-
+  assign_instruction(v, e),
+  expr_points_to_choice(e, a).
+
+// load
+unify_expr(e, b) :-
+  load_instruction_address(i, u),
+  instruction_assigns_to(i, e),
+  expr_points_to_choice(u, a),
+  ptr_points_to_choice(a, b).
+
+unify_expr(e, b) :-
+  load_instruction_address(i, u),
+  instruction_assigns_to(i, e),
+  expr_points_to_choice(u, baseAlloc),
+  alloc_matches(lessGenericAlloc, baseAlloc),
+  ptr_points_to_choice(lessGenericAlloc, b).
+
+// store
+unify_ptr(a, b) :-
+  store_instruction_address(i, v),
+  store_instruction_value(i, u),
+  expr_points_to_choice(v, a),
+  expr_points_to_choice(u, b).
+
+// field
+// unify_expr(v, a) :-
+//   getelementptr_instruction_base(i, e),
+//   instruction_assigns_to(i, v),
+//   expr_points_to_choice(e, a).
+
+// unify_expr(e, a) :-
+//   getelementptr_instruction_base(i, e),
+//   instruction_assigns_to(i, v),
+//   expr_points_to_choice(v, a).
+
+// If `f(t* x)`, `f(v)`, and `v -> a`, then `x -> a`.
+unify_expr(x, a) :-
+  function(f),
+  function_param(f, idx, x),
+  call_instruction_fn_target(instr, f),
+  call_instruction_arg(instr, idx, v),
+  expr_points_to_choice(v, a).
+
+// If `return u` in `f` and `u -> a`, then `f(z) -> a`.
+unify_expr(to_var, a) :-
+  instruction_in_function(ret_instr, f),
+  call_instruction_fn_target(call_instr, f),
+  ret_instruction_value(ret_instr, u),
+  instruction_assigns_to(call_instr, to_var),
+  expr_points_to_choice(u, a).
+
+eql(?subAlloc1,?subAlloc2) :- 
+  alloc_aliases(?mustAlias,?alloc), 
+  alloc_subregion_at_path(?alloc,?path,?subAlloc1), 
+  alloc_subregion_at_path(?mustAlias,?path,?subAlloc2).
+
+eql(?subAlloc1,?subAlloc2) :- 
+  ptr_points_to_choice(?ptr, ?alloc1), 
+  unify_ptr(?ptr, ?alloc2), 
+  alloc_subregion_at_path(?alloc1,?path,?subAlloc1), 
+  alloc_subregion_at_path(?alloc2,?path,?subAlloc2). 
+
+eql(?subAlloc1,?subAlloc2) :- 
+  expr_points_to_choice(?var, ?alloc1), 
+  unify_expr(?var, ?alloc2), 
+  alloc_subregion_at_path(?alloc1,?path,?subAlloc1), 
+  alloc_subregion_at_path(?alloc2,?path,?subAlloc2).
+
+eql(?baseAlloc1, ?baseAlloc2) :- alloc_aliases(?baseAlloc1, ?baseAlloc2).
+
+.decl is_repr(repr: Allocation)
+is_repr(repr) :-
+  unify(repr, _),
+  0 = count : {
+    unify(other, repr),
+    other != repr
+  }.
+
+.decl expr_points_to_final(e: Operand, a: Allocation)
+expr_points_to_final(e, r) :-
+  expr_points_to_choice(e, a),
+  unify(r, a),
+  is_repr(r).
+
+.decl ptr_points_to_final(a: Allocation, b: Allocation)
+ptr_points_to_final(a, r) :-
+  ptr_points_to_choice(a, b),
+  unify(r, b),
+  is_repr(r),
+  is_repr(a).
+
+.printsize expr_points_to_final
+.printsize ptr_points_to_final

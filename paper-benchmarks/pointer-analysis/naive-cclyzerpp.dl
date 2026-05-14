@@ -1,0 +1,105 @@
+#include "types.dl"
+
+.decl eql(a: Allocation, b: Allocation)
+.decl expr_points_to(e: Operand, a: Allocation)
+.decl ptr_points_to(a: Allocation, b: Allocation)
+eql(a, a) :- expr_points_to(_, a).
+
+eql(a, b) :- 
+  expr_points_to(v, a), expr_points_to(v, b).
+eql(a, b) :- 
+  ptr_points_to(c1, a), ptr_points_to(c2, b),
+  eql(c1, c2).
+expr_points_to(v, b) :-
+  eql(a, b), expr_points_to(v, a).
+ptr_points_to(c2, b) :-
+  eql(c1, c2), eql(a, b), ptr_points_to(c1, a).
+
+expr_points_to(e, a) :- constant_points_to(e, a).
+ptr_points_to(a, b) :- constant_ptr_points_to(a, b).
+expr_points_to(v, a) :- allocation_by_instruction(i, a), instruction_assigns_to(i, v).
+
+// assign
+expr_points_to(v, a) :-
+  assign_instruction(v, e),
+  expr_points_to(e, a).
+
+// load
+expr_points_to(e, b) :-
+  load_instruction_address(i, u),
+  instruction_assigns_to(i, e),
+  expr_points_to(u, a),
+  ptr_points_to(a, b).
+
+// store
+ptr_points_to(a, b) :-
+  store_instruction_address(i, v),
+  store_instruction_value(i, u),
+  expr_points_to(v, a),
+  expr_points_to(u, b).
+
+// field
+// expr_points_to(v, a) :-
+//   getelementptr_instruction_base(i, e),
+//   instruction_assigns_to(i, v),
+//   expr_points_to(e, a).
+
+// expr_points_to(e, a) :-
+//   getelementptr_instruction_base(i, e),
+//   instruction_assigns_to(i, v),
+//   expr_points_to(v, a).
+
+// If `f(t* x)`, `f(v)`, and `v -> a`, then `x -> a`.
+expr_points_to(x, a) :-
+  function(f),
+  function_param(f, idx, x),
+  call_instruction_fn_target(instr, f),
+  call_instruction_arg(instr, idx, v),
+  expr_points_to(v, a).
+
+// If `return u` in `f` and `u -> a`, then `f(z) -> a`.
+expr_points_to(to_var, a) :-
+  instruction_in_function(ret_instr, f),
+  call_instruction_fn_target(call_instr, f),
+  ret_instruction_value(ret_instr, u),
+  instruction_assigns_to(call_instr, to_var),
+  expr_points_to(u, a).
+
+eql(?subAlloc1,?subAlloc2) :- 
+  alloc_aliases(?mustAlias,?alloc), 
+  alloc_subregion_at_path(?alloc,?path,?subAlloc1), 
+  alloc_subregion_at_path(?mustAlias,?path,?subAlloc2).
+
+eql(?subAlloc1,?subAlloc2) :- 
+  ptr_points_to(?ptr, ?alloc1), 
+  ptr_points_to(?ptr, ?alloc2), 
+  alloc_subregion_at_path(?alloc1,?path,?subAlloc1), 
+  alloc_subregion_at_path(?alloc2,?path,?subAlloc2). 
+
+eql(?subAlloc1,?subAlloc2) :- 
+  expr_points_to(?var, ?alloc1), 
+  expr_points_to(?var, ?alloc2), 
+  alloc_subregion_at_path(?alloc1,?path,?subAlloc1), 
+  alloc_subregion_at_path(?alloc2,?path,?subAlloc2).
+
+.decl is_repr(repr: Allocation)
+is_repr(repr) :-
+  eql(repr, _),
+  0 = count : {
+    eql(other, repr),
+    ord(other) < ord(repr)
+  }.
+
+.decl expr_points_to_final(e: Operand, a: Allocation)
+expr_points_to_final(e, a) :-
+  expr_points_to(e, a),
+  is_repr(a).
+
+.decl ptr_points_to_final(a: Allocation, b: Allocation)
+ptr_points_to_final(a, b) :-
+  ptr_points_to(a, b),
+  is_repr(a),
+  is_repr(b).
+
+.printsize expr_points_to_final
+.printsize ptr_points_to_final
