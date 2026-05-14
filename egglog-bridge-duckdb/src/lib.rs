@@ -776,15 +776,6 @@ impl EGraph {
         egglog_backend_trait::ColumnTy::Base(id)
     }
 
-    /// `true` iff `bv` is the [`BaseValueId`] used as the pair marker.
-    /// Used by `trait_col_ty_to_duck` to dispatch to [`DuckColumnTy::PairI64`].
-    pub(crate) fn is_pair_marker(&self, bv: egglog_backend_trait::BaseValueId) -> bool {
-        use egglog_backend_trait::BaseValuePool;
-        use std::any::TypeId;
-        let pool = &self.backend_base_value_pool;
-        BaseValuePool::has_ty(pool, TypeId::of::<DuckPairMarker>())
-            && bv == BaseValuePool::get_ty_by_type_id(pool, TypeId::of::<DuckPairMarker>())
-    }
 
     /// Associate a primitive name with a previously registered
     /// [`egglog_backend_trait::ExternalFunctionId`]. The frontend's
