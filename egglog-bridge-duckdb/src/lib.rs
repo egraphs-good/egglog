@@ -176,6 +176,9 @@ pub(crate) fn exec_bound(
     let bound = sql
         .replace("?1", &last.to_string())
         .replace("?2", &cur.to_string());
+    if std::env::var("DUCK_TRACE_BOUND").is_ok() {
+        eprintln!("[duck/bound last={last} cur={cur}] {bound}");
+    }
     Ok(conn.execute(&bound, [])?)
 }
 

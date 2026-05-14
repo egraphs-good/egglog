@@ -38,10 +38,24 @@ fn format_where(parts: &[String]) -> String {
 
 /// Target table written by an action, if any. Used by the runner
 /// to bump the table's insert watermark after a successful execute.
-fn action_target(a: &Action) -> Option<String> {
+fn action_target(a: &Action, functions: &HashMap<String, FunctionInfo>) -> Option<String> {
     match a {
         Action::Insert { name, .. } | Action::Delete { name, .. } => Some(name.clone()),
-        Action::LetCtor { .. } | Action::LetExpr { .. } | Action::Panic { .. } => None,
+        // LetCtor that has no associated `@<name>View` table actually
+        // INSERTs into the constructor itself (term-encoding helpers
+        // `@to_delete_X`, `@to_subsume_X`, `mergecleanup-N`). For
+        // those, treat the constructor as the action's target so the
+        // body-table watermark gate sees the write and downstream
+        // rules don't get skipped.
+        Action::LetCtor { name, .. } => {
+            let view = format!("@{name}View");
+            if functions.contains_key(&view) {
+                None
+            } else {
+                Some(name.clone())
+            }
+        }
+        Action::LetExpr { .. } | Action::Panic { .. } => None,
     }
 }
 
@@ -462,7 +476,7 @@ fn compile_fused_variant(
                     &rule.name,
                     functions,
                 )?;
-                Ok(CompiledAction { sql, target: action_target(a) })
+                Ok(CompiledAction { sql, target: action_target(a, functions) })
             })
             .collect::<Result<_>>()?;
         return Ok(CompiledVariant {
@@ -641,7 +655,7 @@ fn compile_fused_variant(
         )?;
         action_sqls.push(CompiledAction {
             sql,
-            target: action_target(action),
+            target: action_target(action, functions),
         });
     }
 
@@ -1104,16 +1118,47 @@ fn compile_materialized_action(
             // action list (the runner expects a SQL string).
             Ok("SELECT 1 WHERE FALSE".to_string())
         }
-        Action::LetCtor { var, .. } => {
+        Action::LetCtor { var, name, args } => {
             // The fresh ID is already in the materialized temp
-            // table's `var` column (via `nextval`). Subsequent
-            // actions reference that column directly. The raw
-            // constructor table is never queried, so we skip the
-            // write into it — the matching `(set @<name>View …)`
-            // action emits the canonical row. Emit a no-op SQL so
-            // the runner has a statement to execute.
-            let _ = (var, functions);
-            Ok("SELECT 1 WHERE FALSE".to_string())
+            // table's `var` column (via `nextval`). For
+            // user-level constructors a matching `Insert @<name>View`
+            // emits the canonical row, so the raw `<name>` table goes
+            // unwritten. But term-encoding's helper constructors
+            // (`@to_delete_<X>`, `@to_subsume_<X>`, `<mergecleanup-N>`)
+            // don't have an accompanying `@<name>View` — they ARE
+            // the data table — so without an explicit insert here the
+            // helper row never reaches the @delete_rule / @merge_cleanup
+            // body, and the program silently misses the side effect.
+            // Detect "no view exists" and insert (args…, fresh_id, ts)
+            // into the constructor table directly.
+            let view = format!("@{name}View");
+            if functions.contains_key(&view) {
+                return Ok("SELECT 1 WHERE FALSE".to_string());
+            }
+            let info = functions
+                .get(name)
+                .ok_or_else(|| anyhow!("rule {rule_name}: unknown LetCtor target {name}"))?;
+            let arg_sqls: Vec<String> = args
+                .iter()
+                .map(|t| term_sql(t, mat_binding, rule_name))
+                .collect::<Result<_>>()?;
+            // Defensive: caller arity must equal `inputs_len`.
+            if arg_sqls.len() != info.inputs_len {
+                return Err(anyhow!(
+                    "rule {rule_name}: LetCtor {name} arity {} doesn't match inputs_len {}",
+                    arg_sqls.len(),
+                    info.inputs_len
+                ));
+            }
+            let target_cols: Vec<String> =
+                (0..info.cols.len()).map(|i| format!("c{i}")).collect();
+            let select_list = format!("{}{}, ?2", prefix_with_comma(&arg_sqls), q(var));
+            let conflict = conflict_clause(info);
+            Ok(format!(
+                "INSERT INTO {} ({}, ts) SELECT {select_list} FROM {from} {conflict}",
+                q(name),
+                target_cols.join(", "),
+            ))
         }
         Action::Panic { msg } => {
             let safe = msg.replace('\'', "''");
