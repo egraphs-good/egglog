@@ -1505,6 +1505,21 @@ impl EGraph {
                 }
             },
             ResolvedNCommand::Extract(span, expr, variants) => {
+                // Extraction relies on bridge-specific facilities
+                // (`Extractor::compute_costs_from_rootsorts` walks the
+                // bridge's typed tables). The duck backend silently
+                // skips extract commands — matches the legacy
+                // duck pipeline's behavior (see
+                // `backend_duckdb.rs::dispatch`, where
+                // `GenericNCommand::Extract` is a no-op).
+                if self
+                    .backend
+                    .as_any()
+                    .downcast_ref::<egglog_bridge_duckdb::EGraph>()
+                    .is_some()
+                {
+                    return Ok(None);
+                }
                 let sort = expr.output_type();
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
@@ -2234,6 +2249,32 @@ impl<'a> BackendRule<'a> {
                 partial_arcsorts,
                 name: name.clone(),
             });
+        }
+
+        // Type-disambiguate built-in primitive names for the duckdb
+        // backend. Several egglog primitives share a name across
+        // sorts (`^` is XOR for i64 / POWER for f64; `/` is integer-
+        // div for i64 / float-div for f64; `+` is string concat for
+        // String / numeric add for i64/f64). DuckDB's SQL operators
+        // pick one meaning per symbol, and the duck rule-builder
+        // dispatches by name, so without an override the wrong SQL
+        // gets emitted. Each `SpecializedPrimitive` carries a unique
+        // `external_id`; we rename per-id so the duck side maps each
+        // id to the SQL form for its specific type.
+        //
+        // Hardcoded for now — see also `compile.rs::prim_sql`. A more
+        // principled design (per-primitive SQL emitter registered via
+        // the macro) is deferred.
+        let pname = prim.name();
+        let pout = prim.output().name();
+        let duck_name: Option<&str> = match (pname, &*pout) {
+            ("^", "i64") => Some("i64-xor"),
+            ("/", "i64") => Some("int-div"),
+            ("+", "String") => Some("string-concat"),
+            _ => None,
+        };
+        if let Some(name) = duck_name {
+            self.rb.rename_prim(prim.external_id(), name.to_owned());
         }
 
         (

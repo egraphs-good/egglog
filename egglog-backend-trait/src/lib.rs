@@ -688,6 +688,16 @@ pub trait RuleBuilderOps {
             "build_check is not implemented for this backend"
         ))
     }
+
+    /// Rename an already-registered primitive on the backend so that
+    /// the per-id name reflects the call-site's concrete type. Used
+    /// to disambiguate built-in primitives whose egglog name is
+    /// overloaded across sorts (e.g. `^` is XOR for i64 and POWER for
+    /// f64; `+` for String is concat). The bridge backend doesn't
+    /// need this (it dispatches via the typed `ExternalFunction`
+    /// directly), so the default is a no-op. The duck rule-builder
+    /// routes the call through the egraph it already holds mutably.
+    fn rename_prim(&mut self, _id: ExternalFunctionId, _name: String) {}
 }
 
 // ---------------------------------------------------------------------------

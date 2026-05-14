@@ -670,6 +670,10 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         self.rule.actions.push(Action::Panic { msg: message });
     }
 
+    fn rename_prim(&mut self, id: ExternalFunctionId, name: String) {
+        self.egraph.set_external_func_name(id, name);
+    }
+
     fn build(self: Box<Self>) -> Result<RuleId> {
         // Bring the struct out of the Box so we can move fields.
         let Self {
