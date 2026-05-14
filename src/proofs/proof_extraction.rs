@@ -52,14 +52,16 @@ impl ProofInstrumentor<'_> {
         let mut termdag = TermDag::default();
         let mut witness_value = None;
 
-        self.egraph.backend.for_each_while(backend_id, |row| {
-            let value = *row
-                .vals
-                .last()
-                .expect("constructor rows include their output value");
-            witness_value = Some(value);
-            false
-        });
+        self.egraph
+            .backend
+            .for_each_while(backend_id, &mut |row| {
+                let value = *row
+                    .vals
+                    .last()
+                    .expect("constructor rows include their output value");
+                witness_value = Some(value);
+                false
+            });
 
         let witness_value = witness_value.ok_or_else(|| ProveExistsError::QueryDidNotMatch {
             constructor: func.name.clone(),

@@ -143,7 +143,7 @@ impl EGraph {
                 continue;
             }
             let mut rows = 0;
-            self.backend.for_each_while(function.backend_id, |row| {
+            self.backend.for_each_while(function.backend_id, &mut |row| {
                 if rows >= max_calls_per_function {
                     truncated_functions.push(name.clone());
                     return false;
@@ -241,7 +241,7 @@ impl EGraph {
         // Canonicalize the value first so that we always use the canonical e-class ID
         let value = self
             .backend
-            .get_canon_repr(value, sort.column_ty(&self.backend));
+            .get_canon_repr(value, sort.column_ty(&*self.backend));
         assert!(
             !sort.name().to_string().contains('-'),
             "Tag cannot contain '-' when serializing"
@@ -344,7 +344,7 @@ impl EGraph {
             let node_id = self.to_node_id(Some(sort), SerializedNode::Primitive(value));
             // Add node for value
             {
-                let container_values = self.backend.container_values();
+                let container_values = self.bridge().container_values();
                 // Children will be empty unless this is a container sort
                 let children: Vec<egraph_serialize::NodeId> = sort
                     .inner_values(container_values, value)
@@ -358,11 +358,11 @@ impl EGraph {
                     sort.serialized_name(container_values, value)
                 } else {
                     let primitive_id = self
-                        .backend
+                        .bridge()
                         .base_values()
                         .get_ty_by_id(sort.value_type().unwrap());
                     let formatted_val = BaseValuePrinter {
-                        base: self.backend.base_values(),
+                        base: self.bridge().base_values(),
                         ty: primitive_id,
                         val: value,
                     };

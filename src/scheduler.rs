@@ -234,7 +234,7 @@ impl EGraph {
         // `with_execution_state` is now expressed as repeated
         // `Backend::insert_rows` calls; the scheduler's `instantiate` no
         // longer touches the execution state.
-        let unit = self.backend.base_values().get(());
+        let unit = self.bridge().base_values().get(());
         for (rule_id, _rule) in rules.iter() {
             let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
@@ -334,9 +334,9 @@ impl ExternalFunction for CollectMatches {
 impl SchedulerRuleInfo {
     fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
-        let unit_type = egraph.backend.base_values().get_ty::<()>();
-        let unit = egraph.backend.base_values().get(());
-        let unit_entry = egraph.backend.base_value_constant(());
+        let unit_type = egraph.bridge().base_values().get_ty::<()>();
+        let unit = egraph.bridge().base_values().get(());
+        let unit_entry = egraph.bridge().base_value_constant(());
 
         let matches = Arc::new(Mutex::new(Vec::new()));
         let collect_matches = egraph
@@ -344,7 +344,7 @@ impl SchedulerRuleInfo {
             .register_external_func(Box::new(CollectMatches::new(matches.clone())));
         let schema = free_vars
             .iter()
-            .map(|v| v.sort.column_ty(&egraph.backend))
+            .map(|v| v.sort.column_ty(&*egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
         let decided = egraph.backend.add_table(FunctionConfig {
@@ -356,27 +356,39 @@ impl SchedulerRuleInfo {
         });
 
         // Step 1: build the query rule
-        let mut qrule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, true),
-            &egraph.functions,
-            &egraph.type_info,
-        );
-        qrule_builder.query(&rule.body, true);
-        let entries = free_vars
-            .iter()
-            .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
-            .collect::<Vec<_>>();
-        let _var = qrule_builder.rb.call_external_func(
-            collect_matches,
-            &entries,
-            ColumnTy::Base(unit_type),
-            || "collect_matches".to_string(),
-        );
-        let qrule_id = qrule_builder.build();
+        let qrule_id = {
+            let bridge = egraph
+                .backend
+                .as_any_mut()
+                .downcast_mut::<egglog_bridge::EGraph>()
+                .expect("rule construction is bridge-only");
+            let mut qrule_builder = BackendRule::new(
+                bridge.new_rule(name, true),
+                &egraph.functions,
+                &egraph.type_info,
+            );
+            qrule_builder.query(&rule.body, true);
+            let entries = free_vars
+                .iter()
+                .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+                .collect::<Vec<_>>();
+            let _var = qrule_builder.rb.call_external_func(
+                collect_matches,
+                &entries,
+                ColumnTy::Base(unit_type),
+                || "collect_matches".to_string(),
+            );
+            qrule_builder.build()
+        };
 
         // Step 2: build the action rule
+        let bridge = egraph
+            .backend
+            .as_any_mut()
+            .downcast_mut::<egglog_bridge::EGraph>()
+            .expect("rule construction is bridge-only");
         let mut arule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, false),
+            bridge.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
         );

@@ -538,20 +538,23 @@ pub fn rust_rule(
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
+    let bridge_ref = egraph.bridge();
+    let union_action = egglog_bridge::UnionAction::new(bridge_ref);
+    let table_actions: Vec<(String, egglog_bridge::TableAction)> = egraph
+        .functions
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                egglog_bridge::TableAction::new(bridge_ref, v.backend_id),
+            )
+        })
+        .collect();
     egraph.add_primitive(RustRuleRhs {
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-        union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: egraph
-            .functions
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
-            })
-            .collect(),
+        union_action,
+        table_actions: table_actions.into_iter().collect(),
 
         panic_id,
         func,
@@ -969,8 +972,8 @@ mod tests {
             ],
         )?;
 
-        let x = egraph.backend.base_values().get::<i64>(7);
-        let y = egraph.backend.base_values().get::<i64>(13);
+        let x = egraph.bridge().base_values().get::<i64>(7);
+        let y = egraph.bridge().base_values().get::<i64>(13);
         assert_eq!(results.data, [x, y]);
 
         Ok(())
@@ -1019,7 +1022,7 @@ mod tests {
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
+        let y = egraph.bridge().base_values().get::<i64>(6765);
         assert_eq!(results.data, [y]);
 
         Ok(())
@@ -1111,7 +1114,7 @@ mod tests {
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
+        let y = egraph.bridge().base_values().get::<i64>(6765);
         assert_eq!(results.data, [y]);
 
         Ok(())

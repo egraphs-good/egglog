@@ -321,7 +321,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
     fn compute_cost_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Option<C> {
         if sort.is_container_sort() {
-            let elements = sort.inner_values(egraph.backend.container_values(), value);
+            let elements = sort.inner_values(egraph.bridge().container_values(), value);
             let mut ch_costs: Vec<C> = Vec::new();
             for ch in elements.iter() {
                 ch_costs.push(self.compute_cost_node(egraph, ch.1, &ch.0)?);
@@ -361,7 +361,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
     fn compute_topo_rnk_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> usize {
         if sort.is_container_sort() {
-            sort.inner_values(egraph.backend.container_values(), value)
+            sort.inner_values(egraph.bridge().container_values(), value)
                 .iter()
                 .fold(0, |ret, (sort, value)| {
                     usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
@@ -417,7 +417,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let target_sort = func.extraction_output_sort();
 
                 let output_idx = func.extraction_output_index();
-                let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
+                let mut relax_hyperedge = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
                         let mut updated = false;
@@ -454,7 +454,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     }
                 };
 
-                egraph.backend.for_each(func.backend_id, relax_hyperedge);
+                egraph
+                    .backend
+                    .for_each(func.backend_id, &mut relax_hyperedge);
             }
         }
 
@@ -464,7 +466,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let target_sort = func.extraction_output_sort();
             let output_idx = func.extraction_output_index();
 
-            let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
+            let mut save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
                 if !row.subsumed {
                     let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
@@ -495,7 +497,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             egraph
                 .backend
-                .for_each(func.backend_id, save_best_parent_edge);
+                .for_each(func.backend_id, &mut save_best_parent_edge);
         }
     }
 
@@ -524,7 +526,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         }
 
         let term = if sort.is_container_sort() {
-            let elements = sort.inner_values(egraph.backend.container_values(), value);
+            let elements = sort.inner_values(egraph.bridge().container_values(), value);
             let mut ch_terms: Vec<TermId> = Vec::new();
             for ch in elements.iter() {
                 ch_terms.push(
@@ -532,7 +534,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 );
             }
             sort.reconstruct_termdag_container(
-                egraph.backend.container_values(),
+                egraph.bridge().container_values(),
                 value,
                 termdag,
                 ch_terms,
@@ -559,7 +561,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             termdag.app(output_name.to_string(), ch_terms)
         } else {
             // Base value case
-            sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
+            sort.reconstruct_termdag_base(egraph.bridge().base_values(), value, termdag)
         };
 
         cache.insert(key, term);
@@ -634,7 +636,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut canonical = value;
         egraph
             .backend
-            .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+            .for_each(uf_func.backend_id, &mut |row: egglog_bridge::FunctionRow| {
                 // UF table has (child, parent) as inputs
                 if row.vals[0] == value {
                     canonical = row.vals[1];
@@ -684,7 +686,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let func = egraph.functions.get(func_name).unwrap();
                 let output_idx = func.extraction_output_index();
 
-                let find_root_variants = |row: egglog_bridge::FunctionRow| {
+                let mut find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
                         if *target == canonical_value {
@@ -694,7 +696,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     }
                 };
 
-                egraph.backend.for_each(func.backend_id, find_root_variants);
+                egraph
+                    .backend
+                    .for_each(func.backend_id, &mut find_root_variants);
             }
 
             let mut res: Vec<(C, TermId)> = Vec::new();
@@ -884,7 +888,7 @@ impl EGraph {
             None
         };
 
-        let extract_row = |row: egglog_bridge::FunctionRow| {
+        let mut extract_row = |row: egglog_bridge::FunctionRow| {
             if inputs.len() < n {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();
@@ -909,7 +913,8 @@ impl EGraph {
             }
         };
 
-        self.backend.for_each_while(func.backend_id, extract_row);
+        self.backend
+            .for_each_while(func.backend_id, &mut extract_row);
 
         Ok((inputs, output, termdag))
     }

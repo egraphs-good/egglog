@@ -51,7 +51,6 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use egglog_backend_trait::Backend;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
@@ -241,7 +240,7 @@ impl std::fmt::Display for CommandOutput {
 /// ```
 #[derive(Clone)]
 pub struct EGraph {
-    backend: egglog_bridge::EGraph,
+    backend: Box<dyn egglog_backend_trait::Backend>,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -352,7 +351,7 @@ impl Default for EGraph {
         let mut parser = Parser::default();
         let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
-            backend: Default::default(),
+            backend: Box::new(egglog_bridge::EGraph::default()),
             parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -453,6 +452,27 @@ struct ResolvedNCommandsWithOutput {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Downcast `self.backend` to the concrete bridge `EGraph`. Use this
+    /// when invoking bridge-inherent methods that are not lifted onto the
+    /// [`egglog_backend_trait::Backend`] trait (typed generics, `TableAction`
+    /// / `UnionAction` constructors, `base_values()` / `container_values()`
+    /// accessors, etc.). Panics if `self.backend` is not a bridge `EGraph`
+    /// — these call sites are bridge-only by design.
+    pub(crate) fn bridge(&self) -> &egglog_bridge::EGraph {
+        self.backend
+            .as_any()
+            .downcast_ref::<egglog_bridge::EGraph>()
+            .expect("this code path is bridge-only")
+    }
+
+    /// Mutable counterpart of [`EGraph::bridge`].
+    pub(crate) fn bridge_mut(&mut self) -> &mut egglog_bridge::EGraph {
+        self.backend
+            .as_any_mut()
+            .downcast_mut::<egglog_bridge::EGraph>()
+            .expect("this code path is bridge-only")
+    }
+
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
@@ -684,7 +704,7 @@ impl EGraph {
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
             GenericExpr::Lit(_, literal) => {
-                let val = literal_to_value(&self.backend, literal);
+                let val = literal_to_value(self.bridge(), literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
             GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
@@ -744,7 +764,7 @@ impl EGraph {
             schema: input
                 .iter()
                 .chain([&output])
-                .map(|sort| sort.column_ty(&self.backend))
+                .map(|sort| sort.column_ty(&*self.backend))
                 .collect(),
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
@@ -1012,10 +1032,11 @@ impl EGraph {
         let func = self.functions.get("next_ts")?;
         let id = func.backend_id;
         let cur_val = self.backend.lookup_id(id, &[])?;
-        let cur: i64 = self.backend.base_values().unwrap::<i64>(cur_val);
+        let cur: i64 = self.bridge().base_values().unwrap::<i64>(cur_val);
         let new = cur + 1;
-        let new_val = self.backend.base_values().get::<i64>(new);
-        self.backend.add_values([(id, vec![new_val])]);
+        let new_val = self.bridge().base_values().get::<i64>(new);
+        self.backend
+            .add_values(Box::new([(id, vec![new_val])].into_iter()));
         Some(new)
     }
 
@@ -1027,7 +1048,7 @@ impl EGraph {
         for n in rule_names {
             sources.insert(n.split('@').next().unwrap_or(n.as_str()));
         }
-        let ts_val = self.backend.base_values().get::<i64>(ts);
+        let ts_val = self.bridge().base_values().get::<i64>(ts);
         let updates: Vec<_> = sources
             .into_iter()
             .filter_map(|src| {
@@ -1038,7 +1059,7 @@ impl EGraph {
             })
             .collect();
         if !updates.is_empty() {
-            self.backend.add_values(updates);
+            self.backend.add_values(Box::new(updates.into_iter()));
         }
     }
 
@@ -1053,8 +1074,13 @@ impl EGraph {
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
+            let bridge = self
+                .backend
+                .as_any_mut()
+                .downcast_mut::<egglog_bridge::EGraph>()
+                .expect("rule construction is bridge-only");
             let mut translator = BackendRule::new(
-                self.backend.new_rule(&rule.name, self.seminaive),
+                bridge.new_rule(&rule.name, self.seminaive),
                 &self.functions,
                 &self.type_info,
             );
@@ -1092,13 +1118,20 @@ impl EGraph {
         );
         let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
-        let mut translator = BackendRule::new(
-            self.backend.new_rule("eval_actions", false),
-            &self.functions,
-            &self.type_info,
-        );
-        translator.actions(&actions)?;
-        let id = translator.build();
+        let id = {
+            let bridge = self
+                .backend
+                .as_any_mut()
+                .downcast_mut::<egglog_bridge::EGraph>()
+                .expect("rule construction is bridge-only");
+            let mut translator = BackendRule::new(
+                bridge.new_rule("eval_actions", false),
+                &self.functions,
+                &self.type_info,
+            );
+            translator.actions(&actions)?;
+            translator.build()
+        };
         let result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
 
@@ -1120,13 +1153,13 @@ impl EGraph {
     pub fn function_for_each(
         &self,
         func_name: &str,
-        f: impl FnMut(FunctionRow<'_>),
+        mut f: impl FnMut(FunctionRow<'_>),
     ) -> Result<(), Error> {
         let func = self
             .functions
             .get(func_name)
             .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
-        self.backend.for_each(func.backend_id, f);
+        self.backend.for_each(func.backend_id, &mut |row| f(row));
         Ok(())
     }
 
@@ -1153,8 +1186,8 @@ impl EGraph {
     }
 
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
-        let unit_id = self.backend.base_values().get_ty::<()>();
-        let unit_val = self.backend.base_values().get(());
+        let unit_id = self.bridge().base_values().get_ty::<()>();
+        let unit_val = self.bridge().base_values().get(());
 
         let result: egglog_bridge::SideChannel<Value> = Default::default();
         let result_ref = result.clone();
@@ -1165,12 +1198,6 @@ impl EGraph {
                 *result_ref.lock().unwrap() = Some(vals[0]);
                 Some(unit_val)
             })));
-
-        let mut translator = BackendRule::new(
-            self.backend.new_rule("eval_resolved_expr", false),
-            &self.functions,
-            &self.type_info,
-        );
 
         let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
@@ -1190,17 +1217,30 @@ impl EGraph {
             self.proof_state.original_typechecking.is_none(),
         );
         let actions = actions.to_core_actions(&mut ctx)?.0;
-        translator.actions(&actions)?;
 
-        let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
-        translator.rb.call_external_func(
-            ext_id,
-            &[arg],
-            egglog_bridge::ColumnTy::Base(unit_id),
-            || "this function will never panic".to_string(),
-        );
+        let id = {
+            let bridge = self
+                .backend
+                .as_any_mut()
+                .downcast_mut::<egglog_bridge::EGraph>()
+                .expect("rule construction is bridge-only");
+            let mut translator = BackendRule::new(
+                bridge.new_rule("eval_resolved_expr", false),
+                &self.functions,
+                &self.type_info,
+            );
+            translator.actions(&actions)?;
 
-        let id = translator.build();
+            let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+            translator.rb.call_external_func(
+                ext_id,
+                &[arg],
+                egglog_bridge::ColumnTy::Base(unit_id),
+                || "this function will never panic".to_string(),
+            );
+
+            translator.build()
+        };
         let rule_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
@@ -1252,18 +1292,25 @@ impl EGraph {
                 Some(Value::new_const(0))
             })));
 
-        let mut translator = BackendRule::new(
-            self.backend.new_rule("check_facts", false),
-            &self.functions,
-            &self.type_info,
-        );
-        translator.query(&query, true);
-        translator
-            .rb
-            .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
-                "this function will never panic".to_string()
-            });
-        let id = translator.build();
+        let id = {
+            let bridge = self
+                .backend
+                .as_any_mut()
+                .downcast_mut::<egglog_bridge::EGraph>()
+                .expect("rule construction is bridge-only");
+            let mut translator = BackendRule::new(
+                bridge.new_rule("check_facts", false),
+                &self.functions,
+                &self.type_info,
+            );
+            translator.query(&query, true);
+            translator
+                .rb
+                .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
+                    "this function will never panic".to_string()
+                });
+            translator.build()
+        };
         let _ = self.backend.run_rules(&[id]).unwrap();
         self.backend.free_rule(id);
 
@@ -1361,7 +1408,7 @@ impl EGraph {
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
                 let n = self.eval_resolved_expr(span, &variants)?;
-                let n: i64 = self.backend.base_values().unwrap(n);
+                let n: i64 = self.bridge().base_values().unwrap(n);
 
                 let mut termdag = TermDag::default();
 
@@ -1519,14 +1566,21 @@ impl EGraph {
             .type_info
             .get_func_type(func_name)
             .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
-        let func = self.functions.get_mut(func_name).unwrap();
+        let (func_backend_id, func_schema_input, func_schema_output) = {
+            let func = self.functions.get(func_name).unwrap();
+            (
+                func.backend_id,
+                func.schema.input.clone(),
+                func.schema.output.clone(),
+            )
+        };
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
         filename.push(file.as_str());
 
         // check that the function uses supported types
 
-        for t in &func.schema.input {
+        for t in &func_schema_input {
             match t.name() {
                 "i64" | "f64" | "String" => {}
                 s => panic!("Unsupported type {s} for input"),
@@ -1534,7 +1588,7 @@ impl EGraph {
         }
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            match func.schema.output.name() {
+            match func_schema_output.name() {
                 "i64" | "String" | "Unit" => {}
                 s => panic!("Unsupported type {s} for input"),
             }
@@ -1548,14 +1602,14 @@ impl EGraph {
         // Can also do a row-major Vec<Value>
         let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
 
-        let mut row_schema = func.schema.input.clone();
+        let mut row_schema = func_schema_input;
         if function_type.subtype == FunctionSubtype::Custom {
-            row_schema.push(func.schema.output.clone());
+            row_schema.push(func_schema_output);
         }
 
         log::debug!("{row_schema:?}");
 
-        let unit_val = self.backend.base_values().get(());
+        let unit_val = self.bridge().base_values().get(());
 
         for line in contents.lines() {
             let mut it = line.split('\t').map(|s| s.trim());
@@ -1567,21 +1621,21 @@ impl EGraph {
                     let val = match sort.name() {
                         "i64" => {
                             if let Ok(i) = raw.parse::<i64>() {
-                                self.backend.base_values().get(i)
+                                self.bridge().base_values().get(i)
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
                         }
                         "f64" => {
                             if let Ok(f) = raw.parse::<f64>() {
-                                self.backend
+                                self.bridge()
                                     .base_values()
                                     .get::<F>(core_relations::Boxed::new(f.into()))
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
                         }
-                        "String" => self.backend.base_values().get::<S>(raw.to_string().into()),
+                        "String" => self.bridge().base_values().get::<S>(raw.to_string().into()),
                         "Unit" => unit_val,
                         _ => panic!("Unreachable"),
                     };
@@ -1607,10 +1661,10 @@ impl EGraph {
         let num_facts = parsed_contents.len();
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.insert_rows(func.backend_id, &parsed_contents);
+            self.backend.insert_rows(func_backend_id, &parsed_contents);
         } else {
             self.backend
-                .lookup_constructor_rows(func.backend_id, &parsed_contents);
+                .lookup_constructor_rows(func_backend_id, &parsed_contents);
         }
 
         self.backend.flush_updates();
@@ -1893,12 +1947,12 @@ impl EGraph {
 
     /// Convert from an egglog value to a Rust type.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
-        self.backend.base_values().unwrap::<T>(x)
+        self.bridge().base_values().unwrap::<T>(x)
     }
 
     /// Convert from a Rust type to an egglog value.
     pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
-        self.backend.base_values().get::<T>(x)
+        self.bridge().base_values().get::<T>(x)
     }
 
     /// Convert from an egglog value to a reference of a Rust container type.
@@ -1911,7 +1965,7 @@ impl EGraph {
         &self,
         x: Value,
     ) -> Option<impl Deref<Target = T>> {
-        self.backend.container_values().get_val::<T>(x)
+        self.bridge().container_values().get_val::<T>(x)
     }
 
     /// Convert from a Rust container type to an egglog value.
@@ -1925,7 +1979,7 @@ impl EGraph {
         // directly here. When `EGraph::backend` becomes `Box<dyn Backend>`
         // in Commit 8, this site will need a typed container-registration
         // path on the trait.
-        self.backend.get_container_value::<T>(x)
+        self.bridge_mut().get_container_value::<T>(x)
     }
 
     /// Get the size of a function in the e-graph.
@@ -1970,12 +2024,12 @@ impl EGraph {
     /// Get the canonical representation for `val` based on type.
     pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
-            .get_canon_repr(val, sort.column_ty(&self.backend))
+            .get_canon_repr(val, sort.column_ty(&*self.backend))
     }
 
     /// Create a new union action that can be used to union two values.
     pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
-        UnionAction::new(&self.backend)
+        UnionAction::new(self.bridge())
     }
 }
 
@@ -2338,7 +2392,9 @@ mod tests {
     fn get_value(egraph: &EGraph, name: &str) -> Value {
         let mut out = None;
         let id = get_function(egraph, name).backend_id;
-        egraph.backend.for_each(id, |row| out = Some(row.vals[0]));
+        egraph
+            .backend
+            .for_each(id, &mut |row| out = Some(row.vals[0]));
         out.unwrap()
     }
 
