@@ -414,7 +414,7 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         &mut self,
         func: ExternalFunctionId,
         entries: &[QueryEntry],
-        _ret_ty: ColumnTy,
+        ret_ty: ColumnTy,
     ) -> Result<()> {
         // The bridge's `query_prim` semantics: the last entry is the
         // expected return value. If it's a fresh variable, bind it to
@@ -495,6 +495,30 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
                     vec![arg.clone()],
                 )));
             }
+        }
+        // Primitives whose return type is `()` (Unit) act as body
+        // filters — they succeed if their predicate holds, fail
+        // otherwise (e.g. `(!= x y)`, `(< x y)`, `(value-eq x y)`).
+        // The bridge's `query_prim` idiom threads a fresh return var
+        // through every primitive call, so the inline-the-result path
+        // above captures the value-propagation half of the contract.
+        // But Unit-returning primitives don't propagate anything
+        // meaningful — their semantics is purely the filter — so the
+        // inline alone leaves the body unconstrained. Emit a Filter
+        // atom on top so the SQL WHERE clause actually checks the
+        // predicate. (The bridge backend gets this for free by
+        // halting rule eval when invoke returns `None`; duck needs
+        // it spelled out in SQL.) `guard` already handled above.
+        let unit_return = {
+            use egglog_backend_trait::{BaseValuePool, ColumnTy};
+            use std::any::TypeId;
+            let pool: &dyn BaseValuePool = &self.egraph.backend_base_value_pool;
+            matches!(ret_ty, ColumnTy::Base(bv)
+                if pool.has_ty(TypeId::of::<()>())
+                    && bv == pool.get_ty_by_type_id(TypeId::of::<()>()))
+        };
+        if unit_return && name != "guard" {
+            self.rule.body.push(Atom::Filter(call.clone()));
         }
         Ok(())
     }
