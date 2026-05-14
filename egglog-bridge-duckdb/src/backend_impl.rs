@@ -480,13 +480,14 @@ impl Backend for EGraph {
             }
             DefaultVal::Fail | DefaultVal::Const(_) => {
                 // Either a function with an explicit output, or a
-                // relation if `merge` is AssertEq and the schema has
-                // no "natural" output column. We can't easily tell
-                // schemas apart from the trait info alone — the
-                // simplest rule is: if the schema has at least one
-                // column we treat the last as the output for functions
-                // with a real merge mode, otherwise we make it a
-                // relation.
+                // relation if the output is Unit (term encoding's
+                // pattern for view tables — `(function @XView (...)
+                // Unit :merge old)`). The parallel pipeline's
+                // `add_function` in backend_duckdb.rs detected this
+                // by string-matching `output_sort == "Unit"`; on the
+                // trait side we don't have the sort name, only the
+                // `BaseValueId`. Use the pool to compare against the
+                // Unit type id.
                 let merge_mode = match config.merge {
                     MergeFn::Old | MergeFn::AssertEq => Some(MergeMode::Old),
                     MergeFn::New => Some(MergeMode::New),
@@ -501,9 +502,33 @@ impl Backend for EGraph {
                     }
                 };
 
+                // Detect Unit output: schema's last entry is
+                // `ColumnTy::Base(id)` where `id` matches the pool's
+                // registration for the `()` type.
+                let output_is_unit = schema.last().is_some_and(|t| match t {
+                    ColumnTy::Base(bv) => {
+                        let pool: &dyn BaseValuePool = &self.backend_base_value_pool;
+                        pool.has_ty(TypeId::of::<()>())
+                            && *bv == pool.get_ty_by_type_id(TypeId::of::<()>())
+                    }
+                    _ => false,
+                });
+
                 if duck_cols.is_empty() {
                     // No columns at all: treat as a nullary relation.
                     self.add_relation_with_pname(&name, &[], None)
+                } else if output_is_unit {
+                    // Function with Unit output: matches term
+                    // encoding's relation pattern (e.g.
+                    // `(function @UF_@pathSort (Math Math) Unit
+                    // :merge old)`). The parallel pipeline drops the
+                    // Unit output and registers the function as a
+                    // relation whose key spans the INPUTS only — so
+                    // the body atoms reference inputs without a
+                    // trailing wildcard. Strip the trailing Unit
+                    // column to match.
+                    let inputs = &duck_cols[..duck_cols.len() - 1];
+                    self.add_relation_with_pname(&name, inputs, None)
                 } else if let Some(mode) = merge_mode {
                     let inputs = &duck_cols[..duck_cols.len() - 1];
                     let output = duck_cols[duck_cols.len() - 1];
@@ -847,14 +872,22 @@ impl Backend for EGraph {
                     .and_then(|opt| opt.clone())
             })
             .collect();
-
         // `run_iteration_in_set` takes `&[&str]`; build a view.
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
 
-        let total = EGraph::run_iteration_in_set(self, &name_refs)?;
+        // `total` counts rows the iteration *attempted to insert*
+        // (which includes `ON CONFLICT DO NOTHING` no-ops). That
+        // overcounts and never saturates — once a rule's body
+        // matches, the action keeps re-trying the same insert every
+        // iteration. For the frontend's saturation detection we
+        // need a delta of `rules_affected_total`, the duck backend's
+        // cumulative "rows that changed the database" counter.
+        let before = self.rules_affected_total();
+        let _ = EGraph::run_iteration_in_set(self, &name_refs)?;
+        let after = self.rules_affected_total();
 
         let mut report = IterationReport::default();
-        report.rule_set_report.changed = total > 0;
+        report.rule_set_report.changed = after != before;
         Ok(report)
     }
 
