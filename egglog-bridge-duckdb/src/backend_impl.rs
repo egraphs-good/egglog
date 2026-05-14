@@ -858,6 +858,19 @@ impl Backend for EGraph {
     }
 
     fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+        // Empty rule set = no work to do. The trait's
+        // `run_rules(&[])` means "no rules to run" (the frontend
+        // emits this for rulesets that ended up with zero
+        // registered rules, e.g. `@delete_subsume_ruleset` when no
+        // subsumable terms exist). DuckDB's
+        // `run_iteration_in_set(&[])` interprets the empty list as
+        // *run all rules* (`allow_all = allowed.is_empty()`), which
+        // would silently re-fire every rule every iteration and
+        // prevent saturation from ever being reached. Short-circuit
+        // here.
+        if rules.is_empty() {
+            return Ok(IterationReport::default());
+        }
         // Map RuleIds → user-visible names, then call the existing
         // `run_iteration_in_set`. The duckdb backend does not track
         // per-rule timing in a `RuleSetReport` shape (its perf
@@ -872,6 +885,16 @@ impl Backend for EGraph {
                     .and_then(|opt| opt.clone())
             })
             .collect();
+        // If the caller passed rule ids but all of them resolved to
+        // freed/no-op slots (`None`), the resulting `names` is empty.
+        // `run_iteration_in_set(&[])` interprets the empty allowed-set
+        // as "run all rules", which would silently re-fire every rule
+        // — disastrous when the scheduler is just asking the freed
+        // rules to step (e.g. `eval_actions` after `free_rule`).
+        // Short-circuit instead.
+        if names.is_empty() {
+            return Ok(IterationReport::default());
+        }
         // `run_iteration_in_set` takes `&[&str]`; build a view.
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
 
@@ -885,6 +908,13 @@ impl Backend for EGraph {
         let before = self.rules_affected_total();
         let _ = EGraph::run_iteration_in_set(self, &name_refs)?;
         let after = self.rules_affected_total();
+        if std::env::var("DUCK_TRACE_RUN_RULES").is_ok() {
+            eprintln!(
+                "[duck/run_rules] names={:?} delta={}",
+                names,
+                after - before
+            );
+        }
 
         let mut report = IterationReport::default();
         report.rule_set_report.changed = after != before;

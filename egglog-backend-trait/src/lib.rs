@@ -675,6 +675,19 @@ pub trait RuleBuilderOps {
     /// feature the backend does not support (e.g. subsume on DuckDB), this
     /// is where the error surfaces.
     fn build(self: Box<Self>) -> Result<RuleId>;
+
+    /// Consume the builder and check whether its accumulated body
+    /// matches at least one assignment in the current database.
+    /// Actions accumulated in the builder are ignored. The bridge
+    /// backend's default implementation panics; the DuckDB backend
+    /// overrides this to compile the body to SQL and run it.
+    /// Used by `(check …)` on the DuckDB path; the bridge keeps its
+    /// existing external-func side-channel approach in `check_facts`.
+    fn build_check(self: Box<Self>) -> Result<bool> {
+        Err(anyhow::anyhow!(
+            "build_check is not implemented for this backend"
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------

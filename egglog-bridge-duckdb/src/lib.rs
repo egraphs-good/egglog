@@ -1222,6 +1222,15 @@ impl EGraph {
     /// Compile and store a rule. Compilation produces one SQL
     /// statement per (variant × action).
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
+        if std::env::var("DUCK_DUMP_RULES").is_ok() {
+            eprintln!("[duck/add_rule] name={} ruleset={}", rule.name, rule.ruleset);
+            for atom in &rule.body {
+                eprintln!("  body: {atom:?}");
+            }
+            for action in &rule.actions {
+                eprintln!("  action: {action:?}");
+            }
+        }
         // Under `--duck-native-uf` the UF-maintenance rulesets are
         // skipped at every iter (the native UF maintains the same
         // invariants in-memory). Compile-time, some of their rules

@@ -342,6 +342,22 @@ impl SchedulerRuleInfo {
         let collect_matches = egraph
             .backend
             .register_external_func(Box::new(CollectMatches::new(matches.clone())));
+        // Side-channel primitive — give it a placeholder name so
+        // the duckdb rule builder can refer to it by name. The
+        // scheduler only ever invokes this primitive through the
+        // bridge's apply path; on the duckdb backend it's
+        // unreachable, but the name lookup still has to succeed at
+        // rule-build time.
+        if let Some(duck) = egraph
+            .backend
+            .as_any_mut()
+            .downcast_mut::<egglog_bridge_duckdb::EGraph>()
+        {
+            duck.set_external_func_name(
+                collect_matches,
+                "__scheduler_collect_matches".to_string(),
+            );
+        }
         let schema = free_vars
             .iter()
             .map(|v| v.sort.column_ty(&*egraph.backend))

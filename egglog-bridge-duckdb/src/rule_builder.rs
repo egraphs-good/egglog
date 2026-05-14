@@ -189,8 +189,17 @@ impl<'a> DuckRuleBuilderOps<'a> {
         // compiles every rule into a seminaive variant per body atom,
         // so the bridge-side flag has no DuckDB analog. We accept and
         // ignore it.
+        //
+        // De-collide the rule name with an instance suffix: the
+        // frontend hands us non-unique names (e.g. "eval_actions" for
+        // every top-level command, "check_facts" for every check).
+        // Each rule needs a unique name so duck's `run_iteration_in_set`
+        // (which filters by ruleset == name under our build() ruleset
+        // rename) doesn't fire freed siblings still resident in
+        // `self.rules`.
+        let unique_name = format!("{name}#{}", egraph.backend_rule_names.len());
         let rule = Rule {
-            name: name.to_string(),
+            name: unique_name,
             ruleset: String::new(),
             body: Vec::new(),
             actions: Vec::new(),
@@ -732,6 +741,54 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         let idx = egraph.backend_rule_names.len() as u32;
         egraph.backend_rule_names.push(Some(name));
         Ok(RuleId::new(idx))
+    }
+
+    /// Consume the builder, finalize the accumulated body atoms, and
+    /// run them as an existential check query against the egraph.
+    /// Used by the frontend's `(check …)` implementation. Actions
+    /// accumulated through `call_external_func` (the bridge's
+    /// side-channel sentinel pattern) are ignored — the duckdb path
+    /// answers `matches?` directly via SQL.
+    fn build_check(self: Box<Self>) -> Result<bool> {
+        let Self {
+            egraph,
+            mut rule,
+            deferred_err,
+            inline_terms,
+            consumed_inline,
+            ..
+        } = *self;
+
+        if let Some(e) = deferred_err {
+            return Err(e);
+        }
+
+        // Same unused-inline-term-to-Filter dance as `build`: any
+        // inline term whose result var was never consumed represents a
+        // body-level predicate (e.g. `(!= a b)`) that must constrain
+        // the check. Without lifting these into the body the check
+        // would incorrectly answer "matches" on every row.
+        let consumed = consumed_inline.into_inner();
+        let mut unused: Vec<(u32, Term)> = inline_terms
+            .into_iter()
+            .filter(|(id, _)| !consumed.contains(id))
+            .collect();
+        unused.sort_by_key(|(id, _)| *id);
+        for (_id, term) in unused {
+            // Skip the check-facts sentinel call: it has no
+            // semantic content on duckdb (it's the bridge's
+            // side-channel hook, which we ignore here).
+            if let Term::Prim(name, _) = &term {
+                if name == "__check_facts_sentinel" {
+                    continue;
+                }
+            }
+            if matches!(term, Term::Prim(_, _) | Term::FuncCall { .. }) {
+                rule.body.push(Atom::Filter(term));
+            }
+        }
+
+        egraph.body_exists(&rule.body)
     }
 }
 

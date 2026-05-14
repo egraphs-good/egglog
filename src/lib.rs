@@ -1257,6 +1257,14 @@ impl EGraph {
                 *result_ref.lock().unwrap() = Some(vals[0]);
                 Some(unit_val)
             })));
+        // Side-channel primitive — see `check_facts` for context.
+        if let Some(duck) = self
+            .backend
+            .as_any_mut()
+            .downcast_mut::<egglog_bridge_duckdb::EGraph>()
+        {
+            duck.set_external_func_name(ext_id, "__eval_resolved_sentinel".to_string());
+        }
 
         let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
@@ -1340,6 +1348,41 @@ impl EGraph {
             self.proof_state.original_typechecking.is_none(),
         )?;
         let query = core_rule.body;
+
+        // Backend-agnostic check: build the body via the trait, then
+        // ask the rule builder whether it matches. The DuckDB impl
+        // runs `SELECT … LIMIT 1` against the compiled body; the
+        // bridge backend falls back to the side-channel sentinel
+        // pattern (see below).
+        let is_duck = self
+            .backend
+            .as_any()
+            .downcast_ref::<egglog_bridge_duckdb::EGraph>()
+            .is_some();
+
+        if is_duck {
+            let backend_ptr: *const dyn egglog_backend_trait::Backend = &*self.backend;
+            let rb = self.backend.new_rule("check_facts", false);
+            let mut translator = BackendRule::new(
+                rb,
+                // SAFETY: see `add_rule` for the disjoint-reborrow rationale.
+                unsafe { &*backend_ptr },
+                &self.functions,
+                &self.type_info,
+            );
+            translator.query(&query, true);
+            let matched = translator
+                .into_rb()
+                .build_check()
+                .map_err(|e| Error::BackendError(format!("check_facts: {e}")))?;
+            if !matched {
+                return Err(Error::CheckError(
+                    facts.iter().map(|f| f.clone().make_unresolved()).collect(),
+                    span.clone(),
+                ));
+            }
+            return Ok(());
+        }
 
         let ext_sc = egglog_bridge::SideChannel::default();
         let ext_sc_ref = ext_sc.clone();
@@ -2304,6 +2347,10 @@ impl<'a> BackendRule<'a> {
 
     fn build(self) -> egglog_bridge::RuleId {
         self.rb.build().expect("rule build failed")
+    }
+
+    fn into_rb(self) -> Box<dyn egglog_backend_trait::RuleBuilderOps + 'a> {
+        self.rb
     }
 }
 
