@@ -81,7 +81,20 @@ impl SpecializedPrimitive {
 
 impl PartialEq for SpecializedPrimitive {
     fn eq(&self, other: &Self) -> bool {
+        // This is the key used when resolved atoms are deduplicated by
+        // `(head, inputs)`. The context-id map identifies the primitive
+        // registration, while the concrete input/output sorts identify the
+        // specialization of generic primitives. The primitive name and
+        // validator are registration metadata, so they are intentionally not
+        // separate key fields.
         self.prim_with_id.context_ids == other.prim_with_id.context_ids
+            && self.output.name() == other.output.name()
+            && self.input.len() == other.input.len()
+            && self
+                .input
+                .iter()
+                .zip(&other.input)
+                .all(|(a, b)| a.name() == b.name())
     }
 }
 
@@ -90,6 +103,11 @@ impl Eq for SpecializedPrimitive {}
 impl Hash for SpecializedPrimitive {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.prim_with_id.context_ids.hash(state);
+        self.output.name().hash(state);
+        self.input.len().hash(state);
+        for input in &self.input {
+            input.name().hash(state);
+        }
     }
 }
 
