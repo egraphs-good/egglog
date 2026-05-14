@@ -22,7 +22,7 @@
 //!
 //! On [`RuleBuilderOps::build`], the accumulated rule is handed to the
 //! existing `EGraph::add_rule`. A fresh `RuleId` is allocated as the
-//! index into `EGraph::backend_rule_names`.
+//! index into `EGraph::backend_rule_indices`.
 //!
 //! ## What is supported
 //!
@@ -192,12 +192,11 @@ impl<'a> DuckRuleBuilderOps<'a> {
         //
         // De-collide the rule name with an instance suffix: the
         // frontend hands us non-unique names (e.g. "eval_actions" for
-        // every top-level command, "check_facts" for every check).
-        // Each rule needs a unique name so duck's `run_iteration_in_set`
-        // (which filters by ruleset == name under our build() ruleset
-        // rename) doesn't fire freed siblings still resident in
-        // `self.rules`.
-        let unique_name = format!("{name}#{}", egraph.backend_rule_names.len());
+        // every top-level command, "check_facts" for every check),
+        // and per-rule bookkeeping (`last_run_at`, `rule_perf_ns`) is
+        // keyed by name. Dispatch goes through `RuleId` → index, so
+        // the suffix only affects internal accounting.
+        let unique_name = format!("{name}#{}", egraph.backend_rule_indices.len());
         let rule = Rule {
             name: unique_name,
             ruleset: String::new(),
@@ -716,35 +715,30 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         // running it does nothing.
         let name = rule.name.clone();
         if rule.actions.is_empty() {
-            let idx = egraph.backend_rule_names.len() as u32;
-            // Mark the slot freed (None) so run_rules treats it as a
-            // no-op (filter out unknown names).
-            egraph.backend_rule_names.push(None);
+            let idx = egraph.backend_rule_indices.len() as u32;
+            // Allocate a slot pointing at no compiled rule. `run_rules`
+            // skips ids with `None` here so an empty-action rule
+            // becomes a true no-op.
+            egraph.backend_rule_indices.push(None);
             return Ok(RuleId::new(idx));
         }
 
-        // Bug 1 fix: the trait surface identifies rules by `RuleId`,
-        // not by ruleset (mirroring the bridge's API). DuckDB's
-        // iteration loop, however, filters by ruleset name. Give each
-        // trait-built rule its own unique ruleset (the rule's own
-        // name) so `Backend::run_rules(&[ids])` can map ids → names
-        // and use those names as the `allowed` ruleset set in
-        // `run_iteration_in_set`. The frontend is the one tracking
-        // which `RuleId`s belong to which logical ruleset, so this
-        // synthetic ruleset is invisible to the program.
-        rule.ruleset = name.clone();
-
-        // Register the rule with the existing pipeline.
+        // Register the rule with the existing pipeline. Keep the
+        // original ruleset name — the trait API filters by RuleId,
+        // not by ruleset, so there's no need for a synthetic one.
+        let _ = name;
+        let rule_idx = egraph.rules.len();
         egraph
             .add_rule(rule)
             .map_err(|e| anyhow!("DuckRuleBuilderOps::build: add_rule failed: {e}"))?;
 
-        // Allocate a trait-level RuleId by appending to
-        // `backend_rule_names`. Match the same Vec-index convention
-        // as `backend_function_names`.
-        let idx = egraph.backend_rule_names.len() as u32;
-        egraph.backend_rule_names.push(Some(name));
-        Ok(RuleId::new(idx))
+        // Allocate a trait-level RuleId pointing at the compiled
+        // rule's index in `egraph.rules`. `Backend::run_rules(&[ids])`
+        // resolves each id back to that index and runs just that
+        // specific rule.
+        let id = egraph.backend_rule_indices.len() as u32;
+        egraph.backend_rule_indices.push(Some(rule_idx));
+        Ok(RuleId::new(id))
     }
 
     /// Consume the builder, finalize the accumulated body atoms, and
@@ -862,11 +856,14 @@ mod tests {
                 .as_any()
                 .downcast_ref::<EGraph>()
                 .expect("downcast");
+            let stored_idx = eg
+                .backend_rule_indices
+                .get(rule_id.rep() as usize)
+                .and_then(|x| *x);
+            assert!(stored_idx.is_some(), "rule index should be stored");
             assert_eq!(
-                eg.backend_rule_names
-                    .get(rule_id.rep() as usize)
-                    .and_then(|x| x.as_deref()),
-                Some("copy_rule_smoke")
+                stored_idx.and_then(|i| eg.rules.get(i)).map(|r| &r.name[..]),
+                Some("copy_rule_smoke#0")
             );
         }
 
@@ -884,7 +881,7 @@ mod tests {
             .downcast_ref::<EGraph>()
             .expect("downcast");
         assert!(
-            eg.backend_rule_names
+            eg.backend_rule_indices
                 .get(rule_id.rep() as usize)
                 .map(|x| x.is_none())
                 .unwrap_or(false),

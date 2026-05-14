@@ -627,13 +627,18 @@ pub struct EGraph {
     /// RuleId -> rule name registered through the trait. Populated by
     /// `RuleBuilderOps::build` (see `rule_builder.rs`). Indexed by
     /// `RuleId::rep()`. The corresponding compiled rule lives in
-    /// `self.rules`; this vector just remembers the user-visible name
-    /// per trait id so `run_rules`/`free_rule` can map an id back to
-    /// the duckdb-internal handle.
+    /// `RuleId.rep() -> index into self.rules`. The trait surface
+    /// hands callers a `RuleId` from `Backend::new_rule(...).build()`
+    /// and later asks the backend to run specific ids via
+    /// `Backend::run_rules(&[ids])`. We translate each id back into a
+    /// slot in `self.rules` (the compiled-rule vector) so the runtime
+    /// can dispatch *exactly* those rules — no ruleset-name detour, no
+    /// risk of co-firing freed siblings that happen to share a name.
     ///
     /// `None` entries mark slots whose rule has been freed (via
-    /// `Backend::free_rule`).
-    backend_rule_names: Vec<Option<String>>,
+    /// `Backend::free_rule`) or whose builder produced an empty
+    /// action list (no-op rule that was never compiled).
+    backend_rule_indices: Vec<Option<usize>>,
     /// In-process base-value pool. Stores typed intern tables for
     /// every `BaseValue` type registered through the trait, including
     /// `i64`/`bool`/`f64`/`String`/`Unit` and user-defined impls.
@@ -745,7 +750,7 @@ impl EGraph {
             backend_function_names: Vec::new(),
             backend_report_level: egglog_backend_trait::ReportLevel::default(),
             backend_container_pool: backend_impl::DuckdbContainerPool,
-            backend_rule_names: Vec::new(),
+            backend_rule_indices: Vec::new(),
             backend_base_value_pool: base_values::DuckdbBaseValuePool::default(),
             backend_external_funcs: external_func::DuckdbExternalFuncRegistry::default(),
         })
@@ -1394,6 +1399,47 @@ impl EGraph {
             self.bump_watermark(name, cur_ts);
         }
         Ok(())
+    }
+
+    /// Run exactly the rules at `indices` once. The indices reference
+    /// positions in `self.rules`. Each rule advances its own
+    /// `last_run_at`, and the global `next_ts` bumps once per call so
+    /// the seminaive predicates compute against a consistent
+    /// snapshot. Used by the trait surface's `run_rules(&[ids])` —
+    /// the frontend gives us specific `RuleId`s and we translate them
+    /// to indices before calling here.
+    pub fn run_iteration_for_indices(&mut self, indices: &[usize]) -> Result<usize> {
+        let synced_displaced = self.sync_native_ufs()?;
+        self.rules_affected = self.rules_affected.wrapping_add(synced_displaced as u64);
+        self.next_ts += 1;
+        let cur = self.next_ts;
+        let mut total: usize = synced_displaced;
+        let last_run_ats: HashMap<String, i64> = self.last_run_at.clone();
+        let skip_uf_maintenance = self.native_uf_enabled;
+        for &idx in indices {
+            let Some(rule) = self.rules.get(idx) else {
+                continue;
+            };
+            if skip_uf_maintenance && is_uf_maintenance_ruleset(&rule.ruleset) {
+                continue;
+            }
+            let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
+            total += run_rule_variants(
+                rule,
+                last,
+                cur,
+                &self.conn,
+                &mut self.time_mat_ns,
+                &mut self.time_mat_act_ns,
+                &mut self.time_act_ns,
+                &mut self.rules_affected,
+                &mut self.rule_perf_ns,
+                &mut self.table_watermarks,
+                &mut self.rules_skipped,
+            )?;
+            self.last_run_at.insert(rule.name.clone(), cur);
+        }
+        Ok(total)
     }
 
     /// Run rules whose ruleset is in `allowed` once. Empty set means

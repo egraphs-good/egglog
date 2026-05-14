@@ -868,69 +868,44 @@ impl Backend for EGraph {
         // place rather than truncating the vector so subsequent
         // `RuleId`s retain their numeric meaning. The compiled rule
         // in `self.rules` is left intact: removing it from there
-        // would require recomputing every index. As a degraded
-        // implementation, we clear the slot's name so subsequent
-        // `run_rules([id])` is a no-op (the name doesn't match any
-        // entry in `self.rules`, so `run_iteration_in_set` filters
-        // it out). Phase 2 Commit 10.
+        // would require recomputing every index. Clear the slot so
+        // subsequent `run_rules([id])` skips this rule.
         let idx = id.rep() as usize;
-        if let Some(slot) = self.backend_rule_names.get_mut(idx) {
+        if let Some(slot) = self.backend_rule_indices.get_mut(idx) {
             *slot = None;
         }
     }
 
     fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
-        // Empty rule set = no work to do. The trait's
-        // `run_rules(&[])` means "no rules to run" (the frontend
-        // emits this for rulesets that ended up with zero
-        // registered rules, e.g. `@delete_subsume_ruleset` when no
-        // subsumable terms exist). DuckDB's
-        // `run_iteration_in_set(&[])` interprets the empty list as
-        // *run all rules* (`allow_all = allowed.is_empty()`), which
-        // would silently re-fire every rule every iteration and
-        // prevent saturation from ever being reached. Short-circuit
-        // here.
-        if rules.is_empty() {
-            return Ok(IterationReport::default());
-        }
-        // Map RuleIds → user-visible names, then call the existing
-        // `run_iteration_in_set`. The duckdb backend does not track
-        // per-rule timing in a `RuleSetReport` shape (its perf
-        // accounting goes through `rule_perf_ns` instead), so we
-        // return a minimal default `IterationReport` with `changed`
-        // reflecting whether any rows were affected.
-        let names: Vec<String> = rules
+        // The trait's `run_rules(&[ids])` is "run exactly these rules
+        // once." Resolve each id to its `self.rules` index and call
+        // `run_iteration_for_indices`. Empty input — and input where
+        // every id resolves to a freed slot — is a true no-op (no
+        // ruleset-name detour that could fall through to "run all
+        // rules"). The duckdb backend doesn't surface per-rule
+        // timing in a `RuleSetReport` shape (it accounts via
+        // `rule_perf_ns`), so we return a minimal `IterationReport`
+        // with `changed` reflecting whether any rows were affected.
+        let indices: Vec<usize> = rules
             .iter()
             .filter_map(|id| {
-                self.backend_rule_names
+                self.backend_rule_indices
                     .get(id.rep() as usize)
-                    .and_then(|opt| opt.clone())
+                    .and_then(|opt| *opt)
             })
             .collect();
-        // If the caller passed rule ids but all of them resolved to
-        // freed/no-op slots (`None`), the resulting `names` is empty.
-        // `run_iteration_in_set(&[])` interprets the empty allowed-set
-        // as "run all rules", which would silently re-fire every rule
-        // — disastrous when the scheduler is just asking the freed
-        // rules to step (e.g. `eval_actions` after `free_rule`).
-        // Short-circuit instead.
-        if names.is_empty() {
+        if indices.is_empty() {
             return Ok(IterationReport::default());
         }
-        // `run_iteration_in_set` takes `&[&str]`; build a view.
-        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
 
-        // `total` counts rows the iteration *attempted to insert*
-        // (which includes `ON CONFLICT DO NOTHING` no-ops). That
-        // overcounts and never saturates — once a rule's body
-        // matches, the action keeps re-trying the same insert every
-        // iteration. For the frontend's saturation detection we
-        // need a delta of `rules_affected_total`, the duck backend's
-        // cumulative "rows that changed the database" counter.
         let before = self.rules_affected_total();
-        let _ = EGraph::run_iteration_in_set(self, &name_refs)?;
+        let _ = EGraph::run_iteration_for_indices(self, &indices)?;
         let after = self.rules_affected_total();
         if std::env::var("DUCK_TRACE_RUN_RULES").is_ok() {
+            let names: Vec<&str> = indices
+                .iter()
+                .filter_map(|i| self.rules.get(*i).map(|r| r.name.as_str()))
+                .collect();
             eprintln!(
                 "[duck/run_rules] names={:?} delta={}",
                 names,
