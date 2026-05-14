@@ -13,7 +13,7 @@ export PATH=~/.cargo/bin:$PATH
 
 # Ensure we start from a clean slate
 rm -rf nightly
-mkdir -p nightly/output nightly/tmp
+mkdir -p nightly
 
 # Standalone runs do their own setup (toolchain + benchmarks clone). When
 # driven by the combined orchestrator, POACH_NIGHTLY_COMBINED=1 and the

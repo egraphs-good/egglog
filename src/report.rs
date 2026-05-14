@@ -28,7 +28,7 @@ pub struct RunReport {
 struct TimingStep {
     name: String,
     tags: Vec<String>,
-    #[serde(with = "serde_millis")]
+    #[serde(serialize_with = "serialize_duration_total")]
     total: Duration,
     #[serde(serialize_with = "serialize_duration_breakdown")]
     breakdown: Vec<Duration>,
@@ -109,25 +109,36 @@ impl Display for TimingStep {
         writeln!(f, "timing:")?;
         writeln!(f, "  name: {}", self.name)?;
         writeln!(f, "  tags: {:?}", self.tags)?;
-        writeln!(f, "  total: {}", self.total.as_secs_f64())?;
+        writeln!(f, "  total: {}", self.total.as_micros())?;
         writeln!(
             f,
             "  breakdown: {:?}",
             self.breakdown
                 .iter()
-                .map(Duration::as_millis)
+                .map(Duration::as_micros)
                 .collect::<Vec<_>>()
         )?;
         Ok(())
     }
 }
 
+fn serialize_duration_total<S>(total: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    // Clock granularity is ~50-100 ns.
+    // Serialize as micros to avoid reporting false precision.
+    total.as_micros().serialize(serializer)
+}
+
 fn serialize_duration_breakdown<S>(breakdown: &[Duration], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let breakdown_millis: Vec<_> = breakdown.iter().map(Duration::as_millis).collect();
-    breakdown_millis.serialize(serializer)
+    // Clock granularity is ~50-100 ns.
+    // Serialize as micros to avoid reporting false precision.
+    let breakdown_micros: Vec<_> = breakdown.iter().map(Duration::as_micros).collect();
+    breakdown_micros.serialize(serializer)
 }
 
 fn write_metric_section<T>(f: &mut Formatter<'_>, title: &str, metrics: &[T]) -> fmt::Result

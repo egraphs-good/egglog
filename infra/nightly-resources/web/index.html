@@ -9,6 +9,11 @@
   <body>
     <main class="page">
       <h1>Poach Nightly</h1>
+      <fieldset id="time-display-selector">
+        <legend>Time Display</legend>
+        <label><input type="radio" name="time-display" value="readable" checked /> Readable</label>
+        <label><input type="radio" name="time-display" value="raw" /> Raw</label>
+      </fieldset>
       <p id="status">Loading <code>data/data.json</code>...</p>
       <div id="contents">
         <div id="summary">
@@ -19,19 +24,7 @@
           <h2>Reports</h2>
           <div id="suite-tabs"></div>
           <div id="active-suite-summary"></div>
-          <table>
-            <thead>
-              <tr id="benchmarks-header">
-                <th data-sort-key="benchmark_path">Path</th>
-                <th data-sort-key="time_seconds">Wall Time</th>
-                <th data-sort-key="timing_summary.rule_running_millis">Rule Running</th>
-                <th data-sort-key="timing_summary.extraction_millis">Extraction</th>
-                <th data-sort-key="timing_summary.other_millis">Other</th>
-                <th data-sort-key="timing_summary.timing_steps"># Timing Steps</th>
-              </tr>
-            </thead>
-            <tbody id="benchmarks-body"></tbody>
-          </table>
+          <div id="active-suite-table"></div>
         </div>
       </div>
     </main>
