@@ -156,6 +156,7 @@ impl ContainerPool for DuckdbContainerPool {
 /// caller exercises `add_table` and we see what column kinds the
 /// frontend actually asks for.
 fn trait_col_ty_to_duck(ty: ColumnTy, pool: &dyn BaseValuePool) -> DuckColumnTy {
+    use crate::DuckPairMarker;
     use ordered_float::OrderedFloat;
     use std::any::TypeId;
     match ty {
@@ -168,6 +169,12 @@ fn trait_col_ty_to_duck(ty: ColumnTy, pool: &dyn BaseValuePool) -> DuckColumnTy 
             // matching DuckDB column kind. Falls back to `I64` for
             // unknown / unregistered base types (which is also what
             // egglog-bridge does for them — see `BaseValue::sql_ty`).
+            if pool.has_ty(TypeId::of::<DuckPairMarker>())
+                && bv == pool.get_ty_by_type_id(TypeId::of::<DuckPairMarker>())
+            {
+                // Pair marker — see `EGraph::pair_column_ty`.
+                return DuckColumnTy::PairI64;
+            }
             if pool.has_ty(TypeId::of::<i64>())
                 && bv == pool.get_ty_by_type_id(TypeId::of::<i64>())
             {

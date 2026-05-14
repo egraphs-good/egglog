@@ -862,7 +862,39 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.name()
     }
 
-    fn column_ty(&self, _backend: &dyn egglog_backend_trait::Backend) -> ColumnTy {
+    fn column_ty(&self, backend: &dyn egglog_backend_trait::Backend) -> ColumnTy {
+        // Proof encoding uses `Pair<sort, proof>` to bundle a leader
+        // id with its justification. On duck we store these as native
+        // SQL `STRUCT(first BIGINT, second BIGINT)` columns rather
+        // than going through the bridge's container interning. To
+        // route a `PairSort` column to a duck `STRUCT`, hand the
+        // duck-side `pair_column_ty()` back: that method registers a
+        // marker `BaseValueId` whose presence
+        // `trait_col_ty_to_duck` recognizes and maps to
+        // `DuckColumnTy::PairI64`. Other container sorts on duck
+        // remain unsupported (gated upstream by
+        // `program_supports_proofs`).
+        if TypeId::of::<T>() == TypeId::of::<crate::sort::PairSort>()
+            && let Some(_duck) = backend
+                .as_any()
+                .downcast_ref::<egglog_bridge_duckdb::EGraph>()
+        {
+            // `pair_column_ty` is a `&mut self` method that
+            // registers the marker on first call; we have only an
+            // immutable backend ref here. Sidestep with the
+            // pool-level lookup — if the marker hasn't been
+            // registered yet, fall back to `Id` and rely on
+            // `register_type` (which has `&mut`) to seed it before
+            // any add_table call references the marker.
+            use egglog_backend_trait::BaseValuePool;
+            use std::any::TypeId as Tid;
+            let pool: &dyn BaseValuePool = backend.base_value_pool();
+            if pool.has_ty(Tid::of::<egglog_bridge_duckdb::DuckPairMarker>()) {
+                let id =
+                    pool.get_ty_by_type_id(Tid::of::<egglog_bridge_duckdb::DuckPairMarker>());
+                return ColumnTy::Base(id);
+            }
+        }
         ColumnTy::Id
     }
 
@@ -871,12 +903,22 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         // The DuckDB backend has `supports_containers() == false`; any
         // program reaching here on duckdb is upstream-gated by
         // `program_supports_proofs` and won't actually use the
-        // container.
+        // container. Exception: `PairSort` survives on duck as a
+        // direct SQL `STRUCT` column (used by proof encoding's
+        // `Pair<sort, proof>`); seed the duck-side marker now so
+        // later `column_ty` calls can return `ColumnTy::Base(marker)`.
         if let Some(bridge) = backend
             .as_any_mut()
             .downcast_mut::<egglog_bridge::EGraph>()
         {
             bridge.register_container_ty::<T::Container>();
+        }
+        if TypeId::of::<T>() == TypeId::of::<crate::sort::PairSort>()
+            && let Some(duck) = backend
+                .as_any_mut()
+                .downcast_mut::<egglog_bridge_duckdb::EGraph>()
+        {
+            let _ = duck.pair_column_ty();
         }
     }
 

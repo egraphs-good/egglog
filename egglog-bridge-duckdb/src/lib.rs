@@ -339,6 +339,18 @@ impl ColumnTy {
     }
 }
 
+/// Marker [`BaseValue`] registered with the trait `BaseValuePool` so
+/// the duck pipeline can carry "this column is a Pair sort" through
+/// the existing [`egglog_backend_trait::ColumnTy::Base`] surface
+/// without extending the trait IR. Never actually constructed at
+/// runtime — pair values live in DuckDB `STRUCT` columns and are
+/// computed inline by the `pair` / `pair-first` / `pair-second` SQL
+/// primitives.
+#[derive(Clone, Hash, Eq, PartialEq, Debug, Default)]
+pub struct DuckPairMarker;
+
+impl egglog_core_relations::BaseValue for DuckPairMarker {}
+
 /// Merge mode for functions with outputs. Mirrors egglog's
 /// `:merge old` / `:merge new` keywords.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -745,6 +757,33 @@ impl EGraph {
     /// to decide whether to also spin up a `UfTable` + UDF.
     pub fn enable_native_uf(&mut self) {
         self.native_uf_enabled = true;
+    }
+
+    /// Return (registering if necessary) the [`BaseValueId`] used as a
+    /// marker for Pair-sort columns. The trait pipeline carries the
+    /// "this column stores a `(i64, i64)` pair" signal through the
+    /// regular [`ColumnTy::Base`] surface; `trait_col_ty_to_duck`
+    /// recognizes this id and maps it to
+    /// [`DuckColumnTy::PairI64`] (a DuckDB `STRUCT(first BIGINT,
+    /// second BIGINT)`). The frontend's `ContainerSortImpl::column_ty`
+    /// calls this when the wrapped sort is a `PairSort` and the
+    /// backend is duck. Other backends keep their existing
+    /// container-based representation.
+    pub fn pair_column_ty(&mut self) -> egglog_backend_trait::ColumnTy {
+        use egglog_backend_trait::{BaseValuePool, pool_register_type};
+        let pool: &mut dyn BaseValuePool = &mut self.backend_base_value_pool;
+        let id = pool_register_type::<DuckPairMarker>(pool);
+        egglog_backend_trait::ColumnTy::Base(id)
+    }
+
+    /// `true` iff `bv` is the [`BaseValueId`] used as the pair marker.
+    /// Used by `trait_col_ty_to_duck` to dispatch to [`DuckColumnTy::PairI64`].
+    pub(crate) fn is_pair_marker(&self, bv: egglog_backend_trait::BaseValueId) -> bool {
+        use egglog_backend_trait::BaseValuePool;
+        use std::any::TypeId;
+        let pool = &self.backend_base_value_pool;
+        BaseValuePool::has_ty(pool, TypeId::of::<DuckPairMarker>())
+            && bv == BaseValuePool::get_ty_by_type_id(pool, TypeId::of::<DuckPairMarker>())
     }
 
     /// Associate a primitive name with a previously registered
