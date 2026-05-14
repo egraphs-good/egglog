@@ -425,25 +425,21 @@ impl EGraph {
                     unionable: *unionable,
                 }
             }
-            NCommand::CoreAction(Action::Let(span, var, expr)) => {
-                let expr = self.type_info.typecheck_standalone_expr(
+            NCommand::CoreAction(action @ Action::Let(span, var, _)) => {
+                let action = self.type_info.typecheck_standalone_action(
                     symbol_gen,
-                    expr,
+                    action,
                     &Default::default(),
                     Context::Full,
                 )?;
-                let output_type = expr.output_type();
                 self.ensure_global_name_prefix(span, var)?;
+                let ResolvedAction::Let(_, resolved_var, _) = &action else {
+                    unreachable!("typechecking an Action::Let should return ResolvedAction::Let")
+                };
                 self.type_info
                     .global_sorts
-                    .insert(var.clone(), output_type.clone());
-                let var = ResolvedVar {
-                    name: var.clone(),
-                    sort: output_type,
-                    // not a global reference, but a global binding
-                    is_global_ref: false,
-                };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
+                    .insert(resolved_var.name.clone(), resolved_var.sort.clone());
+                ResolvedNCommand::CoreAction(action)
             }
             NCommand::CoreAction(action) => {
                 ResolvedNCommand::CoreAction(self.type_info.typecheck_standalone_action(
