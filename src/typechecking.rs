@@ -426,9 +426,12 @@ impl EGraph {
                 }
             }
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
-                let expr = self
-                    .type_info
-                    .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                let expr = self.type_info.typecheck_standalone_expr(
+                    symbol_gen,
+                    expr,
+                    &Default::default(),
+                    Context::Full,
+                )?;
                 let output_type = expr.output_type();
                 self.ensure_global_name_prefix(span, var)?;
                 self.type_info
@@ -442,18 +445,28 @@ impl EGraph {
                 };
                 ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
             }
-            NCommand::CoreAction(action) => ResolvedNCommand::CoreAction(
-                self.type_info
-                    .typecheck_action(symbol_gen, action, &Default::default())?,
-            ),
+            NCommand::CoreAction(action) => {
+                ResolvedNCommand::CoreAction(self.type_info.typecheck_standalone_action(
+                    symbol_gen,
+                    action,
+                    &Default::default(),
+                    Context::Full,
+                )?)
+            }
             NCommand::Extract(span, expr, variants) => {
-                let res_expr =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                let res_expr = self.type_info.typecheck_standalone_expr(
+                    symbol_gen,
+                    expr,
+                    &Default::default(),
+                    Context::Full,
+                )?;
 
-                let res_variants =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, variants, &Default::default())?;
+                let res_variants = self.type_info.typecheck_standalone_expr(
+                    symbol_gen,
+                    variants,
+                    &Default::default(),
+                    Context::Full,
+                )?;
                 if res_variants.output_type().name() != I64Sort.name() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
@@ -519,8 +532,12 @@ impl EGraph {
                 let exprs = exprs
                     .iter()
                     .map(|expr| {
-                        self.type_info
-                            .typecheck_expr(symbol_gen, expr, &Default::default())
+                        self.type_info.typecheck_standalone_expr(
+                            symbol_gen,
+                            expr,
+                            &Default::default(),
+                            Context::Full,
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 ResolvedNCommand::Output {
@@ -733,7 +750,15 @@ impl TypeInfo {
             schema: fdecl.schema.clone(),
             resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
             merge: match &fdecl.merge {
-                Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
+                // Merge expressions run as part of action-side table updates:
+                // writes are allowed, but live DB reads would be untracked by
+                // seminaive rule execution.
+                Some(merge) => Some(self.typecheck_standalone_expr(
+                    symbol_gen,
+                    merge,
+                    &bound_vars,
+                    Context::Write,
+                )?),
                 None => None,
             },
             cost: fdecl.cost,
@@ -909,11 +934,15 @@ impl TypeInfo {
         Ok(annotated_facts)
     }
 
-    fn typecheck_actions(
+    // Standalone expressions/actions use action lowering. Top-level commands
+    // pass `Full`; function `:merge` reuses this path with `Write` because
+    // merge expressions run during table updates.
+    fn typecheck_standalone_actions(
         &self,
         symbol_gen: &mut SymbolGen,
         actions: &Actions,
         binding: &IndexMap<&str, (Span, ArcSort)>,
+        context: Context,
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
@@ -923,10 +952,7 @@ impl TypeInfo {
         let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
-        // Top-level action-shaped commands (e.g. `eval`, `let`) get the
-        // most permissive context: primitives may both read and write
-        // the database.
-        problem.add_actions(&actions, self, symbol_gen, Context::Full)?;
+        problem.add_actions(&actions, self, symbol_gen, context)?;
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
@@ -937,35 +963,43 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let annotated_actions = assignment.annotate_actions(&mapped_action, self, Context::Full)?;
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self, context)?;
         Ok(annotated_actions)
     }
 
-    fn typecheck_expr(
+    fn typecheck_standalone_expr(
         &self,
         symbol_gen: &mut SymbolGen,
         expr: &Expr,
         binding: &IndexMap<&str, (Span, ArcSort)>,
+        context: Context,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Expr(expr.span(), expr.clone());
-        let typechecked_action = self.typecheck_action(symbol_gen, &action, binding)?;
+        let typechecked_action =
+            self.typecheck_standalone_action(symbol_gen, &action, binding, context)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),
             _ => unreachable!(),
         }
     }
 
-    fn typecheck_action(
+    fn typecheck_standalone_action(
         &self,
         symbol_gen: &mut SymbolGen,
         action: &Action,
         binding: &IndexMap<&str, (Span, ArcSort)>,
+        context: Context,
     ) -> Result<ResolvedAction, TypeError> {
-        self.typecheck_actions(symbol_gen, &Actions::singleton(action.clone()), binding)
-            .map(|v| {
-                assert_eq!(v.len(), 1);
-                v.0.into_iter().next().unwrap()
-            })
+        self.typecheck_standalone_actions(
+            symbol_gen,
+            &Actions::singleton(action.clone()),
+            binding,
+            context,
+        )
+        .map(|v| {
+            assert_eq!(v.len(), 1);
+            v.0.into_iter().next().unwrap()
+        })
     }
 
     pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {

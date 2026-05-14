@@ -381,6 +381,38 @@ fn full_primitive_accepted_only_in_global_action() {
         .unwrap();
 }
 
+/// Merge expressions are action-side writes, not top-level full actions:
+/// they may use pure/write primitives, but not primitives that read live DB
+/// state.
+#[test]
+fn merge_primitives_use_write_context() {
+    let mut egraph = EGraph::default();
+    egraph.add_write_primitive(WriteEcho("w-echo"), None);
+    egraph
+        .parse_and_run_program(None, "(function g () i64 :merge (w-echo old))")
+        .unwrap();
+
+    let mut egraph2 = EGraph::default();
+    egraph2.add_read_primitive(
+        ReadLookup {
+            name: "lookup-f",
+            table_name: "f",
+        },
+        None,
+    );
+    let result = egraph2.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (function g () i64 :merge (lookup-f old))",
+    );
+    assert!(result.is_err(), "ReadPrim must be rejected in :merge");
+
+    let mut egraph3 = EGraph::default();
+    egraph3.add_full_primitive(FullEcho("f-echo"), None);
+    let result = egraph3.parse_and_run_program(None, "(function g () i64 :merge (f-echo old))");
+    assert!(result.is_err(), "FullPrim must be rejected in :merge");
+}
+
 // `unstable-app` dispatch tests live in
 // `tests/typed_primitive_unstable_app.egg` — they only need built-in
 // primitives, so the `.egg` form is more direct than building an

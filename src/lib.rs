@@ -702,7 +702,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.external_id(crate::Context::Full),
+                    p.external_id(crate::Context::Write),
                     translated_args,
                 ))
             }
