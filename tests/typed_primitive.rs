@@ -468,26 +468,10 @@ fn matrix_program(ctx: AppCtx) -> String {
 fn run_matrix_cell(register: impl FnOnce(&mut EGraph), ctx: AppCtx) -> Result<(), String> {
     let mut egraph = EGraph::default();
     register(&mut egraph);
-    // Dispatch mismatch usually surfaces as `Err` from
-    // `parse_and_run_program` (via the egglog panic side channel),
-    // but in a `check` it can bubble up as a thread panic because
-    // `EGraph::check_facts` unwraps the underlying `run_rules`
-    // result. Treat either signal as a dispatch failure here.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        egraph.parse_and_run_program(None, &matrix_program(ctx))
-    }));
-    match result {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(format!("{e}")),
-        Err(p) => {
-            let msg = p
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| p.downcast_ref::<&'static str>().map(|s| s.to_string()))
-                .unwrap_or_else(|| "<non-string panic>".to_string());
-            Err(format!("panic: {msg}"))
-        }
-    }
+    egraph
+        .parse_and_run_program(None, &matrix_program(ctx))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[test]

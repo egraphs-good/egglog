@@ -1218,10 +1218,10 @@ impl EGraph {
                 "this function will never panic".to_string()
             });
         let id = translator.build();
-        let _ = self.backend.run_rules(&[id]).unwrap();
+        let run_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
-
         self.backend.free_external_func(ext_id);
+        run_result.map_err(|e| Error::BackendError(e.to_string()))?;
 
         let ext_sc_val = ext_sc.lock().unwrap().take();
         let matched = matches!(ext_sc_val, Some(()));
@@ -2077,8 +2077,7 @@ impl<'a> BackendRule<'a> {
             // `run_rules` rather than a thread unwind.
             let panic_id = self.rb.new_panic(format!(
                 "unstable-fn over `{name}` was applied in a context where its wrapped \
-                 function is not valid; if the call should be sound, add `:naive` to the \
-                 surrounding rule"
+                 function is not valid for this call site, if in a rule, add :naive."
             ));
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
