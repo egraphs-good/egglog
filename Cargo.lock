@@ -1080,6 +1080,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "egglog-experimental"
+version = "0.1.0"
+dependencies = [
+ "egglog",
+ "egglog-ast",
+ "egglog-reports",
+ "glob",
+ "lazy_static",
+ "libtest-mimic",
+ "log",
+ "num",
+]
+
+[[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
 dependencies = [

@@ -138,13 +138,19 @@ pub fn cli(mut egraph: EGraph) {
                 panic!("Failed to read file {arg}")
             });
 
-            // DuckDB backend: bypass the regular pipeline entirely.
-            // We resolve via the egglog frontend (so type info, term
-            // encoding, etc., still apply for the parts we support)
-            // but dispatch each ResolvedNCommand to DuckDB.
+            // DuckDB backend: route the program through the same egglog
+            // frontend (parser, typechecker, term encoding) but with the
+            // DuckDB-backed `Backend` impl swapped in. The
+            // `EGraph::with_duckdb_backend` constructor builds an
+            // ordinary `EGraph` whose `backend` is the DuckDB engine —
+            // no parallel typechecker, no separate dispatch loop. The
+            // caller's `egraph` (which may carry an experimental parser
+            // or other customizations) is replaced wholesale for this
+            // input; we preserve the parser so any
+            // `egglog-experimental` parse-time macros still resolve.
             if args.duckdb_backend {
-                let mut backend = egglog::backend_duckdb::DuckdbBackend::new_with_config(
-                    egglog::backend_duckdb::DuckBackendConfig {
+                let mut duck_eg = egglog::EGraph::with_duckdb_backend(
+                    egglog::DuckBackendConfig {
                         native_uf: args.duck_native_uf,
                         proofs: false,
                     },
@@ -153,7 +159,9 @@ pub fn cli(mut egraph: EGraph) {
                     log::error!("failed to start DuckDB backend: {err}");
                     std::process::exit(1);
                 });
-                if let Err(err) = backend.run_program(
+                duck_eg.parser = std::mem::take(&mut egraph.parser);
+                duck_eg.ensure_no_reserved_symbols(false);
+                if let Err(err) = duck_eg.parse_and_run_program(
                     Some(input.to_str().unwrap().into()),
                     &program,
                 ) {

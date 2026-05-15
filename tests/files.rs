@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use egglog::backend_duckdb::DuckdbBackend;
 use egglog::{file_supports_proofs, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
@@ -172,40 +171,14 @@ impl Run {
             // leader as `i64`, which doesn't satisfy the encoder's
             // pair type. Until native UF learns to return Pair
             // values in proof mode, keep them apart in tests.
-            let config = egglog::backend_duckdb::DuckBackendConfig {
+            let config = DuckBackendConfig {
                 proofs: self.proofs,
                 native_uf: false,
             };
-            // Phase 2 C14 (in progress): route through the unified
-            // `EGraph::with_duckdb_backend` pipeline under
-            // `DUCK_TRAIT_FLIP=1` so we can incrementally test the
-            // trait path. Without the env var, fall back to the
-            // legacy parallel pipeline.
-            if std::env::var("DUCK_TRAIT_FLIP").is_ok() {
-                let mut egraph = EGraph::with_duckdb_backend(config)
-                    .unwrap_or_else(|e| panic!("EGraph::with_duckdb_backend init failed: {e}"));
-                egraph.ensure_no_reserved_symbols(false);
-                return match egraph.parse_and_run_program(filename, &program) {
-                    Ok(msgs) => {
-                        if self.should_fail() {
-                            panic!(
-                                "Program should have failed under --duckdb! Outputs:\n{}",
-                                msgs.iter().map(|m| m.to_string()).collect::<Vec<_>>().join("")
-                            );
-                        }
-                        Ok(msgs)
-                    }
-                    Err(err) => {
-                        if !self.should_fail() {
-                            panic!("{message} (--duckdb): {err}");
-                        }
-                        Err(err.to_string())
-                    }
-                };
-            }
-            let mut backend = DuckdbBackend::new_with_config(config)
-                .unwrap_or_else(|e| panic!("DuckdbBackend init failed: {e}"));
-            return match backend.parse_and_run_program(filename, &program) {
+            let mut egraph = EGraph::with_duckdb_backend(config)
+                .unwrap_or_else(|e| panic!("EGraph::with_duckdb_backend init failed: {e}"));
+            egraph.ensure_no_reserved_symbols(false);
+            return match egraph.parse_and_run_program(filename, &program) {
                 Ok(msgs) => {
                     if self.should_fail() {
                         panic!(

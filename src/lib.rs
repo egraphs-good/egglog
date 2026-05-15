@@ -13,7 +13,8 @@
 //!
 //!
 pub mod ast;
-pub mod backend_duckdb;
+pub mod duckdb_config;
+pub use duckdb_config::DuckBackendConfig;
 #[cfg(feature = "bin")]
 mod cli;
 mod command_macro;
@@ -453,9 +454,7 @@ impl EGraph {
     ///
     /// Term encoding (or proof-tracking term encoding) is enabled
     /// unconditionally: the DuckDB backend is term-encoding only.
-    pub fn with_duckdb_backend(
-        config: backend_duckdb::DuckBackendConfig,
-    ) -> anyhow::Result<Self> {
+    pub fn with_duckdb_backend(config: DuckBackendConfig) -> anyhow::Result<Self> {
         let mut db = egglog_bridge_duckdb::EGraph::new()?;
         if config.native_uf {
             db.enable_native_uf();
@@ -468,8 +467,7 @@ impl EGraph {
         // cannot be cloned (its `Connection` is not trivially
         // cloneable), so we instead build a bridge-backed typechecker
         // that mirrors the same sort + primitive registration done
-        // above. This mirrors what `backend_duckdb::DuckdbBackend`'s
-        // legacy pipeline did internally.
+        // above.
         let typechecker = if config.proofs {
             EGraph::new_with_proofs()
         } else {
