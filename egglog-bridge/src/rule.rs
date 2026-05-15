@@ -98,6 +98,12 @@ pub(crate) struct Query {
     sole_focus: Option<usize>,
     seminaive: bool,
     plan_strategy: PlanStrategy,
+    /// When set, this rule matches the term-encoding "rebuild rule" shape:
+    /// atom 0 is a view-table atom whose children are canonical at insertion,
+    /// and atoms 1..N are UF lookups for those children. The seminaive
+    /// scheduler can then skip the focus=atom-0 variant and drop the
+    /// `atom 0 ts < mid_ts` constraint from the UF-focus variants.
+    rebuild_pattern: bool,
 }
 
 pub struct RuleBuilder<'a> {
@@ -128,6 +134,7 @@ impl EGraph {
                 atoms: Default::default(),
                 add_rule: Default::default(),
                 plan_strategy: Default::default(),
+                rebuild_pattern: false,
             },
         }
     }
@@ -150,6 +157,11 @@ impl RuleBuilder<'_> {
 
     pub(crate) fn set_plan_strategy(&mut self, strategy: PlanStrategy) {
         self.query.plan_strategy = strategy;
+    }
+
+    /// Mark this rule as a term-encoding rebuild rule. See `Query::rebuild_pattern`.
+    pub(crate) fn set_rebuild_pattern(&mut self) {
+        self.query.rebuild_pattern = true;
     }
 
     /// Get the canonical value of an id in the union-find. An internal-only
@@ -770,7 +782,21 @@ impl Query {
         //
         let mut constraints: Vec<(core_relations::AtomId, Constraint)> =
             Vec::with_capacity(self.atoms.len());
-        'outer: for focus_atom in 0..self.atoms.len() {
+        // Rebuild-rule optimization: skip the focus=atom-0 variant (under the
+        // canonical-children invariant no firing is possible when the view
+        // atom is the freshest), and drop the `view ts < mid_ts` constraint
+        // from the remaining UF-focus variants so they instead catch every
+        // match where the UF atom is the freshest, regardless of the view's
+        // timestamp.
+        //
+        // Gated on `mid_ts > 0`: when `mid_ts == 0`, only variant 0 runs (the
+        // inner LtConst loop below short-circuits via `continue 'outer` for
+        // every other focus), and skipping it would drop every match on the
+        // rule's very first run.
+        let apply_rebuild_opt = self.rebuild_pattern && mid_ts > Timestamp::new(0);
+        let start_focus = if apply_rebuild_opt { 1 } else { 0 };
+        let skip_view_lt = apply_rebuild_opt;
+        'outer: for focus_atom in start_focus..self.atoms.len() {
             constraints.clear();
             // start with the focus atom since `add_rule_from_cached_plan` will apply the
             // constraints in order, and the focus atom may have an empty delta, which
@@ -789,6 +815,9 @@ impl Query {
             for (i, (_, _, schema_info)) in self.atoms[0..focus_atom].iter().enumerate() {
                 if mid_ts == Timestamp::new(0) {
                     continue 'outer;
+                }
+                if skip_view_lt && i == 0 {
+                    continue;
                 }
                 let ts_col = ColumnId::from_usize(schema_info.ts_col());
                 constraints.push((

@@ -3,7 +3,10 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize},
+    sync::{
+        Arc, OnceLock, RwLock,
+        atomic::{AtomicU64, AtomicUsize},
+    },
 };
 
 use crate::{
@@ -480,6 +483,7 @@ impl Database {
                         rule_report.value_mut().push(RuleReport {
                             plan: report_plan,
                             search_and_apply_time,
+                            apply_time: std::time::Duration::ZERO,
                             num_matches: usize::MAX,
                         });
                     });
@@ -592,6 +596,7 @@ impl Database {
                 rule_report.push(RuleReport {
                     plan: report_plan,
                     search_and_apply_time,
+                    apply_time: std::time::Duration::ZERO,
                     num_matches: usize::MAX,
                 });
             }
@@ -611,6 +616,8 @@ impl Database {
             // If an action is used by multiple queries, then we can't tell how many matches are
             // caused by individual queries.
             reports[i].num_matches = match_counter.read_matches(plan.actions());
+            reports[i].apply_time =
+                std::time::Duration::from_nanos(match_counter.read_apply_ns(plan.actions()));
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -1753,7 +1760,10 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         }
         if action_state.len >= VAR_BATCH_SIZE {
             let mut state = to_exec_state();
+            let t = Instant::now();
             let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
+            self.match_counter
+                .add_apply_ns(action, t.elapsed().as_nanos() as u64);
             action_state.bindings.clear();
             self.match_counter.inc_matches(action, succeeded);
             action_state.len = 0;
@@ -1836,7 +1846,9 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
             action_state.len = 0;
             let match_counter = self.match_counter.clone();
             self.scope.spawn(move |_| {
+                let t = Instant::now();
                 let succeeded = state.run_instrs(&action_info.instrs, &mut bindings);
+                match_counter.add_apply_ns(action, t.elapsed().as_nanos() as u64);
                 match_counter.inc_matches(action, succeeded);
             });
         }
@@ -1899,7 +1911,9 @@ fn flush_action_states(
 ) {
     for (action, ActionState { bindings, len, .. }) in actions.iter_mut() {
         if *len > 0 {
+            let t = Instant::now();
             let succeeded = exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
+            match_counter.add_apply_ns(action, t.elapsed().as_nanos() as u64);
             bindings.clear();
             match_counter.inc_matches(action, succeeded);
             *len = 0;
@@ -2045,13 +2059,19 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
 
 struct MatchCounter {
     matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
+    apply_time_ns: IdVec<ActionId, CachePadded<AtomicU64>>,
 }
 
 impl MatchCounter {
     fn new(n_ids: usize) -> Self {
         let mut matches = IdVec::with_capacity(n_ids);
         matches.resize_with(n_ids, || CachePadded::new(AtomicUsize::new(0)));
-        Self { matches }
+        let mut apply_time_ns = IdVec::with_capacity(n_ids);
+        apply_time_ns.resize_with(n_ids, || CachePadded::new(AtomicU64::new(0)));
+        Self {
+            matches,
+            apply_time_ns,
+        }
     }
 
     fn inc_matches(&self, action: ActionId, by: usize) {
@@ -2059,6 +2079,12 @@ impl MatchCounter {
     }
     fn read_matches(&self, action: ActionId) -> usize {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn add_apply_ns(&self, action: ActionId, ns: u64) {
+        self.apply_time_ns[action].fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn read_apply_ns(&self, action: ActionId) -> u64 {
+        self.apply_time_ns[action].load(std::sync::atomic::Ordering::Acquire)
     }
 }
 

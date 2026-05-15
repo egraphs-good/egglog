@@ -614,6 +614,17 @@ pub trait RuleBuilderOps {
         ret_ty: ColumnTy,
     ) -> Result<()>;
 
+    /// Mark this rule as a "rebuild rule" — atom 0 is a view-table atom
+    /// whose children are canonical at insertion (an invariant maintained by
+    /// the term encoding), and atoms 1..N are UF lookups whose children come
+    /// from atom 0. This lets the seminaive scheduler skip the focus=atom-0
+    /// variant (which under the invariant only matches when at least one UF
+    /// child is also new) and drop the `view ts < mid_ts` constraint from the
+    /// UF-focus variants instead — so each variant `k` catches matches where
+    /// UF atom `k` is the freshest, with no restriction on the view's
+    /// timestamp. No-op on backends that don't implement it.
+    fn set_rebuild_pattern(&mut self) {}
+
     /// Call an external function in the RHS, panicking with `panic_msg` on
     /// failure. Returns the result variable.
     ///

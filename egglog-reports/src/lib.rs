@@ -58,6 +58,10 @@ pub struct Plan {
 pub struct RuleReport {
     pub plan: Option<Plan>,
     pub search_and_apply_time: Duration,
+    /// Time spent inside the rule's RHS instruction stream (the "apply"
+    /// portion of search-and-apply). The remainder of `search_and_apply_time`
+    /// is the join/search.
+    pub apply_time: Duration,
     // TODO: succeeding matches
     pub num_matches: usize,
 }
@@ -82,6 +86,13 @@ impl RuleSetReport {
         self.rule_reports
             .get(rule)
             .map(|r| r.iter().map(|r| r.search_and_apply_time).sum())
+            .unwrap_or(Duration::ZERO)
+    }
+
+    pub fn rule_apply_time(&self, rule: &str) -> Duration {
+        self.rule_reports
+            .get(rule)
+            .map(|r| r.iter().map(|r| r.apply_time).sum())
             .unwrap_or(Duration::ZERO)
     }
 }
@@ -123,6 +134,7 @@ pub struct RunReport {
     /// If any changes were made to the database.
     pub updated: bool,
     pub search_and_apply_time_per_rule: HashMap<Arc<str>, Duration>,
+    pub apply_time_per_rule: HashMap<Arc<str>, Duration>,
     pub num_matches_per_rule: HashMap<Arc<str>, usize>,
     pub search_and_apply_time_per_ruleset: HashMap<Arc<str>, Duration>,
     pub merge_time_per_ruleset: HashMap<Arc<str>, Duration>,
@@ -136,11 +148,18 @@ impl Display for RunReport {
 
         for (rule, time) in rule_times_vec {
             let name = Self::truncate_rule_name(rule.to_string());
-            let time = time.as_secs_f64();
+            let total = time.as_secs_f64();
             let num_matches = self.num_matches_per_rule.get(rule).copied().unwrap_or(0);
+            let apply = self
+                .apply_time_per_rule
+                .get(rule)
+                .copied()
+                .unwrap_or(Duration::ZERO)
+                .as_secs_f64();
+            let search = (total - apply).max(0.0);
             writeln!(
                 f,
-                "Rule {name}: search and apply {time:.3}s, num matches {num_matches}",
+                "Rule {name}: search and apply {total:.3}s (search {search:.3}s, apply {apply:.3}s), num matches {num_matches}",
             )?;
         }
 
@@ -217,6 +236,10 @@ impl RunReport {
                 .search_and_apply_time_per_rule
                 .entry(rule.clone())
                 .or_default() += iteration.rule_set_report.rule_search_and_apply_time(rule);
+            *report
+                .apply_time_per_rule
+                .entry(rule.clone())
+                .or_default() += iteration.rule_set_report.rule_apply_time(rule);
             *report.num_matches_per_rule.entry(rule.clone()).or_default() +=
                 iteration.rule_set_report.num_matches(rule);
         }
@@ -244,6 +267,10 @@ impl RunReport {
         RunReport::union_times(
             &mut self.search_and_apply_time_per_rule,
             other.search_and_apply_time_per_rule,
+        );
+        RunReport::union_times(
+            &mut self.apply_time_per_rule,
+            other.apply_time_per_rule,
         );
         RunReport::union_counts(&mut self.num_matches_per_rule, other.num_matches_per_rule);
         RunReport::union_times(

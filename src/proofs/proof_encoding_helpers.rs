@@ -4,14 +4,99 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, TypeInfo,
+    ArcSort, EGraph, Primitive, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, Schedule,
     },
+    constraint::{SimpleTypeConstraint, TypeConstraint},
     proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, SymbolGen},
 };
+use crate::core_relations::{ExecutionState, TableId, Value};
+use egglog_ast::span::Span;
+use std::sync::{Arc, OnceLock};
+
+/// Primitive form of an "unsafe" UF function lookup used by the term encoding:
+/// returns the leader stored in `__UF_<sort>f` for the given value, or the
+/// value itself when no row exists. Acts like the bridge's `lookup_with_default`,
+/// but exposed as an egglog primitive so it can appear in rule actions
+/// (custom-function lookups in actions are disallowed by typecheck; primitives
+/// are not).
+///
+/// "Unsafe" because the lookup result is the table's *current* state — within
+/// a single action sequence, writes are staged and not visible, so the value
+/// returned reflects state from before the current action batch began. That is
+/// exactly the semantics we need for canonicalizing constructor args at view
+/// insertion: freshly-created terms don't have a UF row yet (default-to-self
+/// is the right answer, since they're canonical by construction), and
+/// previously-existing terms see their committed leader.
+#[derive(Clone)]
+pub(crate) struct UnsafeLookupUfPrim {
+    pub(crate) name: String,
+    pub(crate) sort: ArcSort,
+    /// The UF function's table id, filled in at command-execute time after
+    /// `declare_function` has actually added the table to the backend. The
+    /// primitive is registered earlier (during typecheck of the function
+    /// declaration) so that subsequent commands' typechecks can resolve its
+    /// name.
+    pub(crate) uf_table_id: Arc<OnceLock<TableId>>,
+}
+
+impl Primitive for UnsafeLookupUfPrim {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            &self.name,
+            vec![self.sort.clone(), self.sort.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+        let table_id = *self
+            .uf_table_id
+            .get()
+            .expect("unsafe-lookup-uf primitive invoked before its UF table was registered");
+        let table = exec_state.get_table(table_id);
+        // Chase the UF chain until we reach a fixed point. During user
+        // actions the UF function table may not be fully path-compressed
+        // (path_compress only saturates inside the rebuild schedule), so a
+        // single hop can return a non-leader value. We follow until either
+        // the lookup misses or returns the same value back, which gives the
+        // true leader. A cycle would loop forever, but UF's
+        // `:merge (ordering-min old new)` keeps values monotonically
+        // decreasing along the chain, so chains are acyclic and terminate.
+        let mut current = args[0];
+        let mut steps = 0usize;
+        loop {
+            match table.get_row(&[current]) {
+                Some(row) => {
+                    let next = row.vals[1];
+                    if next == current {
+                        return Some(current);
+                    }
+                    current = next;
+                }
+                None => return Some(current),
+            }
+            steps += 1;
+            assert!(
+                steps < 1_000_000,
+                "unsafe-lookup-uf: UF chain too long, likely a cycle"
+            );
+        }
+    }
+}
+
+/// Returns the egglog primitive name for the UF-lookup of a given sort.
+pub(crate) fn unsafe_lookup_uf_name(sort_name: &str) -> String {
+    format!("__unsafe-lookup-uf-{sort_name}")
+}
 
 /// Holds all the names used in proof encoding.
 /// We need fresh names that don't collide with user-defined names.

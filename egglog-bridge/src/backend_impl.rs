@@ -102,6 +102,10 @@ impl<'a> RuleBuilderOps for BridgeRuleBuilderOps<'a> {
         self.inner.query_prim(func, entries, ret_ty)
     }
 
+    fn set_rebuild_pattern(&mut self) {
+        self.inner.set_rebuild_pattern();
+    }
+
     fn call_external_func(
         &mut self,
         func: ExternalFunctionId,
