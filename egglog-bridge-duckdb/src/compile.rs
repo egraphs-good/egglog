@@ -1390,6 +1390,20 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
             }
             Ok(format!("__egglog_bigrat({}, {})", args[0], args[1]))
         }
+        // egglog-experimental's `get-size!` zero-arg form. The
+        // variadic table-filter form is not yet supported on duckdb;
+        // `EGraph::refresh_table_sizes` must be called before each
+        // query that may reference this UDF so it sees a fresh
+        // snapshot.
+        "get-size!" => {
+            if !args.is_empty() {
+                return Err(anyhow!(
+                    "rule {rule_name}: variadic `get-size!` arg form is unsupported on duckdb \
+                     (only the zero-arg total form works)"
+                ));
+            }
+            Ok("__egglog_get_size()".to_string())
+        }
         // BigRat-specific aliases — the frontend renames the
         // BigRat-overloaded `+`, `<`, `round`, ... call sites to
         // `bigrat-add`, `bigrat-lt`, `bigrat-round`, ... so we route

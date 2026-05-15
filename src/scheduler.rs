@@ -234,7 +234,11 @@ impl EGraph {
         // `with_execution_state` is now expressed as repeated
         // `Backend::insert_rows` calls; the scheduler's `instantiate` no
         // longer touches the execution state.
-        let unit = self.bridge().base_values().get(());
+        // Trait-level pool access — see `SchedulerRuleInfo::new` for
+        // the rationale. The bridge backend's pool and the duckdb
+        // pool both implement `BaseValuePool`, so this works on either.
+        let unit =
+            egglog_backend_trait::pool_get::<()>(self.backend.base_value_pool(), ());
         for (rule_id, _rule) in rules.iter() {
             let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
@@ -334,9 +338,14 @@ impl ExternalFunction for CollectMatches {
 impl SchedulerRuleInfo {
     fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
-        let unit_type = egraph.bridge().base_values().get_ty::<()>();
-        let unit = egraph.bridge().base_values().get(());
-        let unit_entry = egraph.bridge().base_value_constant(());
+        // Use the trait-level pool helpers so this path doesn't require
+        // a bridge backend — duckdb has its own pool, and downcast was
+        // the historical bottleneck for `step_rules_with_scheduler`
+        // hitting `egraph.bridge()`'s "this code path is bridge-only"
+        // panic on Herbie's run-schedule with-scheduler programs.
+        let unit_type = egglog_backend_trait::pool_get_ty::<()>(egraph.backend.base_value_pool());
+        let unit = egglog_backend_trait::pool_get::<()>(egraph.backend.base_value_pool(), ());
+        let unit_entry = egraph.backend.base_value_constant_dyn(unit, unit_type);
 
         let matches = Arc::new(Mutex::new(Vec::new()));
         let collect_matches = egraph
@@ -363,11 +372,21 @@ impl SchedulerRuleInfo {
             .map(|v| v.sort.column_ty(&*egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
+        // The duckdb backend rejects duplicate function-table names
+        // and the scheduler creates a new "decided" table per call,
+        // so disambiguate with the rule name + a fresh suffix. The
+        // bridge backend ignores duplicate names (it tracks by
+        // FunctionId), so the unique name is harmless there too.
+        let decided_name = format!(
+            "@scheduler_decided_{}_{}",
+            name,
+            egraph.parser.symbol_gen.fresh("instance")
+        );
         let decided = egraph.backend.add_table(FunctionConfig {
             schema,
             default: DefaultVal::Const(unit),
             merge: MergeFn::AssertEq,
-            name: "backend".to_string(),
+            name: decided_name,
             can_subsume: false,
         });
 

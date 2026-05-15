@@ -651,6 +651,61 @@ impl VScalar for BigratNumDenomScalar {
     }
 }
 
+/// State for the `get-size!` UDF: a shared snapshot of function-table
+/// row counts. The duckdb EGraph refreshes this immediately before
+/// each `query`/`:until`-style check via `refresh_table_sizes`, then
+/// the UDF reads from it during the check's single SELECT. Variadic
+/// arg filtering isn't supported yet — `Herbie`'s use is
+/// `(get-size!)` with no args, which sums all entries.
+#[derive(Clone, Default)]
+struct GetSizeState {
+    table_sizes: Arc<Mutex<HashMap<String, i64>>>,
+}
+
+/// UDF wrapper for `egglog-experimental`'s `get-size!` primitive. The
+/// primitive itself walks `ExecutionState::table_ids()` to sum row
+/// counts; the duckdb backend has no `ExecutionState` accessible from
+/// inside a UDF, so we mirror table sizes into `GetSizeState` and
+/// expose them through this zero-arity function. The egglog frontend
+/// renames every duckdb-bound `get-size!` call site to this UDF via
+/// the `rename_prim` hook so the rule_builder emits
+/// `__egglog_get_size()` in the body SQL.
+struct GetSizeScalar;
+
+impl VScalar for GetSizeScalar {
+    type State = GetSizeState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let total: i64 = state
+            .table_sizes
+            .lock()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("GetSizeScalar: mutex poisoned: {e}").into()
+            })?
+            .values()
+            .copied()
+            .sum();
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        for i in 0..n {
+            out_slice[i] = total;
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
 /// UDF for `Q → DOUBLE` (`to-f64`).
 struct BigratToF64Scalar;
 
@@ -1293,6 +1348,11 @@ pub struct EGraph {
     /// registered on `self.conn`. Re-registering the same name is an
     /// error in DuckDB, so we dedupe at the source.
     registered_builtin_udfs: std::collections::HashSet<String>,
+    /// Snapshot of function-table row counts, shared with the
+    /// `get-size!` UDF state. `refresh_table_sizes` repopulates this
+    /// just before each existence-check query so the UDF returns a
+    /// consistent answer for that query.
+    table_sizes: Arc<Mutex<HashMap<String, i64>>>,
 }
 
 struct CompiledRule {
@@ -1393,6 +1453,7 @@ impl EGraph {
             backend_base_value_pool: base_values::DuckdbBaseValuePool::default(),
             backend_external_funcs: external_func::DuckdbExternalFuncRegistry::default(),
             registered_builtin_udfs: std::collections::HashSet::new(),
+            table_sizes: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1511,6 +1572,16 @@ impl EGraph {
                         &state,
                     )
             }
+            "get-size!" => {
+                let state = GetSizeState {
+                    table_sizes: Arc::clone(&self.table_sizes),
+                };
+                self.conn
+                    .register_scalar_function_with_state::<GetSizeScalar>(
+                        "__egglog_get_size",
+                        &state,
+                    )
+            }
             other if BigratOp::from_duck_name(other).is_some() => {
                 let Some(bigrat_ty) = bigrat_ty else { return };
                 let op = BigratOp::from_duck_name(other).unwrap();
@@ -1563,6 +1634,39 @@ impl EGraph {
         id: egglog_backend_trait::ExternalFunctionId,
     ) -> Option<&str> {
         self.backend_external_funcs.name(id)
+    }
+
+    /// Refresh the row-count snapshot consulted by the `get-size!`
+    /// UDF. Queries each function table once via `SELECT COUNT(*)`
+    /// and writes the result into the shared `table_sizes` map.
+    /// Internal-symbol-prefixed tables (term-encoding bookkeeping)
+    /// are excluded so the result matches the bridge `get-size!`
+    /// primitive, which applies the same filter.
+    ///
+    /// Callers should invoke this immediately before each
+    /// existence-check query that may reference `get-size!`. The
+    /// snapshot stays valid for the duration of that query.
+    pub fn refresh_table_sizes(&self) -> Result<()> {
+        const INTERNAL_PREFIX: &str = "@";
+        let mut new_sizes: HashMap<String, i64> = HashMap::new();
+        for (name, info) in &self.functions {
+            if name.starts_with(INTERNAL_PREFIX) {
+                continue;
+            }
+            let _ = info;
+            let sql = format!("SELECT COUNT(*) FROM {}", q(name));
+            let count: i64 = self
+                .conn
+                .query_row(&sql, [], |r| r.get(0))
+                .map_err(|e| anyhow!("refresh_table_sizes: failed to count {name}: {e}"))?;
+            new_sizes.insert(name.clone(), count);
+        }
+        let mut guard = self
+            .table_sizes
+            .lock()
+            .map_err(|e| anyhow!("table_sizes mutex poisoned: {e}"))?;
+        *guard = new_sizes;
+        Ok(())
     }
 
     /// Currently registered native union-find tables, for read-only

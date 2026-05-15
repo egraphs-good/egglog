@@ -644,6 +644,31 @@ pub fn query(
 ) -> Result<QueryResult, Error> {
     use std::sync::{Arc, Mutex};
 
+    // DuckDB-backed egraph: `rust_rule` is bridge-only (it wires
+    // `egglog_bridge::UnionAction` / `TableAction` into the rule's
+    // RHS primitive), so the regular path below panics. For the
+    // existence-only case (no vars to capture — used by
+    // `run-schedule`'s `:until` clauses), we can answer the query by
+    // compiling the body through the trait and calling `build_check`
+    // on the resulting rule, exactly like `EGraph::check_facts`. We
+    // don't yet support row-capturing queries on duckdb.
+    if egraph.has_duckdb_backend() {
+        if !vars.is_empty() {
+            return Err(Error::BackendError(format!(
+                "query() with {} captured variable(s) is not yet supported on the DuckDB \
+                 backend (only existence queries with `vars = &[]` work). Caller can use \
+                 `(check ...)` if all it needs is a yes/no answer.",
+                vars.len()
+            )));
+        }
+        let matched = egraph.run_check_facts_any(facts.0)?;
+        return Ok(QueryResult {
+            rows: if matched { 1 } else { 0 },
+            cols: 0,
+            data: Vec::new(),
+        });
+    }
+
     let results = Arc::new(Mutex::new(QueryResult {
         rows: 0,
         cols: vars.len(),

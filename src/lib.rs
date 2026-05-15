@@ -1832,6 +1832,101 @@ impl EGraph {
             .is::<egglog_bridge_duckdb::EGraph>()
     }
 
+    /// Compile the given facts as a rule body, check if any row
+    /// matches, and return the boolean answer. Used by
+    /// [`prelude::query`] on the duckdb backend to answer
+    /// `:until`-style existence queries from `run-schedule` without
+    /// the bridge-only `rust_rule` machinery.
+    ///
+    /// Unlike [`Self::check_facts`] (private, returns
+    /// `Err(CheckError)` on a non-match), this returns the boolean
+    /// directly so the caller can decide what to do with it.
+    pub fn run_check_facts_any(
+        &mut self,
+        facts: Vec<Fact>,
+    ) -> Result<bool, Error> {
+        // Refresh the row-count snapshot that the duckdb `get-size!`
+        // UDF reads from. The snapshot lives in the duckdb EGraph
+        // (out of reach for the bridge backend), so down-cast and
+        // call its public refresh helper. The bridge backend handles
+        // `get-size!` via the regular ExternalFunction path, which
+        // reads `ExecutionState::table_ids()` live — no snapshot
+        // needed there.
+        if let Some(duck) = self
+            .backend
+            .as_any()
+            .downcast_ref::<egglog_bridge_duckdb::EGraph>()
+        {
+            duck.refresh_table_sizes()
+                .map_err(|e| Error::BackendError(format!("refresh_table_sizes: {e}")))?;
+        }
+
+        // Route through the *full* resolve pipeline (including term
+        // encoding when enabled). The facts may reference user-level
+        // function names like `bad-merge?`; under term encoding those
+        // get rewritten to view-table references (`@bad-merge?View`)
+        // which is the schema the duckdb backend actually has. Using
+        // `resolve_command_before_proofs` here previously bypassed
+        // term encoding and produced body atoms with the wrong
+        // arity at duck rule-build time.
+        let fresh_name = self.parser.symbol_gen.fresh("query_check");
+        let fresh_ruleset = self.parser.symbol_gen.fresh("query_check_ruleset");
+        let rule = ast::Rule {
+            span: span!(),
+            head: ast::Actions::default(),
+            body: facts,
+            name: fresh_name.clone(),
+            ruleset: fresh_ruleset.clone(),
+        };
+        let cmd = ast::Command::Rule { rule };
+        let resolved = self.resolve_command(cmd)?;
+        // Extract the resolved rule's body. After term encoding,
+        // there may be multiple commands (rule + auxiliary
+        // function/insert declarations); we only want the rule.
+        let mut resolved_body: Option<Vec<ResolvedFact>> = None;
+        for r in resolved.desugared {
+            if let ResolvedNCommand::NormRule { rule } = r {
+                resolved_body = Some(rule.body.clone());
+                break;
+            }
+        }
+        let resolved_body = resolved_body.ok_or_else(|| {
+            Error::BackendError("run_check_facts_any: resolver did not yield a rule".into())
+        })?;
+
+        // Same backend-agnostic shape as `check_facts`'s duckdb
+        // branch, but split out into a returns-bool form.
+        let core_rule = ast::ResolvedRule {
+            span: span!(),
+            head: ResolvedActions::default(),
+            body: resolved_body,
+            name: fresh_name,
+            ruleset: fresh_ruleset,
+        }
+        .to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
+        let query = core_rule.body;
+
+        let backend_ptr: *const dyn egglog_backend_trait::Backend = &*self.backend;
+        let rb = self.backend.new_rule("query_check", false);
+        let mut translator = BackendRule::new(
+            rb,
+            // SAFETY: see `add_rule` for the disjoint-reborrow rationale.
+            unsafe { &*backend_ptr },
+            &self.functions,
+            &self.type_info,
+        );
+        translator.query(&query, true);
+        let matched = translator
+            .into_rb()
+            .build_check()
+            .map_err(|e| Error::BackendError(format!("run_check_facts_any: {e}")))?;
+        Ok(matched)
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
