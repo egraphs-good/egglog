@@ -408,11 +408,9 @@ mod tests {
         assert_eq!(String::from_utf8(output).unwrap(), "(error)\n");
 
         let missing_include = std::env::temp_dir().join(format!(
-            "egglog_missing_include_{}.egg",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "egglog_missing_include_{}_{}.egg",
+            std::process::id(),
+            "repl_test"
         ));
         let input = format!(
             "(include \"{}\")",
