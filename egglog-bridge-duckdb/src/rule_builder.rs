@@ -440,7 +440,21 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
         let expected = translated.pop().ok_or_else(|| {
             anyhow!("DuckRuleBuilderOps::query_prim: must specify a return value")
         })?;
-        let call = Term::prim(name.clone(), translated);
+        // Constant-fold builtin primitives (`from-string`, `bigrat`,
+        // `bigrat-*`) when every input arg is a `Literal`. Avoids the
+        // SQL-expression-depth blowup on Herbie's `(bigrat (from-string
+        // …) (from-string …))` constants and ensures shared interning
+        // — same value, same handle, same SQL i64 across every rule
+        // that mentions it. See `EGraph::fold_builtin_prim`.
+        let call = if translated
+            .iter()
+            .all(|t| matches!(t, Term::Lit(_)))
+            && let Some(folded) = self.egraph.fold_builtin_prim(&name, &translated)
+        {
+            folded
+        } else {
+            Term::prim(name.clone(), translated)
+        };
         // Bug 5 fix: ALL `query_prim` results go through
         // `inline_terms` so a downstream atom or action that uses
         // the result gets the call inlined into its args. This is
@@ -557,13 +571,23 @@ impl<'a> RuleBuilderOps for DuckRuleBuilderOps<'a> {
                 Vec::new()
             }
         };
-        let result = self.alloc_var(Some(&format!("call_{}", sanitize(&name))));
+        // Same constant-fold as `query_prim` — see that comment for
+        // why this is load-bearing on Herbie.
+        let inline_term = if translated_args
+            .iter()
+            .all(|t| matches!(t, Term::Lit(_)))
+            && let Some(folded) = self.egraph.fold_builtin_prim(&name, &translated_args)
+        {
+            folded
+        } else {
+            Term::prim(name, translated_args)
+        };
+        let result = self.alloc_var(Some("call_prim"));
         // Inline the primitive call into `inline_terms` for the same
         // reason `lookup` does — see `lookup`'s comment. Subsequent
         // actions get the call substituted into their args directly,
         // sidestepping the sibling-SELECT-list-alias restriction.
-        self.inline_terms
-            .insert(result.id.rep(), Term::prim(name, translated_args));
+        self.inline_terms.insert(result.id.rep(), inline_term);
         QueryEntry::Var(result)
     }
 

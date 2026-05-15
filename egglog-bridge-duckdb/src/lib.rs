@@ -1651,6 +1651,146 @@ impl EGraph {
         &self.backend_base_value_pool
     }
 
+    /// Constant-fold a builtin primitive call: if every arg is a
+    /// `Literal` and `name` is a primitive we know how to evaluate
+    /// off-line (`from-string`, `bigrat`, `bigrat-add`, …), return a
+    /// `Term::Lit(...)` with the pre-interned result. Otherwise
+    /// return `None` and the caller emits the regular `Term::Prim`
+    /// call.
+    ///
+    /// This is the load-bearing performance fix for Herbie on duckdb:
+    /// Herbie's rules contain hundreds of inlined
+    /// `(bigrat (from-string "X") (from-string "Y"))` constants. Without
+    /// folding, each one expands to a nested UDF chain in SQL — the
+    /// resulting rule WHERE/SELECT lists blow past DuckDB's expression
+    /// depth limit and trigger massive per-row UDF overhead. With
+    /// folding the same call collapses to a single i64 handle, and
+    /// repeated references share the same handle thanks to intern
+    /// stability.
+    pub fn fold_builtin_prim(&self, name: &str, args: &[Term]) -> Option<Term> {
+        use egglog_backend_trait::{BaseValuePool, Value};
+        use egglog_numeric_id::NumericId;
+        use num::{BigInt, BigRational};
+        use std::any::TypeId;
+        use std::str::FromStr;
+
+        let pool_dyn: &dyn BaseValuePool = &self.backend_base_value_pool;
+        let bigint_ty_id = TypeId::of::<egglog_core_relations::Boxed<BigInt>>();
+        let bigrat_ty_id = TypeId::of::<egglog_core_relations::Boxed<BigRational>>();
+        if !pool_dyn.has_ty(bigint_ty_id) {
+            return None;
+        }
+        let bigint_ty = pool_dyn.get_ty_by_type_id(bigint_ty_id);
+        let bigrat_ty = if pool_dyn.has_ty(bigrat_ty_id) {
+            Some(pool_dyn.get_ty_by_type_id(bigrat_ty_id))
+        } else {
+            None
+        };
+
+        // Helper: extract a string literal arg.
+        fn as_str(t: &Term) -> Option<&str> {
+            if let Term::Lit(Literal::Str(s)) = t {
+                Some(s)
+            } else {
+                None
+            }
+        }
+        // Helper: extract an i64 literal arg.
+        fn as_i64(t: &Term) -> Option<i64> {
+            if let Term::Lit(Literal::I64(i)) = t {
+                Some(*i)
+            } else {
+                None
+            }
+        }
+        // Helper: unwrap a Q-handle (BIGINT) into a BigRational.
+        let unwrap_q = |raw: i64| -> Option<BigRational> {
+            let bigrat_ty = bigrat_ty?;
+            let val = Value::new(raw as u32);
+            let boxed = pool_dyn.unwrap_dyn(bigrat_ty, val);
+            let q: &egglog_core_relations::Boxed<BigRational> = boxed.downcast_ref()?;
+            Some(q.0.clone())
+        };
+        // Helper: intern a BigInt as Z and return its Term::Lit.
+        let intern_z = |bi: BigInt| -> Term {
+            let z = egglog_core_relations::Boxed::new(bi);
+            let v = pool_dyn.intern_dyn(bigint_ty, Box::new(z));
+            Term::Lit(Literal::I64(v.rep() as i64))
+        };
+        // Helper: intern a BigRational as Q and return its Term::Lit.
+        let intern_q = |q: BigRational| -> Option<Term> {
+            let bigrat_ty = bigrat_ty?;
+            let qb = egglog_core_relations::Boxed::new(q);
+            let v = pool_dyn.intern_dyn(bigrat_ty, Box::new(qb));
+            Some(Term::Lit(Literal::I64(v.rep() as i64)))
+        };
+
+        match name {
+            "from-string" => {
+                let s = as_str(args.first()?)?;
+                let bi = BigInt::from_str(s).ok()?;
+                Some(intern_z(bi))
+            }
+            "bigrat" => {
+                let n_raw = as_i64(args.first()?)?;
+                let d_raw = as_i64(args.get(1)?)?;
+                let n_val = Value::new(n_raw as u32);
+                let d_val = Value::new(d_raw as u32);
+                let n_boxed = pool_dyn.unwrap_dyn(bigint_ty, n_val);
+                let d_boxed = pool_dyn.unwrap_dyn(bigint_ty, d_val);
+                let n: &egglog_core_relations::Boxed<BigInt> = n_boxed.downcast_ref()?;
+                let d: &egglog_core_relations::Boxed<BigInt> = d_boxed.downcast_ref()?;
+                let q = BigRational::new(n.0.clone(), d.0.clone());
+                intern_q(q)
+            }
+            other => {
+                let op = BigratOp::from_duck_name(other)?;
+                // Comparison ops fold to a Bool literal — emit it
+                // and the rule_builder's downstream Filter on this
+                // term sees `Lit(Bool(true/false))`.
+                if op.is_comparison() {
+                    let a = unwrap_q(as_i64(args.first()?)?)?;
+                    let b = unwrap_q(as_i64(args.get(1)?)?)?;
+                    let r = match op {
+                        BigratOp::Lt => a < b,
+                        BigratOp::Gt => a > b,
+                        BigratOp::Le => a <= b,
+                        BigratOp::Ge => a >= b,
+                        _ => unreachable!(),
+                    };
+                    return Some(Term::Lit(Literal::Bool(r)));
+                }
+                // numer/denom fold to Z handles.
+                if op.returns_z() {
+                    let q = unwrap_q(as_i64(args.first()?)?)?;
+                    let bi = match op {
+                        BigratOp::Numer => q.numer().clone(),
+                        BigratOp::Denom => q.denom().clone(),
+                        _ => unreachable!(),
+                    };
+                    return Some(intern_z(bi));
+                }
+                // to-f64 folds to F64 literal.
+                if op.returns_f64() {
+                    use num::ToPrimitive;
+                    let q = unwrap_q(as_i64(args.first()?)?)?;
+                    return Some(Term::Lit(Literal::F64(q.to_f64()?)));
+                }
+                // Unary Q→Q: round, sqrt, neg, abs, ceil, floor, log, cbrt
+                if op.is_unary() {
+                    let q = unwrap_q(as_i64(args.first()?)?)?;
+                    let result = run_bigrat_q(op, &[q])?;
+                    return intern_q(result);
+                }
+                // Binary Q×Q→Q: add, sub, mul, div, min, max, pow
+                let a = unwrap_q(as_i64(args.first()?)?)?;
+                let b = unwrap_q(as_i64(args.get(1)?)?)?;
+                let result = run_bigrat_q(op, &[a, b])?;
+                intern_q(result)
+            }
+        }
+    }
+
     /// Refresh the row-count snapshot consulted by the `get-size!`
     /// UDF. Queries each function table once via `SELECT COUNT(*)`
     /// and writes the result into the shared `table_sizes` map.
