@@ -41,16 +41,24 @@ defines a real-valued expression (e.g.
 lowers these into rewrite problems, builds an e-graph, runs equality
 saturation, and extracts the candidate with the lowest measured FP error.
 
-## Reproducing
+## Reproducing the paper run
 
 The paper's setup vendors a Herbie fork (`herbie-eqlog/` in the Zenodo
 artifact) where the egg backend has been swapped for egglog. The fork
 inherits Herbie's `Makefile`; `make herbie-report` runs the suite end-to-end
 and emits `errorhist.pdf` / `runtime.pdf`.
 
-Today (post-paper), upstream Herbie supports egglog directly — the user's
-suggestion was to point at running Herbie against modern egglog and extract
-the egglog programs it generates per benchmark. Those generated `.egg` files
-aren't in the Zenodo artifact (they're transient per-input outputs), so
-collecting them would mean instrumenting Herbie. Out of scope for this
-folder.
+## Captured egglog sessions (`dump-egglog/`)
+
+Today's upstream Herbie supports egglog directly via the
+`--enable generate:egglog` flag, and `--enable dump:egglog` makes it write
+every egglog session to a file. We ran Herbie 2.3 over `bench/` with both
+flags and packaged the **1260 sessions from successfully-completed
+benchmarks** (314 of 730 — Herbie's 60-second per-input budget timed out
+the rest) into
+[`dump-egglog/dumps.tar.zst`](dump-egglog/dumps.tar.zst). See
+[`dump-egglog/README.md`](dump-egglog/README.md) for regeneration steps and
+the compatibility caveat — these sessions use
+`egglog-experimental` features (`let-scheduler`, `back-off`, `run-with`,
+`get-size!`, `multi-extract`) and **won't parse** through mainline egglog
+without lowering.
