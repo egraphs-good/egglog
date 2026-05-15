@@ -407,6 +407,23 @@ mod tests {
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "(error)\n");
 
+        let missing_include = std::env::temp_dir().join(format!(
+            "egglog_missing_include_{}.egg",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let input = format!(
+            "(include \"{}\")",
+            missing_include.to_string_lossy().replace('\\', "/")
+        );
+        let mut output = Vec::new();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive, false)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "(error)\n");
+
         let input = "(extract 1)";
         let mut output = Vec::new();
         egraph

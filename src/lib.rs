@@ -1777,7 +1777,7 @@ impl EGraph {
                 // handle include specially- we keep them as-is for desugaring
                 if let Command::Include(span, file) = &command {
                     let s = std::fs::read_to_string(file)
-                        .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                        .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()))?;
                     let included_program = self
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
