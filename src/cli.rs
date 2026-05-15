@@ -160,6 +160,7 @@ pub fn cli(mut egraph: EGraph) {
                     std::process::exit(1);
                 });
                 duck_eg.parser = std::mem::take(&mut egraph.parser);
+                duck_eg.fact_directory.clone_from(&args.fact_directory);
                 duck_eg.ensure_no_reserved_symbols(false);
                 if let Err(err) = duck_eg.parse_and_run_program(
                     Some(input.to_str().unwrap().into()),

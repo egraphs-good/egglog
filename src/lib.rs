@@ -1723,7 +1723,14 @@ impl EGraph {
 
         log::debug!("{row_schema:?}");
 
-        let unit_val = self.bridge().base_values().get(());
+        // Use the trait-level base value pool so this works on both
+        // the bridge backend and the DuckDB backend. `pool_get<T>`
+        // takes a `&dyn BaseValuePool` and converts a typed value
+        // into the runtime `Value` representation; both backends
+        // implement the trait, so neither needs a downcast.
+        use egglog_backend_trait::pool_get;
+        let pool = self.backend.base_value_pool();
+        let unit_val = pool_get::<()>(pool, ());
 
         for line in contents.lines() {
             let mut it = line.split('\t').map(|s| s.trim());
@@ -1735,21 +1742,25 @@ impl EGraph {
                     let val = match sort.name() {
                         "i64" => {
                             if let Ok(i) = raw.parse::<i64>() {
-                                self.bridge().base_values().get(i)
+                                pool_get::<i64>(self.backend.base_value_pool(), i)
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
                         }
                         "f64" => {
                             if let Ok(f) = raw.parse::<f64>() {
-                                self.bridge()
-                                    .base_values()
-                                    .get::<F>(core_relations::Boxed::new(f.into()))
+                                pool_get::<F>(
+                                    self.backend.base_value_pool(),
+                                    core_relations::Boxed::new(f.into()),
+                                )
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
                         }
-                        "String" => self.bridge().base_values().get::<S>(raw.to_string().into()),
+                        "String" => pool_get::<S>(
+                            self.backend.base_value_pool(),
+                            raw.to_string().into(),
+                        ),
                         "Unit" => unit_val,
                         _ => panic!("Unreachable"),
                     };

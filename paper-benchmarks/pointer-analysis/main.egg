@@ -56,14 +56,20 @@
 
 (datatype Allocation (A String))
 
-;; NOTE: The paper version omitted `:merge`, relying on legacy egglog's
-;; implicit "unify-on-conflict" for eq-sort outputs. Modern egglog
-;; requires an explicit merge clause; we use `:no-merge` here to keep
-;; the file parsable. For full Steensgaard correctness on inputs that
-;; trigger functional-dependency violations, replace with an explicit
-;; merge that unions the two allocations.
-(function expr_points_to (String) Allocation :no-merge)
-(function ptr_points_to (Allocation) Allocation :no-merge)
+;; NOTE: The paper version declared these as `function`s with eq-sort
+;; output, relying on legacy egglog's implicit "unify-on-conflict"
+;; for eq-sort outputs (a second write to the same key unioned the
+;; old and new allocations). Modern egglog disallows two things the
+;; paper code relied on:
+;;   1. functions without an explicit `:merge` clause;
+;;   2. value lookups of non-constructor functions in rule bodies
+;;      (`(= (expr_points_to e) a)`).
+;; Switch to `constructor`: it allocates a fresh Allocation id on
+;; first call per key, allows lookups in rule bodies, and the
+;; subsequent `(union …)` actions tie equivalences together — exactly
+;; the Steensgaard semantics the paper described.
+(constructor expr_points_to (String) Allocation)
+(constructor ptr_points_to (Allocation) Allocation)
 
 ;; populate allocations
 (rule (
@@ -186,7 +192,7 @@
     (union (expr_points_to to_var) a)
 ))
 
-(function alloc_subregion_at_path (Allocation String) Allocation :no-merge)
+(constructor alloc_subregion_at_path (Allocation String) Allocation)
 ;; this rule subsumes the two rules with unify0
 (rule (
     (RAW_alloc_subregion_at_path alloc path subAlloc)
