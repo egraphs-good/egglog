@@ -1033,6 +1033,7 @@ dependencies = [
  "egglog-core-relations",
  "egglog-numeric-id",
  "log",
+ "num",
  "ordered-float",
 ]
 
@@ -1083,6 +1084,7 @@ dependencies = [
 name = "egglog-experimental"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "egglog",
  "egglog-ast",
  "egglog-reports",

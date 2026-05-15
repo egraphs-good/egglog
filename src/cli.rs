@@ -149,6 +149,23 @@ pub fn cli(mut egraph: EGraph) {
             // input; we preserve the parser so any
             // `egglog-experimental` parse-time macros still resolve.
             if args.duckdb_backend {
+                // If the caller already handed us a duckdb-backed
+                // egraph (e.g. `egglog-experimental`'s main does this
+                // up front so its commands / primitives survive),
+                // route the program through it directly. Otherwise
+                // build a fresh duckdb egraph here. Either way the
+                // program runs through the same trait pipeline.
+                if egraph.has_duckdb_backend() {
+                    egraph.fact_directory.clone_from(&args.fact_directory);
+                    if let Err(err) = egraph.parse_and_run_program(
+                        Some(input.to_str().unwrap().into()),
+                        &program,
+                    ) {
+                        log::error!("{err}");
+                        std::process::exit(1);
+                    }
+                    continue;
+                }
                 let mut duck_eg = egglog::EGraph::with_duckdb_backend(
                     egglog::DuckBackendConfig {
                         native_uf: args.duck_native_uf,

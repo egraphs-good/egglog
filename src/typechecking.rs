@@ -183,6 +183,22 @@ impl EGraph {
             }
         }
 
+        // Mirror the registration into the dedicated typechecking
+        // egraph if one is set up (term-encoding / proof mode). The
+        // typechecker uses `proof_state.original_typechecking`'s
+        // `type_info.primitives` to resolve primitive call sites
+        // before term encoding runs; without this mirroring, any
+        // primitive added *after* the initial setup (e.g. the fresh
+        // `@rust_rule_prim<N>` minted by `prelude::rust_rule` /
+        // `prelude::query`, used by egglog-experimental's
+        // `run-schedule` rebinding) is unbound at typecheck time
+        // even though it's correctly registered on the main egraph's
+        // backend. Recurse before doing the local work so the
+        // typechecker sees the new primitive on its own backend too.
+        if let Some(orig) = self.proof_state.original_typechecking.as_mut() {
+            orig.add_primitive_with_validator(x.clone(), validator.clone());
+        }
+
         let primitive = Arc::new(x.clone());
         let id = self.backend.register_external_func(Box::new(Wrapper(x)));
         // If the backend is the DuckDB-backed one, register the

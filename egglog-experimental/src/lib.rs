@@ -44,15 +44,39 @@ pub use sugar::*;
 
 pub fn new_experimental_egraph() -> EGraph {
     let mut egraph = EGraph::default();
+    extend_with_experimental(&mut egraph);
+    egraph
+}
 
+/// Build an experimental egraph backed by DuckDB. Same surface as
+/// [`new_experimental_egraph`] but the underlying storage / rule
+/// execution go through `egglog_bridge_duckdb`. The frontend's
+/// `--duckdb` CLI flag still flows through `egglog::cli`; this
+/// constructor is for callers that want a duckdb-backed engine
+/// up front (e.g. `egglog-experimental`'s `main`, which has to
+/// register `run-schedule` / `multi-extract` and the rational
+/// primitives *before* `cli` runs its program).
+pub fn new_experimental_egraph_duckdb(
+    config: egglog::DuckBackendConfig,
+) -> anyhow::Result<EGraph> {
+    let mut egraph = EGraph::with_duckdb_backend(config)?;
+    extend_with_experimental(&mut egraph);
+    Ok(egraph)
+}
+
+/// Register all experimental sorts, primitives, commands, and parser
+/// macros on the given egraph in place. Factored out so the same
+/// extensions can be applied to either a default (bridge-backed) or a
+/// DuckDB-backed [`EGraph`] before `egglog::cli` runs.
+pub fn extend_with_experimental(egraph: &mut EGraph) {
     // Set up the parser with experimental parse-time macros
     egraph.parser = experimental_parser();
 
     // Rational support
-    add_base_sort(&mut egraph, RationalSort, span!()).unwrap();
+    add_base_sort(egraph, RationalSort, span!()).unwrap();
 
     // Support for set cost
-    add_set_cost(&mut egraph);
+    add_set_cost(egraph);
     egraph.add_primitive(GetSizePrimitive);
 
     // unstable-fresh! macro
@@ -71,7 +95,6 @@ pub fn new_experimental_egraph() -> EGraph {
             Arc::new(MultiExtract::new(DynamicCostModel)),
         )
         .unwrap();
-    egraph
 }
 
 // Create a parser with experimental macros

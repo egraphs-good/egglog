@@ -1224,19 +1224,35 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved = self.resolve_command(command)?;
+        // Resolve against the *pre-term-encoding* typechecker. Term
+        // encoding lifts `Action::Expr(...)` into UF/View table
+        // updates and drops the return value (literals become a bare
+        // string that's never re-parsed), so routing eval_expr
+        // through it loses the very thing we want to evaluate.
+        // resolve_command_before_proofs typechecks against
+        // original_typechecking (or self.type_info if it's absent)
+        // and preserves the Expr action verbatim — and
+        // eval_resolved_expr below evaluates it against the live
+        // backend, which still carries the user-facing function
+        // names (term encoding adds @ViewN tables alongside them,
+        // not in place of them).
+        let resolved_before_proofs = self.resolve_command_before_proofs(command)?;
         if self.are_proofs_enabled() {
             self.proof_check_program
-                .extend(resolved.desugared_before_proofs);
+                .extend(resolved_before_proofs.clone());
         }
-        let resolved_commands = resolved.desugared;
-
-        assert_eq!(resolved_commands.len(), 1);
-        let resolved_command = resolved_commands.into_iter().next().unwrap();
-        let resolved_expr = match resolved_command {
-            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
-            _ => unreachable!(),
-        };
+        let mut expr_action = None;
+        for cmd in resolved_before_proofs {
+            if let ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, e)) = cmd {
+                expr_action = Some(e);
+                break;
+            }
+        }
+        let resolved_expr = expr_action.ok_or_else(|| {
+            Error::BackendError(
+                "eval_expr: resolver did not produce an expression action".into(),
+            )
+        })?;
         let sort = resolved_expr.output_type();
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
@@ -1803,6 +1819,19 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// True iff this egraph's backend is the duckdb-backed one (vs.
+    /// the in-process bridge backend). Used by `cli.rs` to decide
+    /// whether the `--duckdb` CLI flag should rebuild the egraph
+    /// from scratch or use the caller-supplied one as-is — relevant
+    /// for downstream crates (e.g. `egglog-experimental`) that
+    /// register commands / primitives up front and need them to
+    /// survive into the run.
+    pub fn has_duckdb_backend(&self) -> bool {
+        self.backend
+            .as_any()
+            .is::<egglog_bridge_duckdb::EGraph>()
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
@@ -2278,10 +2307,44 @@ impl<'a> BackendRule<'a> {
         // the macro) is deferred.
         let pname = prim.name();
         let pout = prim.output().name();
-        let duck_name: Option<&str> = match (pname, &*pout) {
-            ("^", "i64") => Some("i64-xor"),
-            ("/", "i64") => Some("int-div"),
-            ("+", "String") => Some("string-concat"),
+        let in0 = prim.input().first().map(|s| s.name());
+        // For sort-overloaded primitives, route the duckdb backend's
+        // rule-builder to a sort-specific duck name. compile.rs's
+        // `prim_sql` maps these to either native SQL ops or — for
+        // BigRat operations that have no SQL equivalent — to per-op
+        // UDFs registered on demand via
+        // `EGraph::set_external_func_name` → `register_builtin_prim_udf`.
+        let duck_name: Option<&str> = match (pname, &*pout, in0) {
+            ("^", "i64", _) => Some("i64-xor"),
+            ("/", "i64", _) => Some("int-div"),
+            ("+", "String", _) => Some("string-concat"),
+            // BigRat overloads: dispatch by op name and arg sort.
+            // Comparisons return Unit; arithmetic returns BigRat;
+            // numer/denom return BigInt; to-f64 returns f64. We use
+            // the BigRat *argument* type to disambiguate from i64/f64
+            // overloads of the same op name.
+            ("+", "BigRat", _) => Some("bigrat-add"),
+            ("-", "BigRat", _) => Some("bigrat-sub"),
+            ("*", "BigRat", _) => Some("bigrat-mul"),
+            ("/", "BigRat", _) => Some("bigrat-div"),
+            ("min", "BigRat", _) => Some("bigrat-min"),
+            ("max", "BigRat", _) => Some("bigrat-max"),
+            ("pow", "BigRat", _) => Some("bigrat-pow"),
+            ("neg", "BigRat", _) => Some("bigrat-neg"),
+            ("abs", "BigRat", _) => Some("bigrat-abs"),
+            ("floor", "BigRat", _) => Some("bigrat-floor"),
+            ("ceil", "BigRat", _) => Some("bigrat-ceil"),
+            ("round", "BigRat", _) => Some("bigrat-round"),
+            ("sqrt", "BigRat", _) => Some("bigrat-sqrt"),
+            ("log", "BigRat", _) => Some("bigrat-log"),
+            ("cbrt", "BigRat", _) => Some("bigrat-cbrt"),
+            ("<", "Unit", Some("BigRat")) => Some("bigrat-lt"),
+            (">", "Unit", Some("BigRat")) => Some("bigrat-gt"),
+            ("<=", "Unit", Some("BigRat")) => Some("bigrat-le"),
+            (">=", "Unit", Some("BigRat")) => Some("bigrat-ge"),
+            ("numer", _, Some("BigRat")) => Some("bigrat-numer"),
+            ("denom", _, Some("BigRat")) => Some("bigrat-denom"),
+            ("to-f64", _, Some("BigRat")) => Some("bigrat-to-f64"),
             _ => None,
         };
         if let Some(name) = duck_name {

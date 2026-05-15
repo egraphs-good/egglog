@@ -21,6 +21,7 @@ egglog = { path = "..", default-features = false }
 egglog-ast = { path = "../egglog-ast" }
 egglog-reports = { path = "../egglog-reports" }
 
+anyhow = "1"
 num = "0.4.3"
 lazy_static = "1.4"
 log = "0.4"

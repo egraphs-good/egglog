@@ -16,9 +16,11 @@
 
 use anyhow::{Result, anyhow};
 use duckdb::core::{DataChunkHandle, LogicalTypeHandle, LogicalTypeId};
+use duckdb::types::DuckString;
 use duckdb::vscalar::{ScalarFunctionSignature, VScalar};
 use duckdb::vtab::arrow::WritableVector;
 use duckdb::{Connection, ToSql};
+use duckdb::ffi::duckdb_string_t;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -56,6 +58,639 @@ impl VScalar for UfFindScalar {
         vec![ScalarFunctionSignature::exact(
             vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
             LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// State shared by all bigint/bigrat-related UDFs: a snapshot of the
+/// base-value pool whose interior intern tables are Arc-shared with
+/// the EGraph's pool, plus the resolved `BaseValueId`s for `Z` and
+/// (when registered) `Q`. Cloning is cheap and preserves intern
+/// sharing — every clone agrees on Value handles, so a `Q` interned
+/// by the UDF at row-time appears in the EGraph's pool by the time a
+/// rule action consumes it.
+///
+/// `bigrat_ty` is `None` until `BigRatSort` has been registered. Since
+/// `BigIntSort` registers first (and Herbie programs need both to do
+/// anything), the bigrat UDFs delay registration to
+/// `set_external_func_name`-time when the `Q` id is known to exist.
+#[derive(Clone)]
+struct BigPoolState {
+    pool: base_values::DuckdbBaseValuePool,
+    bigint_ty: egglog_backend_trait::BaseValueId,
+    bigrat_ty: Option<egglog_backend_trait::BaseValueId>,
+}
+
+/// UDF for the `from-string` primitive (egglog's `S -> Z` constructor
+/// for `BigInt`). Takes a VARCHAR row, parses it as a `BigInt`, and
+/// interns the result in the shared base-value pool. Returns the
+/// `Value`'s `u32` rep widened to `BIGINT`.
+///
+/// On parse failure: the bridge backend's `from-string` is fallible
+/// and returns `None`; we emit `NULL` so a downstream rule action
+/// referencing the result drops out via standard SQL NULL propagation.
+struct FromStringScalar;
+
+impl VScalar for FromStringScalar {
+    type State = BigPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::BaseValuePool;
+        use egglog_numeric_id::NumericId;
+        use num::BigInt;
+        use std::str::FromStr;
+
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<duckdb_string_t>(n);
+
+        // Two-pass to avoid overlapping &mut on the output vector
+        // (set_null and as_mut_slice both want &mut). First parse +
+        // intern into `Vec<Option<i64>>`, then write the slice, then
+        // mark NULLs.
+        let mut results: Vec<Option<i64>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let s = DuckString::new(&mut { in_slice[i] }).as_str().to_string();
+            // Mirror the bridge's `-?>` semantics: parse failure
+            // means the rule firing should not produce a value.
+            // Encode as NULL so downstream actions/filters drop
+            // rows that resolve to NULL.
+            results.push(BigInt::from_str(&s).ok().map(|bi| {
+                let z = egglog_core_relations::Boxed::new(bi);
+                let val = state.pool.intern_dyn(state.bigint_ty, Box::new(z));
+                val.rep() as i64
+            }));
+        }
+
+        let mut out_vec = output.flat_vector();
+        {
+            let out_slice = out_vec.as_mut_slice::<i64>();
+            for (i, r) in results.iter().enumerate() {
+                out_slice[i] = r.unwrap_or(0);
+            }
+        }
+        for (i, r) in results.iter().enumerate() {
+            if r.is_none() {
+                out_vec.set_null(i);
+            }
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Varchar)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for the `bigrat` primitive (egglog's `Z × Z -> Q` constructor
+/// for `BigRat`). Inputs are two `BIGINT` columns holding `Z` handles
+/// produced by `__egglog_from_string` (or any other source); the UDF
+/// unwraps each to a `num::BigInt`, builds a `num::BigRational`, and
+/// interns it as `Q = Boxed<BigRational>` in the shared pool.
+///
+/// State requires `bigrat_ty` to be `Some(...)` — the EGraph's
+/// `set_external_func_name` path checks this before registering the
+/// UDF (BigRatSort always registers before any `bigrat` call site).
+struct BigratScalar;
+
+impl VScalar for BigratScalar {
+    type State = BigPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::{BaseValuePool, Value};
+        use egglog_numeric_id::NumericId;
+        use num::{BigInt, BigRational};
+
+        let bigrat_ty = state
+            .bigrat_ty
+            .ok_or_else(|| -> Box<dyn std::error::Error> {
+                "BigratScalar: bigrat type id missing (BigRatSort not registered before \
+                 __egglog_bigrat was called)"
+                    .into()
+            })?;
+
+        let n = input.len();
+        let num_col = input.flat_vector(0);
+        let den_col = input.flat_vector(1);
+        let num_slice = num_col.as_slice_with_len::<i64>(n);
+        let den_slice = den_col.as_slice_with_len::<i64>(n);
+
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+
+        for i in 0..n {
+            let num_val = Value::new(num_slice[i] as u32);
+            let den_val = Value::new(den_slice[i] as u32);
+            let num_boxed = state.pool.unwrap_dyn(state.bigint_ty, num_val);
+            let den_boxed = state.pool.unwrap_dyn(state.bigint_ty, den_val);
+            let num_bigint: &egglog_core_relations::Boxed<BigInt> = num_boxed
+                .downcast_ref()
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    "BigratScalar: numerator was not a Boxed<BigInt>".into()
+                })?;
+            let den_bigint: &egglog_core_relations::Boxed<BigInt> = den_boxed
+                .downcast_ref()
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    "BigratScalar: denominator was not a Boxed<BigInt>".into()
+                })?;
+            let q = egglog_core_relations::Boxed::new(BigRational::new(
+                num_bigint.0.clone(),
+                den_bigint.0.clone(),
+            ));
+            let val = state.pool.intern_dyn(bigrat_ty, Box::new(q));
+            out_slice[i] = val.rep() as i64;
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+            ],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// BigRat operations that need a UDF wrapper because their egglog
+/// name (`+`, `<`, `round`, ...) is overloaded across sorts and DuckDB
+/// SQL has no native concept of arbitrary-precision rationals. The
+/// frontend renames each call site to a sort-specific duck name (e.g.
+/// `bigrat-add`); each variant of this enum corresponds to one such
+/// name and selects the operation the UDF performs.
+///
+/// Unary ops (`Neg`/`Abs`/…) take one `Q` handle and return one. Binary
+/// ops (`Add`/…/`Pow`) take two. Comparison ops (`Lt`/`Gt`/…) take two
+/// `Q` handles and return BOOLEAN. `Numer`/`Denom` return a `Z` handle.
+/// `ToF64` returns a DOUBLE.
+#[derive(Copy, Clone, Debug)]
+enum BigratOp {
+    // Q × Q → Q (fallible for +, -, *, /, pow via checked_*)
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Min,
+    Max,
+    Pow,
+    // Q → Q
+    Neg,
+    Abs,
+    Floor,
+    Ceil,
+    Round,
+    Sqrt,
+    Log,
+    Cbrt,
+    // Q × Q → BOOL
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    // Q → Z
+    Numer,
+    Denom,
+    // Q → f64
+    ToF64,
+}
+
+impl BigratOp {
+    fn from_duck_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "bigrat-add" => BigratOp::Add,
+            "bigrat-sub" => BigratOp::Sub,
+            "bigrat-mul" => BigratOp::Mul,
+            "bigrat-div" => BigratOp::Div,
+            "bigrat-min" => BigratOp::Min,
+            "bigrat-max" => BigratOp::Max,
+            "bigrat-pow" => BigratOp::Pow,
+            "bigrat-neg" => BigratOp::Neg,
+            "bigrat-abs" => BigratOp::Abs,
+            "bigrat-floor" => BigratOp::Floor,
+            "bigrat-ceil" => BigratOp::Ceil,
+            "bigrat-round" => BigratOp::Round,
+            "bigrat-sqrt" => BigratOp::Sqrt,
+            "bigrat-log" => BigratOp::Log,
+            "bigrat-cbrt" => BigratOp::Cbrt,
+            "bigrat-lt" => BigratOp::Lt,
+            "bigrat-gt" => BigratOp::Gt,
+            "bigrat-le" => BigratOp::Le,
+            "bigrat-ge" => BigratOp::Ge,
+            "bigrat-numer" => BigratOp::Numer,
+            "bigrat-denom" => BigratOp::Denom,
+            "bigrat-to-f64" => BigratOp::ToF64,
+            _ => return None,
+        })
+    }
+
+    fn is_unary(&self) -> bool {
+        use BigratOp::*;
+        matches!(
+            self,
+            Neg | Abs | Floor | Ceil | Round | Sqrt | Log | Cbrt | Numer | Denom | ToF64
+        )
+    }
+
+    fn is_comparison(&self) -> bool {
+        use BigratOp::*;
+        matches!(self, Lt | Gt | Le | Ge)
+    }
+
+    fn returns_z(&self) -> bool {
+        matches!(self, BigratOp::Numer | BigratOp::Denom)
+    }
+
+    fn returns_f64(&self) -> bool {
+        matches!(self, BigratOp::ToF64)
+    }
+}
+
+/// State for the family of bigrat UDFs. Holds a clone of the pool
+/// (intern tables Arc-shared with the EGraph), the `Z` and `Q`
+/// `BaseValueId`s, and the specific op this UDF instance performs.
+#[derive(Clone)]
+struct BigratExecState {
+    pool: base_values::DuckdbBaseValuePool,
+    bigint_ty: egglog_backend_trait::BaseValueId,
+    bigrat_ty: egglog_backend_trait::BaseValueId,
+    op: BigratOp,
+}
+
+/// Run a unary or binary BigRat → BigRat operation. Returns
+/// `Some(Q)` on success, `None` for fallible ops on bad inputs
+/// (division by zero, `pow` with fractional exponent, etc.) so the
+/// UDF can emit SQL NULL and downstream rules drop out via NULL
+/// propagation. Mirrors the bridge-side closures in
+/// `egglog::sort::bigrat::register_primitives`.
+fn run_bigrat_q(op: BigratOp, args: &[num::BigRational]) -> Option<num::BigRational> {
+    use num::traits::{One, Signed, Zero};
+    use num::{BigInt, BigRational};
+    let one = || BigRational::one();
+    let zero = || BigRational::zero();
+    let _ = one;
+    let _ = zero;
+    match op {
+        BigratOp::Add => Some(&args[0] + &args[1]),
+        BigratOp::Sub => Some(&args[0] - &args[1]),
+        BigratOp::Mul => Some(&args[0] * &args[1]),
+        BigratOp::Div => {
+            if args[1].is_zero() {
+                None
+            } else {
+                Some(&args[0] / &args[1])
+            }
+        }
+        BigratOp::Min => Some(args[0].clone().min(args[1].clone())),
+        BigratOp::Max => Some(args[0].clone().max(args[1].clone())),
+        BigratOp::Pow => {
+            let a = &args[0];
+            let b = &args[1];
+            if !b.is_integer() {
+                return None;
+            }
+            if a.is_zero() {
+                if b.is_zero() {
+                    return Some(BigRational::one());
+                }
+                if b.numer() > &BigInt::from(0) {
+                    return Some(BigRational::zero());
+                }
+                return None;
+            }
+            let is_neg = b.numer() < &BigInt::from(0);
+            let adj_base = if is_neg { a.recip() } else { a.clone() };
+            let adj_exp = if is_neg {
+                BigRational::new(-b.numer().clone(), b.denom().clone())
+            } else {
+                b.clone()
+            };
+            let exp_i64 = adj_exp.numer().to_string().parse::<i64>().ok()?;
+            if exp_i64 < 0 {
+                return None;
+            }
+            let exp = exp_i64 as usize;
+            num::traits::checked_pow(adj_base, exp)
+        }
+        BigratOp::Neg => Some(-args[0].clone()),
+        BigratOp::Abs => Some(BigRational::new(
+            args[0].numer().abs().clone(),
+            args[0].denom().clone(),
+        )),
+        BigratOp::Floor => Some(args[0].floor()),
+        BigratOp::Ceil => Some(args[0].ceil()),
+        BigratOp::Round => Some(args[0].round()),
+        BigratOp::Sqrt => {
+            // Closed-form sqrt only if both numer and denom are
+            // perfect squares — matches the bridge's behavior in
+            // `bigrat.rs`.
+            if args[0].numer() < &BigInt::from(0) {
+                return None;
+            }
+            let n_sqrt = args[0].numer().sqrt();
+            let d_sqrt = args[0].denom().sqrt();
+            if &(n_sqrt.clone() * n_sqrt.clone()) == args[0].numer()
+                && &(d_sqrt.clone() * d_sqrt.clone()) == args[0].denom()
+            {
+                Some(BigRational::new(n_sqrt, d_sqrt))
+            } else {
+                None
+            }
+        }
+        BigratOp::Log => {
+            // Bridge only handles `log(1) = 0`; everything else
+            // panics. Match that conservatively (just return None).
+            if args[0].numer() == &BigInt::from(1) && args[0].denom() == &BigInt::from(1) {
+                Some(BigRational::zero())
+            } else {
+                None
+            }
+        }
+        BigratOp::Cbrt => {
+            // Bridge only handles `cbrt(1) = 1`.
+            if args[0].numer() == &BigInt::from(1) && args[0].denom() == &BigInt::from(1) {
+                Some(BigRational::one())
+            } else {
+                None
+            }
+        }
+        BigratOp::Lt
+        | BigratOp::Gt
+        | BigratOp::Le
+        | BigratOp::Ge
+        | BigratOp::Numer
+        | BigratOp::Denom
+        | BigratOp::ToF64 => unreachable!("not a Q-returning op: {op:?}"),
+    }
+}
+
+/// Unwrap a `Q`-handle (BIGINT) row into a `BigRational`.
+fn unwrap_bigrat(
+    pool: &base_values::DuckdbBaseValuePool,
+    bigrat_ty: egglog_backend_trait::BaseValueId,
+    raw: i64,
+) -> std::result::Result<num::BigRational, Box<dyn std::error::Error>> {
+    use egglog_backend_trait::{BaseValuePool, Value};
+    use egglog_numeric_id::NumericId;
+    let val = Value::new(raw as u32);
+    let boxed = pool.unwrap_dyn(bigrat_ty, val);
+    let q: &egglog_core_relations::Boxed<num::BigRational> = boxed
+        .downcast_ref()
+        .ok_or_else(|| -> Box<dyn std::error::Error> {
+            "expected Boxed<BigRational> from pool".into()
+        })?;
+    Ok(q.0.clone())
+}
+
+/// UDF for unary `Q → Q` bigrat operations. Variants of [`BigratOp`]
+/// with `is_unary() && !returns_z() && !returns_f64() && !is_comparison()`.
+struct BigratUnaryQScalar;
+
+impl VScalar for BigratUnaryQScalar {
+    type State = BigratExecState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::BaseValuePool;
+        use egglog_numeric_id::NumericId;
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<i64>(n);
+
+        let mut results: Vec<Option<i64>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let q = unwrap_bigrat(&state.pool, state.bigrat_ty, in_slice[i])?;
+            let out = run_bigrat_q(state.op, &[q]);
+            results.push(out.map(|r| {
+                let boxed = egglog_core_relations::Boxed::new(r);
+                state
+                    .pool
+                    .intern_dyn(state.bigrat_ty, Box::new(boxed))
+                    .rep() as i64
+            }));
+        }
+        let mut out_vec = output.flat_vector();
+        {
+            let out_slice = out_vec.as_mut_slice::<i64>();
+            for (i, r) in results.iter().enumerate() {
+                out_slice[i] = r.unwrap_or(0);
+            }
+        }
+        for (i, r) in results.iter().enumerate() {
+            if r.is_none() {
+                out_vec.set_null(i);
+            }
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for binary `Q × Q → Q` bigrat operations.
+struct BigratBinaryQScalar;
+
+impl VScalar for BigratBinaryQScalar {
+    type State = BigratExecState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::BaseValuePool;
+        use egglog_numeric_id::NumericId;
+        let n = input.len();
+        let a_vec = input.flat_vector(0);
+        let b_vec = input.flat_vector(1);
+        let a_slice = a_vec.as_slice_with_len::<i64>(n);
+        let b_slice = b_vec.as_slice_with_len::<i64>(n);
+
+        let mut results: Vec<Option<i64>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let a = unwrap_bigrat(&state.pool, state.bigrat_ty, a_slice[i])?;
+            let b = unwrap_bigrat(&state.pool, state.bigrat_ty, b_slice[i])?;
+            let out = run_bigrat_q(state.op, &[a, b]);
+            results.push(out.map(|r| {
+                let boxed = egglog_core_relations::Boxed::new(r);
+                state
+                    .pool
+                    .intern_dyn(state.bigrat_ty, Box::new(boxed))
+                    .rep() as i64
+            }));
+        }
+        let mut out_vec = output.flat_vector();
+        {
+            let out_slice = out_vec.as_mut_slice::<i64>();
+            for (i, r) in results.iter().enumerate() {
+                out_slice[i] = r.unwrap_or(0);
+            }
+        }
+        for (i, r) in results.iter().enumerate() {
+            if r.is_none() {
+                out_vec.set_null(i);
+            }
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+            ],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `Q × Q → BOOL` bigrat comparison operations. Returns
+/// BOOLEAN; the rule_builder side wraps it in a `Filter` atom, which
+/// becomes a SQL `WHERE` clause.
+struct BigratCmpScalar;
+
+impl VScalar for BigratCmpScalar {
+    type State = BigratExecState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let a_vec = input.flat_vector(0);
+        let b_vec = input.flat_vector(1);
+        let a_slice = a_vec.as_slice_with_len::<i64>(n);
+        let b_slice = b_vec.as_slice_with_len::<i64>(n);
+
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<bool>();
+        for i in 0..n {
+            let a = unwrap_bigrat(&state.pool, state.bigrat_ty, a_slice[i])?;
+            let b = unwrap_bigrat(&state.pool, state.bigrat_ty, b_slice[i])?;
+            out_slice[i] = match state.op {
+                BigratOp::Lt => a < b,
+                BigratOp::Gt => a > b,
+                BigratOp::Le => a <= b,
+                BigratOp::Ge => a >= b,
+                _ => unreachable!("not a comparison op: {:?}", state.op),
+            };
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+            ],
+            LogicalTypeHandle::from(LogicalTypeId::Boolean),
+        )]
+    }
+}
+
+/// UDF for `Q → Z` (`numer`/`denom`).
+struct BigratNumDenomScalar;
+
+impl VScalar for BigratNumDenomScalar {
+    type State = BigratExecState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::BaseValuePool;
+        use egglog_numeric_id::NumericId;
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<i64>(n);
+
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        for i in 0..n {
+            let q = unwrap_bigrat(&state.pool, state.bigrat_ty, in_slice[i])?;
+            let bi = match state.op {
+                BigratOp::Numer => q.numer().clone(),
+                BigratOp::Denom => q.denom().clone(),
+                _ => unreachable!(),
+            };
+            let z = egglog_core_relations::Boxed::new(bi);
+            out_slice[i] = state.pool.intern_dyn(state.bigint_ty, Box::new(z)).rep() as i64;
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `Q → DOUBLE` (`to-f64`).
+struct BigratToF64Scalar;
+
+impl VScalar for BigratToF64Scalar {
+    type State = BigratExecState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use num::ToPrimitive;
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<i64>(n);
+
+        let mut results: Vec<Option<f64>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let q = unwrap_bigrat(&state.pool, state.bigrat_ty, in_slice[i])?;
+            results.push(q.to_f64());
+        }
+        let mut out_vec = output.flat_vector();
+        {
+            let out_slice = out_vec.as_mut_slice::<f64>();
+            for (i, r) in results.iter().enumerate() {
+                out_slice[i] = r.unwrap_or(0.0);
+            }
+        }
+        for (i, r) in results.iter().enumerate() {
+            if r.is_none() {
+                out_vec.set_null(i);
+            }
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
+            LogicalTypeHandle::from(LogicalTypeId::Double),
         )]
     }
 }
@@ -654,6 +1289,10 @@ pub struct EGraph {
     /// `external_func.rs` for slot semantics. Wiring the stored
     /// functions to live DuckDB UDFs is deferred to Commit 14.
     backend_external_funcs: external_func::DuckdbExternalFuncRegistry,
+    /// Primitive names whose DuckDB scalar UDF wrapper we've already
+    /// registered on `self.conn`. Re-registering the same name is an
+    /// error in DuckDB, so we dedupe at the source.
+    registered_builtin_udfs: std::collections::HashSet<String>,
 }
 
 struct CompiledRule {
@@ -753,6 +1392,7 @@ impl EGraph {
             backend_rule_indices: Vec::new(),
             backend_base_value_pool: base_values::DuckdbBaseValuePool::default(),
             backend_external_funcs: external_func::DuckdbExternalFuncRegistry::default(),
+            registered_builtin_udfs: std::collections::HashSet::new(),
         })
     }
 
@@ -789,13 +1429,131 @@ impl EGraph {
     /// translate `ExternalFunctionId` references into
     /// `Term::Prim(name, ...)` calls in the duck IR.
     ///
+    /// For primitives that need to run real Rust code at SQL eval
+    /// time (currently `from-string` and `bigrat` — the
+    /// constants-only path Herbie's dumps exercise), this also
+    /// registers a DuckDB scalar UDF named `__egglog_<sanitized>`
+    /// that calls into the shared base-value pool. compile.rs's
+    /// `prim_sql` routes those primitive names to the UDF.
+    ///
     /// No-op for unknown ids.
     pub fn set_external_func_name(
         &mut self,
         id: egglog_backend_trait::ExternalFunctionId,
         name: String,
     ) {
-        self.backend_external_funcs.set_name(id, name);
+        self.backend_external_funcs.set_name(id, name.clone());
+        self.register_builtin_prim_udf(&name);
+    }
+
+    /// Register a DuckDB scalar UDF for a known builtin primitive
+    /// name, if we haven't already.
+    ///
+    /// Two families of names:
+    /// - `from-string` / `bigrat` — the BigInt / BigRat constructors
+    ///   (Herbie writes every numeric literal as
+    ///   `(bigrat (from-string "...") (from-string "..."))`).
+    /// - `bigrat-<op>` — sort-specific aliases the frontend emits via
+    ///   `rename_prim` for BigRat-overloaded ops (`+`, `<`, `round`, …).
+    ///   Each registers an `__egglog_<name>` UDF parameterized by
+    ///   [`BigratOp`].
+    ///
+    /// The required `BaseValueId`s for `Z` and (for `bigrat`/`bigrat-…`)
+    /// `Q` must already be registered in the pool —
+    /// `BaseSortImpl::register_type` does this when the egglog frontend
+    /// calls `add_base_sort`. The frontend calls this method indirectly
+    /// via `set_external_func_name` only *after* sort registration, so
+    /// the ids resolve.
+    fn register_builtin_prim_udf(&mut self, name: &str) {
+        use egglog_backend_trait::BaseValuePool;
+        use num::{BigInt, BigRational};
+        use std::any::TypeId;
+        if self.registered_builtin_udfs.contains(name) {
+            return;
+        }
+        let pool_dyn: &dyn BaseValuePool = &self.backend_base_value_pool;
+        let bigint_type_id = TypeId::of::<egglog_core_relations::Boxed<BigInt>>();
+        if !pool_dyn.has_ty(bigint_type_id) {
+            return;
+        }
+        let bigint_ty = pool_dyn.get_ty_by_type_id(bigint_type_id);
+        let bigrat_type_id = TypeId::of::<egglog_core_relations::Boxed<BigRational>>();
+        let bigrat_ty = if pool_dyn.has_ty(bigrat_type_id) {
+            Some(pool_dyn.get_ty_by_type_id(bigrat_type_id))
+        } else {
+            None
+        };
+        let result: duckdb::Result<()> = match name {
+            "from-string" => {
+                let state = BigPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    bigint_ty,
+                    bigrat_ty,
+                };
+                self.conn
+                    .register_scalar_function_with_state::<FromStringScalar>(
+                        "__egglog_from_string",
+                        &state,
+                    )
+            }
+            "bigrat" => {
+                if bigrat_ty.is_none() {
+                    return;
+                }
+                let state = BigPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    bigint_ty,
+                    bigrat_ty,
+                };
+                self.conn
+                    .register_scalar_function_with_state::<BigratScalar>(
+                        "__egglog_bigrat",
+                        &state,
+                    )
+            }
+            other if BigratOp::from_duck_name(other).is_some() => {
+                let Some(bigrat_ty) = bigrat_ty else { return };
+                let op = BigratOp::from_duck_name(other).unwrap();
+                let state = BigratExecState {
+                    pool: self.backend_base_value_pool.clone(),
+                    bigint_ty,
+                    bigrat_ty,
+                    op,
+                };
+                let udf_name = format!("__egglog_{}", other.replace('-', "_"));
+                if op.is_comparison() {
+                    self.conn
+                        .register_scalar_function_with_state::<BigratCmpScalar>(&udf_name, &state)
+                } else if op.returns_z() {
+                    self.conn
+                        .register_scalar_function_with_state::<BigratNumDenomScalar>(
+                            &udf_name, &state,
+                        )
+                } else if op.returns_f64() {
+                    self.conn
+                        .register_scalar_function_with_state::<BigratToF64Scalar>(&udf_name, &state)
+                } else if op.is_unary() {
+                    self.conn
+                        .register_scalar_function_with_state::<BigratUnaryQScalar>(
+                            &udf_name, &state,
+                        )
+                } else {
+                    self.conn
+                        .register_scalar_function_with_state::<BigratBinaryQScalar>(
+                            &udf_name, &state,
+                        )
+                }
+            }
+            _ => return,
+        };
+        match result {
+            Ok(()) => {
+                self.registered_builtin_udfs.insert(name.to_string());
+            }
+            Err(e) => {
+                log::warn!("failed to register builtin UDF for {name}: {e}");
+            }
+        }
     }
 
     /// Look up the primitive name associated with `id`, if any.

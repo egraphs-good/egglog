@@ -1367,6 +1367,40 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
             }
             Ok(format!("({}).second", args[0]))
         }
+        // BigInt / BigRat constructors are routed to DuckDB scalar
+        // UDFs registered by `EGraph::register_builtin_prim_udf` (see
+        // `lib.rs`). The UDFs call into the shared base-value pool to
+        // intern the parsed/constructed value and return its `Value`
+        // rep as a BIGINT handle.
+        "from-string" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `from-string` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("__egglog_from_string({})", args[0]))
+        }
+        "bigrat" => {
+            if args.len() != 2 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `bigrat` expects 2 args, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("__egglog_bigrat({}, {})", args[0], args[1]))
+        }
+        // BigRat-specific aliases — the frontend renames the
+        // BigRat-overloaded `+`, `<`, `round`, ... call sites to
+        // `bigrat-add`, `bigrat-lt`, `bigrat-round`, ... so we route
+        // them to the per-op UDFs registered by
+        // `register_builtin_prim_udf` (see `lib.rs`). The duck UDF
+        // name uses `_` instead of `-` to keep it as a valid SQL
+        // identifier — same convention as `sanitize_for_udf`.
+        s if s.starts_with("bigrat-") => {
+            let udf = format!("__egglog_{}", s.replace('-', "_"));
+            Ok(format!("{udf}({})", args.join(", ")))
+        }
         _ => Err(anyhow!("rule {rule_name}: unknown primitive `{op}`")),
     }
 }
