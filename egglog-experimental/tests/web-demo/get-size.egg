@@ -1,0 +1,23 @@
+(check (= (get-size!) 0))
+
+(datatype Foo (MkFoo i64))
+(check (= (get-size!) 0))
+(check (= (get-size! "MkFoo") 0))
+
+(MkFoo 1)
+(check (= (get-size!) 1))
+(check (= (get-size! "MkFoo") 1))
+
+(MkFoo 2)
+(check (= (get-size!) 2))
+(check (= (get-size! "MkFoo") 2))
+
+(datatype Bar (MkBar i64))
+(check (= (get-size!) 2))
+(check (= (get-size! "MkBar") 0))
+
+(MkBar 10)
+(check (= (get-size!) 3))
+(check (= (get-size! "MkBar") 1))
+(check (= (get-size! "MkFoo") 2))
+(check (= (get-size! "MkFoo" "MkBar") 3))

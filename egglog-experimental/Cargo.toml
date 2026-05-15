@@ -1,0 +1,30 @@
+[package]
+name = "egglog-experimental"
+version = "0.1.0"
+edition = "2024"
+description = "Experimental extensions to the egglog language."
+repository = "https://github.com/egraphs-good/egglog-experimental"
+keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
+license = "MIT"
+readme = "README.md"
+
+[[test]]
+harness = false
+name = "files"
+
+[features]
+default = ["bin"]
+bin = ["egglog/bin"]
+
+[dependencies]
+egglog = { path = "..", default-features = false }
+egglog-ast = { path = "../egglog-ast" }
+egglog-reports = { path = "../egglog-reports" }
+
+num = "0.4.3"
+lazy_static = "1.4"
+log = "0.4"
+
+[dev-dependencies]
+glob = "0.3.1"
+libtest-mimic = "0.8.1"

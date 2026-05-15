@@ -1,0 +1,19 @@
+; (multi-extract n t1 ... tm) extracts n lowest-cost variants of each term.
+
+(datatype Math (Add Math Math) (Mul Math Math) (Num i64))
+
+; Commutativity rules create multiple representations in each e-class
+(rewrite (Add a b) (Add b a))
+(rewrite (Mul a b) (Mul b a))
+
+(let x (Add (Num 1) (Num 2)))
+(let y (Mul (Num 3) (Num 4)))
+
+(run 1)
+
+; Extract 2 variants each of x and y
+(multi-extract 2 x y)
+
+; Extract 1 variant of a single term
+(multi-extract 1 x)
+

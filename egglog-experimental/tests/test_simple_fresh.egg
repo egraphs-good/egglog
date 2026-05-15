@@ -1,0 +1,10 @@
+(datatype Math
+    (Let Math Math)
+    (Var String))
+
+(rule ((Let a b))
+      ((Let (unstable-fresh! Math) b)))
+
+(Let (Var "x") (Var "y"))
+(run 1)
+(check (Let ?a ?b))

@@ -1,0 +1,24 @@
+; Demonstrates using (get-size!) with an :until schedule guard to cap
+; how many new e-graph nodes a scheduled rewrite is allowed to add.
+
+(ruleset node-limit-demo)
+
+(datatype Chain (SeedA) (SeedB) (Step Chain))
+
+; Seed the e-graph with two independent chain elements so the rewrite below can fire twice as much.
+(let start-a (Step (SeedA)))
+(let start-b (Step (SeedB)))
+
+; Each application of this rewrite doubles the nesting depth of `Step`.
+; The schedule below uses :until to stop once the total node count hits 8.
+(rewrite (Step x)
+         (Step (Step x))
+         :ruleset node-limit-demo)
+
+; Run the ruleset repeatedly via saturate, exiting as soon as `(get-size!) >= 8`.
+(run-schedule (saturate (run node-limit-demo :until (<= 8 (get-size!)))))
+
+(print-size)
+
+(check (= (get-size!) 8))
+(fail (check (< (get-size!) 8)))

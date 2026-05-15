@@ -1,0 +1,15 @@
+;; scheduler declaration inside repeat
+(run-schedule
+    (repeat 10
+        (let-scheduler bo (back-off))
+        (run-with bo)))
+
+;; scheduler declaration inside saturate
+(relation R (i64 ))
+(R 1)
+(rule ((R x) (< x 10)) ((R (+ x 1))))
+(run-schedule
+    (saturate
+        (let-scheduler bo (back-off))
+        (run-with bo)))
+(print-size)

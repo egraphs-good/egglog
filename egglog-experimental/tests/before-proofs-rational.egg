@@ -1,0 +1,32 @@
+(datatype Math
+    (Add Math Math)
+    (Sub Math Math)
+    (Const Rational)
+    (Var String))
+
+(rewrite (Add a b) (Add (Add a b) (Const (rational 0 1))))
+
+(rewrite (Add a b) (Add b a))
+
+
+(rewrite (Add a (Add b c))
+      (Add (Add a b) c))
+
+(let two (rational 2 1))
+(let start1 (Add (Var "x") (Const two)))
+;; add original proofs
+
+(run 3)
+
+
+(check (!= (Var "x") (Const two)))
+(check (= (Add (Var "x") (Const two))
+          (Add (Const two) (Var "x"))))
+
+(let zero (Const (rational 0 1)))
+(let addx2 (Add (Var "x") (Const two)))
+(let addx20 (Add addx2 zero))
+(let addzerofront (Add (Add zero (Var "x")) (Const two)))
+
+(check (= addx2
+          addx20))

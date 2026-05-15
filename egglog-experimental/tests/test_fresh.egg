@@ -1,0 +1,12 @@
+(datatype Math
+    (Let Math Math)
+    (Var String))
+
+(rule ((Let a b))
+      ((Let (unstable-fresh! Math) b)))
+
+(Let (Var "x") (Var "y"))
+(run 1)
+
+; Check that fresh values are created and are distinct
+(check (Let ?x (Var "y")) (Let ?y (Var "y")) (!= ?x ?y))

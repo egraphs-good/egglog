@@ -1,0 +1,36 @@
+(datatype Math
+  (Num Rational)
+  (Var String)
+  (Mul Math Math))
+
+(function hi (Math) Rational :merge (min old new))
+(function lo (Math) Rational :merge (max old new))
+
+(rule ((= mul (Mul a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
+      ((set (lo mul) 
+          (min (min (* la lb) (* la hb))
+               (min (* ha lb) (* ha hb))))))
+
+(let x (Var "x"))
+(let e (Mul x x))
+
+(set (lo x) (rational -10 1))
+(set (hi x) (rational 10 1))
+
+(run 1)
+
+(check (= (lo e) (rational -100 1)))
+
+(rule ((= mul (Mul a a))
+       (= la (lo a)))
+      ((set (lo mul) (* la la))))
+
+(run 1)
+(check (= (lo e) (rational 100 1)))
+
+;; testing extraction of rationals
+(extract (lo e))
