@@ -948,13 +948,12 @@ fn get_atom_application_constraints(
 
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
-        // Each `add_*_primitive` call commits one registration per
-        // context the trait permits, with disjoint `selection_ctx`
-        // values. For a given (name, signature, ctx) tuple at most
-        // one variant survives this filter and the XOR resolves
-        // cleanly.
+        // Each primitive definition records the runtime contexts its
+        // trait permits. For a given (name, signature, ctx) tuple at
+        // most one definition should survive this filter and the XOR
+        // resolves cleanly.
         for p in primitives {
-            if p.selection_ctx != ctx {
+            if p.context_ids[ctx].is_none() {
                 continue;
             }
             let constraints = p.primitive.get_type_constraints(span).get(args, type_info);

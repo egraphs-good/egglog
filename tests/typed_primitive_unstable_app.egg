@@ -1,10 +1,9 @@
 ; Tests for typed-primitive dispatch of `unstable-app` (#772).
 ;
-; `unstable-app` is registered via `add_higher_order_primitive`, which
-; produces one `ExternalFunctionId` per `Context` variant. At runtime
-; the closure for the chosen id stamps its specific context onto the
-; `ExecutionState`, and `FunctionContainer::apply` reads it back and
-; chooses pure-side vs action-side dispatch.
+; `unstable-app` dispatches using the application-time context:
+; `Context::{Pure, Read, Write, Full}`. If the wrapped function is not valid in
+; that context, `FunctionContainer::apply` takes the runtime mismatch/panic path.
+; These cases verify context dispatch, not source-line or tagged-variant routing.
 
 ; --- 1. unstable-app over a pure primitive (`+`) works in a query.
 (sort IntFn (UnstableFn (i64 i64) i64))
@@ -52,9 +51,8 @@
 (check (= (dbl-out 7) 14))
 
 ; --- 5. The same custom-function lookup in a top-level `check`
-;     (GlobalQuery) succeeds — top-level queries don't have
-;     seminaive's "untracked read" concern, so reading the existing
-;     row's value is sound. (Inside a rule LHS the typechecker emits
-;     the RuleQuery-tagged variant of `unstable-app`, whose body
-;     refuses custom-function reads — see [`FunctionContainer::apply`].)
+;     succeeds in `Context::Read`: top-level checks don't have seminaive's
+;     "untracked read" concern, so reading the existing row's value is sound.
+;     In a default seminaive rule LHS the application context is `Context::Pure`,
+;     so the same read would hit the runtime mismatch/panic path instead.
 (check (= (unstable-app twice 7) 14))

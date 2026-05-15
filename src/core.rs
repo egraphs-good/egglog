@@ -64,8 +64,13 @@ impl SpecializedPrimitive {
     }
 
     /// Get the external function ID of this primitive
-    pub(crate) fn external_id(&self) -> ExternalFunctionId {
-        self.prim_with_id.id
+    pub(crate) fn external_id(&self, ctx: crate::Context) -> ExternalFunctionId {
+        self.prim_with_id.context_ids[ctx].unwrap_or_else(|| {
+            panic!(
+                "primitive {:?} is not valid in context {ctx:?}",
+                self.prim_with_id.primitive.name()
+            )
+        })
     }
 
     /// Get the validator function of this primitive, if any
@@ -76,7 +81,20 @@ impl SpecializedPrimitive {
 
 impl PartialEq for SpecializedPrimitive {
     fn eq(&self, other: &Self) -> bool {
-        self.prim_with_id.id == other.prim_with_id.id
+        // This is the key used when resolved atoms are deduplicated by
+        // `(head, inputs)`. The context-id map identifies the primitive
+        // registration, while the concrete input/output sorts identify the
+        // specialization of generic primitives. The primitive name and
+        // validator are registration metadata, so they are intentionally not
+        // separate key fields.
+        self.prim_with_id.context_ids == other.prim_with_id.context_ids
+            && self.output.name() == other.output.name()
+            && self.input.len() == other.input.len()
+            && self
+                .input
+                .iter()
+                .zip(&other.input)
+                .all(|(a, b)| a.name() == b.name())
     }
 }
 
@@ -84,7 +102,12 @@ impl Eq for SpecializedPrimitive {}
 
 impl Hash for SpecializedPrimitive {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.prim_with_id.id.hash(state);
+        self.prim_with_id.context_ids.hash(state);
+        self.output.name().hash(state);
+        self.input.len().hash(state);
+        for input in &self.input {
+            input.name().hash(state);
+        }
     }
 }
 
@@ -155,41 +178,23 @@ impl ResolvedCall {
             }
         }
 
-        // For a given (signature, context) pair, exactly one
-        // registration must match. Each `add_*_primitive` call commits
-        // one id per context the trait permits, with disjoint
-        // `selection_ctx` values. If two primitives accept the same
-        // signature in the same context, registration was ambiguous
-        // (e.g. the same primitive added twice); panic here rather
-        // than silently picking one.
-        if let Some(primitives) = typeinfo.get_prims(head) {
-            let matches: Vec<_> = primitives
-                .iter()
-                .filter(|p| p.selection_ctx == ctx && p.accept(types, typeinfo))
-                .collect();
-            match matches.as_slice() {
-                [] => {}
-                [picked] => {
-                    let (out, inp) = types.split_last().unwrap();
-                    return ResolvedCall::Primitive(SpecializedPrimitive {
-                        prim_with_id: (*picked).clone(),
-                        input: inp.to_vec(),
-                        output: out.clone(),
-                    });
-                }
-                multiple => {
-                    let sig: Vec<_> = types.iter().map(|s| s.name().to_string()).collect();
-                    panic!(
-                        "Ambiguous primitive resolution for {head:?} in context {ctx:?} \
-                         with signature [{}]: {} registrations accept this call. \
-                         Each (name, signature, context) tuple must map to a unique \
-                         primitive — was {head:?} registered more than once with the \
-                         same type?",
-                        sig.join(", "),
-                        multiple.len(),
-                    );
-                }
+        let mut primitives = typeinfo
+            .get_prims(head)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.context_ids[ctx].is_some() && p.accept(types, typeinfo));
+        if let Some(picked) = primitives.next() {
+            if primitives.next().is_some() {
+                panic!(
+                    "Ambiguous primitive resolution for {head:?} in direct call context {ctx:?}"
+                );
             }
+            let (out, inp) = types.split_last().unwrap();
+            return ResolvedCall::Primitive(SpecializedPrimitive {
+                prim_with_id: picked.clone(),
+                input: inp.to_vec(),
+                output: out.clone(),
+            });
         }
 
         panic!("No resolution for {head:?} in context {ctx:?}");

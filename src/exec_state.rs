@@ -42,10 +42,9 @@ use egglog_bridge::{ActionRegistry, TableAction};
 /// capability profile they grant. Each variant maps 1:1 to one of the
 /// state wrappers below: `Pure` ↔ [`PureState`], `Write` ↔ [`WriteState`],
 /// `Read` ↔ [`ReadState`], `Full` ↔ [`FullState`]. The egglog
-/// typechecker filters primitive registrations by their
-/// `selection_ctx` against the surrounding `Context` at each call
-/// site.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+/// typechecker filters primitive definitions by whether they carry a
+/// runtime id for the surrounding `Context` at each call site.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, enum_map::Enum)]
 pub enum Context {
     /// No DB reads, no DB writes. The body (LHS) of a rule running
     /// under seminaive evaluation: a body read of live state means
@@ -196,7 +195,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     ) -> Option<Value> {
         let ctx = self.ctx();
         let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
-        fc.apply(&mut pure, ctx, args)
+        fc.apply(&mut pure, args)
     }
 }
 

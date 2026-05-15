@@ -9,6 +9,7 @@ use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar,
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use egglog_bridge::ActionRegistry;
+use enum_map::EnumMap;
 use std::sync::{Arc, RwLock};
 
 // `ExternalFunction` wrapper for `PurePrim`. Holds the primitive
@@ -155,14 +156,12 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 #[derive(Clone)]
 pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn Primitive>,
-    pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
-    /// The single context this registration was created for. Each
-    /// `add_*_primitive` call commits one registration per context
-    /// the trait permits, so the constraint solver filters by
-    /// `selection_ctx == ambient_ctx` to pick exactly one id per
-    /// call site.
-    pub(crate) selection_ctx: Context,
+    /// Runtime entrypoints for the contexts this primitive is valid in.
+    /// The primitive definition is stored once, while each context keeps
+    /// its own backend id so higher-order dispatch can still recover the
+    /// application context at runtime.
+    pub(crate) context_ids: EnumMap<Context, Option<ExternalFunctionId>>,
 }
 
 impl PrimitiveWithId {
@@ -285,15 +284,11 @@ impl EGraph {
     where
         T: WritePrim + Clone,
     {
-        let registry = self.backend.action_registry().clone();
-        self.register_per_context(x, validator, WriteState::valid_contexts(), move |x, ctx| {
-            Box::new(RegistryPrimWrapper::<T, WrapWrite> {
-                prim: x,
-                registry: registry.clone(),
-                ctx,
-                _wrap: std::marker::PhantomData,
-            })
-        });
+        self.register_registry_primitive::<T, WrapWrite>(
+            x,
+            validator,
+            WriteState::valid_contexts(),
+        );
     }
 
     /// Register a [`ReadPrim`]. Pass `None` for the validator if not
@@ -302,15 +297,7 @@ impl EGraph {
     where
         T: ReadPrim + Clone,
     {
-        let registry = self.backend.action_registry().clone();
-        self.register_per_context(x, validator, ReadState::valid_contexts(), move |x, ctx| {
-            Box::new(RegistryPrimWrapper::<T, WrapRead> {
-                prim: x,
-                registry: registry.clone(),
-                ctx,
-                _wrap: std::marker::PhantomData,
-            })
-        });
+        self.register_registry_primitive::<T, WrapRead>(x, validator, ReadState::valid_contexts());
     }
 
     /// Register a [`FullPrim`]. Pass `None` for the validator if not
@@ -319,9 +306,21 @@ impl EGraph {
     where
         T: FullPrim + Clone,
     {
+        self.register_registry_primitive::<T, WrapFull>(x, validator, FullState::valid_contexts());
+    }
+
+    fn register_registry_primitive<T, S>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+        valid_ctxs: &[Context],
+    ) where
+        T: Primitive + Clone,
+        S: RegistryWrap<T> + 'static,
+    {
         let registry = self.backend.action_registry().clone();
-        self.register_per_context(x, validator, FullState::valid_contexts(), move |x, ctx| {
-            Box::new(RegistryPrimWrapper::<T, WrapFull> {
+        self.register_per_context(x, validator, valid_ctxs, move |x, ctx| {
+            Box::new(RegistryPrimWrapper::<T, S> {
                 prim: x,
                 registry: registry.clone(),
                 ctx,
@@ -330,11 +329,15 @@ impl EGraph {
         });
     }
 
-    /// Shared registration engine. Registers `x` once per `Context` in
-    /// `valid_ctxs`, with each wrapper carrying its specific context
-    /// stamped onto the state wrapper at invoke time. The typechecker's
-    /// `selection_ctx` filter picks exactly one candidate at each call
-    /// site.
+    /// Shared registration engine. Stores one primitive definition, plus
+    /// one runtime id per valid [`Context`]. Each wrapper carries its
+    /// specific context stamped onto the state wrapper at invoke time.
+    ///
+    /// The typechecker filters by the context-id mask at each call site;
+    /// an `unstable-fn` value built around the primitive bakes *all*
+    /// signature-matching context ids, and `FunctionContainer::apply`
+    /// picks the one whose context matches the application ctx — so
+    /// values flow freely across contexts.
     fn register_per_context<T, F>(
         &mut self,
         x: T,
@@ -347,51 +350,22 @@ impl EGraph {
     {
         let primitive: Arc<dyn Primitive> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
-        for &ctx in valid_ctxs {
-            let id = self
-                .backend
-                .register_external_func(build_wrapper(x.clone(), ctx));
-            self.commit_primitive(PendingPrimitive {
-                primitive: primitive.clone(),
-                id,
-                validator: validator.clone(),
-                selection_ctx: ctx,
-                name: name.clone(),
-            });
-        }
-    }
-
-    fn commit_primitive(&mut self, entry: PendingPrimitive) {
-        let PendingPrimitive {
-            primitive,
-            id,
-            validator,
-            selection_ctx,
-            name,
-        } = entry;
+        let context_ids = EnumMap::from_fn(|ctx| {
+            valid_ctxs.contains(&ctx).then(|| {
+                self.backend
+                    .register_external_func(build_wrapper(x.clone(), ctx))
+            })
+        });
         self.type_info
             .primitives
             .entry(name)
             .or_default()
             .push(PrimitiveWithId {
                 primitive,
-                id,
                 validator,
-                selection_ctx,
+                context_ids,
             });
     }
-}
-
-/// A primitive that's been registered with the bridge but not yet
-/// pushed into the `TypeInfo` registry. The four `add_*_primitive`
-/// helpers commit one of these per [`Context`] variant the trait
-/// supports.
-struct PendingPrimitive {
-    primitive: Arc<dyn Primitive>,
-    id: ExternalFunctionId,
-    validator: Option<PrimitiveValidator>,
-    selection_ctx: Context,
-    name: String,
 }
 
 impl EGraph {
@@ -451,35 +425,44 @@ impl EGraph {
                     unionable: *unionable,
                 }
             }
-            NCommand::CoreAction(Action::Let(span, var, expr)) => {
-                let expr = self
-                    .type_info
-                    .typecheck_expr(symbol_gen, expr, &Default::default())?;
-                let output_type = expr.output_type();
+            NCommand::CoreAction(action @ Action::Let(span, var, _)) => {
+                let action = self.type_info.typecheck_standalone_action(
+                    symbol_gen,
+                    action,
+                    &Default::default(),
+                    Context::Full,
+                )?;
                 self.ensure_global_name_prefix(span, var)?;
+                let ResolvedAction::Let(_, resolved_var, _) = &action else {
+                    unreachable!("typechecking an Action::Let should return ResolvedAction::Let")
+                };
                 self.type_info
                     .global_sorts
-                    .insert(var.clone(), output_type.clone());
-                let var = ResolvedVar {
-                    name: var.clone(),
-                    sort: output_type,
-                    // not a global reference, but a global binding
-                    is_global_ref: false,
-                };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
+                    .insert(resolved_var.name.clone(), resolved_var.sort.clone());
+                ResolvedNCommand::CoreAction(action)
             }
-            NCommand::CoreAction(action) => ResolvedNCommand::CoreAction(
-                self.type_info
-                    .typecheck_action(symbol_gen, action, &Default::default())?,
-            ),
+            NCommand::CoreAction(action) => {
+                ResolvedNCommand::CoreAction(self.type_info.typecheck_standalone_action(
+                    symbol_gen,
+                    action,
+                    &Default::default(),
+                    Context::Full,
+                )?)
+            }
             NCommand::Extract(span, expr, variants) => {
-                let res_expr =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                let res_expr = self.type_info.typecheck_standalone_expr(
+                    symbol_gen,
+                    expr,
+                    &Default::default(),
+                    Context::Full,
+                )?;
 
-                let res_variants =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, variants, &Default::default())?;
+                let res_variants = self.type_info.typecheck_standalone_expr(
+                    symbol_gen,
+                    variants,
+                    &Default::default(),
+                    Context::Full,
+                )?;
                 if res_variants.output_type().name() != I64Sort.name() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
@@ -545,8 +528,12 @@ impl EGraph {
                 let exprs = exprs
                     .iter()
                     .map(|expr| {
-                        self.type_info
-                            .typecheck_expr(symbol_gen, expr, &Default::default())
+                        self.type_info.typecheck_standalone_expr(
+                            symbol_gen,
+                            expr,
+                            &Default::default(),
+                            Context::Full,
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 ResolvedNCommand::Output {
@@ -759,7 +746,15 @@ impl TypeInfo {
             schema: fdecl.schema.clone(),
             resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
             merge: match &fdecl.merge {
-                Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
+                // Merge expressions run as part of action-side table updates:
+                // writes are allowed, but live DB reads would be untracked by
+                // seminaive rule execution.
+                Some(merge) => Some(self.typecheck_standalone_expr(
+                    symbol_gen,
+                    merge,
+                    &bound_vars,
+                    Context::Write,
+                )?),
                 None => None,
             },
             cost: fdecl.cost,
@@ -935,11 +930,15 @@ impl TypeInfo {
         Ok(annotated_facts)
     }
 
-    fn typecheck_actions(
+    // Standalone expressions/actions use action lowering. Top-level commands
+    // pass `Full`; function `:merge` reuses this path with `Write` because
+    // merge expressions run during table updates.
+    fn typecheck_standalone_actions(
         &self,
         symbol_gen: &mut SymbolGen,
         actions: &Actions,
         binding: &IndexMap<&str, (Span, ArcSort)>,
+        context: Context,
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
@@ -949,10 +948,7 @@ impl TypeInfo {
         let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
-        // Top-level action-shaped commands (e.g. `eval`, `let`) get the
-        // most permissive context: primitives may both read and write
-        // the database.
-        problem.add_actions(&actions, self, symbol_gen, Context::Full)?;
+        problem.add_actions(&actions, self, symbol_gen, context)?;
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
@@ -963,35 +959,43 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let annotated_actions = assignment.annotate_actions(&mapped_action, self, Context::Full)?;
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self, context)?;
         Ok(annotated_actions)
     }
 
-    fn typecheck_expr(
+    fn typecheck_standalone_expr(
         &self,
         symbol_gen: &mut SymbolGen,
         expr: &Expr,
         binding: &IndexMap<&str, (Span, ArcSort)>,
+        context: Context,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Expr(expr.span(), expr.clone());
-        let typechecked_action = self.typecheck_action(symbol_gen, &action, binding)?;
+        let typechecked_action =
+            self.typecheck_standalone_action(symbol_gen, &action, binding, context)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),
             _ => unreachable!(),
         }
     }
 
-    fn typecheck_action(
+    fn typecheck_standalone_action(
         &self,
         symbol_gen: &mut SymbolGen,
         action: &Action,
         binding: &IndexMap<&str, (Span, ArcSort)>,
+        context: Context,
     ) -> Result<ResolvedAction, TypeError> {
-        self.typecheck_actions(symbol_gen, &Actions::singleton(action.clone()), binding)
-            .map(|v| {
-                assert_eq!(v.len(), 1);
-                v.0.into_iter().next().unwrap()
-            })
+        self.typecheck_standalone_actions(
+            symbol_gen,
+            &Actions::singleton(action.clone()),
+            binding,
+            context,
+        )
+        .map(|v| {
+            assert_eq!(v.len(), 1);
+            v.0.into_iter().next().unwrap()
+        })
     }
 
     pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {
@@ -1010,7 +1014,7 @@ impl TypeInfo {
         self.primitives
             .values()
             .flat_map(|v| v.iter())
-            .any(|p| p.id == id && p.validator.is_some())
+            .any(|p| p.context_ids.iter().any(|(_, pid)| *pid == Some(id)) && p.validator.is_some())
     }
 
     pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
