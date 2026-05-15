@@ -561,7 +561,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             termdag.app(output_name.to_string(), ch_terms)
         } else {
             // Base value case
-            sort.reconstruct_termdag_base(egraph.bridge().base_values(), value, termdag)
+            sort.reconstruct_termdag_base(egraph.base_values(), value, termdag)
         };
 
         cache.insert(key, term);

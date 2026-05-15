@@ -520,6 +520,29 @@ impl EGraph {
             .expect("this code path is bridge-only")
     }
 
+    /// Backend-agnostic access to the underlying
+    /// [`egglog_core_relations::BaseValues`]. Used by the extraction
+    /// path (which threads `&BaseValues` through `Sort::reconstruct_termdag_base`)
+    /// so it works on either backend without a downcast at every
+    /// call site.
+    pub(crate) fn base_values(&self) -> &egglog_core_relations::BaseValues {
+        if let Some(bridge) = self
+            .backend
+            .as_any()
+            .downcast_ref::<egglog_bridge::EGraph>()
+        {
+            return bridge.base_values();
+        }
+        if let Some(duck) = self
+            .backend
+            .as_any()
+            .downcast_ref::<egglog_bridge_duckdb::EGraph>()
+        {
+            return duck.base_value_pool_typed().inner();
+        }
+        panic!("EGraph::base_values: unknown backend type")
+    }
+
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor

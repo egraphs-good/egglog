@@ -812,7 +812,7 @@ fn sanitize_for_udf(s: &str) -> String {
 }
 
 mod backend_impl;
-mod base_values;
+pub mod base_values;
 mod compile;
 mod external_func;
 mod rule_builder;
@@ -1634,6 +1634,14 @@ impl EGraph {
         id: egglog_backend_trait::ExternalFunctionId,
     ) -> Option<&str> {
         self.backend_external_funcs.name(id)
+    }
+
+    /// Borrow the underlying [`base_values::DuckdbBaseValuePool`].
+    /// Public so the egglog frontend's extraction path can reach the
+    /// inner `BaseValues` through `inner()` without depending on the
+    /// crate-private field name.
+    pub fn base_value_pool_typed(&self) -> &base_values::DuckdbBaseValuePool {
+        &self.backend_base_value_pool
     }
 
     /// Refresh the row-count snapshot consulted by the `get-size!`

@@ -37,23 +37,26 @@ use egglog_backend_trait::{BaseValueId, BaseValuePool, Value};
 use egglog_core_relations::{BaseValues, DynamicInternTable};
 
 /// DuckDB-backend base-value pool. Thin wrapper around
-/// `egglog_core_relations::BaseValues`.
+/// `egglog_core_relations::BaseValues`. Public so the egglog
+/// frontend can reach `inner()` for `Sort::reconstruct_termdag_base`
+/// (which takes `&BaseValues`).
 #[derive(Default, Clone)]
-pub(crate) struct DuckdbBaseValuePool {
+pub struct DuckdbBaseValuePool {
     values: BaseValues,
 }
 
 impl DuckdbBaseValuePool {
     /// Borrow the inner `BaseValues` for direct typed access via the
     /// concrete `register_type<P>` / `get<P>` / `unwrap<P>` methods.
-    #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &BaseValues {
+    /// Public so the egglog frontend's extraction path can call
+    /// `Sort::reconstruct_termdag_base` (which takes `&BaseValues`)
+    /// without first downcasting to `egglog_bridge::EGraph`.
+    pub fn inner(&self) -> &BaseValues {
         &self.values
     }
 
     /// Mutable borrow of the inner `BaseValues`.
-    #[allow(dead_code)]
-    pub(crate) fn inner_mut(&mut self) -> &mut BaseValues {
+    pub fn inner_mut(&mut self) -> &mut BaseValues {
         &mut self.values
     }
 }
