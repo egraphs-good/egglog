@@ -427,6 +427,17 @@ impl<'a> ProofInstrumentor<'a> {
         let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let view_name = self.view_name(&fdecl.name);
         if fdecl.subtype == FunctionSubtype::Custom {
+            // No `:merge` on a Custom function: nothing to do here.
+            // `command_supports_proof_encoding` (when proofs are
+            // enabled) rejects this case via `NoMergeOnNonGlobalFunction`,
+            // so reaching this branch means we're in plain
+            // term-encoding mode where the merge rule simply isn't
+            // needed — the function is set-once or last-write-wins
+            // at the relational level, with no proof artifacts to
+            // thread through.
+            if fdecl.merge.is_none() {
+                return String::new();
+            }
             self.handle_merge_fn(
                 fdecl,
                 &child_names,
@@ -1290,7 +1301,14 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::UserDefined(..) => {
-                panic!("User defined commands unsupported in term encoding");
+                // Pass through as-is: term encoding has nothing to
+                // instrument here — the user-defined command is
+                // dispatched later by whatever registered it
+                // (e.g. egglog-experimental's `run-schedule` /
+                // `multi-extract`). The `command_supports_proof_encoding`
+                // gate above rejects this case when proofs are
+                // actually being generated.
+                res.push(command.to_command().make_unresolved());
             }
         }
     }

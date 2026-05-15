@@ -461,7 +461,11 @@ pub enum ProofEncodingUnsupportedReason {
 /// Checks whether a desugared program supports proof encoding.
 pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
     for command in commands {
-        if command_supports_proof_encoding(command, type_info).is_err() {
+        // This helper specifically asks whether the program is amenable
+        // to *proof* generation, so the full set of checks (validator,
+        // function-lookup-in-action, etc.) applies — hence
+        // `proofs_enabled = true`.
+        if command_supports_proof_encoding(command, type_info, true).is_err() {
             return false;
         }
     }
@@ -501,34 +505,52 @@ fn action_has_function_lookup(action: &ResolvedAction, type_info: &TypeInfo) -> 
 
 /// Checks whether a resolved command supports proof encoding.
 /// Returns Ok(()) if supported, or Err with the reason if not.
+///
+/// `proofs_enabled` indicates whether the proof-tracking phase is
+/// actually going to run. Some checks below only matter when proofs
+/// are produced (e.g. the validator requirement: a validator is the
+/// hook that certifies a proof for a primitive call, so primitives
+/// without one can't produce a proof — but they're fine in plain
+/// term-encoding mode where no proofs are emitted). Callers pass
+/// `false` when term encoding is on but proofs are not, so the
+/// stricter proof-only checks are skipped.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    // Check all expressions for primitives without validators
-    let mut all_primitives_have_validators = true;
-    command.clone().visit_exprs(&mut |expr| {
-        if !expr_primitives_have_validators(&expr) {
-            all_primitives_have_validators = false;
-        }
-        expr
-    });
+    // Check all expressions for primitives without validators —
+    // proof-mode only. Validators are how a primitive certifies its
+    // own result inside a generated proof; absent proofs, missing
+    // validators don't matter.
+    if proofs_enabled {
+        let mut all_primitives_have_validators = true;
+        command.clone().visit_exprs(&mut |expr| {
+            if !expr_primitives_have_validators(&expr) {
+                all_primitives_have_validators = false;
+            }
+            expr
+        });
 
-    if !all_primitives_have_validators {
-        return Err(ProofEncodingUnsupportedReason::PrimitiveWithoutValidator);
+        if !all_primitives_have_validators {
+            return Err(ProofEncodingUnsupportedReason::PrimitiveWithoutValidator);
+        }
     }
 
-    // Check actions (not queries) for function lookups
-    // Egglog supports lookups in actions at the global level, but not in proofs mode
-    // (global function calls are allowed - they get desugared to constructors)
-    let mut has_function_lookup_in_action = false;
-    command.clone().visit_actions(&mut |action| {
-        has_function_lookup_in_action |= action_has_function_lookup(&action, type_info);
-        action
-    });
+    // Check actions (not queries) for function lookups —
+    // proof-mode only. Global function calls (which get desugared to
+    // constructors) are fine; arbitrary lookups break proof
+    // generation but not plain term encoding.
+    if proofs_enabled {
+        let mut has_function_lookup_in_action = false;
+        command.clone().visit_actions(&mut |action| {
+            has_function_lookup_in_action |= action_has_function_lookup(&action, type_info);
+            action
+        });
 
-    if has_function_lookup_in_action {
-        return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
+        if has_function_lookup_in_action {
+            return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
+        }
     }
 
     // Now check command-specific constraints
@@ -544,8 +566,21 @@ pub(crate) fn command_supports_proof_encoding(
             proof_func: Some(_),
             ..
         } => Err(ProofEncodingUnsupportedReason::SortWithProofFuncAnnotation),
-        GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
-        GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
+        GenericCommand::UserDefined(..) if proofs_enabled => {
+            // Proof generation can't reason about user-defined
+            // commands (they're opaque to the term encoder). Plain
+            // term encoding is fine: the user-defined command runs
+            // through whatever the experimental extension installed
+            // (e.g. egglog-experimental's `run-schedule` rebinding,
+            // `multi-extract`), and term encoding doesn't need to
+            // rewrite it.
+            Err(ProofEncodingUnsupportedReason::UserDefinedCommand)
+        }
+        GenericCommand::UserDefined(..) => Ok(()),
+        GenericCommand::Input { .. } if proofs_enabled => {
+            Err(ProofEncodingUnsupportedReason::InputCommand)
+        }
+        GenericCommand::Input { .. } => Ok(()),
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
         // (global function calls are fine - they get desugared to constructors)
@@ -558,20 +593,21 @@ pub(crate) fn command_supports_proof_encoding(
                 Ok(())
             }
         }
-        // no-merge on a non-global function
+        // no-merge on a non-global function — proof-mode only.
+        // Term encoding without proofs is fine with this.
         // To add support: https://github.com/egraphs-good/egglog/issues/774
         GenericCommand::Function {
             merge: None, name, ..
-        } => {
+        } if proofs_enabled => {
             if type_info.is_global(name) {
                 Ok(())
             } else {
                 Err(ProofEncodingUnsupportedReason::NoMergeOnNonGlobalFunction)
             }
         }
-        // let binding with non-eq sort not supported by proof_global_desugar
-        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
-            // let binding with non-eq sort not supported by proof_global_desugar
+        // let binding with non-eq sort not supported by
+        // proof_global_desugar — proof-mode only.
+        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) if proofs_enabled => {
             // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
             if expr.output_type().is_eq_sort() {
                 Ok(())
@@ -579,8 +615,10 @@ pub(crate) fn command_supports_proof_encoding(
                 Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
             }
         }
-        // After global desugar it may look like this
-        ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr)) => {
+        // After global desugar it may look like this — proof-mode only.
+        ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr))
+            if proofs_enabled =>
+        {
             if !type_info.is_global(head.name()) || expr.output_type().is_eq_sort() {
                 Ok(())
             } else {

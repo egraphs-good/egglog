@@ -56,8 +56,14 @@
 
 (datatype Allocation (A String))
 
-(function expr_points_to (String) Allocation)
-(function ptr_points_to (Allocation) Allocation)
+;; NOTE: The paper version omitted `:merge`, relying on legacy egglog's
+;; implicit "unify-on-conflict" for eq-sort outputs. Modern egglog
+;; requires an explicit merge clause; we use `:no-merge` here to keep
+;; the file parsable. For full Steensgaard correctness on inputs that
+;; trigger functional-dependency violations, replace with an explicit
+;; merge that unions the two allocations.
+(function expr_points_to (String) Allocation :no-merge)
+(function ptr_points_to (Allocation) Allocation :no-merge)
 
 ;; populate allocations
 (rule (
@@ -180,7 +186,7 @@
     (union (expr_points_to to_var) a)
 ))
 
-(function alloc_subregion_at_path (Allocation String) Allocation)
+(function alloc_subregion_at_path (Allocation String) Allocation :no-merge)
 ;; this rule subsumes the two rules with unify0
 (rule (
     (RAW_alloc_subregion_at_path alloc path subAlloc)

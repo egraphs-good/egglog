@@ -54,11 +54,16 @@ impl ScheduleState {
 
         if let Expr::Var(_, ruleset) = arg {
             let output = run_ruleset(egraph, ruleset.as_str())?;
-            assert!(output.len() == 1);
-            if let CommandOutput::RunSchedule(report) = &output[0] {
-                return Ok(report.clone());
+            // Term-encoding rewrites the run into a sequence of
+            // schedule fragments, so we can see multiple outputs;
+            // pick the last `RunSchedule` report — that's the
+            // accumulated result.
+            for out in output.iter().rev() {
+                if let CommandOutput::RunSchedule(report) = out {
+                    return Ok(report.clone());
+                }
             }
-            panic!("Expected a RunSchedule, got {:?}", output[0]);
+            panic!("run_ruleset produced no RunSchedule output: {output:?}");
         }
 
         let Expr::Call(span, head, exprs) = arg else {

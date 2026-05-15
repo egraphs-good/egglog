@@ -1803,9 +1803,11 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if let Err(reason) =
-                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
-                {
+                if let Err(reason) = command_supports_proof_encoding(
+                    &command.to_command(),
+                    &self.type_info,
+                    self.proof_state.proofs_enabled,
+                ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,

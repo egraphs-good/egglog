@@ -72,7 +72,24 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
             GenericAction::Let(span, name, expr) => {
                 let ty = expr.output_type();
                 if !ty.is_eq_sort() {
-                    panic!("Global variable {} has non-eq sort {}", name, ty.name());
+                    // Non-eq-sort globals (e.g. `(let $0 (bigrat 0 1))`
+                    // from Herbie's egglog output) can't be lifted to
+                    // a 0-arg constructor — there's no id to
+                    // allocate. The term encoder downstream assumes
+                    // every function it sees is eq-sorted (UF tables,
+                    // congruence rules, etc.), so lifting non-eq-sort
+                    // globals to `Custom` functions cascades into
+                    // "Unbound function @UF_<base>" errors. Pass the
+                    // binding through unchanged: term encoding emits
+                    // it as a regular set/let into the egraph and the
+                    // proof-mode checks (which forbid non-eq-sort
+                    // globals via `LetBindingWithNonEqSort`) reject
+                    // before reaching here.
+                    return vec![GenericNCommand::CoreAction(GenericAction::Let(
+                        span,
+                        name,
+                        remove_globals_expr(expr),
+                    ))];
                 }
 
                 let resolved_call = ResolvedCall::Func(FuncType {
