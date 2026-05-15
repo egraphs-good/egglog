@@ -175,7 +175,7 @@ impl<'a> ProofInstrumentor<'a> {
                 (
                     sort_name.to_string(),
                     "".to_string(),
-                    format!("({pname} a b)"),
+                    format!("({pname} a b)\n                    (!= a b)"),
                     format!("(set ({uf_function_name} a) b)"),
                 )
             };
@@ -193,15 +193,20 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             ":merge (ordering-min old new)".to_string()
         };
-        // singleparent in term mode redirects via the function-form
-        // table and updates it inline, so it doesn't need the
-        // `(ordering-max b c) = b` selector that the original
-        // pairwise rule used. Proof mode still does pairwise.
-        let single_parent_filter = if self.egraph.proof_state.proofs_enabled {
-            "(!= b c)\n                    (= (ordering-max b c) b)".to_string()
-        } else {
-            "(!= b c)".to_string()
-        };
+        // singleparent must fire only when `c < b` so the inserted
+        // `pname(b, c)` and `UF[b] = c` rows respect the max→min
+        // convention. With UF self-loops present, the `:merge
+        // (ordering-min old new)` on the UF function silently absorbs
+        // out-of-order sets (an existing `UF[b] = b` self-loop drops a
+        // `c > b` attempt via ordering-min). Once self-loops are
+        // filtered out of `uf_function_index` (so the UF function table
+        // is sparse), there's no self-loop "floor" left, and an
+        // out-of-order set produces a UF entry pointing to a larger
+        // value — that can later participate in a `UF[x]=y, UF[y]=x`
+        // cycle. The `(= (ordering-max b c) b)` selector (matching what
+        // proof mode already uses) prevents this.
+        let single_parent_filter =
+            "(!= b c)\n                    (= (ordering-max b c) b)".to_string();
         let mut code = format!(
             "{uf_pair_sort_decl}
              (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
@@ -1161,8 +1166,20 @@ impl<'a> ProofInstrumentor<'a> {
         res.push(proof_str);
         res.push(self.update_view(&func_type.name, &canon_args, &view_proof_var));
 
-        // add to uf table to initialize eclass for constructors
-        if func_type.subtype == FunctionSubtype::Constructor {
+        // Initialize the new term's UF state for constructors. In proof
+        // mode we still emit `union(fv, fv)` so the parent table holds a
+        // self-edge with the fiat-proof anchor that downstream proof
+        // construction reads. In term mode that self-edge is pure
+        // overhead: the `pname(fv, fv)` row never propagates to the UF
+        // function table (uf_function_index filters out `a == b`), and
+        // the `__unsafe-lookup-uf-<sort>` primitive already treats a
+        // missing UF row as the value's identity. Skipping it keeps the
+        // parent table sparse — only real unions appear there — and
+        // eliminates the corresponding work in path_compress and
+        // single_parent on every term creation.
+        if func_type.subtype == FunctionSubtype::Constructor
+            && self.egraph.proof_state.proofs_enabled
+        {
             res.push(self.union(
                 func_type.output.name(),
                 &fv,

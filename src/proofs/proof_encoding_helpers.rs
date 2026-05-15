@@ -63,14 +63,12 @@ impl Primitive for UnsafeLookupUfPrim {
             .get()
             .expect("unsafe-lookup-uf primitive invoked before its UF table was registered");
         let table = exec_state.get_table(table_id);
-        // Chase the UF chain until we reach a fixed point. During user
-        // actions the UF function table may not be fully path-compressed
-        // (path_compress only saturates inside the rebuild schedule), so a
-        // single hop can return a non-leader value. We follow until either
-        // the lookup misses or returns the same value back, which gives the
-        // true leader. A cycle would loop forever, but UF's
-        // `:merge (ordering-min old new)` keeps values monotonically
-        // decreasing along the chain, so chains are acyclic and terminate.
+        // Chase the UF chain until we reach a fixed point. We rely on the
+        // term-encoding's invariants (UF function's `:merge (ordering-min …)`
+        // plus `single_parent`'s `ordering-max b c = b` filter) keeping
+        // values monotonically decreasing along the chain, so chains
+        // terminate. A cycle would loop forever; the explicit step cap
+        // exists as a defense against an invariant violation.
         let mut current = args[0];
         let mut steps = 0usize;
         loop {
