@@ -274,6 +274,11 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    /// For each `__UF_<sort>f` function whose UF-lookup primitive has been
+    /// registered at typecheck time but whose backing table hasn't been
+    /// declared yet, the deferred-init handle that the corresponding
+    /// `Function` execution must fill in. Indexed by the UF function's name.
+    pending_uf_lookup_cells: HashMap<String, Arc<std::sync::OnceLock<core_relations::TableId>>>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -380,6 +385,7 @@ impl EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            pending_uf_lookup_cells: HashMap::default(),
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
@@ -846,6 +852,80 @@ impl EGraph {
         }
 
         Ok(())
+    }
+
+    /// If `fdecl` is a term-encoding UF function table (one input column of an
+    /// eq-sort, output of the same sort, declared `:internal-hidden`, named
+    /// `__UF_<sort>f`), register an `unsafe-lookup-uf-<sort>` primitive with a
+    /// deferred-init handle. Called during typechecking of the function decl,
+    /// so subsequent commands (e.g., rule actions emitted by the encoder)
+    /// can typecheck against the primitive's name. The actual `TableId` is
+    /// filled in later by [`Self::maybe_fill_uf_lookup_table_id`] once the
+    /// backend has added the table.
+    fn maybe_register_uf_lookup_prim(&mut self, fdecl: &ResolvedFunctionDecl) {
+        use crate::proofs::proof_encoding_helpers::{UnsafeLookupUfPrim, unsafe_lookup_uf_name};
+        if !is_uf_lookup_function(fdecl) {
+            return;
+        }
+        // Identify the sort: prefer the encoder's `uf_function` map (which is
+        // populated when term encoding is active and gives the
+        // sort→UF-function mapping reliably); fall back to parsing the
+        // fresh-generated name `@UF_<sort>f` for the non-term-encoded
+        // (roundtripped) path.
+        let sort_name = self
+            .proof_state
+            .uf_function
+            .iter()
+            .find(|(_, uf_func_name)| *uf_func_name == &fdecl.name)
+            .map(|(sort, _)| sort.clone())
+            .or_else(|| {
+                // Roundtrip path: the original fresh prefix `@` has been
+                // replaced by sanitize_internal_names with one or more `_`
+                // characters. Strip a leading run of `_` or the `@` itself,
+                // then match `UF_<sort>f<digits>`.
+                let n = fdecl
+                    .name
+                    .trim_start_matches('@')
+                    .trim_start_matches('_');
+                let n = n.strip_prefix("UF_")?;
+                let n = n.trim_end_matches(|c: char| c.is_ascii_digit());
+                let sort = n.strip_suffix('f')?;
+                Some(sort.to_string())
+            });
+        let Some(sort_name) = sort_name else {
+            return;
+        };
+        let Some(sort) = self.type_info.get_sort_by_name(&sort_name) else {
+            return;
+        };
+        if self.pending_uf_lookup_cells.contains_key(&fdecl.name) {
+            return;
+        }
+        let sort = sort.clone();
+        let cell = Arc::new(std::sync::OnceLock::new());
+        self.pending_uf_lookup_cells
+            .insert(fdecl.name.clone(), cell.clone());
+        let name = unsafe_lookup_uf_name(&sort_name);
+        self.add_primitive(UnsafeLookupUfPrim {
+            name,
+            sort,
+            uf_table_id: cell,
+        });
+    }
+
+    /// At command-execute time, after `declare_function` has added the UF
+    /// table to the backend, fill in the `TableId` for the primitive that was
+    /// registered earlier (during typecheck). No-op if `fdecl` isn't a UF
+    /// function table.
+    fn maybe_fill_uf_lookup_table_id(&mut self, fdecl: &ResolvedFunctionDecl) {
+        let Some(cell) = self.pending_uf_lookup_cells.remove(&fdecl.name) else {
+            return;
+        };
+        let Some(func) = self.functions.get(&fdecl.name) else {
+            return;
+        };
+        let table_id = self.bridge().function_table_id(func.backend_id);
+        let _ = cell.set(table_id);
     }
 
     /// Extract rows of a table using the default cost model with name sym
@@ -1454,6 +1534,7 @@ impl EGraph {
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
+                self.maybe_fill_uf_lookup_table_id(&fdecl);
                 log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }
             ResolvedNCommand::AddRuleset(_span, name) => {
@@ -1818,7 +1899,21 @@ impl EGraph {
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
         } else {
-            let mut typechecked = self.typecheck_program(&desugared)?;
+            // Typecheck one command at a time so we can register the
+            // `unsafe-lookup-uf-<sort>` primitive immediately after the
+            // function decl is typechecked — subsequent commands in the
+            // same batch may reference the primitive (this happens when a
+            // term-encoded program is roundtripped through plain text and
+            // re-parsed on a fresh egraph).
+            let mut typechecked = Vec::with_capacity(desugared.len());
+            for cmd in &desugared {
+                let mut tc = self.typecheck_program(&vec![cmd.clone()])?;
+                if let Some(ResolvedNCommand::Function(fdecl)) = tc.first() {
+                    let fdecl = fdecl.clone();
+                    self.maybe_register_uf_lookup_prim(&fdecl);
+                }
+                typechecked.append(&mut tc);
+            }
 
             typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
@@ -1872,6 +1967,16 @@ impl EGraph {
 
                 // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
+                // After typecheck, the UF function decl is in type_info but
+                // hasn't been added to the backend yet. Register the
+                // unsafe-lookup-uf-<sort> primitive now (with a deferred
+                // TableId) so any subsequent encoder-emitted commands that
+                // reference it can typecheck successfully.
+                for tc in &desugared_typechecked {
+                    if let ResolvedNCommand::Function(fdecl) = tc {
+                        self.maybe_register_uf_lookup_prim(fdecl);
+                    }
+                }
                 // remove globals again, but this time allow primitive globals
                 let desugared_typechecked = remove_globals::remove_globals(
                     desugared_typechecked,
@@ -2309,6 +2414,9 @@ impl<'a> BackendRule<'a> {
                 }
             }
         }
+        if is_rebuild_rule_pattern(query) {
+            self.rb.set_rebuild_pattern();
+        }
     }
 
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
@@ -2393,6 +2501,154 @@ impl<'a> BackendRule<'a> {
     fn into_rb(self) -> Box<dyn egglog_backend_trait::RuleBuilderOps + 'a> {
         self.rb
     }
+}
+
+/// Recognize the term-encoding rebuild-rule shape:
+///
+///   atom 0:   (View_T c0 c1 ... cN  proof)    -- view table
+///   atom k:   (UF_S   ck            ck_leader) for each k in 1..=N
+///   guard:    (guard (or (bool-!= c1 c1_leader) ...))
+///
+/// In this shape, atom 0's children are canonical at the time the view is
+/// inserted (an invariant maintained by the encoder), so the seminaive variant
+/// where atom 0 is the focus can be skipped — its matches are either
+/// invariantly empty (when no UF child is also new in the epoch) or are
+/// equivalently caught by the UF-focus variants once we drop the
+/// `atom 0 ts < mid_ts` constraint from them.
+fn is_rebuild_rule_pattern(query: &core::Query<ResolvedCall, ResolvedVar>) -> bool {
+    use core::GenericAtomTerm;
+    let table_atoms: Vec<&core::GenericAtom<ResolvedCall, ResolvedVar>> = query
+        .atoms
+        .iter()
+        .filter(|a| matches!(a.head, ResolvedCall::Func(_)))
+        .collect();
+    if table_atoms.len() < 2 {
+        return false;
+    }
+    let view_vars: HashSet<&ResolvedVar> = table_atoms[0]
+        .args
+        .iter()
+        .filter_map(|t| match t {
+            GenericAtomTerm::Var(_, v) => Some(v),
+            _ => None,
+        })
+        .collect();
+    let pairs = collect_guarded_bool_neq_pairs(query);
+    if pairs.is_empty() {
+        return false;
+    }
+    for atom in &table_atoms[1..] {
+        if atom.args.len() < 2 {
+            return false;
+        }
+        let (GenericAtomTerm::Var(_, a), GenericAtomTerm::Var(_, b)) =
+            (&atom.args[0], &atom.args[1])
+        else {
+            return false;
+        };
+        if a.sort.name() != b.sort.name() {
+            return false;
+        }
+        if !view_vars.contains(a) {
+            return false;
+        }
+        if !(pairs.contains(&(a.clone(), b.clone())) || pairs.contains(&(b.clone(), a.clone()))) {
+            return false;
+        }
+    }
+    true
+}
+
+/// True when `fdecl` is a term-encoding "UF function" table: one input
+/// column of an eq-sort, output of the same sort, declared
+/// `:internal-hidden`. The actual name is fresh-generated; the caller is
+/// expected to also confirm the function appears in
+/// `EncodingState::uf_function`.
+fn is_uf_lookup_function(fdecl: &ResolvedFunctionDecl) -> bool {
+    if !fdecl.internal_hidden {
+        return false;
+    }
+    if fdecl.subtype != FunctionSubtype::Custom {
+        return false;
+    }
+    if fdecl.schema.input.len() != 1 {
+        return false;
+    }
+    fdecl.schema.input[0] == fdecl.schema.output
+}
+
+/// Collect `(a, b)` pairs of variables that the rule body asserts must be
+/// unequal. Two patterns are recognized:
+///
+/// 1. A `(!= a b)` primitive body fact (unit-returning); the success of the
+///    rule body depends on this primitive, so `a != b` is enforced.
+/// 2. A `bool-!= a b` call whose result reaches a `(guard ...)` (directly or
+///    via `or`/`and`), which the proof-encoding's original rebuild-rule
+///    shape uses for the multi-column case.
+///
+/// Used by [`is_rebuild_rule_pattern`].
+fn collect_guarded_bool_neq_pairs(
+    query: &core::Query<ResolvedCall, ResolvedVar>,
+) -> HashSet<(ResolvedVar, ResolvedVar)> {
+    use core::GenericAtomTerm;
+    let mut producers: HashMap<ResolvedVar, (String, Vec<core::ResolvedAtomTerm>)> =
+        HashMap::default();
+    let mut guard_args: Vec<ResolvedVar> = Vec::new();
+    let mut result: HashSet<(ResolvedVar, ResolvedVar)> = HashSet::default();
+    for atom in &query.atoms {
+        let ResolvedCall::Primitive(p) = &atom.head else {
+            continue;
+        };
+        let name = p.name().to_string();
+        if name == "guard" {
+            if let Some(GenericAtomTerm::Var(_, v)) = atom.args.first() {
+                guard_args.push(v.clone());
+            }
+            continue;
+        }
+        if name == "!=" && atom.args.len() >= 2 {
+            // Direct `(!= a b)` body fact: enforces a != b unconditionally.
+            if let (GenericAtomTerm::Var(_, a), GenericAtomTerm::Var(_, b)) =
+                (&atom.args[0], &atom.args[1])
+            {
+                result.insert((a.clone(), b.clone()));
+            }
+        }
+        if let Some(GenericAtomTerm::Var(_, out)) = atom.args.last() {
+            let inputs = atom.args[..atom.args.len() - 1].to_vec();
+            producers.insert(out.clone(), (name, inputs));
+        }
+    }
+    let mut stack: Vec<ResolvedVar> = guard_args;
+    let mut seen: HashSet<ResolvedVar> = HashSet::default();
+    while let Some(v) = stack.pop() {
+        if !seen.insert(v.clone()) {
+            continue;
+        }
+        let Some((name, inputs)) = producers.get(&v) else {
+            continue;
+        };
+        match name.as_str() {
+            "bool-!=" => {
+                if inputs.len() >= 2 {
+                    if let (GenericAtomTerm::Var(_, a), GenericAtomTerm::Var(_, b)) =
+                        (&inputs[0], &inputs[1])
+                    {
+                        result.insert((a.clone(), b.clone()));
+                    }
+                }
+            }
+            "or" | "and" => {
+                for arg in inputs {
+                    if let GenericAtomTerm::Var(_, w) = arg {
+                        stack.push(w.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 /// Trait-routed literal-to-entry helper. Constructs a typed

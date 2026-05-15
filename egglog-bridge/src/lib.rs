@@ -295,6 +295,13 @@ impl EGraph {
         self.db.estimate_size(self.funcs[table].table, None)
     }
 
+    /// The underlying core-relations table id for a bridge function id. Used
+    /// by primitives that want to read a function's table directly via
+    /// `ExecutionState::get_table`.
+    pub fn function_table_id(&self, func: FunctionId) -> TableId {
+        self.funcs[func].table
+    }
+
     pub fn table_size(&self, table: FunctionId) -> usize {
         self.db.get_table(self.funcs[table].table).len()
     }

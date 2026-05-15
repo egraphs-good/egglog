@@ -531,6 +531,19 @@ impl<'a> ProofInstrumentor<'a> {
             return vec![];
         }
 
+        // In term mode, emit one rule per eq-sort column: each fires on
+        // *its* UF function being updated, looks up the other columns'
+        // current canonical leaders via the chain-following
+        // `__unsafe-lookup-uf-<sort>` primitive in the action, and writes
+        // the canonicalized view. This dramatically shrinks the rule body
+        // (just `view + UF[c_k] + (!= c_k c_k_leader)`) compared to the
+        // original "all UF columns in the body" shape — fewer atoms to
+        // join, and the seminaive scheduler naturally only re-runs each
+        // rule on the new UF entries for its column.
+        if !self.egraph.proof_state.proofs_enabled {
+            return self.rebuilding_rules_per_column(fdecl, &types);
+        }
+
         let view_name = self.view_name(&fdecl.name);
         let child = |i: usize| format!("c{i}_");
         let children_vec: Vec<String> = (0..types.len()).map(child).collect();
@@ -575,8 +588,35 @@ impl<'a> ProofInstrumentor<'a> {
         let or_expr = format!("(or {})", bool_neq_exprs.join("\n             "));
         let filter_query = format!("(guard {or_expr})");
 
-        // Build the updated children: use leader_var for eq-sort columns, original for others.
-        let children_updated: Vec<String> = leader_vars.clone();
+        // Build the updated children. In term mode, emit a chained
+        // `__unsafe-lookup-uf-<sort>` lookup for each eq-sort column so the
+        // newly-inserted view always has the *root* of the UF chain. The
+        // body's `(= c_leader (UF c))` is a single-hop table query; if
+        // path-compression hasn't flattened chains yet (it saturates
+        // between rebuild iterations, not within a single iteration's
+        // actions), the body-bound leader can itself be non-canonical. In
+        // proof mode the primitive's signature doesn't match the UF
+        // function's pair output, so we keep the single-hop leader there.
+        let mut canon_actions: Vec<String> = Vec::new();
+        let children_updated: Vec<String> = if self.egraph.proof_state.proofs_enabled {
+            leader_vars.clone()
+        } else {
+            let mut updated = Vec::with_capacity(types.len());
+            for (i, ty) in types.iter().enumerate() {
+                if ty.is_eq_sort() {
+                    let canon = self.fresh_var();
+                    let prim_name =
+                        crate::proofs::proof_encoding_helpers::unsafe_lookup_uf_name(ty.name());
+                    let ci = child(i);
+                    canon_actions.push(format!("(let {canon} ({prim_name} {ci}))"));
+                    updated.push(canon);
+                } else {
+                    updated.push(child(i));
+                }
+            }
+            updated
+        };
+        let canon_actions_str = canon_actions.join("\n                  ");
 
         let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
         let (query_view, view_prf) = self.query_view_and_get_proof(&fdecl.name, &children_vec);
@@ -639,6 +679,7 @@ impl<'a> ProofInstrumentor<'a> {
                     )
                  (
                   {pf_code}
+                  {canon_actions_str}
                   {updated_view}
                   (delete ({view_name} {children}))
                  )
@@ -646,6 +687,81 @@ impl<'a> ProofInstrumentor<'a> {
             self.proof_names().rebuilding_ruleset_name
         );
         self.parse_program(&rule)
+    }
+
+    /// Term-mode rebuild-rules: one rule per eq-sort column of the view.
+    /// Each rule fires when its UF function table gets a new entry whose
+    /// child is non-canonical, and rewrites every view row referencing the
+    /// affected child with the new canonical leader (other eq-sort columns
+    /// are canonicalized in the action via the chain-following
+    /// `__unsafe-lookup-uf-<sort>` primitive).
+    fn rebuilding_rules_per_column(
+        &mut self,
+        fdecl: &ResolvedFunctionDecl,
+        types: &[crate::ArcSort],
+    ) -> Vec<Command> {
+        let view_name = self.view_name(&fdecl.name);
+        let child = |i: usize| format!("c{i}_");
+        let children_vec: Vec<String> = (0..types.len()).map(child).collect();
+        let children = ListDisplay(&children_vec, " ").to_string();
+        let mut all_text = String::new();
+        for (k, ty_k) in types.iter().enumerate() {
+            if !ty_k.is_eq_sort() {
+                continue;
+            }
+            let uf_function_name = self.uf_function_name(ty_k.name());
+            let leader_k = format!("c{k}_leader_");
+            let ci_k = child(k);
+
+            // The view query binds c0_, c1_, ..., proof. We use the view's
+            // proof as the new proof (term mode has Unit proofs, so this
+            // amounts to `()`).
+            let (query_view, view_prf) = self.query_view_and_get_proof(&fdecl.name, &children_vec);
+
+            // Build the action's canonicalized child list. Use the
+            // chain-following `__unsafe-lookup-uf-<sort>` primitive for
+            // *every* eq-sort column (including column `k`): the body's
+            // `(= leader_k (UF c_k))` only chases a single hop, so if
+            // path-compression hasn't flattened a multi-hop chain yet,
+            // different per-column rules firing on the same stale view
+            // would pick different intermediate values for `c_k` versus
+            // the others. Using the chain-following primitive uniformly
+            // ensures all the per-column rules converge on the same fully-
+            // canonical row.
+            let mut canon_actions: Vec<String> = Vec::new();
+            let mut children_updated: Vec<String> = Vec::with_capacity(types.len());
+            for (i, ty_i) in types.iter().enumerate() {
+                if ty_i.is_eq_sort() {
+                    let canon = self.fresh_var();
+                    let prim_name =
+                        crate::proofs::proof_encoding_helpers::unsafe_lookup_uf_name(ty_i.name());
+                    let ci = child(i);
+                    canon_actions.push(format!("(let {canon} ({prim_name} {ci}))"));
+                    children_updated.push(canon);
+                } else {
+                    children_updated.push(child(i));
+                }
+            }
+            let canon_actions_str = canon_actions.join("\n                  ");
+            let updated_view = self.update_view(&fdecl.name, &children_updated, &view_prf);
+
+            let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+            let rule = format!(
+                "(rule ({query_view}
+                        (= {leader_k} ({uf_function_name} {ci_k}))
+                        (!= {ci_k} {leader_k}))
+                     (
+                      {canon_actions_str}
+                      {updated_view}
+                      (delete ({view_name} {children}))
+                     )
+                      :ruleset {} :name \"{fresh_name}\")",
+                self.proof_names().rebuilding_ruleset_name
+            );
+            all_text.push_str(&rule);
+            all_text.push('\n');
+        }
+        self.parse_program(&all_text)
     }
 
     /// Instrument fact replaces terms with looking up
@@ -963,6 +1079,44 @@ impl<'a> ProofInstrumentor<'a> {
             args.to_vec()
         };
 
+        // Canonicalize each eq-sort arg via the per-sort unsafe-lookup-uf
+        // primitive so the view row is inserted with canonical children
+        // — the invariant the rebuild-rule seminaive optimization relies
+        // on. We also canonicalize the constructor's *output* column
+        // (the freshly-bound `fv`): in general egglog the constructor
+        // call dedups against the term table, so `fv` may be an existing
+        // term that has since been unioned and is now non-canonical;
+        // looking it up via the chain-following primitive replaces it
+        // with the current leader.
+        //
+        // Only applies in term mode; in proof mode the UF function's
+        // output is a `(Pair Sort Proof)` sort, so the simple
+        // identity-on-miss primitive doesn't typecheck. Leaving
+        // canonicalization to the rebuilding-ruleset is fine there since
+        // proof mode isn't the perf target.
+        let mut canon_args: Vec<String> = Vec::with_capacity(args_with_fv.len());
+        // Only the bridge backend registers `__unsafe-lookup-uf-<sort>`
+        // primitives (the DuckDB backend doesn't know about them, since the
+        // optimization only matters there). In proof mode the UF function's
+        // output is `(Pair Sort Proof)`, so the simple identity-on-miss
+        // primitive doesn't typecheck; skip canonicalization there too.
+        let canonicalize = !self.egraph.proof_state.proofs_enabled;
+        for (i, arg) in args_with_fv.iter().enumerate() {
+            let sort = if i < func_type.input.len() {
+                &func_type.input[i]
+            } else {
+                &func_type.output
+            };
+            if !canonicalize || !sort.is_eq_sort() {
+                canon_args.push(arg.clone());
+                continue;
+            }
+            let canon = self.fresh_var();
+            let prim_name = crate::proofs::proof_encoding_helpers::unsafe_lookup_uf_name(sort.name());
+            res.push(format!("(let {canon} ({prim_name} {arg}))"));
+            canon_args.push(canon);
+        }
+
         let (proof_str, view_proof_var) = if self.egraph.proof_state.proofs_enabled {
             let to_ast = self.fname_to_ast_name(&func_type.name);
             let rule_constructor = &self.proof_names().rule_constructor;
@@ -1005,7 +1159,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         res.push(proof_str);
-        res.push(self.update_view(&func_type.name, &args_with_fv, &view_proof_var));
+        res.push(self.update_view(&func_type.name, &canon_args, &view_proof_var));
 
         // add to uf table to initialize eclass for constructors
         if func_type.subtype == FunctionSubtype::Constructor {
