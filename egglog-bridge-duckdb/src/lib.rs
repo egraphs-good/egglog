@@ -1408,6 +1408,13 @@ impl EGraph {
         // Disabling drops a sizeable chunk of per-iteration overhead
         // on workloads that do many INSERT…SELECT.
         conn.execute("SET preserve_insertion_order = false", [])?;
+        // Herbie egglog dumps inline deeply-nested `(bigrat
+        // (from-string …) (from-string …))` constants into rule
+        // bodies; the resulting WHERE clauses + SELECT lists can
+        // easily blow past DuckDB's default expression-depth cap of
+        // 1000. Bump it generously so taylor*.egg dumps with 100+
+        // levels of nesting compile.
+        conn.execute("SET max_expression_depth = 100000", [])?;
         // Determinism: parallel execution can produce rows from a
         // SELECT in any order. With hash-cons (or any rule action
         // that side-effects via nextval()), per-row evaluation order
