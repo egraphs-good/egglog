@@ -42,6 +42,10 @@ mimalloc = { workspace = true }
 name = "writes"
 harness = false
 
+[[bench]]
+name = "gj_index"
+harness = false
+
 [features]
 default = []
 debug-val-trace = []
