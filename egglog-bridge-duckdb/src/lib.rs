@@ -1803,19 +1803,41 @@ impl EGraph {
     /// snapshot stays valid for the duration of that query.
     pub fn refresh_table_sizes(&self) -> Result<()> {
         const INTERNAL_PREFIX: &str = "@";
-        let mut new_sizes: HashMap<String, i64> = HashMap::new();
-        for (name, info) in &self.functions {
-            if name.starts_with(INTERNAL_PREFIX) {
-                continue;
-            }
-            let _ = info;
-            let sql = format!("SELECT COUNT(*) FROM {}", q(name));
-            let count: i64 = self
-                .conn
-                .query_row(&sql, [], |r| r.get(0))
-                .map_err(|e| anyhow!("refresh_table_sizes: failed to count {name}: {e}"))?;
-            new_sizes.insert(name.clone(), count);
+        // Filter to non-internal tables. Order is stable so the
+        // returned columns line up with `names` for read-out.
+        let names: Vec<&str> = self
+            .functions
+            .keys()
+            .filter(|n| !n.starts_with(INTERNAL_PREFIX))
+            .map(|s| s.as_str())
+            .collect();
+        if names.is_empty() {
+            let mut guard = self
+                .table_sizes
+                .lock()
+                .map_err(|e| anyhow!("table_sizes mutex poisoned: {e}"))?;
+            guard.clear();
+            return Ok(());
         }
+        // Batch into a single SELECT with N scalar `(SELECT COUNT(*)
+        // FROM t)` subqueries. Avoids N round-trips per :until check
+        // (Herbie's `(repeat 50 …)` schedules call `get-size!` once
+        // per iteration; the per-query overhead added up to seconds).
+        let cols: Vec<String> = names
+            .iter()
+            .map(|n| format!("(SELECT COUNT(*) FROM {})", q(n)))
+            .collect();
+        let sql = format!("SELECT {}", cols.join(", "));
+        let mut new_sizes: HashMap<String, i64> = HashMap::new();
+        self.conn
+            .query_row(&sql, [], |row| {
+                for (i, n) in names.iter().enumerate() {
+                    let count: i64 = row.get(i)?;
+                    new_sizes.insert((*n).to_string(), count);
+                }
+                Ok(())
+            })
+            .map_err(|e| anyhow!("refresh_table_sizes: batched COUNT failed: {e}"))?;
         let mut guard = self
             .table_sizes
             .lock()
