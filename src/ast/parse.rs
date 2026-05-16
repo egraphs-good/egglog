@@ -1019,10 +1019,7 @@ pub(crate) struct SexpParser {
 impl SexpParser {
     pub(crate) fn new(name: Option<String>, contents: &str) -> SexpParser {
         SexpParser {
-            source: Arc::new(SrcFile {
-                name,
-                contents: contents.to_string(),
-            }),
+            source: Arc::new(SrcFile::new(name, contents.to_string())),
             index: 0,
         }
     }

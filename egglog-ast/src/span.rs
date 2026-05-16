@@ -1,5 +1,6 @@
 use std::fmt::{self, Debug, Display};
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Span {
@@ -22,28 +23,72 @@ pub struct RustSpan {
     pub column: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug)]
 pub struct SrcFile {
     pub name: Option<String>,
     pub contents: String,
+    line_starts: OnceLock<Vec<usize>>,
 }
 
 impl SrcFile {
-    pub fn get_location(&self, offset: usize) -> (usize, usize) {
-        let mut line = 1;
-        let mut col = 1;
-        for (i, c) in self.contents.char_indices() {
-            if i == offset {
-                break;
-            }
-            if c == '\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
+    pub fn new(name: Option<String>, contents: String) -> Self {
+        Self {
+            name,
+            contents,
+            line_starts: OnceLock::new(),
         }
-        (line, col)
+    }
+
+    fn line_starts(&self) -> &[usize] {
+        self.line_starts.get_or_init(|| {
+            let mut starts = vec![0];
+            for (i, c) in self.contents.char_indices() {
+                if c == '\n' {
+                    starts.push(i + 1);
+                }
+            }
+            starts
+        })
+    }
+
+    pub fn get_location(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.contents.len());
+        let starts = self.line_starts();
+        let line_idx = starts
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1);
+        let line_start = starts[line_idx];
+        let col = self.contents[line_start..offset].chars().count() + 1;
+        (line_idx + 1, col)
+    }
+}
+
+impl Clone for SrcFile {
+    fn clone(&self) -> Self {
+        let line_starts = OnceLock::new();
+        if let Some(starts) = self.line_starts.get() {
+            let _ = line_starts.set(starts.clone());
+        }
+        Self {
+            name: self.name.clone(),
+            contents: self.contents.clone(),
+            line_starts,
+        }
+    }
+}
+
+impl PartialEq for SrcFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.contents == other.contents
+    }
+}
+
+impl Eq for SrcFile {}
+
+impl Hash for SrcFile {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.contents.hash(state);
     }
 }
 
