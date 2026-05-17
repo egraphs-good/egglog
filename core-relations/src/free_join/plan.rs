@@ -699,18 +699,22 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     bags
 }
 
-/// Topologically sorts bags based on variable dependencies.
+/// Topologically sorts bags based on variable dependencies, and merges bags so
+/// that the final result is a *chain*. This means `plan_single_bag` only ever
+/// needs a single prologue per bag and never an epilogue. This is because the
+/// epilogues do not participate in joins and are checked only after the main
+/// join loop, so they can easily lead to cartesian products.
 ///
-/// This ensures that we evaluate bags in order.
-///
-/// This method also merges bags. The case where a bag has multiple children in the tree decomposition
-/// has terrible performance currently, because all children but one has to be an innermost lookup.
-/// So in this function, we merge all the non-first children into the parent. This improves HardBoiled benchmarks
-/// significantly.
+/// At every DFS node we pick one child as the chain continuation (the
+/// smallest-overlap child). Every other reachable bag — siblings *and* their
+/// entire sub-trees — gets absorbed into the current chain node.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
+    // Stack entries: (bag_id, parent). `parent` is None for chain nodes (the bag is
+    // pushed to `bags_topo` as a new standalone entry) and Some(idx) for nodes being
+    // absorbed into `bags_topo[idx]`.
     let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
 
     // Starting from the last, since early bags are more likely to be leaves and we don't
@@ -740,15 +744,28 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 .map(|(i, b)| (i, b.common_vars_with(&bag).count()))
                 .filter(|(i, count)| *count > 0 && !visited[*i])
                 .collect();
-            all_children.sort_unstable_by_key(|(_, count)| *count);
 
-            if !all_children.is_empty() {
-                visited[all_children[0].0] = true;
-                stack.push((all_children[0].0, None));
-
-                for &(i, _) in all_children[1..].iter() {
+            if parent.is_some() {
+                // This bag is being absorbed into `bags_topo[this]`. To keep the
+                // result a chain, every descendant of this bag is also absorbed —
+                // none of them get to spawn a new chain node.
+                for &(i, _) in all_children.iter() {
                     visited[i] = true;
-                    stack.push((i, Some(this)))
+                    stack.push((i, Some(this)));
+                }
+            } else {
+                // This bag is a chain node. The cheapest-overlap child continues the
+                // chain; the rest (and all their descendants, via the branch above)
+                // are absorbed into this chain node.
+                all_children.sort_unstable_by_key(|(_, count)| *count);
+                if !all_children.is_empty() {
+                    visited[all_children[0].0] = true;
+                    stack.push((all_children[0].0, None));
+
+                    for &(i, _) in all_children[1..].iter() {
+                        visited[i] = true;
+                        stack.push((i, Some(this)));
+                    }
                 }
             }
 
