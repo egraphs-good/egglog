@@ -1558,20 +1558,58 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
             }
             Ok(format!("CAST({} AS BIGINT)", args[0]))
         }
-        "to-string" => {
+        // The frontend (`rename_prim` in `lib.rs`) routes overloads
+        // of `to-string` to sort-specific names so the SQL emitter
+        // can pick the right UDF:
+        //   i64-to-string    → __egglog_i64_to_string
+        //   f64-to-string    → __egglog_f64_to_string
+        //   bigint-to-string → __egglog_bigint_to_string
+        // Strings now live as interned `Value` handles in BIGINT
+        // columns, so we route to UDFs that take the input, format
+        // it, and intern the result string. The original
+        // `CAST(... AS VARCHAR)` path no longer works because
+        // downstream consumers expect a BIGINT handle, not a raw
+        // VARCHAR.
+        "i64-to-string" => {
             if args.len() != 1 {
                 return Err(anyhow!(
-                    "rule {rule_name}: primitive `to-string` expects 1 arg, got {}",
+                    "rule {rule_name}: primitive `i64-to-string` expects 1 arg, got {}",
                     args.len()
                 ));
             }
-            Ok(format!("CAST({} AS VARCHAR)", args[0]))
+            Ok(format!("__egglog_i64_to_string({})", args[0]))
         }
+        "f64-to-string" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `f64-to-string` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("__egglog_f64_to_string({})", args[0]))
+        }
+        "bigint-to-string" => {
+            if args.len() != 1 {
+                return Err(anyhow!(
+                    "rule {rule_name}: primitive `bigint-to-string` expects 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            Ok(format!("__egglog_bigint_to_string({})", args[0]))
+        }
+        // String-concat is variadic on the egglog side; the duck
+        // UDF mirrors the signature with a variadic BIGINT arg list.
+        // Empty concat is well-defined: emit a literal for the
+        // empty string (interned at compile time would be cleaner,
+        // but the 0-arg form is rare enough that we leave the UDF
+        // to handle it).
         "string-concat" => {
             if args.is_empty() {
-                return Ok("''".to_string());
+                return Err(anyhow!(
+                    "rule {rule_name}: empty `string-concat` not supported on duckdb"
+                ));
             }
-            Ok(format!("({})", args.join(" || ")))
+            Ok(format!("__egglog_string_concat({})", args.join(", ")))
         }
         "replace" => {
             if args.len() != 3 {
@@ -1580,7 +1618,10 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
                     args.len()
                 ));
             }
-            Ok(format!("REPLACE({}, {}, {})", args[0], args[1], args[2]))
+            Ok(format!(
+                "__egglog_replace({}, {}, {})",
+                args[0], args[1], args[2]
+            ))
         }
         "count-matches" => {
             if args.len() != 2 {
@@ -1589,13 +1630,7 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
                     args.len()
                 ));
             }
-            // Count occurrences = (len(haystack) - len(replace(haystack, needle, ''))) / len(needle).
-            // DuckDB has no direct count() so we compute it.
-            let h = &args[0];
-            let n = &args[1];
-            Ok(format!(
-                "((LENGTH({h}) - LENGTH(REPLACE({h}, {n}, ''))) / LENGTH({n}))"
-            ))
+            Ok(format!("__egglog_count_matches({}, {})", args[0], args[1]))
         }
         "guard" => unop(""),
         // Pair container primitives. The term encoder uses these in

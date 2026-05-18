@@ -2449,6 +2449,12 @@ impl<'a> BackendRule<'a> {
             ("^", "i64", _) => Some("i64-xor"),
             ("/", "i64", _) => Some("int-div"),
             ("+", "String", _) => Some("string-concat"),
+            // `to-string` overloads — duck routes each to a
+            // sort-specific UDF that formats the input and interns
+            // the result string handle.
+            ("to-string", "String", Some("i64")) => Some("i64-to-string"),
+            ("to-string", "String", Some("f64")) => Some("f64-to-string"),
+            ("to-string", "String", Some("BigInt")) => Some("bigint-to-string"),
             // BigRat overloads: dispatch by op name and arg sort.
             // Comparisons return Unit; arithmetic returns BigRat;
             // numer/denom return BigInt; to-f64 returns f64. We use

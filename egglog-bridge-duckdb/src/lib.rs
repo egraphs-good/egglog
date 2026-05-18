@@ -663,6 +663,302 @@ impl VScalar for BigratNumDenomScalar {
     }
 }
 
+/// State for the string-handling UDFs: the shared base-value pool
+/// (so we can intern result strings) and the `BaseValueId` for
+/// `Boxed<String>` (so we can unwrap input handles). Same Arc-shared
+/// model as `BigPoolState` / `BigratExecState`.
+#[derive(Clone)]
+struct StringPoolState {
+    pool: base_values::DuckdbBaseValuePool,
+    string_ty: egglog_backend_trait::BaseValueId,
+    /// Optional `BaseValueId` for `Boxed<BigInt>` — required only for
+    /// the `bigint-to-string` UDF.
+    bigint_ty: Option<egglog_backend_trait::BaseValueId>,
+}
+
+/// Unwrap a string-handle (BIGINT) row value into a Rust `String`.
+fn unwrap_string(
+    pool: &base_values::DuckdbBaseValuePool,
+    string_ty: egglog_backend_trait::BaseValueId,
+    raw: i64,
+) -> std::result::Result<String, Box<dyn std::error::Error>> {
+    use egglog_backend_trait::{BaseValuePool, Value};
+    use egglog_numeric_id::NumericId;
+    let val = Value::new(raw as u32);
+    let boxed = pool.unwrap_dyn(string_ty, val);
+    let s: &egglog_core_relations::Boxed<String> = boxed
+        .downcast_ref()
+        .ok_or_else(|| -> Box<dyn std::error::Error> {
+            "expected Boxed<String> from pool".into()
+        })?;
+    Ok(s.0.clone())
+}
+
+/// Intern a Rust `String` into the pool, returning the i64 handle.
+fn intern_string(
+    pool: &base_values::DuckdbBaseValuePool,
+    string_ty: egglog_backend_trait::BaseValueId,
+    s: String,
+) -> i64 {
+    use egglog_backend_trait::BaseValuePool;
+    use egglog_numeric_id::NumericId;
+    let boxed = egglog_core_relations::Boxed::new(s);
+    pool.intern_dyn(string_ty, Box::new(boxed)).rep() as i64
+}
+
+/// UDF for `string-concat` — variadic `String × ... → String`. Each
+/// input is a BIGINT handle to an interned `Boxed<String>`; unwrap,
+/// concat, intern the result, return the new handle.
+struct StringConcatScalar;
+
+impl VScalar for StringConcatScalar {
+    type State = StringPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let arity = input.num_columns();
+        // Materialize per-column handle values up-front so we can
+        // drop the borrowed `FlatVector` wrappers before the
+        // `unwrap_string` pool calls (which need `&state.pool`
+        // unborrowed).
+        let mut cols: Vec<Vec<i64>> = Vec::with_capacity(arity);
+        for c in 0..arity {
+            let v = input.flat_vector(c);
+            cols.push(v.as_slice_with_len::<i64>(n).to_vec());
+        }
+        let mut results: Vec<i64> = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut buf = String::new();
+            for c in 0..arity {
+                let s = unwrap_string(&state.pool, state.string_ty, cols[c][i])?;
+                buf.push_str(&s);
+            }
+            results.push(intern_string(&state.pool, state.string_ty, buf));
+        }
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        out_slice[..n].copy_from_slice(&results);
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::variadic(
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `replace` — `String × String × String → String`. All inputs
+/// are BIGINT handles; unwrap, run `String::replace`, intern result.
+struct ReplaceScalar;
+
+impl VScalar for ReplaceScalar {
+    type State = StringPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let hay_col = input.flat_vector(0);
+        let needle_col = input.flat_vector(1);
+        let repl_col = input.flat_vector(2);
+        let hay = hay_col.as_slice_with_len::<i64>(n);
+        let needle = needle_col.as_slice_with_len::<i64>(n);
+        let repl = repl_col.as_slice_with_len::<i64>(n);
+        let mut results: Vec<i64> = Vec::with_capacity(n);
+        for i in 0..n {
+            let h = unwrap_string(&state.pool, state.string_ty, hay[i])?;
+            let n_s = unwrap_string(&state.pool, state.string_ty, needle[i])?;
+            let r = unwrap_string(&state.pool, state.string_ty, repl[i])?;
+            results.push(intern_string(&state.pool, state.string_ty, h.replace(&n_s, &r)));
+        }
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        out_slice[..n].copy_from_slice(&results);
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+            ],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `count-matches` — `String × String → i64`. Inputs are
+/// BIGINT handles; output is the raw count (i64 with `MAY_UNBOX =
+/// true`, so the value IS the handle for small counts — no interning
+/// needed).
+struct CountMatchesScalar;
+
+impl VScalar for CountMatchesScalar {
+    type State = StringPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let hay_col = input.flat_vector(0);
+        let needle_col = input.flat_vector(1);
+        let hay = hay_col.as_slice_with_len::<i64>(n);
+        let needle = needle_col.as_slice_with_len::<i64>(n);
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        for i in 0..n {
+            let h = unwrap_string(&state.pool, state.string_ty, hay[i])?;
+            let n_s = unwrap_string(&state.pool, state.string_ty, needle[i])?;
+            out_slice[i] = if n_s.is_empty() {
+                0
+            } else {
+                h.matches(&n_s).count() as i64
+            };
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+                LogicalTypeHandle::from(LogicalTypeId::Bigint),
+            ],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `to-string` (i64 overload) — `i64 → String`. Input is the
+/// i64 value (or its handle if it doesn't fit in `i64::MAY_UNBOX`'s
+/// 31-bit fast path). We `pool_unwrap::<i64>` to get the raw value
+/// either way, format with `Display`, intern as Boxed<String>.
+struct I64ToStringScalar;
+
+impl VScalar for I64ToStringScalar {
+    type State = StringPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::Value;
+        use egglog_numeric_id::NumericId;
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<i64>(n);
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        for i in 0..n {
+            let val = Value::new(in_slice[i] as u32);
+            let v: i64 = egglog_backend_trait::pool_unwrap::<i64>(&state.pool, val);
+            out_slice[i] = intern_string(&state.pool, state.string_ty, v.to_string());
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `to-string` (f64 overload) — `f64 → String`. Input is the
+/// raw `DOUBLE` value (f64 columns are still SQL-native).
+struct F64ToStringScalar;
+
+impl VScalar for F64ToStringScalar {
+    type State = StringPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<f64>(n);
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        for i in 0..n {
+            // Match the bridge's `to-string` for f64: `format!("{:?}",
+            // a.0.0)` (see src/sort/f64.rs:43) — uses Debug formatting,
+            // which gives back a decimal that parses round-trip.
+            out_slice[i] = intern_string(&state.pool, state.string_ty, format!("{:?}", in_slice[i]));
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Double)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
+/// UDF for `to-string` (BigInt overload) — `Z → String`. Input is a
+/// `Boxed<BigInt>` handle.
+struct BigIntToStringScalar;
+
+impl VScalar for BigIntToStringScalar {
+    type State = StringPoolState;
+
+    unsafe fn invoke(
+        state: &Self::State,
+        input: &mut DataChunkHandle,
+        output: &mut dyn WritableVector,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use egglog_backend_trait::{BaseValuePool, Value};
+        use egglog_numeric_id::NumericId;
+        let bigint_ty = state
+            .bigint_ty
+            .ok_or_else(|| -> Box<dyn std::error::Error> {
+                "BigIntToStringScalar: bigint_ty missing (BigIntSort not registered before \
+                 bigint-to-string was called)"
+                    .into()
+            })?;
+        let n = input.len();
+        let in_vec = input.flat_vector(0);
+        let in_slice = in_vec.as_slice_with_len::<i64>(n);
+        let mut out_vec = output.flat_vector();
+        let out_slice = out_vec.as_mut_slice::<i64>();
+        for i in 0..n {
+            let val = Value::new(in_slice[i] as u32);
+            let boxed = state.pool.unwrap_dyn(bigint_ty, val);
+            let z: &egglog_core_relations::Boxed<num::BigInt> = boxed
+                .downcast_ref()
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    "BigIntToStringScalar: handle not a Boxed<BigInt>".into()
+                })?;
+            out_slice[i] = intern_string(&state.pool, state.string_ty, z.0.to_string());
+        }
+        Ok(())
+    }
+
+    fn signatures() -> Vec<ScalarFunctionSignature> {
+        vec![ScalarFunctionSignature::exact(
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
+            LogicalTypeHandle::from(LogicalTypeId::Bigint),
+        )]
+    }
+}
+
 /// State for the `get-size!` UDF: a shared snapshot of function-table
 /// row counts. The duckdb EGraph refreshes this immediately before
 /// each `query`/`:until`-style check via `refresh_table_sizes`, then
@@ -1595,10 +1891,106 @@ impl EGraph {
         }
         let pool_dyn: &dyn BaseValuePool = &self.backend_base_value_pool;
         let bigint_type_id = TypeId::of::<egglog_core_relations::Boxed<BigInt>>();
-        if !pool_dyn.has_ty(bigint_type_id) {
+        let bigint_ty_opt = if pool_dyn.has_ty(bigint_type_id) {
+            Some(pool_dyn.get_ty_by_type_id(bigint_type_id))
+        } else {
+            None
+        };
+        // String UDFs need `Boxed<String>` registered — `StringSort` is
+        // declared by `with_backend` before any frontend code calls in
+        // here, so this lookup always succeeds for our test paths.
+        let string_type_id = TypeId::of::<egglog_core_relations::Boxed<String>>();
+        let string_ty_opt = if pool_dyn.has_ty(string_type_id) {
+            Some(pool_dyn.get_ty_by_type_id(string_type_id))
+        } else {
+            None
+        };
+        // Handle string UDFs first so they don't depend on BigInt
+        // being registered (the BigInt early-return below was added
+        // for bigrat-family UDFs).
+        let result_str: Option<duckdb::Result<()>> = match name {
+            "string-concat" => string_ty_opt.map(|string_ty| {
+                let state = StringPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    string_ty,
+                    bigint_ty: bigint_ty_opt,
+                };
+                self.conn.register_scalar_function_with_state::<StringConcatScalar>(
+                    "__egglog_string_concat",
+                    &state,
+                )
+            }),
+            "replace" => string_ty_opt.map(|string_ty| {
+                let state = StringPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    string_ty,
+                    bigint_ty: bigint_ty_opt,
+                };
+                self.conn.register_scalar_function_with_state::<ReplaceScalar>(
+                    "__egglog_replace",
+                    &state,
+                )
+            }),
+            "count-matches" => string_ty_opt.map(|string_ty| {
+                let state = StringPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    string_ty,
+                    bigint_ty: bigint_ty_opt,
+                };
+                self.conn.register_scalar_function_with_state::<CountMatchesScalar>(
+                    "__egglog_count_matches",
+                    &state,
+                )
+            }),
+            "i64-to-string" => string_ty_opt.map(|string_ty| {
+                let state = StringPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    string_ty,
+                    bigint_ty: bigint_ty_opt,
+                };
+                self.conn.register_scalar_function_with_state::<I64ToStringScalar>(
+                    "__egglog_i64_to_string",
+                    &state,
+                )
+            }),
+            "f64-to-string" => string_ty_opt.map(|string_ty| {
+                let state = StringPoolState {
+                    pool: self.backend_base_value_pool.clone(),
+                    string_ty,
+                    bigint_ty: bigint_ty_opt,
+                };
+                self.conn.register_scalar_function_with_state::<F64ToStringScalar>(
+                    "__egglog_f64_to_string",
+                    &state,
+                )
+            }),
+            "bigint-to-string" => string_ty_opt.zip(bigint_ty_opt).map(
+                |(string_ty, _bigint_ty)| {
+                    let state = StringPoolState {
+                        pool: self.backend_base_value_pool.clone(),
+                        string_ty,
+                        bigint_ty: bigint_ty_opt,
+                    };
+                    self.conn.register_scalar_function_with_state::<BigIntToStringScalar>(
+                        "__egglog_bigint_to_string",
+                        &state,
+                    )
+                },
+            ),
+            _ => None,
+        };
+        if let Some(r) = result_str {
+            match r {
+                Ok(()) => {
+                    self.registered_builtin_udfs.insert(name.to_string());
+                }
+                Err(e) => log::warn!("failed to register builtin UDF for {name}: {e}"),
+            }
             return;
         }
-        let bigint_ty = pool_dyn.get_ty_by_type_id(bigint_type_id);
+
+        // Bigrat-family UDFs require BigInt; bail if not registered.
+        let Some(bigint_ty) = bigint_ty_opt else { return };
         let bigrat_type_id = TypeId::of::<egglog_core_relations::Boxed<BigRational>>();
         let bigrat_ty = if pool_dyn.has_ty(bigrat_type_id) {
             Some(pool_dyn.get_ty_by_type_id(bigrat_type_id))
