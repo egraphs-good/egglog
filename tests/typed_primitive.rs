@@ -14,7 +14,7 @@
 
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
-use egglog::sort::I64Sort;
+use egglog::sort::{I64Sort, S, StringSort};
 use egglog::{
     EGraph, FullPrim, FullState, Primitive, PurePrim, PureState, Read, ReadPrim, ReadState, Value,
     WritePrim, WriteState, prelude::*,
@@ -99,6 +99,50 @@ impl Primitive for ReadLookup {
 impl ReadPrim for ReadLookup {
     fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
         state.lookup(self.table_name, args)
+    }
+}
+
+/// A read primitive that uses the read-side table-size API.
+#[derive(Clone)]
+struct ReadTableSize(&'static str);
+impl Primitive for ReadTableSize {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![StringSort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl ReadPrim for ReadTableSize {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let table_name = state.base_values().unwrap::<S>(args[0]).0;
+        let size = state.table_size(&table_name).unwrap_or(0);
+        let size = i64::try_from(size).ok()?;
+        Some(state.base_values().get::<i64>(size))
+    }
+}
+
+/// A read primitive that uses the read-side all-table-size snapshot API.
+#[derive(Clone)]
+struct ReadAllTableSizes(&'static str);
+impl Primitive for ReadAllTableSizes {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![I64Sort.to_arcsort()], span.clone()).into_box()
+    }
+}
+impl ReadPrim for ReadAllTableSizes {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+        let size: usize = state.table_sizes().into_iter().map(|(_, size)| size).sum();
+        let size = i64::try_from(size).ok()?;
+        Some(state.base_values().get::<i64>(size))
     }
 }
 
@@ -319,6 +363,24 @@ fn read_primitive_rejected_in_rule_contexts() {
              (rule ((= x (lookup-f 1))) ((set (g 0) x)) :naive)\n\
              (run 1)\n\
              (check (= (g 0) 99))",
+        )
+        .unwrap();
+}
+
+#[test]
+fn read_primitive_can_observe_table_sizes() {
+    let mut egraph = EGraph::default();
+    egraph.add_read_primitive(ReadTableSize("table-size"), None);
+    egraph.add_read_primitive(ReadAllTableSizes("all-table-sizes"), None);
+
+    egraph
+        .parse_and_run_program(
+            None,
+            "(function f (i64) i64 :no-merge)\n\
+             (set (f 1) 10)\n\
+             (set (f 2) 20)\n\
+             (check (= (table-size \"f\") 2))\n\
+             (check (= (all-table-sizes) 2))",
         )
         .unwrap();
 }

@@ -211,6 +211,19 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         let action = lookup_action(self.registry(), name);
         action.lookup(self.es(), key)
     }
+
+    /// Return the current row count for the named table, or `None` if no table
+    /// with that name is registered.
+    fn table_size(&self, name: &str) -> Option<usize> {
+        self.registry()
+            .lookup_table(name)
+            .map(|action| action.row_count(self.es()))
+    }
+
+    /// Snapshot the registered table names and their current row counts.
+    fn table_sizes(&self) -> Vec<(&str, usize)> {
+        self.registry().table_sizes(self.es())
+    }
 }
 
 /// Action-side write methods — name-indexed inserts/removes/subsumes
