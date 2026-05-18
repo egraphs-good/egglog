@@ -1723,6 +1723,7 @@ where
                     ruleset: fun(rule.ruleset),
                     head: rule.head,
                     body: rule.body,
+                    naive: rule.naive,
                 };
                 GenericCommand::Rule { rule }
             }

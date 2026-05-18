@@ -70,7 +70,8 @@ where
         } else {
             "".into()
         };
-        write!(f, ")\n{indent} {ruleset} {name})")
+        let naive = if self.naive { " :naive" } else { "" };
+        write!(f, ")\n{indent} {ruleset} {name}{naive})")
     }
 }
 
@@ -182,6 +183,7 @@ where
                 .collect(),
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
+            naive: self.naive,
         }
     }
 
@@ -196,6 +198,7 @@ where
             body: self.body,
             name: self.name,
             ruleset: self.ruleset,
+            naive: self.naive,
         }
     }
 
@@ -219,6 +222,7 @@ where
                 .collect(),
             name: self.name,
             ruleset: self.ruleset,
+            naive: self.naive,
         }
     }
 

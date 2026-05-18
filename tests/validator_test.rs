@@ -41,11 +41,13 @@ fn test_add_primitive_validator() {
 }
 
 #[test]
-fn test_add_primitive_with_validator_method() {
-    // Test that we can add a validator to a primitive using the direct method
+fn test_add_pure_primitive_with_validator() {
+    // Test that we can add a validator to a primitive via `add_pure_primitive`.
     let mut egraph = EGraph::default();
 
     // Create a simple primitive that adds two numbers
+    use egglog::PureState;
+
     #[derive(Clone)]
     struct TestAdd;
     impl Primitive for TestAdd {
@@ -64,10 +66,12 @@ fn test_add_primitive_with_validator_method() {
             )
             .into_box()
         }
-        fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-            let a = exec_state.base_values().unwrap::<i64>(args[0]);
-            let b = exec_state.base_values().unwrap::<i64>(args[1]);
-            Some(exec_state.base_values().get(a + b))
+    }
+    impl PurePrim for TestAdd {
+        fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+            let a = state.base_values().unwrap::<i64>(args[0]);
+            let b = state.base_values().unwrap::<i64>(args[1]);
+            Some(state.base_values().get(a + b))
         }
     }
 
@@ -90,8 +94,7 @@ fn test_add_primitive_with_validator_method() {
             Some(result_term)
         });
 
-    // Add the primitive with validator using the direct method
-    egraph.add_primitive_with_validator(TestAdd, Some(validator));
+    egraph.add_pure_primitive(TestAdd, Some(validator));
 
     // Verify the primitive works
     egraph

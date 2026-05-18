@@ -41,6 +41,52 @@ mod tests;
 pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
 
+/// A live registry of action handles for use by typed primitives.
+///
+/// Maps table name to [`TableAction`] (plus the shared [`UnionAction`]
+/// and the default-panic external-function id) and is owned by the
+/// bridge `EGraph`. The state wrappers (`PureState`/`ReadState`/
+/// `WriteState`/`FullState`) live in the `egglog` crate; they read
+/// from this registry at invoke time to back name-indexed action
+/// methods. Held by the bridge `EGraph` inside an `Arc<RwLock<_>>`.
+#[derive(Clone)]
+pub struct ActionRegistry {
+    table_actions: hashbrown::HashMap<String, TableAction>,
+    union_action: UnionAction,
+    default_panic_id: ExternalFunctionId,
+}
+
+impl ActionRegistry {
+    pub(crate) fn new(union_action: UnionAction, default_panic_id: ExternalFunctionId) -> Self {
+        Self {
+            table_actions: hashbrown::HashMap::new(),
+            union_action,
+            default_panic_id,
+        }
+    }
+
+    pub(crate) fn register_table(&mut self, name: String, action: TableAction) {
+        self.table_actions.insert(name, action);
+    }
+
+    /// Look up the [`TableAction`] for a table by name, or `None` if
+    /// no table with that name has been registered.
+    pub fn lookup_table(&self, name: &str) -> Option<&TableAction> {
+        self.table_actions.get(name)
+    }
+
+    /// The shared [`UnionAction`] for this EGraph's union-find.
+    pub fn union_action(&self) -> &UnionAction {
+        &self.union_action
+    }
+
+    /// The default panic external function id, used by the egglog
+    /// crate's `ActionView::panic`.
+    pub fn default_panic_id(&self) -> ExternalFunctionId {
+        self.default_panic_id
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ColumnTy {
     Id,
@@ -73,6 +119,12 @@ pub struct EGraph {
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
     report_level: ReportLevel,
+    /// Live registry of name-indexed action handles. Shared (via
+    /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
+    /// in the egglog crate so name-indexed action methods on
+    /// [`WriteState`] / [`FullState`] can resolve table actions at
+    /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
+    action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -91,6 +143,28 @@ impl Default for EGraph {
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
 
+        // Register a default panic external function so the typed
+        // state wrappers' `panic()` method has an id to call. This
+        // also seeds `panic_funcs` so a later `new_panic` with the
+        // same message reuses the id.
+        let panic_message: SideChannel<String> = Default::default();
+        let mut panic_funcs: HashMap<String, ExternalFunctionId> = Default::default();
+        let default_panic_msg = "primitive panicked".to_string();
+        let default_panic_id = db.add_external_function(Box::new(Panic(
+            default_panic_msg.clone(),
+            panic_message.clone(),
+        )));
+        panic_funcs.insert(default_panic_msg, default_panic_id);
+
+        let union_action = UnionAction {
+            table: uf_table,
+            timestamp: ts_counter,
+        };
+        let action_registry = Arc::new(std::sync::RwLock::new(ActionRegistry::new(
+            union_action,
+            default_panic_id,
+        )));
+
         Self {
             db,
             uf_table,
@@ -98,9 +172,10 @@ impl Default for EGraph {
             timestamp_counter: ts_counter,
             rules: Default::default(),
             funcs: Default::default(),
-            panic_message: Default::default(),
-            panic_funcs: Default::default(),
+            panic_message,
+            panic_funcs,
             report_level: Default::default(),
+            action_registry,
         }
     }
 }
@@ -189,6 +264,17 @@ impl EGraph {
         }
     }
 
+    /// Register a low-level external function. The callback receives a
+    /// raw `&mut ExecutionState`.
+    ///
+    /// # Seminaive-safety trust boundary
+    ///
+    /// Like [`EGraph::with_execution_state`], this is a raw escape —
+    /// the registered function has unrestricted access and is not
+    /// tracked by the per-context validity system. Prefer building
+    /// primitives via the higher-level `egglog::Primitive` /
+    /// `egglog::EGraph::add_primitive` API, which enforces #772's
+    /// seminaive-safety contract.
     pub fn register_external_func(
         &mut self,
         func: Box<dyn ExternalFunction + 'static>,
@@ -452,7 +538,22 @@ impl EGraph {
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
+        let action = TableAction::new(self, res);
+        let table_name = self.funcs[res].name.to_string();
+        self.action_registry
+            .write()
+            .unwrap()
+            .register_table(table_name, action);
         res
+    }
+
+    /// A handle to the live [`ActionRegistry`] for this EGraph.
+    /// The handle is shared (`Arc<RwLock<_>>`); cloning the outer
+    /// `Arc` does not duplicate the underlying registry. Used by the
+    /// egglog crate's primitive machinery to thread the registry into
+    /// state wrappers at invoke time.
+    pub fn action_registry(&self) -> &Arc<std::sync::RwLock<ActionRegistry>> {
+        &self.action_registry
     }
 
     /// Run the given rules, returning whether the database changed.
@@ -804,6 +905,15 @@ impl EGraph {
     ///
     /// The staged updates are not immediately reflected in the EGraph, so you may want to
     /// manually flush the updates using [`EGraph::flush_updates`].
+    ///
+    /// # Seminaive-safety trust boundary
+    ///
+    /// This method hands out a raw `&mut ExecutionState`, which bypasses
+    /// the typed state wrappers (`PureState`, `WriteState`, `ReadState`,
+    /// `FullState`) that the egglog crate uses to enforce #772's
+    /// seminaive-safety model. Treat it as top-level / global-action
+    /// context: appropriate for one-shot database manipulation from
+    /// outside any rule, not for use inside primitive implementations.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.with_execution_state(f)
     }
@@ -1095,7 +1205,12 @@ impl ResolvedMergeFn {
                     .map(|arg| arg.run(state, cur, new, ts))
                     .collect::<Vec<_>>();
 
-                func.lookup(state, &args).unwrap_or_else(|| {
+                // Merge functions dispatch to another function that may be
+                // a constructor (mint fresh id on miss) or a custom function
+                // (return `None` → panic). `lookup_or_insert` preserves
+                // both behaviors; the pure-read `lookup` would skip
+                // constructor minting.
+                func.lookup_or_insert(state, &args).unwrap_or_else(|| {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
                     cur
@@ -1136,10 +1251,27 @@ impl TableAction {
         }
     }
 
-    /// A "table lookup" is not a read-only operation. It will insert a row when
-    /// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
-    /// the `key` is not already present in the table.
-    pub fn lookup(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
+    /// Look up a row and return its return-value column, or `None` if the
+    /// key is not present. **This is a pure read**: it never inserts a row,
+    /// regardless of the table's configured [`DefaultVal`].
+    ///
+    /// For the lookup-or-insert behavior that mints fresh eclass IDs for
+    /// constructors, use [`TableAction::lookup_or_insert`].
+    pub fn lookup(&self, state: &ExecutionState, key: &[Value]) -> Option<Value> {
+        state
+            .get_table(self.table)
+            .get_row(key)
+            .map(|row| row.vals[self.table_math.ret_val_col()])
+    }
+
+    /// Look up a row, inserting the configured default value if absent.
+    /// For constructor tables this mints a fresh eclass ID; for custom
+    /// functions (no default) this behaves identically to
+    /// [`TableAction::lookup`].
+    ///
+    /// This is a write operation — only safe in action contexts. See
+    /// issue #772.
+    pub fn lookup_or_insert(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
         match self.default {
             Some(default) => {
                 let timestamp =
@@ -1165,10 +1297,7 @@ impl TableAction {
                         [self.table_math.ret_val_col()],
                 )
             }
-            None => state
-                .get_table(self.table)
-                .get_row(key)
-                .map(|row| row.vals[self.table_math.ret_val_col()]),
+            None => self.lookup(state, key),
         }
     }
 

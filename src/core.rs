@@ -64,8 +64,13 @@ impl SpecializedPrimitive {
     }
 
     /// Get the external function ID of this primitive
-    pub(crate) fn external_id(&self) -> ExternalFunctionId {
-        self.prim_with_id.id
+    pub(crate) fn external_id(&self, ctx: crate::Context) -> ExternalFunctionId {
+        self.prim_with_id.context_ids[ctx].unwrap_or_else(|| {
+            panic!(
+                "primitive {:?} is not valid in context {ctx:?}",
+                self.prim_with_id.primitive.name()
+            )
+        })
     }
 
     /// Get the validator function of this primitive, if any
@@ -76,7 +81,20 @@ impl SpecializedPrimitive {
 
 impl PartialEq for SpecializedPrimitive {
     fn eq(&self, other: &Self) -> bool {
-        self.prim_with_id.id == other.prim_with_id.id
+        // This is the key used when resolved atoms are deduplicated by
+        // `(head, inputs)`. The context-id map identifies the primitive
+        // registration, while the concrete input/output sorts identify the
+        // specialization of generic primitives. The primitive name and
+        // validator are registration metadata, so they are intentionally not
+        // separate key fields.
+        self.prim_with_id.context_ids == other.prim_with_id.context_ids
+            && self.output.name() == other.output.name()
+            && self.input.len() == other.input.len()
+            && self
+                .input
+                .iter()
+                .zip(&other.input)
+                .all(|(a, b)| a.name() == b.name())
     }
 }
 
@@ -84,7 +102,12 @@ impl Eq for SpecializedPrimitive {}
 
 impl Hash for SpecializedPrimitive {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.prim_with_id.id.hash(state);
+        self.prim_with_id.context_ids.hash(state);
+        self.output.name().hash(state);
+        self.input.len().hash(state);
+        for input in &self.input {
+            input.name().hash(state);
+        }
     }
 }
 
@@ -141,33 +164,40 @@ impl ResolvedCall {
         None
     }
 
-    pub fn from_resolution(head: &str, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
-        let mut resolved_call = Vec::with_capacity(1);
+    pub fn from_resolution(
+        head: &str,
+        types: &[ArcSort],
+        typeinfo: &TypeInfo,
+        ctx: crate::Context,
+    ) -> ResolvedCall {
         if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                resolved_call.push(ResolvedCall::Func(ty.clone()));
+                return ResolvedCall::Func(ty.clone());
             }
         }
 
-        if let Some(primitives) = typeinfo.get_prims(head) {
-            for primitive in primitives {
-                if primitive.accept(types, typeinfo) {
-                    let (out, inp) = types.split_last().unwrap();
-                    resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
-                        prim_with_id: primitive.clone(),
-                        input: inp.to_vec(),
-                        output: out.clone(),
-                    }));
-                }
+        let mut primitives = typeinfo
+            .get_prims(head)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.context_ids[ctx].is_some() && p.accept(types, typeinfo));
+        if let Some(picked) = primitives.next() {
+            if primitives.next().is_some() {
+                panic!(
+                    "Ambiguous primitive resolution for {head:?} in direct call context {ctx:?}"
+                );
             }
+            let (out, inp) = types.split_last().unwrap();
+            return ResolvedCall::Primitive(SpecializedPrimitive {
+                prim_with_id: picked.clone(),
+                input: inp.to_vec(),
+                output: out.clone(),
+            });
         }
-        assert!(
-            resolved_call.len() == 1,
-            "Ambiguous resolution for {head:?}",
-        );
-        resolved_call.pop().unwrap()
+
+        panic!("No resolution for {head:?} in context {ctx:?}");
     }
 }
 
@@ -357,10 +387,11 @@ impl Query<StringOrEq, String> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
+        ctx: crate::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {
-            constraints.extend(atom.get_constraints(type_info)?.into_iter());
+            constraints.extend(atom.get_constraints(type_info, ctx)?.into_iter());
         }
         Ok(constraints)
     }

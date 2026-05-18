@@ -34,6 +34,7 @@ rustc-hash = "2.1"
 thiserror = "2.0"
 web-time = "1.1"
 dyn-clone = "1.0.17"
+enum-map = "2.7"
 rayon = "1.10.0"
 mimalloc = "0.1"
 quote = "1.0"
@@ -144,6 +145,7 @@ rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 dyn-clone = { workspace = true }
+enum-map = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
 egglog-core-relations = { workspace = true }

@@ -1,10 +1,21 @@
 //! This module makes it easier to use `egglog` from Rust.
-//! It is intended to be imported fully.
 //! ```
 //! use egglog::prelude::*;
 //! ```
-//! See also [`rule`], [`rust_rule`], [`query`], [`BaseSort`],
-//! and [`ContainerSort`].
+//!
+//! Common entry points:
+//!
+//! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
+//!   Rust closure (the closure receives an
+//!   [`crate::WriteState`]).
+//! - [`query`] — run a one-shot query and read out matches.
+//! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
+//! - [`crate::PurePrim`] / [`crate::WritePrim`] / [`crate::ReadPrim`] /
+//!   [`crate::FullPrim`] — register custom primitives via the matching
+//!   `EGraph::add_*_primitive` method.
+//! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
+//!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
+//!   the simple "pure native function" case.
 
 use crate::*;
 use std::any::{Any, TypeId};
@@ -13,6 +24,7 @@ use std::any::{Any, TypeId};
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, RustSpan, Span};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{CommandMacro, CommandMacroRegistry};
+pub use egglog::{Core, FullState, PureState, Read, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 
@@ -312,119 +324,34 @@ pub fn rule(
         body: facts.0,
         name: "".into(),
         ruleset: ruleset.into(),
+        naive: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
 }
 
-/// A wrapper around an `ExecutionState` for rules that are written in Rust.
-/// See the [`rust_rule`] documentation for an example of how to use this.
-pub struct RustRuleContext<'a, 'b> {
-    exec_state: &'a mut ExecutionState<'b>,
-    union_action: egglog_bridge::UnionAction,
-    table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
-    panic_id: ExternalFunctionId,
-}
-
-impl RustRuleContext<'_, '_> {
-    /// Convert from an egglog value to a Rust type.
-    pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
-        self.exec_state.base_values().unwrap::<T>(x)
-    }
-
-    /// Convert from an egglog value to reference of Rust container type.
-    ///
-    /// See [`EGraph::value_to_container`].
-    pub fn value_to_container<T: ContainerValue>(
-        &mut self,
-        x: Value,
-    ) -> Option<impl Deref<Target = T>> {
-        self.exec_state.container_values().get_val::<T>(x)
-    }
-
-    /// Convert from a Rust type to an egglog value.
-    pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
-        self.exec_state.base_values().get::<T>(x)
-    }
-
-    /// Convert from a Rust container type to an egglog value.
-    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.exec_state
-            .container_values()
-            .register_val::<T>(x, self.exec_state)
-    }
-
-    fn get_table_action<'a>(
-        table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
-        table: &str,
-    ) -> &'a egglog_bridge::TableAction {
-        table_actions
-            .get(table)
-            .unwrap_or_else(|| panic!("missing table action for table: {table}"))
-    }
-
-    /// Do a table lookup. This is potentially a mutable operation!
-    /// For more information, see `egglog_bridge::TableAction::lookup`.
-    pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        let RustRuleContext {
-            exec_state,
-            table_actions,
-            ..
-        } = self;
-        Self::get_table_action(table_actions, table).lookup(exec_state, key)
-    }
-
-    /// Union two values in the e-graph.
-    /// For more information, see `egglog_bridge::UnionAction::union`.
-    pub fn union(&mut self, x: Value, y: Value) {
-        self.union_action.union(self.exec_state, x, y)
-    }
-
-    /// Insert a row into a table.
-    /// For more information, see `egglog_bridge::TableAction::insert`.
-    pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        Self::get_table_action(self.table_actions, table).insert(self.exec_state, row)
-    }
-
-    /// Remove a row from a table.
-    /// For more information, see `egglog_bridge::TableAction::remove`.
-    pub fn remove(&mut self, table: &str, key: &[Value]) {
-        let RustRuleContext {
-            exec_state,
-            table_actions,
-            ..
-        } = self;
-        Self::get_table_action(table_actions, table).remove(exec_state, key)
-    }
-
-    /// Subsume a row in a table.
-    /// For more information, see `egglog_bridge::TableAction::subsume`.
-    pub fn subsume(&mut self, table: &str, key: &[Value]) {
-        Self::get_table_action(self.table_actions, table)
-            .subsume(self.exec_state, key.iter().copied())
-    }
-
-    /// Panic.
-    /// You should also return `None` from your callback if you call
-    /// this function, which this function hopefully makes easier by
-    /// always returning `None` so that you can use `?`.
-    pub fn panic(&mut self) -> Option<()> {
-        self.exec_state.call_external_func(self.panic_id, &[]);
-        None
-    }
-}
-
 #[derive(Clone)]
-struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
+struct RustRuleRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
     name: String,
     inputs: Vec<ArcSort>,
-    union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
-    panic_id: ExternalFunctionId,
     func: F,
 }
 
-impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
+impl<F> Primitive for RustRuleRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
     fn name(&self) -> &str {
         &self.name
     }
@@ -438,16 +365,20 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
+}
 
-    fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
-        let mut context = RustRuleContext {
-            exec_state,
-            union_action: self.union_action,
-            table_actions: &self.table_actions,
-            panic_id: self.panic_id,
-        };
-        (self.func)(&mut context, values)?;
-        Some(exec_state.base_values().get(()))
+impl<F> WritePrim for RustRuleRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    fn apply<'a, 'db>(&self, state: crate::WriteState<'a, 'db>, values: &[Value]) -> Option<Value> {
+        let unit = state.base_values().get(());
+        (self.func)(state, values)?;
+        Some(unit)
     }
 }
 
@@ -496,7 +427,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///         (= f0 (fib x))
 ///         (= f1 (fib (+ x 1)))
 ///     ],
-///     move |ctx, values| {
+///     move |mut ctx, values| {
 ///         let [x, f0, f1] = values else { unreachable!() };
 ///         let x = ctx.value_to_base::<i64>(*x);
 ///         let f0 = ctx.value_to_base::<i64>(*f0);
@@ -534,28 +465,21 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
-    func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    func: impl for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    + Clone
+    + Send
+    + Sync
+    + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
-    let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
-    egraph.add_primitive(RustRuleRhs {
-        name: prim_name.clone(),
-        inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-        union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: egraph
-            .functions
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
-            })
-            .collect(),
-
-        panic_id,
-        func,
-    });
+    egraph.add_write_primitive(
+        RustRuleRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            func,
+        },
+        None,
+    );
 
     let rule = Rule {
         span: span!(),
@@ -569,6 +493,109 @@ pub fn rust_rule(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
+        naive: false,
+    };
+
+    egraph.run_program(vec![Command::Rule { rule }])
+}
+
+#[derive(Clone)]
+struct RustRuleFullRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    name: String,
+    inputs: Vec<ArcSort>,
+    func: F,
+}
+
+impl<F> Primitive for RustRuleFullRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let sorts: Vec<_> = self
+            .inputs
+            .iter()
+            .chain(once(&UnitSort.to_arcsort()))
+            .cloned()
+            .collect();
+        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
+    }
+}
+
+impl<F> crate::FullPrim for RustRuleFullRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    fn apply<'a, 'db>(&self, state: crate::FullState<'a, 'db>, values: &[Value]) -> Option<Value> {
+        let unit = state.base_values().get(());
+        (self.func)(state, values)?;
+        Some(unit)
+    }
+}
+
+/// Like [`rust_rule`], but the action callback receives a [`FullState`]
+/// — it can read tables (`ctx.lookup`) in addition to writing them.
+/// Action callbacks of `FullPrim` are only valid in `Context::Full`,
+/// so this helper marks the generated rule `:naive`: the body matches
+/// against the entire database every iteration instead of using the
+/// seminaive delta. Use this when the action genuinely needs to look
+/// up rows; prefer [`rust_rule`] when the data can be bound via the
+/// matcher in the rule body.
+pub fn rust_rule_full(
+    egraph: &mut EGraph,
+    rule_name: &str,
+    ruleset: &str,
+    vars: &[(&str, ArcSort)],
+    facts: Facts<String, String>,
+    func: impl for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+    + Clone
+    + Send
+    + Sync
+    + 'static,
+) -> Result<Vec<CommandOutput>, Error> {
+    let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_full_prim");
+    egraph.add_full_primitive(
+        RustRuleFullRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            func,
+        },
+        None,
+    );
+
+    let rule = Rule {
+        span: span!(),
+        head: GenericActions(vec![GenericAction::Expr(
+            span!(),
+            exprs::call(
+                &prim_name,
+                vars.iter().map(|(v, _)| exprs::var(v)).collect(),
+            ),
+        )]),
+        body: facts.0,
+        name: egraph.parser.symbol_gen.fresh(rule_name),
+        ruleset: ruleset.into(),
+        // FullPrim action requires `Context::Full`, which is only
+        // available in `:naive` rules.
+        naive: true,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -1081,7 +1108,7 @@ mod tests {
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
             ],
-            move |ctx, values| {
+            move |mut ctx, values| {
                 let [x, f0, f1] = values else { unreachable!() };
                 let x = ctx.value_to_base::<i64>(*x);
                 let f0 = ctx.value_to_base::<i64>(*f0);

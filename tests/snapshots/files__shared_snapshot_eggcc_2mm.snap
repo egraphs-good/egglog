@@ -1,6 +1,5 @@
 ---
 source: tests/files.rs
-assertion_line: 97
 expression: snapshot_content_across_treatments
 ---
 ((Abs 1)
@@ -186,7 +185,7 @@ expression: snapshot_content_across_treatments
  (Shl 1)
  (Shr 1)
  (Single 957)
- (Smaller 1826)
+ (Smaller 1804)
  (Smax 1)
  (Smin 1)
  (StateT 1)
@@ -196,7 +195,7 @@ expression: snapshot_content_across_treatments
  (SuffixAt-List<PtrPointees> 0)
  (SuffixAt-List<i64+IntInterval> 0)
  (Switch 0)
- (TCPair 2744)
+ (TCPair 2743)
  (TCons 318)
  (TLConcat 1649)
  (TNil 1)
@@ -204,7 +203,7 @@ expression: snapshot_content_across_treatments
  (TermArg 1)
  (TermBop 134)
  (TermCall 0)
- (TermConcat 1907)
+ (TermConcat 1906)
  (TermCons 0)
  (TermConst 22)
  (TermEmpty 0)
