@@ -1855,6 +1855,14 @@ impl EGraph {
             .is::<egglog_bridge_duckdb::EGraph>()
     }
 
+    /// Borrow the underlying backend trait object for diagnostic
+    /// downcasts. Used by `cli.rs`'s `DUCK_PERF_DUMP` path to read
+    /// per-rule timing off the duckdb backend without exposing the
+    /// `backend` field publicly.
+    pub fn backend_for_diagnostics(&self) -> &dyn egglog_backend_trait::Backend {
+        &*self.backend
+    }
+
     /// Compile the given facts as a rule body, check if any row
     /// matches, and return the boolean answer. Used by
     /// [`prelude::query`] on the duckdb backend to answer

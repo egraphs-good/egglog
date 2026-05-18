@@ -157,10 +157,45 @@ pub fn cli(mut egraph: EGraph) {
                 // program runs through the same trait pipeline.
                 if egraph.has_duckdb_backend() {
                     egraph.fact_directory.clone_from(&args.fact_directory);
-                    if let Err(err) = egraph.parse_and_run_program(
+                    let result = egraph.parse_and_run_program(
                         Some(input.to_str().unwrap().into()),
                         &program,
-                    ) {
+                    );
+                    // Dump per-rule timing if DUCK_PERF_DUMP is set
+                    // (env-flag activated; no CLI flag). Reads the
+                    // duckdb backend's per-rule counters directly.
+                    if std::env::var("DUCK_PERF_DUMP").is_ok()
+                        && let Some(duck) = egraph
+                            .backend_for_diagnostics()
+                            .as_any()
+                            .downcast_ref::<egglog_bridge_duckdb::EGraph>()
+                    {
+                        eprintln!("\n=== DUCK_PERF_DUMP: top 20 rules by total ns ===");
+                        let mut rows = duck.perf_per_rule();
+                        rows.truncate(20);
+                        eprintln!(
+                            "{:>10} {:>10} {:>10}  {:<40} {}",
+                            "total_s", "mat_s", "act_s", "ruleset", "rule"
+                        );
+                        for (rn, rs, m, a) in &rows {
+                            eprintln!(
+                                "{:>10.3} {:>10.3} {:>10.3}  {:<40} {}",
+                                (m + a) as f64 / 1e9,
+                                *m as f64 / 1e9,
+                                *a as f64 / 1e9,
+                                rs,
+                                rn
+                            );
+                        }
+                        let (mat, mat_act, act) = duck.perf_timings_ns();
+                        eprintln!(
+                            "totals: materialize {:.3}s, mat_action {:.3}s, action {:.3}s",
+                            mat as f64 / 1e9,
+                            mat_act as f64 / 1e9,
+                            act as f64 / 1e9,
+                        );
+                    }
+                    if let Err(err) = result {
                         log::error!("{err}");
                         std::process::exit(1);
                     }
