@@ -22,7 +22,7 @@ use web_time::Instant;
 
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
-    action::{Bindings, ExecutionState},
+    action::{Bindings, ExecutionState, QueryEntry},
     common::{DashMap, Value},
     free_join::{
         frame_update::{FrameUpdates, UpdateInstr},
@@ -40,7 +40,7 @@ use crate::{
 use super::{
     ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableInfo, Variable,
     get_column_index_from_tableinfo,
-    plan::{JoinHeader, JoinStage, Plan},
+    plan::{JoinHeader, JoinStage, Plan, PrimitiveOutput},
     with_pool_set,
 };
 
@@ -377,7 +377,10 @@ impl Database {
                         let join_state = JoinState::new(db, exec_state.clone());
                         let mut binding_info = BindingInfo::default();
                         for (id, info) in plan.atoms().iter() {
-                            let table = join_state.db.get_table(info.table);
+                            if info.is_primitive() {
+                                continue;
+                            }
+                            let table = join_state.db.get_table(info.table_id());
                             binding_info.insert_subset(id, table.all());
                         }
                         let mut action_buf =
@@ -517,7 +520,10 @@ impl Database {
                 let mut binding_info = BindingInfo::default();
 
                 for (id, info) in plan.atoms().iter() {
-                    let table = join_state.db.get_table(info.table);
+                    if info.is_primitive() {
+                        continue;
+                    }
+                    let table = join_state.db.get_table(info.table_id());
                     binding_info.insert_subset(id, table.all());
                 }
 
@@ -824,7 +830,7 @@ impl<'a> JoinState<'a> {
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
 
-        let table_id = atoms[atom].table;
+        let table_id = atoms[atom].table_id();
         let info = &self.db.tables[table_id];
         let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
             DynamicIndex::SparseColumn(SparseColumnIndex::new(
@@ -1098,7 +1104,7 @@ impl<'a> JoinState<'a> {
                         return;
                     }
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
-                    let info = &self.db.tables[atoms[a.atom].table];
+                    let info = &self.db.tables[atoms[a.atom].table_id()];
                     let table = info.table.as_ref();
                     let has_stale = table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -1145,10 +1151,10 @@ impl<'a> JoinState<'a> {
 
                     let smaller_atom = smaller_scan.atom;
                     let larger_atom = larger_scan.atom;
-                    let large_info = &self.db.tables[atoms[larger_atom].table];
+                    let large_info = &self.db.tables[atoms[larger_atom].table_id()];
                     let large_table = large_info.table.as_ref();
                     let large_has_stale = large_table.has_stale_rows();
-                    let small_info = &self.db.tables[atoms[smaller_atom].table];
+                    let small_info = &self.db.tables[atoms[smaller_atom].table_id()];
                     let small_table = small_info.table.as_ref();
                     let small_has_stale = small_table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -1246,14 +1252,14 @@ impl<'a> JoinState<'a> {
                     }
 
                     let main_spec = &rest[smallest];
-                    let main_spec_info = &self.db.tables[atoms[main_spec.atom].table];
+                    let main_spec_info = &self.db.tables[atoms[main_spec.atom].table_id()];
                     let main_spec_table = main_spec_info.table.as_ref();
                     let main_spec_has_stale = main_spec_table.has_stale_rows();
                     // Pre-compute has_stale for each scan to avoid vtable calls in the hot loop.
                     let rest_has_stale: SmallVec<[bool; 3]> = rest
                         .iter()
                         .map(|scan| {
-                            self.db.tables[atoms[scan.atom].table]
+                            self.db.tables[atoms[scan.atom].table_id()]
                                 .table
                                 .as_ref()
                                 .has_stale_rows()
@@ -1272,7 +1278,7 @@ impl<'a> JoinState<'a> {
                                 }
                                 if let Some(sub) = probers[i].get_subset(key) {
                                     let table =
-                                        self.db.tables[atoms[rest[i].atom].table].table.as_ref();
+                                        self.db.tables[atoms[rest[i].atom].table_id()].table.as_ref();
                                     if sub.size() <= 16 {
                                         let sub = refine_subset(
                                             sub.to_owned(pool),
@@ -1289,7 +1295,7 @@ impl<'a> JoinState<'a> {
                                         let node = probers[i].node.get_cached_trie_node(
                                             scan.column,
                                             key[0],
-                                            &self.db.tables[atoms[scan.atom].table],
+                                            &self.db.tables[atoms[scan.atom].table_id()],
                                             || {
                                                 refine_subset(
                                                     sub.to_owned(pool),
@@ -1373,7 +1379,7 @@ impl<'a> JoinState<'a> {
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 loop {
                     buffer.clear();
-                    let table = &self.db.tables[atoms[cover_atom].table].table;
+                    let table = &self.db.tables[atoms[cover_atom].table_id()].table;
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
@@ -1432,7 +1438,7 @@ impl<'a> JoinState<'a> {
                 let index_has_stale: SmallVec<[bool; 4]> = index_probers
                     .iter()
                     .map(|(_, atom, _)| {
-                        self.db.tables[atoms[*atom].table]
+                        self.db.tables[atoms[*atom].table_id()]
                             .table
                             .as_ref()
                             .has_stale_rows()
@@ -1446,7 +1452,7 @@ impl<'a> JoinState<'a> {
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 loop {
                     buffer.clear();
-                    let table = &self.db.tables[atoms[cover_atom].table].table;
+                    let table = &self.db.tables[atoms[cover_atom].table_id()].table;
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
@@ -1480,7 +1486,7 @@ impl<'a> JoinState<'a> {
                                 continue 'mid;
                             };
                             // apply any constraints needed in this scan.
-                            let table_info = &self.db.tables[atoms[*atom].table];
+                            let table_info = &self.db.tables[atoms[*atom].table_id()];
                             let cs = &to_intersect[*i].0.constraints;
                             let subset = refine_subset(
                                 subset.to_owned(pool),
@@ -1540,7 +1546,7 @@ impl<'a> JoinState<'a> {
                 let probers_has_stale: SmallVec<[bool; 4]> = to_intersect
                     .iter()
                     .map(|(spec, _)| {
-                        self.db.tables[atoms[spec.to_index.atom].table]
+                        self.db.tables[atoms[spec.to_index.atom].table_id()]
                             .table
                             .as_ref()
                             .has_stale_rows()
@@ -1573,7 +1579,7 @@ impl<'a> JoinState<'a> {
                             let subset = refine_subset(
                                 subset.to_owned(pool),
                                 &spec.constraints,
-                                &self.db.tables[atoms[spec.to_index.atom].table]
+                                &self.db.tables[atoms[spec.to_index.atom].table_id()]
                                     .table
                                     .as_ref(),
                                 probers_has_stale[j],
@@ -1674,6 +1680,61 @@ impl<'a> JoinState<'a> {
                 for (spec, prober) in to_intersect.iter().zip(probers) {
                     binding_info.move_back(spec.0.to_index.atom, prober);
                 }
+            }
+            JoinStage::PrimitiveCall {
+                func,
+                inputs,
+                output,
+            } => {
+                // Resolve input values from the current frame's bindings.
+                // If any input variable isn't bound at this point, the
+                // planner appended this primitive without proper input
+                // scheduling — drop the frame conservatively rather than
+                // panic. (Matches the OLD behavior of producing stale
+                // garbage that would generally fail the equality check.)
+                let mut input_values = SmallVec::<[Value; 4]>::with_capacity(inputs.len());
+                for inp in inputs {
+                    let v = match inp {
+                        QueryEntry::Var(v) => match binding_info.bindings.get(*v).copied() {
+                            Some(val) => val,
+                            None => return,
+                        },
+                        QueryEntry::Const(c) => *c,
+                    };
+                    input_values.push(v);
+                }
+                // Invoke the primitive. We clone exec_state because
+                // ExternalFunction::invoke takes &mut ExecutionState and
+                // run_plan only has &self. Query-side primitives are expected
+                // to be pure, so the dropped mutations are not load-bearing.
+                let mut exec = self.exec_state.clone();
+                let result = self.db.external_functions[*func].invoke(&mut exec, &input_values);
+                let Some(val) = result else {
+                    // Primitive failed: drop this frame.
+                    return;
+                };
+                let mut updates = FrameUpdates::with_capacity(1);
+                match output {
+                    PrimitiveOutput::Bind(v) => {
+                        updates.push_binding(*v, val);
+                        updates.finish_frame();
+                    }
+                    PrimitiveOutput::Filter(expected) => {
+                        let expected_val = match expected {
+                            QueryEntry::Var(v) => match binding_info.bindings.get(*v).copied() {
+                                Some(val) => val,
+                                None => return,
+                            },
+                            QueryEntry::Const(c) => *c,
+                        };
+                        if val != expected_val {
+                            // Filter mismatch: drop this frame.
+                            return;
+                        }
+                        updates.finish_frame();
+                    }
+                }
+                drain_updates!(updates);
             }
         }
     }
@@ -2090,6 +2151,8 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
             .unwrap_or(0),
         JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
         JoinStage::FusedIntersectMat { cover, .. } => binding_info.materializations[*cover].len(), // TODO: len() might be expensive.
+        // A primitive call is a 1:1 transformation on the current frame.
+        JoinStage::PrimitiveCall { .. } => 1,
     }
 }
 
@@ -2098,6 +2161,8 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
         JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
         JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32,
+        // Primitives don't intersect any tables; they only produce/check a value.
+        JoinStage::PrimitiveCall { .. } => 0,
     }
 }
 
@@ -2115,7 +2180,7 @@ fn sort_plan_by_size(
             JoinStage::FusedIntersectMat {
                 mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
                 ..
-            }
+            } | JoinStage::PrimitiveCall { .. }
         ) {
             sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
             last_pos = i + 1;
@@ -2161,6 +2226,9 @@ fn sort_plan_by_size_inner(
                         spec.to_index.vars.len() as i64;
                 });
             }
+            // Primitives are pinned by sort_plan_by_size's boundary check,
+            // so they won't appear inside this range; defensive no-op.
+            JoinStage::PrimitiveCall { .. } => {}
         }
     }
 
@@ -2187,6 +2255,7 @@ fn sort_plan_by_size_inner(
                 .copied()
                 .unwrap_or_default(),
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
+            JoinStage::PrimitiveCall { .. } => 0,
         };
         (
             -refine,
@@ -2228,6 +2297,7 @@ fn sort_plan_by_size_inner(
                         spec.to_index.vars.len() as i64;
                 });
             }
+            JoinStage::PrimitiveCall { .. } => {}
         }
     }
 }

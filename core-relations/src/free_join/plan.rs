@@ -60,7 +60,7 @@ use crate::{
     common::{HashMap, HashSet, IndexSet},
     offsets::Subset,
     pool::Pooled,
-    query::{Atom, Query, VarColumnMap},
+    query::{Atom, AtomKind, Query, VarColumnMap},
     table_spec::Constraint,
 };
 
@@ -130,6 +130,17 @@ impl Clone for JoinHeader {
     }
 }
 
+/// Decided at plan time: what to do with the primitive's return value.
+#[derive(Debug, Clone)]
+pub(crate) enum PrimitiveOutput {
+    /// Output variable is not bound by an earlier stage — bind it to the
+    /// primitive's return value.
+    Bind(Variable),
+    /// Output is already bound (or constant) — drop the row unless the
+    /// primitive returns the same value.
+    Filter(crate::action::QueryEntry),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum JoinStage {
     /// `Intersect` takes a variable and intersects a set of atoms
@@ -153,6 +164,13 @@ pub(crate) enum JoinStage {
         mode: MatScanMode,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+    },
+    /// Invoke a primitive function whose inputs are all bound by earlier
+    /// stages. Either binds an output variable or filters the row.
+    PrimitiveCall {
+        func: crate::ExternalFunctionId,
+        inputs: SmallVec<[crate::action::QueryEntry; 4]>,
+        output: PrimitiveOutput,
     },
 }
 
@@ -394,6 +412,26 @@ impl SinglePlan {
                 } => {
                     todo!("materialization")
                 }
+                JoinStage::PrimitiveCall {
+                    func,
+                    inputs,
+                    output,
+                } => {
+                    let render_entry = |qe: &crate::action::QueryEntry| match qe {
+                        crate::action::QueryEntry::Var(v) => get_var(*v),
+                        crate::action::QueryEntry::Const(c) => format!("{c:?}"),
+                    };
+                    let render_inputs = inputs.iter().map(render_entry).collect();
+                    let render_output = match output {
+                        PrimitiveOutput::Bind(v) => get_var(*v),
+                        PrimitiveOutput::Filter(qe) => render_entry(qe),
+                    };
+                    ReportStage::PrimitiveCall {
+                        name: format!("prim#{}", func.index()),
+                        inputs: render_inputs,
+                        output: render_output,
+                    }
+                }
             };
             let next = if i == self.stages.instrs.len() - 1 {
                 vec![]
@@ -524,7 +562,8 @@ fn update_hypergraph(
     let fake_atom_id = atoms.push(Atom {
         var_columns,
         constraints: ProcessedConstraints::dummy(),
-        table: TableId::dummy(),
+        kind: AtomKind::Table(TableId::dummy()),
+        prim_constants: Default::default(),
     });
 
     // Update variable occurrences to include the covering atom
@@ -609,7 +648,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
     assert!(
         !atoms.iter().any(|(_, atom_info)| {
-            !atom_info.table.is_dummy() && !atom_info.var_columns.is_empty()
+            !atom_info.is_dummy() && !atom_info.var_columns.is_empty()
         }),
         "All atoms should be put into bags"
     );
@@ -852,6 +891,11 @@ fn plan_single_bag(
                 for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
                     let vinfo = &bag.vars[*var];
                     for occ in vinfo.occurrences.iter() {
+                        // Primitive atoms can't be enumerated or probed; they
+                        // are evaluated by spliced PrimitiveCall stages.
+                        if bag.atoms[occ.atom].is_primitive() {
+                            continue;
+                        }
                         let isect = match to_intersect
                             .iter_mut()
                             .find(|(spec, _)| spec.to_index.atom == occ.atom)
@@ -899,7 +943,16 @@ fn plan_single_bag(
         }
     }
 
-    let (header, mut instrs) = plan_stages(&stripped_bag, strat);
+    // Compute "incoming variables" for primitive-call scheduling. These are
+    // variables bound by the prologue (FusedIntersectMat::KeyOnly) and
+    // therefore available throughout this bag's plan.
+    let incoming_vars: HashSet<Variable> = match &prologue {
+        Some(JoinStage::FusedIntersectMat { bind, .. }) => {
+            bind.iter().map(|(_, v)| *v).collect()
+        }
+        _ => HashSet::default(),
+    };
+    let (header, mut instrs) = plan_stages(&stripped_bag, strat, &incoming_vars);
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
 
@@ -1045,7 +1098,8 @@ pub(crate) fn tree_decompose_and_plan(
 ) -> Plan {
     macro_rules! fast_path {
         () => {{
-            let (header, instrs) = plan_stages(&ctx, strat);
+            let no_incoming: HashSet<Variable> = HashSet::default();
+            let (header, instrs) = plan_stages(&ctx, strat, &no_incoming);
             let stages = JoinStages {
                 instrs: Arc::new(instrs),
             };
@@ -1059,6 +1113,14 @@ pub(crate) fn tree_decompose_and_plan(
         }};
     }
     if ctx.atoms.len() <= 2 {
+        return fast_path!();
+    }
+
+    // Tree decomposition currently doesn't know how to assign primitive
+    // atoms to specific bags (their vars can span bags). For now, fall back
+    // to a single-plan when any primitive is present. Decomposition support
+    // for primitives is future work.
+    if ctx.atoms.iter().any(|(_, a)| a.is_primitive()) {
         return fast_path!();
     }
 
@@ -1249,6 +1311,11 @@ impl<'a> BucketQueue<'a> {
         let mut atom_info = DenseIdMap::with_capacity(atoms.n_ids());
         let mut sizes = BTreeMap::<usize, IndexSet<AtomId>>::new();
         for (id, atom) in atoms.iter() {
+            // Primitive atoms cannot serve as covers (they can only be
+            // evaluated, not enumerated).
+            if atom.is_primitive() {
+                continue;
+            }
             let mut bitset = VarSet::with_capacity(var_info.n_ids());
             for var in atom.vars() {
                 bitset.insert(var.index());
@@ -1277,7 +1344,12 @@ impl<'a> BucketQueue<'a> {
         // new ordering.
         for new_var in vars.difference(&self.cover).map(Variable::from_usize) {
             for subatom in &self.var_info[new_var].occurrences {
-                let cur_set = &mut self.atom_info[subatom.atom];
+                // Primitive-atom occurrences were excluded from `atom_info`
+                // (they can never be covers); skip them here so we don't
+                // index a missing key.
+                let Some(cur_set) = self.atom_info.get_mut(subatom.atom) else {
+                    continue;
+                };
                 let old_size = cur_set.count_ones(..);
                 cur_set.difference_with(&vars);
                 let new_size = cur_set.count_ones(..);
@@ -1302,6 +1374,9 @@ impl<'a> BucketQueue<'a> {
 
 /// Build join headers from fast constraints and compute remaining constraints for planning.
 /// Returns (headers, remaining_constraints) tuple.
+///
+/// Primitive atoms are skipped — they have no table to filter, no fast/slow
+/// constraints, and they cannot be used as cover or driving atoms.
 fn plan_headers(
     ctx: &PlanningContext,
 ) -> (
@@ -1319,6 +1394,9 @@ fn plan_headers(
         Default::default();
 
     for (atom, atom_info) in ctx.atoms.iter() {
+        if atom_info.is_primitive() {
+            continue;
+        }
         remaining_constraints.insert(
             atom,
             (
@@ -1341,7 +1419,17 @@ fn plan_headers(
 /// Plan query execution stages using the specified strategy.
 /// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
 /// It does not directly return the plan because the caller may want to further modify the stages.
-fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+///
+/// `incoming_vars` lists variables bound before this plan starts (e.g.,
+/// message variables delivered by a prologue stage in a tree-decomposed
+/// plan). They affect primitive-call scheduling: a primitive whose
+/// variables span this bag and a prior bag fires here only if those prior
+/// vars are listed in `incoming_vars`.
+fn plan_stages(
+    ctx: &PlanningContext,
+    strat: PlanStrategy,
+    incoming_vars: &HashSet<Variable>,
+) -> (Vec<JoinHeader>, Vec<JoinStage>) {
     let (header, remaining_constraints) = plan_headers(ctx);
     let mut instrs = Vec::new();
     let mut state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
@@ -1353,7 +1441,237 @@ fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, 
         PlanStrategy::Gj => plan_gj(ctx, &mut state, &remaining_constraints, &mut instrs),
     };
 
+    // Splice in primitive calls as early as their inputs allow.
+    insert_primitive_stages(ctx, &mut instrs, incoming_vars);
+
     (header, instrs)
+}
+
+/// Return the set of variables newly bound by `stage`.
+fn vars_bound_by_stage(stage: &JoinStage) -> SmallVec<[Variable; 4]> {
+    match stage {
+        JoinStage::Intersect { var, .. } => smallvec![*var],
+        JoinStage::FusedIntersect { bind, .. } => bind.iter().map(|(_, v)| *v).collect(),
+        JoinStage::FusedIntersectMat { bind, .. } => bind.iter().map(|(_, v)| *v).collect(),
+        JoinStage::PrimitiveCall { output, .. } => match output {
+            PrimitiveOutput::Bind(v) => smallvec![*v],
+            PrimitiveOutput::Filter(_) => smallvec![],
+        },
+    }
+}
+
+/// Reconstruct a primitive atom's `(inputs, output)` as `QueryEntry`s,
+/// reading variables from `var_columns` and constants from `prim_constants`.
+fn primitive_atom_entries(
+    atom: &Atom,
+    n_inputs: usize,
+) -> (
+    SmallVec<[crate::action::QueryEntry; 4]>,
+    crate::action::QueryEntry,
+) {
+    use crate::action::QueryEntry;
+    let arity = n_inputs + 1;
+    let mut entries: SmallVec<[Option<QueryEntry>; 5]> = SmallVec::from_iter((0..arity).map(|_| None));
+    for (col, var) in atom.var_columns.iter() {
+        if col.index() < arity {
+            entries[col.index()] = Some(QueryEntry::Var(var));
+        }
+    }
+    for (col, val) in &atom.prim_constants {
+        if col.index() < arity {
+            entries[col.index()] = Some(QueryEntry::Const(*val));
+        }
+    }
+    let output = entries[n_inputs]
+        .expect("primitive output slot must be filled");
+    let inputs: SmallVec<[QueryEntry; 4]> = entries[..n_inputs]
+        .iter()
+        .map(|e| e.expect("primitive input slot must be filled"))
+        .collect();
+    (inputs, output)
+}
+
+/// After table stages are planned, splice in `PrimitiveCall` stages.
+///
+/// For each primitive atom in the context, find the earliest point at which
+/// all its inputs are bound (by either a table stage, a header, a constant,
+/// or a previously-scheduled primitive stage). The output mode is decided
+/// up-front: if the output variable is bound by ANY table stage in the
+/// plan, the primitive fires as a `Filter` after both inputs *and* the
+/// output are bound; otherwise it fires as `Bind` as soon as inputs are
+/// ready. This avoids the bug where a primitive `Bind` is overwritten by a
+/// later table-side `Intersect` enumerating the same variable.
+fn insert_primitive_stages(
+    ctx: &PlanningContext,
+    stages: &mut Vec<JoinStage>,
+    incoming_vars: &HashSet<Variable>,
+) {
+    use crate::action::QueryEntry;
+
+    // Variables that will be bound by some table stage in the existing plan.
+    let mut table_bound: HashSet<Variable> = HashSet::default();
+    for stage in stages.iter() {
+        for v in vars_bound_by_stage(stage) {
+            table_bound.insert(v);
+        }
+    }
+
+    // Collect raw primitive info, filtering out atoms that don't "belong" to
+    // this bag. A primitive belongs here iff every one of its variables is
+    // either local to this bag (`ctx.vars`) or arrives via the prologue
+    // (`incoming_vars`). Primitives whose variables include some var bound
+    // only in a LATER bag are skipped — they'll fire in that later bag.
+    let var_available = |v: &Variable| -> bool {
+        ctx.vars.contains_key(*v) || incoming_vars.contains(v)
+    };
+    let entry_available = |e: &QueryEntry| -> bool {
+        match e {
+            QueryEntry::Var(v) => var_available(v),
+            QueryEntry::Const(_) => true,
+        }
+    };
+    struct PrimRaw {
+        inputs: SmallVec<[QueryEntry; 4]>,
+        output: QueryEntry,
+        func: crate::ExternalFunctionId,
+        emitted: bool,
+    }
+    let mut prims: Vec<PrimRaw> = Vec::new();
+    for (_, atom) in ctx.atoms.iter() {
+        if let AtomKind::Primitive { func, n_inputs } = atom.kind {
+            let (inputs, output) = primitive_atom_entries(atom, n_inputs);
+            if !inputs.iter().all(&entry_available) || !entry_available(&output) {
+                continue;
+            }
+            prims.push(PrimRaw {
+                inputs,
+                output,
+                func,
+                emitted: false,
+            });
+        }
+    }
+    if prims.is_empty() {
+        return;
+    }
+
+    // Incoming message variables are bound by the prologue (FusedIntersectMat)
+    // before any stage of this bag's plan runs.
+    let mut bound: HashSet<Variable> = incoming_vars.clone();
+    let is_bound = |bound: &HashSet<Variable>, e: &QueryEntry| -> bool {
+        match e {
+            QueryEntry::Var(v) => bound.contains(v),
+            QueryEntry::Const(_) => true,
+        }
+    };
+    // A primitive is ready to fire when (a) all inputs are bound, and either
+    // (b1) its output is already bound (=> Filter), or (b2) its output is
+    // NOT scheduled to be bound by a later table stage (=> Bind). The (b2)
+    // condition prevents a Bind from happening before a later
+    // table-side enumeration overwrites the variable.
+    let prim_ready = |bound: &HashSet<Variable>, p: &PrimRaw| -> bool {
+        if !p.inputs.iter().all(|e| is_bound(bound, e)) {
+            return false;
+        }
+        if is_bound(bound, &p.output) {
+            return true;
+        }
+        match p.output {
+            QueryEntry::Var(v) if table_bound.contains(&v) => false,
+            _ => true,
+        }
+    };
+    let make_stage = |bound: &HashSet<Variable>, p: &PrimRaw| -> JoinStage {
+        let output = match p.output {
+            QueryEntry::Var(v) if !bound.contains(&v) => PrimitiveOutput::Bind(v),
+            qe => PrimitiveOutput::Filter(qe),
+        };
+        JoinStage::PrimitiveCall {
+            func: p.func,
+            inputs: p.inputs.clone(),
+            output,
+        }
+    };
+
+    // Helper that fires every primitive whose inputs (and, for Filter, also
+    // output) are now bound. Returns true if any were fired.
+    fn fire_ready(
+        prims: &mut [PrimRaw],
+        bound: &mut HashSet<Variable>,
+        out: &mut Vec<JoinStage>,
+        prim_ready: &impl Fn(&HashSet<Variable>, &PrimRaw) -> bool,
+        make_stage: &impl Fn(&HashSet<Variable>, &PrimRaw) -> JoinStage,
+    ) -> bool {
+        let mut any = false;
+        loop {
+            let mut fired_this_round = false;
+            for p in prims.iter_mut() {
+                if p.emitted {
+                    continue;
+                }
+                if prim_ready(bound, p) {
+                    let stage = make_stage(bound, p);
+                    for v in vars_bound_by_stage(&stage) {
+                        bound.insert(v);
+                    }
+                    out.push(stage);
+                    p.emitted = true;
+                    fired_this_round = true;
+                    any = true;
+                }
+            }
+            if !fired_this_round {
+                break;
+            }
+        }
+        any
+    }
+
+    // Fire prims whose inputs are all constants/header-bound at the very start.
+    let mut new_stages: Vec<JoinStage> = Vec::new();
+    fire_ready(
+        &mut prims,
+        &mut bound,
+        &mut new_stages,
+        &prim_ready,
+        &make_stage,
+    );
+
+    // Walk the original stages, after each one fire any newly-ready prims.
+    let original = std::mem::take(stages);
+    for stage in original {
+        for v in vars_bound_by_stage(&stage) {
+            bound.insert(v);
+        }
+        new_stages.push(stage);
+        fire_ready(
+            &mut prims,
+            &mut bound,
+            &mut new_stages,
+            &prim_ready,
+            &make_stage,
+        );
+    }
+
+    // Any prim still un-emitted: append at the tail as a defensive fallback.
+    // The executor drops the frame if any input variable is unbound at
+    // runtime, so this is no worse than the OLD action-side path.
+    for p in prims.iter_mut().filter(|p| !p.emitted) {
+        log::debug!(
+            "Primitive atom (func #{}) appended at plan tail; inputs/output not bound by tracked stages: inputs={:?}, output={:?}",
+            p.func.index(),
+            p.inputs,
+            p.output,
+        );
+        let stage = make_stage(&bound, p);
+        for v in vars_bound_by_stage(&stage) {
+            bound.insert(v);
+        }
+        new_stages.push(stage);
+        p.emitted = true;
+    }
+
+    *stages = new_stages;
 }
 
 /// Plan free join queries using pure size or minimal cover strategy.
@@ -1427,6 +1745,11 @@ fn get_next_freejoin_stage(
                 if subatom.atom == atom {
                     continue;
                 }
+                // Primitive atoms are evaluated via spliced PrimitiveCall
+                // stages, never used as table-side filters here.
+                if ctx.atoms[subatom.atom].is_primitive() {
+                    continue;
+                }
                 scratch_subatom
                     .entry(subatom.atom)
                     .or_default()
@@ -1466,17 +1789,41 @@ fn plan_gj(
     remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
     stages: &mut Vec<JoinStage>,
 ) {
+    // Helper: occurrences restricted to non-primitive atoms (only table atoms
+    // can be enumerated as a Gj stage cover).
+    let table_occurrences = |var_info: &VarInfo| -> Vec<SubAtom> {
+        var_info
+            .occurrences
+            .iter()
+            .filter(|sub| !ctx.atoms[sub.atom].is_primitive())
+            .cloned()
+            .collect()
+    };
+    // A variable is "live" if it shows up in any atom or any rule action.
+    // We use the full occurrence count (including primitives) for the
+    // liveness heuristic so that a variable consumed by a body primitive
+    // is still planned even if it only appears in a single table.
+    let liveness_count = |var_info: &VarInfo| -> usize { var_info.occurrences.len() };
+
     // First, map all variables to the size of the smallest atom in which they appear:
     let mut min_sizes = Vec::with_capacity(ctx.vars.n_ids());
     let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
     for (var, var_info) in ctx.vars.iter() {
-        let n_occs = var_info.occurrences.len();
-        if n_occs == 1 && !var_info.used_in_rhs {
-            // Do not plan this one. Unless (see below).
+        let table_occs = table_occurrences(var_info);
+        if table_occs.is_empty() {
+            // The variable only appears in primitive atoms (or nowhere).
+            // It will be bound by a spliced PrimitiveCall stage rather than
+            // by a Gj stage. Skip.
             continue;
         }
-        if let Some(min_size) = var_info
-            .occurrences
+        let n_live = liveness_count(var_info);
+        if n_live == 1 && !var_info.used_in_rhs {
+            // Truly dead variable: appears in exactly one place and not
+            // referenced anywhere else. Skip, unless its atom is otherwise
+            // unmentioned (handled below).
+            continue;
+        }
+        if let Some(min_size) = table_occs
             .iter()
             .map(|subatom| {
                 atoms_hit.set(subatom.atom.index(), true);
@@ -1484,18 +1831,17 @@ fn plan_gj(
             })
             .min()
         {
-            min_sizes.push((var, min_size, n_occs));
+            min_sizes.push((var, min_size, table_occs.len()));
         }
-        // If the variable has no ocurrences, it may be bound on the RHS of a
-        // rule (or it may just be unused). Either way, we will ignore it when
-        // planning the query.
     }
     for (var, var_info) in ctx.vars.iter() {
-        if var_info.occurrences.len() == 1 && !var_info.used_in_rhs {
+        let table_occs = table_occurrences(var_info);
+        let n_live = liveness_count(var_info);
+        if table_occs.len() == 1 && n_live == 1 && !var_info.used_in_rhs {
             // We skipped this variable the first time around because it
             // looks "unused". If it belongs to an atom that otherwise has
             // gone unmentioned, though, we need to plan it anyway.
-            let atom = var_info.occurrences[0].atom;
+            let atom = table_occs[0].atom;
             if !atoms_hit.contains(atom.index()) {
                 min_sizes.push((var, remaining_constraints[atom].0, 1));
             }
@@ -1504,13 +1850,14 @@ fn plan_gj(
     // Sort ascending by size, then descending by number of occurrences.
     min_sizes.sort_by_key(|(_, size, occs)| (*size, -(*occs as i64)));
     for (var, _, _) in min_sizes {
-        let occ = ctx.vars[var].occurrences[0].clone();
+        let occs = table_occurrences(&ctx.vars[var]);
+        let occ = occs[0].clone();
         let mut info = StageInfo {
             cover: occ,
             vars: smallvec![var],
             filters: Default::default(),
         };
-        for occ in &ctx.vars[var].occurrences[1..] {
+        for occ in &occs[1..] {
             info.filters
                 .push((occ.clone(), smallvec![ColumnId::new(0); occ.vars.len()]));
         }

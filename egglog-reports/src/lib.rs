@@ -36,6 +36,13 @@ pub enum Stage {
         cover: Scan,             // build side
         to_intersect: Vec<Scan>, // probe sides
     },
+    /// A primitive function call: inputs are already bound, the call either
+    /// binds the output variable or filters the row.
+    PrimitiveCall {
+        name: String,
+        inputs: Vec<String>,
+        output: String,
+    },
 }
 
 #[derive(Serialize, Clone, Debug)]

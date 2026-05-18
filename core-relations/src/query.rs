@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::{
     BaseValueId, CounterId, ExternalFunctionId, PoolSet,
     action::{Instr, QueryEntry, WriteVal},
-    common::HashMap,
+    common::{HashMap, Value},
     free_join::{
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
         Variable,
@@ -160,7 +160,7 @@ impl<'outer> RuleSetBuilder<'outer> {
     ) -> Option<()> {
         for (atom_id, constraint) in extra_constraints {
             let atom_info = atoms.get(*atom_id).expect("atom must exist in plan");
-            let table = atom_info.table;
+            let table = atom_info.table_id();
             headers.push(self.reprocess_constraints(
                 table,
                 *atom_id,
@@ -181,7 +181,7 @@ impl<'outer> RuleSetBuilder<'outer> {
         } in existing
         {
             let atom_info = atoms.get(*atom).expect("atom must exist in plan");
-            let table = atom_info.table;
+            let table = atom_info.table_id();
             headers.push(self.reprocess_constraints(table, *atom, constraints)?);
         }
         Some(())
@@ -399,9 +399,10 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         cs.iter().try_fold((), |_, c| check_constraint(c))?;
         let processed = self.rsb.db.process_constraints(table_id, &cs);
         let mut atom = Atom {
-            table: table_id,
+            kind: AtomKind::Table(table_id),
             var_columns: Default::default(),
             constraints: processed,
+            prim_constants: Default::default(),
         };
         let next_atom = AtomId::from_usize(self.query.atoms.n_ids());
         let mut subatoms = HashMap::<Variable, SubAtom>::default();
@@ -453,6 +454,89 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         self.query.fun_deps.add_dependency(antecedent, consequent);
 
         Ok(self.query.atoms.push(atom))
+    }
+
+    /// Add a primitive function atom to the query.
+    ///
+    /// Primitives behave like relations with a hard functional dependency:
+    /// once all `inputs` are bound, the planner schedules the primitive call
+    /// to bind (or check) `output`. Primitives cannot be used as cover atoms
+    /// — they can only be evaluated, never enumerated.
+    pub fn add_prim_atom(
+        &mut self,
+        func: ExternalFunctionId,
+        inputs: &[QueryEntry],
+        output: QueryEntry,
+    ) -> AtomId {
+        let n_inputs = inputs.len();
+        let mut atom = Atom {
+            kind: AtomKind::Primitive { func, n_inputs },
+            var_columns: Default::default(),
+            constraints: ProcessedConstraints::dummy(),
+            prim_constants: Default::default(),
+        };
+
+        let next_atom = AtomId::from_usize(self.query.atoms.n_ids());
+        let mut subatoms = HashMap::<Variable, SubAtom>::default();
+
+        // Helper closure for registering one column.
+        let register = |atom: &mut Atom,
+                        subatoms: &mut HashMap<Variable, SubAtom>,
+                        i: usize,
+                        qe: &QueryEntry| {
+            let col = ColumnId::from_usize(i);
+            match qe {
+                QueryEntry::Var(v) if *v != Variable::placeholder() => {
+                    if let Some(_prev) = atom.var_columns.insert(*v, col) {
+                        // Same variable referenced twice in the same primitive
+                        // atom — record nothing extra; the planner treats
+                        // these as a single variable. For inputs this is fine;
+                        // for output collisions we keep the first column.
+                    }
+                    subatoms
+                        .entry(*v)
+                        .or_insert_with(|| SubAtom::new(next_atom))
+                        .vars
+                        .push(col);
+                }
+                QueryEntry::Var(_) => {} // placeholder
+                QueryEntry::Const(c) => {
+                    atom.prim_constants.push((col, *c));
+                }
+            }
+        };
+
+        for (i, qe) in inputs.iter().enumerate() {
+            register(&mut atom, &mut subatoms, i, qe);
+        }
+        register(&mut atom, &mut subatoms, n_inputs, &output);
+
+        for (var, subatom) in subatoms {
+            self.query
+                .var_info
+                .get_mut(var)
+                .expect("all variables must be bound in current query")
+                .occurrences
+                .push(subatom);
+        }
+
+        // Hard functional dependency: inputs -> output.
+        let antecedent: Vec<_> = inputs
+            .iter()
+            .filter_map(|qe| match qe {
+                QueryEntry::Var(v) if *v != Variable::placeholder() => Some(*v),
+                _ => None,
+            })
+            .collect();
+        let consequent: Vec<_> = match output {
+            QueryEntry::Var(v) if v != Variable::placeholder() => vec![v],
+            _ => Vec::new(),
+        };
+        if !consequent.is_empty() {
+            self.query.fun_deps.add_dependency(antecedent, consequent);
+        }
+
+        self.query.atoms.push(atom)
     }
 }
 
@@ -529,9 +613,13 @@ impl RuleBuilder<'_, '_> {
                 .query
                 .atoms
                 .iter()
-                .filter_map(|(id, atom)| {
-                    let name = self.table_info(atom.table).name.clone();
-                    name.map(|name| (id, name))
+                .filter_map(|(id, atom)| match atom.kind {
+                    AtomKind::Table(t) => {
+                        self.table_info(t).name.clone().map(|name| (id, name))
+                    }
+                    AtomKind::Primitive { func, .. } => {
+                        Some((id, Arc::from(format!("prim#{}", func.index()))))
+                    }
                 })
                 .collect(),
             vars: var_info
@@ -867,8 +955,22 @@ impl RuleBuilder<'_, '_> {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum AtomKind {
+    /// A normal table atom: enumerable in any column order; FDs are
+    /// keys -> values.
+    Table(TableId),
+    /// A primitive function atom: a hard FD `inputs -> output`. Cannot be
+    /// enumerated; can only be evaluated when all input variables are bound.
+    /// Columns `0..n_inputs` are inputs, column `n_inputs` is the output.
+    Primitive {
+        func: ExternalFunctionId,
+        n_inputs: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct Atom {
-    pub(crate) table: TableId,
+    pub(crate) kind: AtomKind,
     pub(crate) var_columns: VarColumnMap,
     /// These constraints are an initial take at processing "fast" constraints as well as a
     /// potential list of "slow" constraints.
@@ -876,6 +978,9 @@ pub(crate) struct Atom {
     /// Fast constraints get re-computed when queries are executed. In particular, this makes it
     /// possible to cache plans and add new fast constraints to them without re-planning.
     pub(crate) constraints: ProcessedConstraints,
+    /// Constant arguments to primitive atoms, keyed by column. Empty for table
+    /// atoms (which encode constants in `constraints` as `EqConst`).
+    pub(crate) prim_constants: SmallVec<[(ColumnId, Value); 2]>,
 }
 
 impl Atom {
@@ -889,6 +994,29 @@ impl Atom {
 
     pub(crate) fn get_col(&self, var: Variable) -> Option<ColumnId> {
         self.var_columns.get_col(var)
+    }
+
+    pub(crate) fn is_primitive(&self) -> bool {
+        matches!(self.kind, AtomKind::Primitive { .. })
+    }
+
+    /// Returns the underlying table id, or panics if this atom is a primitive.
+    /// Callers should only invoke this on atoms they know to be table atoms
+    /// (e.g., from inside join-stage execution after the planner has filtered
+    /// out primitives).
+    pub(crate) fn table_id(&self) -> TableId {
+        match self.kind {
+            AtomKind::Table(t) => t,
+            AtomKind::Primitive { .. } => {
+                panic!("table_id() called on a primitive atom")
+            }
+        }
+    }
+
+    /// True for the synthetic "covering" atom inserted during tree
+    /// decomposition.
+    pub(crate) fn is_dummy(&self) -> bool {
+        matches!(self.kind, AtomKind::Table(t) if t.is_dummy())
     }
 }
 

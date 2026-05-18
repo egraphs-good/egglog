@@ -105,6 +105,12 @@ pub(crate) struct Query {
     rule_id: RuleId,
     vars: DenseIdMap<VariableId, VarInfo>,
     atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
+    /// Primitive atoms in the query body. Each entry is
+    /// `(func, args_then_output)` — the last `QueryEntry` is the primitive's
+    /// return value, the rest are inputs. These get added to the
+    /// core-relations query eagerly (in `build_cached_plan`) so the planner
+    /// can interleave primitive calls into the join.
+    prim_atoms: Vec<(ExternalFunctionId, Vec<QueryEntry>)>,
     /// The builders for queries in this module essentially wrap the lower-level
     /// builders from the `core_relations` crate. A single egglog rule can turn
     /// into N core-relations rules. The code is structured by constructing a
@@ -145,6 +151,7 @@ impl EGraph {
                 sole_focus: None,
                 vars: Default::default(),
                 atoms: Default::default(),
+                prim_atoms: Default::default(),
                 add_rule: Default::default(),
                 plan_strategy: Default::default(),
             },
@@ -427,6 +434,11 @@ impl RuleBuilder<'_> {
 
     /// Add the given primitive atom to query. As elsewhere in the crate, the last
     /// argument is the "return value" of the function.
+    ///
+    /// Primitive atoms are treated as relations with a hard functional
+    /// dependency: the planner schedules the primitive call as soon as all
+    /// its input variables are bound, so the call can prune inside the join
+    /// loop rather than running once per LHS match.
     pub fn query_prim(
         &mut self,
         func: ExternalFunctionId,
@@ -434,20 +446,11 @@ impl RuleBuilder<'_> {
         // NB: not clear if we still need this now that proof checker is in a separate crate.
         _ret_ty: ColumnTy,
     ) -> Result<()> {
-        let entries = entries.to_vec();
-        self.query.add_rule.push(Box::new(move |inner, rb| {
-            let mut dst_vars = inner.convert_all(&entries);
-            let expected = dst_vars.pop().expect("must specify a return value");
-            let var = rb.call_external(func, &dst_vars)?;
-            match entries.last().unwrap() {
-                QueryEntry::Var(Variable { id, .. }) if !inner.grounded.contains(id) => {
-                    inner.mapping.insert(*id, var.into());
-                    inner.grounded.insert(*id);
-                }
-                _ => rb.assert_eq(var.into(), expected),
-            }
-            Ok(())
-        }));
+        assert!(
+            !entries.is_empty(),
+            "query_prim: entries must contain at least an output slot"
+        );
+        self.query.prim_atoms.push((func, entries.to_vec()));
         Ok(())
     }
 
@@ -745,6 +748,9 @@ impl Query {
         for (table, entries, _schema_info) in &self.atoms {
             atom_mapping.push(add_atom(&mut qb, *table, entries, &[], &mut inner)?);
         }
+        for (func, entries) in &self.prim_atoms {
+            add_prim_atom(&mut qb, *func, entries, &mut inner);
+        }
         let rule_id = self.run_rules_and_build(qb, inner, desc)?;
         let rs = rsb.build();
         let plan = Arc::new(rs.build_cached_plan(rule_id));
@@ -866,4 +872,24 @@ fn add_atom(
     }
     let vars = inner.convert_all(entries);
     Ok(qb.add_atom(table, &vars, constraints)?)
+}
+
+/// Add a primitive atom to the underlying core-relations query.
+///
+/// The last entry is the output; the rest are inputs. Every input/output
+/// variable is marked grounded so subsequent atoms can refer to it.
+fn add_prim_atom(
+    qb: &mut QueryBuilder,
+    func: ExternalFunctionId,
+    entries: &[QueryEntry],
+    inner: &mut Bindings,
+) {
+    for entry in entries {
+        if let QueryEntry::Var(Variable { id, .. }) = entry {
+            inner.grounded.insert(*id);
+        }
+    }
+    let mut dst = inner.convert_all(entries);
+    let output = dst.pop().expect("query_prim must have an output slot");
+    qb.add_prim_atom(func, &dst, output);
 }
