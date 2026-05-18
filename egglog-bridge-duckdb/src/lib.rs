@@ -99,27 +99,39 @@ impl VScalar for FromStringScalar {
         input: &mut DataChunkHandle,
         output: &mut dyn WritableVector,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use egglog_backend_trait::BaseValuePool;
+        use egglog_backend_trait::{BaseValuePool, Value};
         use egglog_numeric_id::NumericId;
         use num::BigInt;
+        use std::any::TypeId;
         use std::str::FromStr;
+
+        // Strings on duck are stored as interned `Boxed<String>`
+        // handles in BIGINT columns (matches bridge encoding). So
+        // this UDF's input is a BIGINT handle, not a raw VARCHAR.
+        // Unwrap the handle to get the string, then parse as BigInt.
+        let string_ty = state
+            .pool
+            .get_ty_by_type_id(TypeId::of::<egglog_core_relations::Boxed<String>>());
 
         let n = input.len();
         let in_vec = input.flat_vector(0);
-        let in_slice = in_vec.as_slice_with_len::<duckdb_string_t>(n);
+        let in_slice = in_vec.as_slice_with_len::<i64>(n);
 
-        // Two-pass to avoid overlapping &mut on the output vector
-        // (set_null and as_mut_slice both want &mut). First parse +
-        // intern into `Vec<Option<i64>>`, then write the slice, then
-        // mark NULLs.
         let mut results: Vec<Option<i64>> = Vec::with_capacity(n);
         for i in 0..n {
-            let s = DuckString::new(&mut { in_slice[i] }).as_str().to_string();
+            let handle = Value::new(in_slice[i] as u32);
+            let boxed = state.pool.unwrap_dyn(string_ty, handle);
+            let s_boxed: &egglog_core_relations::Boxed<String> =
+                boxed.downcast_ref().ok_or_else(
+                    || -> Box<dyn std::error::Error> {
+                        "FromStringScalar: handle did not refer to a Boxed<String>".into()
+                    },
+                )?;
             // Mirror the bridge's `-?>` semantics: parse failure
             // means the rule firing should not produce a value.
             // Encode as NULL so downstream actions/filters drop
             // rows that resolve to NULL.
-            results.push(BigInt::from_str(&s).ok().map(|bi| {
+            results.push(BigInt::from_str(s_boxed.0.as_str()).ok().map(|bi| {
                 let z = egglog_core_relations::Boxed::new(bi);
                 let val = state.pool.intern_dyn(state.bigint_ty, Box::new(z));
                 val.rep() as i64
@@ -143,7 +155,7 @@ impl VScalar for FromStringScalar {
 
     fn signatures() -> Vec<ScalarFunctionSignature> {
         vec![ScalarFunctionSignature::exact(
-            vec![LogicalTypeHandle::from(LogicalTypeId::Varchar)],
+            vec![LogicalTypeHandle::from(LogicalTypeId::Bigint)],
             LogicalTypeHandle::from(LogicalTypeId::Bigint),
         )]
     }
@@ -1729,14 +1741,28 @@ impl EGraph {
             None
         };
 
-        // Helper: extract a string literal arg.
-        fn as_str(t: &Term) -> Option<&str> {
-            if let Term::Lit(Literal::Str(s)) = t {
-                Some(s)
+        // Helper: extract a string from an interned-handle arg.
+        // Strings live in the base-value pool now (matches bridge
+        // encoding); the arg's `Literal::I64` is the handle.
+        let string_ty = if pool_dyn.has_ty(TypeId::of::<egglog_core_relations::Boxed<String>>())
+        {
+            Some(pool_dyn.get_ty_by_type_id(
+                TypeId::of::<egglog_core_relations::Boxed<String>>(),
+            ))
+        } else {
+            None
+        };
+        let as_str = |t: &Term| -> Option<String> {
+            if let Term::Lit(Literal::I64(handle)) = t {
+                let ty = string_ty?;
+                let val = Value::new(*handle as u32);
+                let boxed = pool_dyn.unwrap_dyn(ty, val);
+                let s: &egglog_core_relations::Boxed<String> = boxed.downcast_ref()?;
+                Some(s.0.clone())
             } else {
                 None
             }
-        }
+        };
         // Helper: extract an i64 literal arg.
         fn as_i64(t: &Term) -> Option<i64> {
             if let Term::Lit(Literal::I64(i)) = t {
@@ -1770,7 +1796,7 @@ impl EGraph {
         match name {
             "from-string" => {
                 let s = as_str(args.first()?)?;
-                let bi = BigInt::from_str(s).ok()?;
+                let bi = BigInt::from_str(&s).ok()?;
                 Some(intern_z(bi))
             }
             "bigrat" => {

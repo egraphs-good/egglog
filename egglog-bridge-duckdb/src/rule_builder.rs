@@ -111,10 +111,16 @@ fn decode_base_const(
         && ty == pool_dyn
             .get_ty_by_type_id(TypeId::of::<egglog_core_relations::Boxed<String>>())
     {
-        let v = egglog_backend_trait::pool_unwrap::<egglog_core_relations::Boxed<String>>(
-            pool_dyn, val,
-        );
-        return Ok(Term::Lit(Literal::Str((*v).clone())));
+        // Match the bridge's uniform encoding: strings live in the
+        // base-value pool and tables store the interned `Value`
+        // handle (i64), not the raw VARCHAR. The frontend already
+        // interned this string when building the QueryEntry::Const
+        // (see `literal_to_query_entry` in egglog/lib.rs), so the
+        // `Value` we got is the handle — just emit it as `I64`.
+        // SQL `=`/`!=` on handles is correct for string equality
+        // (interning is stable, so same string ⟺ same handle).
+        use egglog_numeric_id::NumericId;
+        return Ok(Term::Lit(Literal::I64(val.rep() as i64)));
     }
     // BigInt/BigRat etc. fall through to an error path the caller
     // can route into deferred_err.

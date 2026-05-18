@@ -191,16 +191,27 @@ fn trait_col_ty_to_duck(ty: ColumnTy, pool: &dyn BaseValuePool) -> DuckColumnTy 
             {
                 return DuckColumnTy::F64;
             }
-            type SBoxed = egglog_core_relations::Boxed<String>;
-            if pool.has_ty(TypeId::of::<SBoxed>())
-                && bv == pool.get_ty_by_type_id(TypeId::of::<SBoxed>())
-            {
-                return DuckColumnTy::Str;
-            }
-            // Unit and any other registered base types: store as i64.
-            // This includes BigInt / BigRat / Rational64 which the
-            // bridge interns; their `Value` is an intern-table index
-            // that fits in i64.
+            // Strings used to map to `DuckColumnTy::Str` (VARCHAR),
+            // but that broke bridge-API parity: the trait surface
+            // (`for_each_while`, etc.) returns `Value` handles, and
+            // `duck_value_to_trait_value` had no way to round-trip
+            // a VARCHAR back to a `Value` without re-interning
+            // against the pool. The bridge stores strings as
+            // interned handles in BIGINT columns; we now match.
+            //
+            // SQL semantics: equality / inequality on the BIGINT
+            // handle is equivalent to equality on the original
+            // string because interning is stable. Ordering ops on
+            // handles aren't meaningful, but egglog doesn't expose
+            // `<` / `>` on strings either, so that's a non-issue.
+            // String-producing primitives (`to-string`, `string-
+            // concat`, `replace`) need UDFs that intern their
+            // output — see compile.rs's prim_sql.
+            //
+            // Unit and any other registered base types: store as
+            // i64. This includes BigInt / BigRat / Rational64
+            // which the bridge interns; their `Value` is an
+            // intern-table index that fits in i64.
             DuckColumnTy::I64
         }
     }

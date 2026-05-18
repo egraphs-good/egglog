@@ -1386,22 +1386,24 @@ fn compile_materialized_action(
             Ok("SELECT 1 WHERE FALSE".to_string())
         }
         Action::LetCtor { var, name, args } => {
-            // The fresh ID is already in the materialized temp
-            // table's `var` column (via `nextval`). For
-            // user-level constructors a matching `Insert @<name>View`
-            // emits the canonical row, so the raw `<name>` table goes
-            // unwritten. But term-encoding's helper constructors
-            // (`@to_delete_<X>`, `@to_subsume_<X>`, `<mergecleanup-N>`)
-            // don't have an accompanying `@<name>View` — they ARE
-            // the data table — so without an explicit insert here the
-            // helper row never reaches the @delete_rule / @merge_cleanup
-            // body, and the program silently misses the side effect.
-            // Detect "no view exists" and insert (args…, fresh_id, ts)
-            // into the constructor table directly.
-            let view = format!("@{name}View");
-            if functions.contains_key(&view) {
-                return Ok("SELECT 1 WHERE FALSE".to_string());
-            }
+            // Insert the (args…, fresh_id, ts) row into the
+            // constructor's own table so it mirrors the bridge
+            // backend's `TableAction::lookup` with `FreshId`
+            // default. The fresh ID is already in the
+            // materialized temp table's `var` column (via
+            // `nextval`/hash-cons COALESCE); just project it
+            // through.
+            //
+            // Previously this branch skipped the INSERT whenever
+            // `@<name>View` existed (relying on the accompanying
+            // `Insert @<name>View` to emit the canonical row).
+            // That made the raw `<name>` table go unwritten, which
+            // broke bridge-compatible callers that walk the
+            // constructor table by name (`prove_exists`, the
+            // extractor, etc.). Now that strings are stored as
+            // interned `Value` handles (BIGINT) — matching the
+            // bridge — `for_each_while` round-trips correctly, so
+            // it's safe to populate both tables.
             let info = functions
                 .get(name)
                 .ok_or_else(|| anyhow!("rule {rule_name}: unknown LetCtor target {name}"))?;
