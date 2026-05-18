@@ -995,3 +995,51 @@ fn eqsat_basic_term_encoding_roundtrip() {
         .parse_and_run_program(None, &text_thrice)
         .expect("final program should execute successfully");
 }
+
+#[test]
+fn term_encoding_custom_merge_rebuild_interleaves_with_user_rules() {
+    let program = r#"
+        (sort Expr)
+        (constructor X () Expr)
+        (sort Bound)
+        (constructor IntB (i64) Bound)
+        (constructor bound-max (Bound Bound) Bound)
+        (function lo-bound (Expr) Bound :merge (bound-max old new))
+        (ruleset init)
+        (ruleset interval-analysis)
+        (rule ()
+              ((set (lo-bound (X)) (IntB 1))
+               (set (lo-bound (X)) (IntB 2))
+               (set (lo-bound (X)) (IntB 3)))
+              :ruleset init)
+        (rule ((= out (bound-max (IntB x) (IntB y))))
+              ((union out (IntB (max x y))))
+              :ruleset interval-analysis)
+        (run-schedule (run init))
+        (run-schedule (repeat 2 interval-analysis))
+        (check (= (lo-bound (X)) (IntB 3)))
+    "#;
+
+    EGraph::new_with_term_encoding()
+        .parse_and_run_program(None, program)
+        .expect("custom merge rebuild should converge under term encoding");
+}
+
+#[test]
+fn term_encoding_custom_merge_repeatedly_folds_conflicts() {
+    let program = r#"
+        (function total () i64 :merge (+ old new))
+        (ruleset init)
+        (rule ()
+              ((set (total) 1)
+               (set (total) 2)
+               (set (total) 3))
+              :ruleset init)
+        (run init 1)
+        (check (= (total) 6))
+    "#;
+
+    EGraph::new_with_term_encoding()
+        .parse_and_run_program(None, program)
+        .expect("custom merge rebuild should repeatedly fold conflicts");
+}
