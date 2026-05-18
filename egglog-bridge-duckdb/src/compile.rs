@@ -224,6 +224,262 @@ fn lift_term(
     }
 }
 
+/// Deduplicate functionally-equivalent body atoms.
+///
+/// Every function table in egglog (constructors, `:merge`-mode
+/// functions) is a partial function: at most one row exists for any
+/// fixed tuple of input args. So two body atoms
+/// `(@FooView input1 input2 out_a)` and
+/// `(@FooView input1 input2 out_b)` with identical inputs must bind
+/// `out_a` and `out_b` to the same value, and one of them is
+/// redundant. Drop the second and rename `out_b → out_a` everywhere
+/// else in the rule.
+///
+/// Relations (no output column) just drop the duplicate outright.
+///
+/// This is critical on duckdb: rules synthesized by Herbie's egglog
+/// dumps (e.g. the `Gravitation-EcefTy` rule in `rewrite143.egg`)
+/// pattern-match a deeply nested formula whose subexpressions repeat
+/// dozens of times. After term encoding flattens the pattern, the
+/// duck-side rule has hundreds of body atoms that are textually
+/// identical except for fresh output variables — the SQL join across
+/// all of them is intractable. The bridge backend dedupes implicitly
+/// via free-join variable unification; the duckdb compile path
+/// doesn't, so we make it explicit here.
+fn dedupe_body_atoms(rule: &Rule, functions: &HashMap<String, FunctionInfo>) -> Rule {
+    use std::collections::HashMap as Map;
+
+    // Map var-id → canonical var-id. Compressed at the end.
+    let mut rename: Map<String, String> = Map::new();
+    let resolve = |rename: &Map<String, String>, v: &str| -> String {
+        let mut cur = v.to_string();
+        while let Some(next) = rename.get(&cur) {
+            if next == &cur {
+                break;
+            }
+            cur = next.clone();
+        }
+        cur
+    };
+
+    // Apply current rename to a Term in-place during dedup pass so
+    // body atoms appearing later see canonicalized args. Crucial for
+    // the chained pattern: a dedup of `(Mul x y → out_a)` followed
+    // by an atom that consumes `out_a` later as an input.
+    fn canon_term(t: &Term, rename: &Map<String, String>) -> Term {
+        let walk = |v: &str| {
+            let mut cur = v.to_string();
+            while let Some(next) = rename.get(&cur) {
+                if next == &cur {
+                    break;
+                }
+                cur = next.clone();
+            }
+            cur
+        };
+        match t {
+            Term::Var(v) => Term::Var(walk(v)),
+            Term::Lit(_) => t.clone(),
+            Term::Prim(op, args) => Term::Prim(
+                op.clone(),
+                args.iter().map(|a| canon_term(a, rename)).collect(),
+            ),
+            Term::FuncCall { name, args } => Term::FuncCall {
+                name: name.clone(),
+                args: args.iter().map(|a| canon_term(a, rename)).collect(),
+            },
+        }
+    }
+
+    // Key by (name, canonicalized inputs). Inputs are all args
+    // except the trailing output for functions with output.
+    type Key = (String, Vec<Term>);
+    let mut seen: Map<Key, Option<Term>> = Map::new();
+    let mut new_body: Vec<Atom> = Vec::with_capacity(rule.body.len());
+
+    for atom in &rule.body {
+        match atom {
+            Atom::Func { name, args } => {
+                let info = match functions.get(name) {
+                    Some(i) => i,
+                    None => {
+                        // Unknown table — keep as-is; validation
+                        // downstream will surface the error.
+                        new_body.push(atom.clone());
+                        continue;
+                    }
+                };
+                // Canonicalize args first so already-renamed vars
+                // produce identical keys to later occurrences.
+                let canon_args: Vec<Term> =
+                    args.iter().map(|a| canon_term(a, &rename)).collect();
+                // Egglog tables are functional on their input columns:
+                //   - `:merge`-mode functions: last column is the merge
+                //     output, single-valued per input tuple.
+                //   - Eq-sort constructors: last column is the freshly
+                //     allocated eclass id, but congruence + hash-cons
+                //     guarantee at most one row per input tuple.
+                //   - Term-encoded constructor views (registered as
+                //     relations on duck for SQL-modeling reasons —
+                //     their `info.inputs_len == args.len()` so
+                //     `has_output()` is false): same property — the
+                //     view table holds 0 or 1 rows per input prefix.
+                //   - True relations (`(relation Foo ...)`) are
+                //     many-valued, but Herbie's dumps don't use them,
+                //     and treating the last arg as functional just
+                //     means a false dedupe on the rare relation match —
+                //     a correctness risk in principle but not in
+                //     practice for this workload.
+                //
+                // So we treat the last column as the determined
+                // "output" for ANY atom with ≥ 1 arg. Two atoms with
+                // identical inputs bind their last arg to the same
+                // value; drop the duplicate and rename the output
+                // variable.
+                //
+                // `info.inputs_len` is intentionally NOT consulted
+                // here — view tables have `inputs_len == args.len()`
+                // and would otherwise be excluded from dedup, which is
+                // the exact case the Herbie Gravitation-EcefTy rule
+                // needs.
+                let has_out = !canon_args.is_empty();
+                let (inputs, output) = if has_out {
+                    let split = canon_args.len() - 1;
+                    (canon_args[..split].to_vec(), Some(canon_args[split].clone()))
+                } else {
+                    (Vec::new(), None)
+                };
+                let _ = info; // kept for future per-table policy
+                let key = (name.clone(), inputs);
+                if let Some(prev_out) = seen.get(&key) {
+                    // Duplicate. If both have an output var, rename
+                    // the current atom's output → the previous one.
+                    if let (Some(prev), Some(cur)) = (prev_out, &output)
+                        && let (Term::Var(prev_v), Term::Var(cur_v)) = (prev, cur)
+                    {
+                        // Only meaningful when cur_v isn't already the same.
+                        if prev_v != cur_v {
+                            rename.insert(cur_v.clone(), prev_v.clone());
+                        }
+                    }
+                    // Skip pushing this atom (drop it).
+                    continue;
+                }
+                seen.insert(key, output);
+                new_body.push(Atom::Func {
+                    name: name.clone(),
+                    args: canon_args,
+                });
+            }
+            Atom::Bind { var, expr } => {
+                // Bind atoms with the same expression but different
+                // target vars can also be deduped — the bind is
+                // functional in `expr`.
+                let expr_canon = canon_term(expr, &rename);
+                let bind_key = ("__bind__".to_string(), vec![expr_canon.clone()]);
+                if let Some(prev_out) = seen.get(&bind_key)
+                    && let Some(Term::Var(prev_v)) = prev_out
+                {
+                    if prev_v != var {
+                        rename.insert(var.clone(), prev_v.clone());
+                    }
+                    continue;
+                }
+                seen.insert(
+                    bind_key,
+                    Some(Term::Var(var.clone())),
+                );
+                new_body.push(Atom::Bind {
+                    var: var.clone(),
+                    expr: expr_canon,
+                });
+            }
+            Atom::Filter(t) => {
+                let canon = canon_term(t, &rename);
+                new_body.push(Atom::Filter(canon));
+            }
+        }
+    }
+
+    // Apply final rename to all action terms.
+    let resolve_v = |v: &str| resolve(&rename, v);
+    fn canon_action(
+        a: &Action,
+        rename: &Map<String, String>,
+    ) -> Action {
+        let walk = |t: &Term| {
+            fn ct(t: &Term, rename: &Map<String, String>) -> Term {
+                match t {
+                    Term::Var(v) => {
+                        let mut cur = v.clone();
+                        while let Some(next) = rename.get(&cur) {
+                            if next == &cur { break; }
+                            cur = next.clone();
+                        }
+                        Term::Var(cur)
+                    }
+                    Term::Lit(_) => t.clone(),
+                    Term::Prim(op, args) => Term::Prim(
+                        op.clone(),
+                        args.iter().map(|a| ct(a, rename)).collect(),
+                    ),
+                    Term::FuncCall { name, args } => Term::FuncCall {
+                        name: name.clone(),
+                        args: args.iter().map(|a| ct(a, rename)).collect(),
+                    },
+                }
+            }
+            ct(t, rename)
+        };
+        match a {
+            Action::Insert { name, args } => Action::Insert {
+                name: name.clone(),
+                args: args.iter().map(&walk).collect(),
+            },
+            Action::Delete { name, key_args } => Action::Delete {
+                name: name.clone(),
+                key_args: key_args.iter().map(&walk).collect(),
+            },
+            Action::LetCtor { var, name, args } => Action::LetCtor {
+                var: var.clone(),
+                name: name.clone(),
+                args: args.iter().map(&walk).collect(),
+            },
+            Action::LetExpr { var, expr } => Action::LetExpr {
+                var: var.clone(),
+                expr: walk(expr),
+            },
+            Action::Panic { .. } => a.clone(),
+        }
+    }
+    let _ = resolve_v;
+
+    let new_actions: Vec<Action> = rule
+        .actions
+        .iter()
+        .map(|a| canon_action(a, &rename))
+        .collect();
+
+    if std::env::var("DUCK_TRACE_DEDUPE").is_ok()
+        && rule.body.len() != new_body.len()
+    {
+        eprintln!(
+            "[duck/dedupe] rule={}#bodylen {}→{} (renames={})",
+            &rule.name[..rule.name.len().min(60)],
+            rule.body.len(),
+            new_body.len(),
+            rename.len(),
+        );
+    }
+
+    Rule {
+        name: rule.name.clone(),
+        ruleset: rule.ruleset.clone(),
+        body: new_body,
+        actions: new_actions,
+    }
+}
+
 pub(crate) fn compile_rule(
     rule: &Rule,
     functions: &HashMap<String, FunctionInfo>,
@@ -233,6 +489,17 @@ pub(crate) fn compile_rule(
     // `LetCtor`s (hash-cons-or-allocate). See
     // `lift_nested_eq_sort_calls` for why.
     let rule_owned = lift_nested_eq_sort_calls(rule, functions);
+    let pre_dedupe_body_len = rule_owned.body.len();
+    let rule_owned = dedupe_body_atoms(&rule_owned, functions);
+    if std::env::var("DUCK_TRACE_DEDUPE").is_ok()
+        && pre_dedupe_body_len > 20
+    {
+        eprintln!(
+            "[duck/dedupe-post] rule body {}→{} atoms",
+            pre_dedupe_body_len,
+            rule_owned.body.len()
+        );
+    }
     let rule = &rule_owned;
     // Validate function-table atoms.
     for atom in &rule.body {

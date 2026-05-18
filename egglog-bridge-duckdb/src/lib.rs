@@ -1057,12 +1057,54 @@ pub enum MergeMode {
 }
 
 /// A literal value usable in seed inserts and `check`/`lookup`.
+///
+/// `Hash` / `Eq` / `PartialEq` are derived so `compile::dedupe_body_atoms`
+/// can key on `(name, input args)` to collapse duplicate body atoms.
+/// `f64` doesn't implement `Eq`/`Hash` natively; we wrap it through
+/// `to_bits()` in the impls below so the trait bounds are satisfied
+/// for the dedup pass (NaN-equality semantics don't matter here:
+/// rule bodies never contain NaN literals).
 #[derive(Debug, Clone)]
 pub enum Literal {
     I64(i64),
     Bool(bool),
     F64(f64),
     Str(String),
+}
+
+impl PartialEq for Literal {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Literal::I64(a), Literal::I64(b)) => a == b,
+            (Literal::Bool(a), Literal::Bool(b)) => a == b,
+            (Literal::F64(a), Literal::F64(b)) => a.to_bits() == b.to_bits(),
+            (Literal::Str(a), Literal::Str(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+impl Eq for Literal {}
+impl std::hash::Hash for Literal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Literal::I64(v) => {
+                0u8.hash(state);
+                v.hash(state);
+            }
+            Literal::Bool(v) => {
+                1u8.hash(state);
+                v.hash(state);
+            }
+            Literal::F64(v) => {
+                2u8.hash(state);
+                v.to_bits().hash(state);
+            }
+            Literal::Str(v) => {
+                3u8.hash(state);
+                v.hash(state);
+            }
+        }
+    }
 }
 
 impl ToSql for Literal {
@@ -1077,7 +1119,7 @@ impl ToSql for Literal {
 }
 
 /// A term in a rule body or action.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
     Var(String),
     Lit(Literal),
