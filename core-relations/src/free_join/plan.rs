@@ -709,13 +709,28 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 /// smallest-overlap child). Every other reachable bag — siblings *and* their
 /// entire sub-trees — gets absorbed into the current chain node.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
-    let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
-    let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
-    let mut visited = vec![false; bags_opt.len()];
     // Stack entries: (bag_id, parent). `parent` is None for chain nodes (the bag is
     // pushed to `bags_topo` as a new standalone entry) and Some(idx) for nodes being
     // absorbed into `bags_topo[idx]`.
     let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
+
+    let mut all_children_list: Vec<Vec<(usize, usize)>> = vec![vec![]; bags.len()];
+    for i in 0..bags.len() {
+        let parent = bags
+            .iter()
+            .enumerate()
+            .skip(i + 1)
+            .map(|(j, b)| (j, b.common_vars_with(&bags[i]).count()))
+            .filter(|(_, count)| *count > 0)
+            .max_by_key(|(j, count)| (*count, -(*j as isize)));
+        if let Some((j, count)) = parent {
+            all_children_list[j].push((i, count));
+        }
+    }
+
+    let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
+    let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
+    let mut visited = vec![false; bags_opt.len()];
 
     // Starting from the last, since early bags are more likely to be leaves and we don't
     // want a leafy bag to be a root.
@@ -737,19 +752,13 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 this = bags_topo.len();
             }
 
-            let mut all_children: Vec<_> = bags_opt
-                .iter()
-                .enumerate()
-                .filter_map(|(i, b)| Some((i, b.as_ref()?)))
-                .map(|(i, b)| (i, b.common_vars_with(&bag).count()))
-                .filter(|(i, count)| *count > 0 && !visited[*i])
-                .collect();
+            let all_children = &mut all_children_list[bag_id];
 
             if parent.is_some() {
                 // This bag is being absorbed into `bags_topo[this]`. To keep the
                 // result a chain, every descendant of this bag is also absorbed —
                 // none of them get to spawn a new chain node.
-                for &(i, _) in all_children.iter() {
+                for &(i, _) in all_children.iter().rev() {
                     visited[i] = true;
                     stack.push((i, Some(this)));
                 }
@@ -905,6 +914,9 @@ fn plan_single_bag(
                     .vars
                     .retain(|var, _vinfo| !prev_block.1.msg_vars.contains(&var));
             } else {
+                panic!(
+                    "Multiple blocks contribute to the same bag, which is not supported by the current planning algorithm"
+                );
                 epilogue.push(JoinStage::FusedIntersectMat {
                     cover: MatId::from_usize(i),
                     mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),
