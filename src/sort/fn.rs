@@ -207,10 +207,6 @@ impl Sort for FunctionSort {
             },
             None,
         );
-        // Higher-order primitive: registers four `ExternalFunctionId`s
-        // (one per `Context` variant). Each wrapper stamps its specific
-        // ctx onto the `PureState`, and `Core::apply_function` reads it
-        // back to choose pure-side vs action-side dispatch.
         eg.add_pure_primitive(
             Apply {
                 name: "unstable-app".into(),
