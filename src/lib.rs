@@ -1282,8 +1282,13 @@ impl EGraph {
     }
 
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
-        let unit_id = self.bridge().base_values().get_ty::<()>();
-        let unit_val = self.bridge().base_values().get(());
+        // Use trait-level pool helpers so this path doesn't require a
+        // bridge backend — `multi-extract` reaches here on duckdb
+        // via `MultiExtract::update → eval_expr`.
+        let unit_id =
+            egglog_backend_trait::pool_get_ty::<()>(self.backend.base_value_pool());
+        let unit_val =
+            egglog_backend_trait::pool_get::<()>(self.backend.base_value_pool(), ());
 
         let result: egglog_bridge::SideChannel<Value> = Default::default();
         let result_ref = result.clone();
