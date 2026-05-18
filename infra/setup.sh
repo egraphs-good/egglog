@@ -10,4 +10,4 @@ rustup update
 cargo install rustfilt
 
 mkdir -p nightly/tmp
-git clone https://github.com/ajpal/poach-benchmarks.git nightly/tmp/poach-benchmarks
+git clone --depth 1 https://github.com/ajpal/poach-benchmarks.git nightly/tmp/poach-benchmarks
