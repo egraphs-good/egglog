@@ -712,7 +712,8 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
     // depth maximizing the sum of common variables on the path,
     // so that it prefers long paths with many overlapping variables between consective bags.
-    let mut depth = vec![0; bags.len()];
+    // let mut depth = vec![0.0f64; bags.len()];
+    let mut depth = vec![bags.len(); bags.len()];
     for i in 0..bags.len() {
         let parent = bags
             .iter()
@@ -722,7 +723,9 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
             .filter(|(_, count)| *count > 0)
             .max_by_key(|(j, count)| (*count, -(*j as isize)));
         if let Some((j, count)) = parent {
-            depth[j] = depth[j].max(depth[i] + count);
+            // depth[j] = depth[j].max(depth[i] + 1.0/count as f64);
+            // depth[j] = depth[j].max(depth[i] + (-(count as f64)).exp());
+            depth[j] = depth[j].min(depth[i]).min(count);
             all_children_list[j].push(i);
         }
     }
@@ -770,7 +773,7 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 // chain; the rest (and all their descendants, via the branch above)
                 // are absorbed into this chain node.
                 // all_children.sort_unstable_by_key(|(_, count)| *count);
-                all_children.sort_unstable_by_key(|b| -(depth[*b] as isize));
+                all_children.sort_unstable_by_key(|b| depth[*b]);
                 if !all_children.is_empty() {
                     for &i in all_children[1..].iter().rev() {
                         visited[i] = true;
