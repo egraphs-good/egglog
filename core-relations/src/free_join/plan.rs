@@ -759,13 +759,12 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 // are absorbed into this chain node.
                 all_children.sort_unstable_by_key(|(_, count)| *count);
                 if !all_children.is_empty() {
-                    visited[all_children[0].0] = true;
-                    stack.push((all_children[0].0, None));
-
-                    for &(i, _) in all_children[1..].iter() {
+                    for &(i, _) in all_children[1..].iter().rev() {
                         visited[i] = true;
                         stack.push((i, Some(this)));
                     }
+                    visited[all_children[0].0] = true;
+                    stack.push((all_children[0].0, None));
                 }
             }
 
