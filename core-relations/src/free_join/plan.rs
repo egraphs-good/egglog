@@ -951,6 +951,13 @@ fn plan_single_bag(
     let (header, mut instrs) = plan_stages(&stripped_bag, strat);
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
+    // `plan_gj` decides `is_leaf_scan` based only on the stages it produces, so it cannot
+    // see the prologue/epilogue stages we just spliced in. A leaf scan factorizes its
+    // bound variables into `binding_info.binding_sets` rather than `binding_info.bindings`,
+    // which breaks any later `FusedIntersectMat::Value`/`Lookup` that reads those variables
+    // directly from `bindings`. Downgrade bad leaf scans now that the full instruction
+    // sequence is known.
+    revert_bad_leaf_scans(&mut instrs);
 
     let stages = JoinStages {
         instrs: Arc::new(instrs),
@@ -1043,6 +1050,68 @@ fn fuse_last_stage(
     last_block.instrs = Arc::new(instrs);
 
     (blocks, last_block)
+}
+
+/// Downgrade any `FusedIntersect { is_leaf_scan: true, .. }` whose factorized bindings
+/// would be observed as missing by a later stage.
+///
+/// `is_leaf_scan` instructs the executor to factorize the stage's bindings into
+/// `BindingInfo::binding_sets` instead of materializing them into `BindingInfo::bindings`.
+/// That is OK only if no subsequent stage in the same `JoinStages` reads any of those
+/// variables as a scalar value from `bindings`. The only stages that do so are
+/// `FusedIntersectMat::Value` / `Lookup`, whose `index_vars` are looked up directly.
+///
+/// `plan_gj` performs its own (cover-atom-based) check, but that runs before prologue /
+/// epilogue stages are spliced into the instruction list, so it cannot detect
+/// `FusedIntersectMat` lookups that come from the epilogue. This pass closes that gap.
+///
+/// # Example
+///
+/// Suppose `plan_gj` produces the following two stages for a bag, where stage 0 is
+/// the last `FusedIntersect` and binds variable `y` from atom `A` via a leaf scan
+/// (no atom later in `plan_gj`'s output reuses `A`):
+///
+/// ```text
+///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
+/// ```
+///
+/// `plan_single_bag` then splices an epilogue that looks up an earlier block's
+/// materialization keyed on `y`:
+///
+/// ```text
+///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
+///   stage 1: FusedIntersectMat { mode: Lookup([y]), ... }
+/// ```
+///
+/// With `is_leaf_scan: true`, stage 0 puts `y` into `binding_sets` instead of
+/// `bindings`. Stage 1 then tries `binding_info.bindings[y]` and panics on a missing
+/// entry. This pass detects the overlap (`y ∈ bound_vars ∩ Lookup`'s index_vars) and
+/// flips stage 0's `is_leaf_scan` back to `false`.
+fn revert_bad_leaf_scans(stages: &mut [JoinStage]) {
+    for i in 0..stages.len() {
+        let bound_vars: SmallVec<[Variable; 4]> = match &stages[i] {
+            JoinStage::FusedIntersect {
+                bind,
+                is_leaf_scan: true,
+                ..
+            } => bind.iter().map(|(_, v)| *v).collect(),
+            _ => continue,
+        };
+
+        let needs_scalar = ((i + 1)..stages.len()).any(|j| match &stages[j] {
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Value(vars) | MatScanMode::Lookup(vars),
+                ..
+            } => vars.iter().any(|v| bound_vars.contains(v)),
+            _ => false,
+        });
+
+        if needs_scalar
+            && let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i]
+        {
+            *is_leaf_scan = false;
+        }
+    }
 }
 
 /// Eagerly lift materialization lookups up
