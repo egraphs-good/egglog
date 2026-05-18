@@ -709,12 +709,10 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 /// smallest-overlap child). Every other reachable bag — siblings *and* their
 /// entire sub-trees — gets absorbed into the current chain node.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
-    // Stack entries: (bag_id, parent). `parent` is None for chain nodes (the bag is
-    // pushed to `bags_topo` as a new standalone entry) and Some(idx) for nodes being
-    // absorbed into `bags_topo[idx]`.
-    let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
-
-    let mut all_children_list: Vec<Vec<(usize, usize)>> = vec![vec![]; bags.len()];
+    let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
+    // depth maximizing the sum of common variables on the path,
+    // so that it prefers long paths with many overlapping variables between consective bags.
+    let mut depth = vec![0; bags.len()];
     for i in 0..bags.len() {
         let parent = bags
             .iter()
@@ -724,13 +722,18 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
             .filter(|(_, count)| *count > 0)
             .max_by_key(|(j, count)| (*count, -(*j as isize)));
         if let Some((j, count)) = parent {
-            all_children_list[j].push((i, count));
+            depth[j] = depth[j].max(depth[i] + count);
+            all_children_list[j].push(i);
         }
     }
 
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
+    // Stack entries: (bag_id, parent). `parent` is None for chain nodes (the bag is
+    // pushed to `bags_topo` as a new standalone entry) and Some(idx) for nodes being
+    // absorbed into `bags_topo[idx]`.
+    let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
 
     // Starting from the last, since early bags are more likely to be leaves and we don't
     // want a leafy bag to be a root.
@@ -758,7 +761,7 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 // This bag is being absorbed into `bags_topo[this]`. To keep the
                 // result a chain, every descendant of this bag is also absorbed —
                 // none of them get to spawn a new chain node.
-                for &(i, _) in all_children.iter().rev() {
+                for &i in all_children.iter().rev() {
                     visited[i] = true;
                     stack.push((i, Some(this)));
                 }
@@ -766,14 +769,15 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 // This bag is a chain node. The cheapest-overlap child continues the
                 // chain; the rest (and all their descendants, via the branch above)
                 // are absorbed into this chain node.
-                all_children.sort_unstable_by_key(|(_, count)| *count);
+                // all_children.sort_unstable_by_key(|(_, count)| *count);
+                all_children.sort_unstable_by_key(|b| -(depth[*b] as isize));
                 if !all_children.is_empty() {
-                    for &(i, _) in all_children[1..].iter().rev() {
+                    for &i in all_children[1..].iter().rev() {
                         visited[i] = true;
                         stack.push((i, Some(this)));
                     }
-                    visited[all_children[0].0] = true;
-                    stack.push((all_children[0].0, None));
+                    visited[all_children[0]] = true;
+                    stack.push((all_children[0], None));
                 }
             }
 
@@ -914,9 +918,6 @@ fn plan_single_bag(
                     .vars
                     .retain(|var, _vinfo| !prev_block.1.msg_vars.contains(&var));
             } else {
-                panic!(
-                    "Multiple blocks contribute to the same bag, which is not supported by the current planning algorithm"
-                );
                 epilogue.push(JoinStage::FusedIntersectMat {
                     cover: MatId::from_usize(i),
                     mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),
