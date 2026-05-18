@@ -1106,9 +1106,7 @@ fn revert_bad_leaf_scans(stages: &mut [JoinStage]) {
             _ => false,
         });
 
-        if needs_scalar
-            && let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i]
-        {
+        if needs_scalar && let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] {
             *is_leaf_scan = false;
         }
     }
@@ -1651,9 +1649,9 @@ fn plan_gj(
         {
             let cover_atom = cover.to_index.atom;
             let mut used_later = false;
-            for j in (i + 1)..stages.len() {
+            for later_stage in &stages[i + 1..] {
                 used_later = used_later
-                    || match &stages[j] {
+                    || match later_stage {
                         JoinStage::Intersect { scans, .. } => {
                             scans.iter().any(|scan| scan.atom == cover_atom)
                         }

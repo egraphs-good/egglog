@@ -1740,8 +1740,8 @@ trait ActionBuffer<'state, A: NumericId>: Send {
     type AsLocal<'a>: ActionBuffer<'state, A>
     where
         'state: 'a;
-    
-    /// Expand the binding sets to individual bindings and 
+
+    /// Expand the binding sets to individual bindings and
     /// call push_bindings
     fn push_bindings_factorized(
         &mut self,
@@ -1750,14 +1750,7 @@ trait ActionBuffer<'state, A: NumericId>: Send {
         binding_sets: &BindingSet,
         mut to_exec_state: impl FnMut() -> ExecutionState<'state>,
     ) {
-        expand_binding_sets(
-            self,
-            action,
-            bindings,
-            &binding_sets,
-            0,
-            &mut to_exec_state,
-        );
+        expand_binding_sets(self, action, bindings, binding_sets, 0, &mut to_exec_state);
     }
 
     /// Push the given bindings to be executed for the specified action. If this
