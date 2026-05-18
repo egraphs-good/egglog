@@ -156,13 +156,18 @@ impl Run {
         // same should_fail handling, the same `(print-size)`
         // appendage. It only swaps the executor.
         if self.duckdb {
-            // When `self.proofs` is set in a duckdb run, wire it
-            // into the backend config so the encoder runs in
-            // proof-tracking mode. This exercises the same control
-            // flow proof-mode reference runs do, but on the DuckDB
-            // executor — catches regressions where backend-side
-            // optimizations (inline-congruence, native UF, hash-cons)
-            // skip cases that the proof encoder relies on.
+            // When `self.proofs` or `self.proof_testing` is set in a
+            // duckdb run, wire it into the backend config so the
+            // encoder runs in proof-tracking mode. proof_testing
+            // additionally rewrites every `(check …)` to
+            // `(prove …)` during desugaring, then `prove-exists`
+            // verifies the proof tree. Both proof flavors exercise
+            // the same control flow proof-mode reference runs do,
+            // but on the DuckDB executor — catches regressions
+            // where backend-side optimizations (inline-congruence,
+            // native UF, hash-cons) skip cases that the proof
+            // encoder relies on.
+            //
             // Native UF and proof mode are not yet compatible: the
             // proof encoder declares `uf_function_<sort>` as
             // returning `(Pair sort proof)`, and rebuild rules read
@@ -171,12 +176,25 @@ impl Run {
             // leader as `i64`, which doesn't satisfy the encoder's
             // pair type. Until native UF learns to return Pair
             // values in proof mode, keep them apart in tests.
+            let want_proofs = self.proofs || self.proof_testing;
             let config = DuckBackendConfig {
-                proofs: self.proofs,
+                proofs: want_proofs,
                 native_uf: false,
             };
             let mut egraph = EGraph::with_duckdb_backend(config)
                 .unwrap_or_else(|e| panic!("EGraph::with_duckdb_backend init failed: {e}"));
+            // proof_testing is a desugar-pass flag (read at
+            // `desugar.rs:164` to rewrite `(check ...)` → `(prove
+            // ...)`), and the desugar pass is shared by both
+            // backends. Flipping it here suffices — every `check`
+            // will desugar to a `prove-exists`, and as the program
+            // runs `proof_check_program` auto-populates from each
+            // command's `desugared_before_proofs`
+            // (`lib.rs:2108–2112`), so `prove-exists` has the rule
+            // context it needs when it fires.
+            if self.proof_testing {
+                egraph = egraph.with_proof_testing();
+            }
             egraph.ensure_no_reserved_symbols(false);
             return match egraph.parse_and_run_program(filename, &program) {
                 Ok(msgs) => {
@@ -472,6 +490,20 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             push_trial(Run {
                 duckdb: true,
                 proofs: true,
+                ..run.clone()
+            });
+
+            // duckdb + proof_testing: same files that get the normal
+            // `proof_testing` trial below should also get a duckdb
+            // version. proof_testing rewrites every `(check …)` to
+            // `(prove …)` and verifies the resulting proof tree, so
+            // these trials catch cases where the duckdb encoder
+            // builds malformed @Proof/@Trans/@Merge rows that the
+            // bridge encoder would have surfaced but the duckdb-only
+            // optimizations (inline-congruence, native UF) hide.
+            push_trial(Run {
+                duckdb: true,
+                proof_testing: true,
                 ..run.clone()
             });
         }

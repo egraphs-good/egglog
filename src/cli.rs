@@ -100,12 +100,14 @@ pub fn cli(mut egraph: EGraph) {
         egraph = egraph.with_term_encoding_enabled();
     }
 
-    if args.proofs {
+    if args.proofs && !egraph.are_proofs_enabled() {
         egraph = egraph.with_proofs_enabled();
     }
 
     if args.proof_testing {
-        egraph = egraph.with_proofs_enabled();
+        if !egraph.are_proofs_enabled() {
+            egraph = egraph.with_proofs_enabled();
+        }
         egraph = egraph.with_proof_testing();
     }
 

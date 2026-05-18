@@ -38,7 +38,42 @@ impl ProofInstrumentor<'_> {
             .get(&func.name)
             .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
 
-        let backend_id = function.backend_id;
+        // On the duckdb backend, the original constructor table is
+        // never populated — every `(let fv (Constructor args))` action
+        // emitted by term encoding compiles to a hash-cons
+        // `LEFT JOIN ... COALESCE(..., nextval(...))` against the
+        // VIEW table and an `Action::Insert` into the view; nothing
+        // writes back to the constructor's own table. The bridge
+        // does both (the table-action machinery inserts into the
+        // constructor's table while also lifting into the view).
+        //
+        // For prove_exists, we need ANY row that proves the
+        // constructor has been instantiated. On duckdb that means
+        // querying the view (the function whose `term_constructor`
+        // back-references this constructor). Same trick as
+        // `EGraph::print_size`'s "find the view table for a
+        // constructor" scan (lib.rs:943-948).
+        //
+        // The view's row schema is `[inputs..., eclass_id, proof]`
+        // — one extra trailing proof column compared to the
+        // constructor's `[inputs..., eclass_id]`. So when we read a
+        // value from the view, the eclass id is `vals[len-2]`, not
+        // `vals[len-1]`.
+        let is_duck = self
+            .egraph
+            .backend
+            .as_any()
+            .is::<egglog_bridge_duckdb::EGraph>();
+        let backend_id = if is_duck {
+            self.egraph
+                .functions
+                .values()
+                .find(|f| f.decl.term_constructor.as_deref() == Some(&func.name))
+                .map(|view_fn| view_fn.backend_id)
+                .unwrap_or(function.backend_id)
+        } else {
+            function.backend_id
+        };
         let output_sort = function.schema.output.clone();
 
         // Use the version that ignores unextractable flag since proof extraction
@@ -55,10 +90,19 @@ impl ProofInstrumentor<'_> {
         self.egraph
             .backend
             .for_each_while(backend_id, &mut |row| {
-                let value = *row
+                // Bridge constructor row schema: `[inputs..., id]`.
+                // Duck view row schema: `[inputs..., id, proof]`. Pick
+                // the column that holds the eclass id in each case.
+                let id_idx = if is_duck {
+                    row.vals.len().saturating_sub(2)
+                } else {
+                    row.vals.len().saturating_sub(1)
+                };
+                let value = row
                     .vals
-                    .last()
-                    .expect("constructor rows include their output value");
+                    .get(id_idx)
+                    .copied()
+                    .expect("constructor/view row should include an output value");
                 witness_value = Some(value);
                 false
             });
