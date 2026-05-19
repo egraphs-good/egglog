@@ -707,12 +707,12 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 ///
 /// At every DFS node we pick one child as the chain continuation. Every other reachable bag —
 /// siblings *and* their entire sub-trees — gets absorbed into the current chain node. The
-/// continuation is picked in a way that minimizes the max # of overlapping variables in the
-/// produced chain.
+/// continuation is picked in a way that minimizes the maximum number of atoms in a bag, i.e.,
+/// the pathwidth.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
-    // score minimizes the maximum number of common variables on the path.
-    // let mut score = vec![HashSet::default(); bags.len()];
+    // best_pathwidth[i] = the best pathwidth of the chain if we pick bag i
+    // to be the chain child.
     let mut best_pathwidth = vec![usize::MAX; bags.len()];
     let mut full = vec![HashSet::default(); bags.len()];
     let mut choice = vec![usize::MAX; bags.len()];
@@ -739,7 +739,9 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 choice[i] = *chain_child;
             }
         }
-        
+
+        // Find the parent of this bag, which must be the lowerest-numbered bag
+        // that shares the most variables with it.
         let parent = bags
             .iter()
             .enumerate()
@@ -786,17 +788,16 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 // This bag is being absorbed into `bags_topo[this]`. To keep the
                 // result a chain, every descendant of this bag is also absorbed —
                 // none of them get to spawn a new chain node.
-                for &i in all_children.iter().rev() {
+                for &i in all_children.iter() {
                     visited[i] = true;
                     stack.push((i, Some(this)));
                 }
             } else {
-                // This bag is a chain node. The cheapest-overlap child continues the
+                // This bag is a chain node. The child that minimizes pathwidth continues the
                 // chain; the rest (and all their descendants, via the branch above)
                 // are absorbed into this chain node.
-                // all_children.sort_unstable_by_key(|b| score[*b].len() as isize);
                 if !all_children.is_empty() {
-                    for &i in all_children[1..].iter().rev() {
+                    for &i in all_children[1..].iter() {
                         if i == choice[bag_id] {
                             continue;
                         }
