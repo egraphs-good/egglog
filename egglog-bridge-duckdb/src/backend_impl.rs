@@ -383,6 +383,29 @@ fn duck_value_to_trait_value(v: ValueRef<'_>, pool: &dyn BaseValuePool) -> Value
         V::USmallInt(i) => return Value::new(i as u32),
         V::UInt(i) => return Value::new(i),
         V::UBigInt(i) => return Value::new(i as u32),
+        // DOUBLE column: f64 base values are stored RAW (so SQL
+        // arithmetic works). Intern via the pool to lift to a
+        // handle the trait consumer can use with `pool_unwrap::<F>`.
+        V::Float(f) => {
+            use ordered_float::OrderedFloat;
+            type FBoxed = egglog_core_relations::Boxed<OrderedFloat<f64>>;
+            if pool.has_ty(TypeId::of::<FBoxed>()) {
+                let ty = pool.get_ty_by_type_id(TypeId::of::<FBoxed>());
+                return pool
+                    .intern_dyn(ty, Box::new(FBoxed::new(OrderedFloat(f as f64))));
+            }
+            return Value::new(u32::MAX);
+        }
+        V::Double(f) => {
+            use ordered_float::OrderedFloat;
+            type FBoxed = egglog_core_relations::Boxed<OrderedFloat<f64>>;
+            if pool.has_ty(TypeId::of::<FBoxed>()) {
+                let ty = pool.get_ty_by_type_id(TypeId::of::<FBoxed>());
+                return pool
+                    .intern_dyn(ty, Box::new(FBoxed::new(OrderedFloat(f))));
+            }
+            return Value::new(u32::MAX);
+        }
         // Other types: unreached for the BIGINT-heavy trait paths,
         // but emit u32::MAX so a panic downstream is more obvious
         // than a silently-wrong value.
