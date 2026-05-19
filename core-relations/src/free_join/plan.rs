@@ -712,8 +712,34 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
     // score minimizes the maximum number of common variables on the path.
-    let mut score = vec![bags.len(); bags.len()];
+    // let mut score = vec![HashSet::default(); bags.len()];
+    let mut best_pathwidth = vec![usize::MAX; bags.len()];
+    let mut full = vec![HashSet::default(); bags.len()];
+    let mut choice = vec![usize::MAX; bags.len()];
     for i in 0..bags.len() {
+        full[i] = bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+        for child in all_children_list[i].iter() {
+            full[i] = full[i].union(&full[*child]).copied().collect();
+        }
+        best_pathwidth[i] = full[i].len();
+        for chain_child in all_children_list[i].iter() {
+            let mut chain_score: HashSet<_> =
+                bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+            for child in all_children_list[i].iter() {
+                if child != chain_child {
+                    chain_score = chain_score
+                        .union(&full[*child])
+                        .copied()
+                        .collect::<HashSet<_>>();
+                }
+            }
+            let s = chain_score.len().max(best_pathwidth[*chain_child]);
+            if s <= best_pathwidth[i] {
+                best_pathwidth[i] = s;
+                choice[i] = *chain_child;
+            }
+        }
+        
         let parent = bags
             .iter()
             .enumerate()
@@ -721,8 +747,7 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
             .map(|(j, b)| (j, b.common_vars_with(&bags[i]).count()))
             .filter(|(_, count)| *count > 0)
             .max_by_key(|(j, count)| (*count, -(*j as isize)));
-        if let Some((j, count)) = parent {
-            score[j] = score[j].min(score[i]).min(count);
+        if let Some((j, _count)) = parent {
             all_children_list[j].push(i);
         }
     }
@@ -769,14 +794,17 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 // This bag is a chain node. The cheapest-overlap child continues the
                 // chain; the rest (and all their descendants, via the branch above)
                 // are absorbed into this chain node.
-                all_children.sort_unstable_by_key(|b| score[*b]);
+                // all_children.sort_unstable_by_key(|b| score[*b].len() as isize);
                 if !all_children.is_empty() {
                     for &i in all_children[1..].iter().rev() {
+                        if i == choice[bag_id] {
+                            continue;
+                        }
                         visited[i] = true;
                         stack.push((i, Some(this)));
                     }
-                    visited[all_children[0]] = true;
-                    stack.push((all_children[0], None));
+                    visited[choice[bag_id]] = true;
+                    stack.push((choice[bag_id], None));
                 }
             }
 
