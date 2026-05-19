@@ -1087,47 +1087,56 @@ impl Backend for EGraph {
     }
 
     fn dump_debug_info(&self) {
-        // Walk every registered backend table; for each, dump rows via
-        // log::info!. Use the duckdb-bridge's `functions` map directly
-        // — `backend_function_names` only tracks those registered
-        // through the trait, but legacy callers may have registered
-        // additional tables.
-        for name in self.functions.keys() {
-            let sql = format!("SELECT * FROM {}", q(name));
-            log::info!("== DuckDB table `{}` ==", name);
-            let mut stmt = match self.conn.prepare(&sql) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::info!("  prepare failed: {e}");
-                    continue;
-                }
-            };
-            let column_count = stmt.column_count();
-            let mut rows = match stmt.query([]) {
-                Ok(r) => r,
-                Err(e) => {
-                    log::info!("  query failed: {e}");
-                    continue;
-                }
-            };
-            loop {
-                match rows.next() {
-                    Ok(Some(row)) => {
-                        let mut parts: Vec<String> = Vec::with_capacity(column_count);
-                        for i in 0..column_count {
-                            match row.get_ref(i) {
-                                Ok(v) => parts.push(format!("{v:?}")),
-                                Err(e) => parts.push(format!("<err: {e}>")),
-                            }
+        eprintln!("== DuckDB tables (dump_debug_info) ==");
+        let names: Vec<String> = self.functions.keys().cloned().collect();
+        for name in &names {
+            // Two-phase: first COUNT to skip empty tables, then
+            // re-query for rows. The `prepare → query → next` flow
+            // produced "statement not executed" panics on some
+            // duckdb-rs versions; this two-phase shape sidesteps it.
+            let n_rows: i64 = self
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {}", q(name)), [], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(0);
+            if n_rows == 0 {
+                continue;
+            }
+            eprintln!("== DuckDB table `{name}` ({n_rows} rows) ==");
+            // Use CAST(... AS VARCHAR) so we never have to inspect
+            // the column type (avoids duckdb-rs's "statement not
+            // executed" panic on some types). Compose the SELECT
+            // dynamically based on the function's known column count.
+            let arity = self.functions.get(name).map(|f| f.cols.len()).unwrap_or(0);
+            // +1 for the ts column.
+            let cols_str: Vec<String> = (0..arity + 1)
+                .map(|i| {
+                    let cn = if i == arity { "ts".to_string() } else { format!("c{i}") };
+                    format!("CAST({cn} AS VARCHAR)")
+                })
+                .collect();
+            let sql = format!("SELECT {} FROM {}", cols_str.join(", "), q(name));
+            let collected: Vec<String> = match self.conn.prepare(&sql) {
+                Ok(mut stmt) => stmt
+                    .query_map([], |row| {
+                        let n_cols = arity + 1;
+                        let mut parts: Vec<String> = Vec::with_capacity(n_cols);
+                        for i in 0..n_cols {
+                            let s: String = row.get(i).unwrap_or_default();
+                            parts.push(s);
                         }
-                        log::info!("  {}", parts.join(", "));
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        log::info!("  row fetch failed: {e}");
-                        break;
-                    }
+                        Ok(parts.join(", "))
+                    })
+                    .map(|iter| iter.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default(),
+                Err(e) => {
+                    eprintln!("  prepare failed: {e}");
+                    continue;
                 }
+            };
+            for line in collected {
+                eprintln!("  {line}");
             }
         }
     }

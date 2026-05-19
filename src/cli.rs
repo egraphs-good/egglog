@@ -159,6 +159,26 @@ pub fn cli(mut egraph: EGraph) {
                 // program runs through the same trait pipeline.
                 if egraph.has_duckdb_backend() {
                     egraph.fact_directory.clone_from(&args.fact_directory);
+                    // Dump-on-panic so even when (check ...) /
+                    // prove-exists / extract panics mid-run we still
+                    // see the duck table contents.
+                    if std::env::var("DUCK_DUMP_TABLES").is_ok() {
+                        let input_str = input.to_str().unwrap().to_owned();
+                        let mut tmp = std::mem::replace(
+                            &mut egraph,
+                            EGraph::with_duckdb_backend(egglog::DuckBackendConfig::default()).unwrap(),
+                        );
+                        let result = std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| {
+                                tmp.parse_and_run_program(Some(input_str), &program)
+                            }),
+                        );
+                        if let Err(e) = result {
+                            eprintln!("== panicked during run: {e:?} ==");
+                        }
+                        tmp.dump_debug_info();
+                        continue;
+                    }
                     let result = egraph.parse_and_run_program(
                         Some(input.to_str().unwrap().into()),
                         &program,
