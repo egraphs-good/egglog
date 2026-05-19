@@ -962,7 +962,7 @@ impl<'a> JoinState<'a> {
                 action,
                 &mut binding_info.bindings,
                 &binding_info.binding_sets,
-                || self.exec_state.clone(),
+                &self.exec_state,
             );
             return;
         }
@@ -1006,7 +1006,7 @@ impl<'a> JoinState<'a> {
                                     action,
                                     &mut binding_info.bindings,
                                     &binding_info.binding_sets,
-                                    || self.exec_state.clone(),
+                                    &self.exec_state,
                                 );
                             } else {
                                 self.run_plan(
@@ -1748,9 +1748,9 @@ trait ActionBuffer<'state, A: NumericId>: Send {
         action: A,
         bindings: &mut DenseIdMap<Variable, Value>,
         binding_sets: &BindingSet,
-        mut to_exec_state: impl FnMut() -> ExecutionState<'state>,
+        exec_state: &ExecutionState<'state>,
     ) {
-        expand_binding_sets(self, action, bindings, binding_sets, 0, &mut to_exec_state);
+        expand_binding_sets(self, action, bindings, binding_sets, 0, exec_state);
     }
 
     /// Push the given bindings to be executed for the specified action. If this
@@ -1978,19 +1978,25 @@ fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Siz
     bindings: &mut DenseIdMap<Variable, Value>,
     binding_sets: &BindingSet,
     idx: usize,
-    mut to_exec_state: &mut impl FnMut() -> ExecutionState<'state>,
+    exec_state: &ExecutionState<'state>,
 ) {
+    if exec_state.should_stop() {
+        return;
+    }
     if idx >= binding_sets.len() {
-        action_buf.push_bindings(action, bindings, to_exec_state);
+        action_buf.push_bindings(action, bindings, || exec_state.clone());
         return;
     }
     if idx + 1 == binding_sets.len() {
         let (vars, buf) = &binding_sets[idx];
         for (_, row) in buf.iter() {
+            if exec_state.should_stop() {
+                return;
+            }
             for (var, val) in vars.iter().zip(row.iter()) {
                 bindings.insert(*var, *val);
             }
-            action_buf.push_bindings(action, bindings, &mut to_exec_state);
+            action_buf.push_bindings(action, bindings, || exec_state.clone());
         }
         return;
     }
@@ -2005,7 +2011,7 @@ fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Siz
             bindings,
             binding_sets,
             idx + 1,
-            to_exec_state,
+            exec_state,
         );
     }
 }
