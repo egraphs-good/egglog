@@ -240,25 +240,20 @@ fn duck_value_to_literal(
     let pool_dyn: &dyn BaseValuePool = pool;
     match col {
         DuckColumnTy::I64 => {
-            // Could be an eq-sort id (high bits clear) or an interned
-            // i64 base value (high bit set per MAY_UNBOX) or an
-            // arbitrary BaseValueId-indexed handle. The `rep() as i64`
-            // cast preserves the bits losslessly; the SQL layer
-            // sees `BIGINT` regardless. For i64 base values, unbox.
-            if pool_dyn.has_ty(TypeId::of::<i64>()) {
-                let id = pool_dyn.get_ty_by_type_id(TypeId::of::<i64>());
-                // If `val` was interned in the i64 pool, `pool_unwrap`
-                // returns the original i64. Otherwise the `rep()`
-                // cast is the right fallback. We can't tell here
-                // which one it is without the column's trait
-                // `ColumnTy::Base(id)`, so prefer the unwrap when
-                // the high bit is set (intern-table convention).
-                let raw = val.rep();
-                if raw & (1 << 31) != 0 {
-                    let i = egglog_backend_trait::pool_unwrap::<i64>(pool_dyn, val);
-                    let _ = id;
-                    return Literal::I64(i);
-                }
+            // Could be an eq-sort id, a primitive i64 value, or a
+            // handle to a non-i64 intern table (BigInt, Boxed<String>,
+            // etc. — all of which use the BIGINT representation on
+            // the duck side). For i64 base values, unwrap to the raw
+            // i64 so SQL arithmetic on the column operates on the
+            // value, not the handle. The read path
+            // (`duck_value_to_trait_value`) re-interns the raw value
+            // back to a handle so callers that expect `Value`s
+            // (the trait API contract) get a usable rep.
+            if pool_dyn.has_ty(TypeId::of::<i64>())
+                && val.rep() & (1 << 31) != 0
+            {
+                let i = egglog_backend_trait::pool_unwrap::<i64>(pool_dyn, val);
+                return Literal::I64(i);
             }
             Literal::I64(val.rep() as i64)
         }
@@ -349,25 +344,69 @@ fn value_to_literal(val: Value, ty: ColumnTy, pool: &dyn BaseValuePool) -> Liter
 ///   pool wired in Commit 11 will know how to interpret the bits, and
 ///   `for_each` callers reaching this path will be added in Commit
 ///   14+. For now correctness is moot since no caller exercises it.
-fn duck_value_to_trait_value(v: ValueRef<'_>) -> Value {
+/// Convert a DuckDB `ValueRef` to a trait-level `Value` handle.
+///
+/// For BIGINT columns this gets tricky because i64 base values
+/// are stored RAW in DuckDB (so SQL arithmetic works) but the trait
+/// API expects `Value` handles. The bridge unifies these: a "small"
+/// i64 (top bit clear, fits in u32) IS its own handle; an "interned"
+/// i64 (out of the 31-bit fast path — negative or > 2^31) has a
+/// handle of `intern_table_idx + VAL_OFFSET` (top bit set).
+///
+/// So when reading a BIGINT value `i`:
+///   - `i >= 0 && i < 2^31`: the raw i64 fits the fast-path, so
+///     `Value(i as u32)` is already a valid handle. Same for eq-sort
+///     ids (which always fit), `Boxed<String>` handles (intern
+///     indices fit easily in practice), and `Boxed<BigInt>` /
+///     `Boxed<BigRat>` handles (same).
+///   - `i < 0 || i >= 2^31`: must be a raw i64 base value that was
+///     stored without going through the intern table at insertion
+///     time. Intern it now to produce a stable handle for the trait
+///     consumer; pool_unwrap on the resulting handle round-trips.
+///
+/// The pool is `&dyn` to keep this callable from contexts that only
+/// have the abstract trait; in for_each_while we already need the
+/// pool to register an i64 type if it isn't yet (rare; defensively).
+fn duck_value_to_trait_value(v: ValueRef<'_>, pool: &dyn BaseValuePool) -> Value {
     use duckdb::types::ValueRef as V;
-    match v {
-        V::Null => Value::new(u32::MAX),
-        V::Boolean(b) => Value::new(b as u32),
-        V::TinyInt(i) => Value::new(i as u32),
-        V::SmallInt(i) => Value::new(i as u32),
-        V::Int(i) => Value::new(i as u32),
-        V::BigInt(i) => Value::new(i as u32),
-        V::HugeInt(i) => Value::new(i as u32),
-        V::UTinyInt(i) => Value::new(i as u32),
-        V::USmallInt(i) => Value::new(i as u32),
-        V::UInt(i) => Value::new(i),
-        V::UBigInt(i) => Value::new(i as u32),
-        // Other types fall back to a sentinel; not reached in stub
-        // usage (only eq-sort id columns flow through trait callers in
-        // Phase 2 Commit 9).
-        _ => Value::new(u32::MAX),
+    use std::any::TypeId;
+
+    let raw_i64: Option<i64> = match v {
+        V::Null => return Value::new(u32::MAX),
+        V::Boolean(b) => return Value::new(b as u32),
+        V::TinyInt(i) => Some(i as i64),
+        V::SmallInt(i) => Some(i as i64),
+        V::Int(i) => Some(i as i64),
+        V::BigInt(i) => Some(i),
+        V::HugeInt(i) => Some(i as i64),
+        V::UTinyInt(i) => return Value::new(i as u32),
+        V::USmallInt(i) => return Value::new(i as u32),
+        V::UInt(i) => return Value::new(i),
+        V::UBigInt(i) => return Value::new(i as u32),
+        // Other types: unreached for the BIGINT-heavy trait paths,
+        // but emit u32::MAX so a panic downstream is more obvious
+        // than a silently-wrong value.
+        _ => return Value::new(u32::MAX),
+    };
+    let Some(i) = raw_i64 else {
+        return Value::new(u32::MAX);
+    };
+
+    // The fast-path range covers all eq-sort ids, MAY_UNBOX-compatible
+    // i64 bases, and intern table indices for any reasonable program.
+    // Values outside it (large positive or any negative) can only be
+    // raw i64 base values: intern via the pool to lift to a handle.
+    if (0..(1i64 << 31)).contains(&i) {
+        return Value::new(i as u32);
     }
+    if pool.has_ty(TypeId::of::<i64>()) {
+        let ty = pool.get_ty_by_type_id(TypeId::of::<i64>());
+        return pool.intern_dyn(ty, Box::new(i));
+    }
+    // No i64 type registered — can't intern. Fall back to the raw
+    // bits; callers that try to `pool_unwrap::<i64>` will panic
+    // cleanly with an unknown-table message.
+    Value::new(i as u32)
 }
 
 impl EGraph {
@@ -635,7 +674,7 @@ impl Backend for EGraph {
                 let v = row
                     .get_ref(i)
                     .unwrap_or_else(|e| panic!("for_each_while: get_ref({i}) failed: {e}"));
-                buf.push(duck_value_to_trait_value(v));
+                buf.push(duck_value_to_trait_value(v, &self.backend_base_value_pool));
             }
             let frow = FunctionRow {
                 vals: &buf,
@@ -692,7 +731,7 @@ impl Backend for EGraph {
         let mut rows = stmt.query([]).ok()?;
         let row = rows.next().ok()??;
         let v = row.get_ref(0).ok()?;
-        Some(duck_value_to_trait_value(v))
+        Some(duck_value_to_trait_value(v, &self.backend_base_value_pool))
     }
 
     fn add_values(&mut self, values: Box<dyn Iterator<Item = (FunctionId, Vec<Value>)> + '_>) {

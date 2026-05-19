@@ -11,7 +11,14 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let want_duckdb = argv.iter().any(|a| a == "--duckdb");
     let want_native_uf = argv.iter().any(|a| a == "--duck-native-uf");
-    let want_proofs = argv.iter().any(|a| a == "--proofs");
+    // `--proof-testing` implies proofs — the desugar pass rewrites
+    // `(check ...)` into `(prove-exists ...)` which needs the proof
+    // encoding active. Without this, cli.rs's `args.proof_testing`
+    // branch would try `with_proofs_enabled()` after construction,
+    // and that path clones the egraph for `original_typechecking`,
+    // hitting duckdb's unimplemented `clone_boxed`.
+    let want_proofs =
+        argv.iter().any(|a| a == "--proofs" || a == "--proof-testing");
     let egraph = if want_duckdb {
         egglog_experimental::new_experimental_egraph_duckdb(egglog::DuckBackendConfig {
             native_uf: want_native_uf,

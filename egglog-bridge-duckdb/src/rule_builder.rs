@@ -84,6 +84,14 @@ fn decode_base_const(
     if pool_dyn.has_ty(TypeId::of::<i64>())
         && ty == pool_dyn.get_ty_by_type_id(TypeId::of::<i64>())
     {
+        // Store the raw i64 value (not the handle). SQL operations
+        // (`+`, `-`, `~`, `&`, …) on BIGINT columns operate on the
+        // i64 itself; storing handles would break arithmetic
+        // comparison (e.g. `~ 0 = -1` would compare raw `-1` against
+        // the handle `2147483648`). The read path
+        // (`duck_value_to_trait_value`) re-derives the handle by
+        // re-interning when the i64 doesn't fit `try_box`'s 31-bit
+        // fast path.
         let v = egglog_backend_trait::pool_unwrap::<i64>(pool_dyn, val);
         return Ok(Term::Lit(Literal::I64(v)));
     }
