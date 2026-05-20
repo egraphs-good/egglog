@@ -211,65 +211,6 @@ impl JoinStage {
                 };
                 true
             }
-            // (
-            //     FusedIntersect {
-            //         cover,
-            //         bind,
-            //         to_intersect,
-            //         is_leaf_scan: _,
-            //     },
-            //     Intersect { var, scans },
-            // ) if to_intersect.is_empty()
-            //     && scans.len() == 1
-            //     && cover.to_index.atom == scans[0].atom
-            //     && scans[0].cs.is_empty() =>
-            // {
-            //     let col = scans[0].column;
-            //     bind.push((col, *var));
-            //     cover.to_index.vars.push(col);
-            //     true
-            // }
-            // (
-            //     x,
-            //     Intersect {
-            //         var: var2,
-            //         scans: scans2,
-            //     },
-            // ) => {
-            //     // This is all somewhat mangled because of the borrowing rules
-            //     // when we pass &mut self into a tuple.
-            //     let (var1, mut scans1) = if let Intersect {
-            //         var: var1,
-            //         scans: scans1,
-            //     } = x
-            //     {
-            //         if !(scans1.len() == 1
-            //             && scans2.len() == 1
-            //             && scans1[0].atom == scans2[0].atom
-            //             && scans2[0].cs.is_empty())
-            //         {
-            //             return false;
-            //         }
-            //         (*var1, mem::take(scans1))
-            //     } else {
-            //         return false;
-            //     };
-            //     let atom = scans1[0].atom;
-            //     let col1 = scans1[0].column;
-            //     let col2 = scans2[0].column;
-            //     *x = FusedIntersect {
-            //         cover: ScanSpec {
-            //             to_index: SubAtom {
-            //                 atom,
-            //                 vars: smallvec![col1, col2],
-            //             },
-            //             constraints: mem::take(&mut scans1[0].cs),
-            //         },
-            //         bind: smallvec![(col1, var1), (col2, *var2)],
-            //         to_intersect: Default::default(),
-            //     };
-            //     true
-            // }
             _ => false,
         }
     }
