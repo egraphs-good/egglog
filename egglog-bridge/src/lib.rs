@@ -75,6 +75,14 @@ impl ActionRegistry {
         self.table_actions.get(name)
     }
 
+    /// Snapshot the registered table names and their current row counts.
+    pub fn table_sizes(&self, state: &ExecutionState) -> Vec<(&str, usize)> {
+        self.table_actions
+            .iter()
+            .map(|(name, action)| (name.as_str(), action.row_count(state)))
+            .collect()
+    }
+
     /// The shared [`UnionAction`] for this EGraph's union-find.
     pub fn union_action(&self) -> &UnionAction {
         &self.union_action
@@ -1262,6 +1270,11 @@ impl TableAction {
             .get_table(self.table)
             .get_row(key)
             .map(|row| row.vals[self.table_math.ret_val_col()])
+    }
+
+    /// Return the current number of rows in this table.
+    pub fn row_count(&self, state: &ExecutionState) -> usize {
+        state.get_table(self.table).len()
     }
 
     /// Look up a row, inserting the configured default value if absent.
