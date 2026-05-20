@@ -709,6 +709,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 /// siblings *and* their entire sub-trees — gets absorbed into the current chain node. The
 /// continuation is picked in a way that minimizes the maximum number of atoms in a bag, i.e.,
 /// the pathwidth.
+/// 
+/// The pathwidth of a path decomposition is the maximum bag size (minus one) over all bags,
+/// and the size of a bag is measured as the number of atoms in the bag.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
     // best_pathwidth[i] = the best pathwidth of the chain if we pick bag i
@@ -717,22 +720,22 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut full = vec![HashSet::default(); bags.len()];
     let mut choice = vec![usize::MAX; bags.len()];
     for i in 0..bags.len() {
-        full[i] = bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+        let mut full_i: HashSet<AtomId> =
+            bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
         for child in all_children_list[i].iter() {
-            full[i] = full[i].union(&full[*child]).copied().collect();
+            full_i.extend(full[*child].iter().copied());
         }
+        full[i] = full_i;
         best_pathwidth[i] = full[i].len();
         for chain_child in all_children_list[i].iter() {
             let mut chain_score: HashSet<_> =
                 bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
-            for child in all_children_list[i].iter() {
-                if child != chain_child {
-                    chain_score = chain_score
-                        .union(&full[*child])
-                        .copied()
-                        .collect::<HashSet<_>>();
-                }
-            }
+            chain_score.extend(
+                all_children_list[*chain_child]
+                    .iter()
+                    .filter(|child| *child != chain_child)
+                    .flat_map(|child| full[*child].iter().copied()),
+            );
             let s = chain_score.len().max(best_pathwidth[*chain_child]);
             if s <= best_pathwidth[i] {
                 best_pathwidth[i] = s;
