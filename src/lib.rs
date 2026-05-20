@@ -10,14 +10,13 @@
 //! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
 //! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
 //!
-//!
-//!
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
 mod command_macro;
 pub mod constraint;
 mod core;
+mod exec_state;
 pub mod extract;
 pub mod prelude;
 mod proofs;
@@ -55,6 +54,7 @@ use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
+pub use exec_state::{Context, Core, FullState, PureState, Read, ReadState, Write, WriteState};
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
@@ -67,7 +67,7 @@ use sort::*;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{Read, Write as _};
+use std::io::{Read as _, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -95,21 +95,41 @@ pub const GLOBAL_NAME_PREFIX: &str = "$";
 
 pub type ArcSort = Arc<dyn Sort>;
 
-/// A trait for implementing custom primitive operations in egglog.
+/// Methods shared by every kind-specific primitive trait.
 ///
-/// Primitives are built-in functions that can be called in both rule queries and actions.
-pub trait Primitive {
-    /// Returns the name of this primitive operation.
+/// `name` and `get_type_constraints` aren't capability-dependent, so
+/// the four kind-specific traits ([`PurePrim`], [`WritePrim`],
+/// [`ReadPrim`], [`FullPrim`]) share this supertrait.
+pub trait Primitive: Send + Sync + 'static {
+    /// Returns the name of this primitive.
     fn name(&self) -> &str;
 
-    /// Constructs a type constraint for the primitive that uses the span information
-    /// for error localization.
+    /// Constructs a type constraint for this primitive.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+}
 
-    /// Applies the primitive operation to the given arguments.
-    ///
-    /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
+/// A primitive whose body sees a [`PureState`]. Register via
+/// [`EGraph::add_pure_primitive`].
+pub trait PurePrim: Primitive {
+    fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
+}
+
+/// A primitive whose body sees a [`WriteState`]. Register via
+/// [`EGraph::add_write_primitive`].
+pub trait WritePrim: Primitive {
+    fn apply<'a, 'db>(&self, state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value>;
+}
+
+/// A primitive whose body sees a [`ReadState`]. Register via
+/// [`EGraph::add_read_primitive`].
+pub trait ReadPrim: Primitive {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value>;
+}
+
+/// A primitive whose body sees a [`FullState`]. Register via
+/// [`EGraph::add_full_primitive`].
+pub trait FullPrim: Primitive {
+    fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A user-defined command output trait.
@@ -695,7 +715,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.external_id(),
+                    p.external_id(crate::Context::Write),
                     translated_args,
                 ))
             }
@@ -988,11 +1008,18 @@ impl EGraph {
         )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
+        // The `:naive` rule option opts a single rule out of seminaive
+        // evaluation. This widens primitive-context selection from
+        // Pure/Write to Read/Full, so primitives that read or write the
+        // database can run inside this rule.
+        let seminaive = self.seminaive && !rule.naive;
+
         let rule_id = {
             let mut translator = BackendRule::new(
-                self.backend.new_rule(&rule.name, self.seminaive),
+                self.backend.new_rule(&rule.name, seminaive),
                 &self.functions,
                 &self.type_info,
+                seminaive,
             );
             translator.query(query, false);
             translator.actions(actions)?;
@@ -1032,6 +1059,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
+            false, // global action context
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -1112,6 +1140,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
+            false, // global action context
         );
 
         let result_var = ResolvedVar {
@@ -1177,6 +1206,7 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
+            naive: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1198,6 +1228,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
+            false, // global query context
         );
         translator.query(&query, true);
         translator
@@ -1206,10 +1237,10 @@ impl EGraph {
                 "this function will never panic".to_string()
             });
         let id = translator.build();
-        let _ = self.backend.run_rules(&[id]).unwrap();
+        let run_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
-
         self.backend.free_external_func(ext_id);
+        run_result.map_err(|e| Error::BackendError(e.to_string()))?;
 
         let ext_sc_val = ext_sc.lock().unwrap().take();
         let matched = matches!(ext_sc_val, Some(()));
@@ -1560,7 +1591,9 @@ impl EGraph {
         } else {
             self.backend.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
-                    table_action.lookup(es, row);
+                    // Constructor semantics: mint a fresh eclass id for
+                    // each missing key.
+                    table_action.lookup_or_insert(es, row);
                 }
                 Some(unit_val)
             });
@@ -1907,6 +1940,14 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
+    /// `true` for a regular seminaive rule; `false` for any of:
+    /// (a) global one-shots (`eval`, `check`, top-level actions),
+    /// (b) rules with the `:naive` option,
+    /// (c) `EGraph::seminaive == false` (the global opt-out).
+    /// Combined with whether we're in the query or action phase, this
+    /// picks the [`crate::Context`] used to select a primitive's
+    /// context-specific runtime id at each call site.
+    seminaive: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -1914,12 +1955,41 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
+        seminaive: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
+            seminaive,
             entries: Default::default(),
+        }
+    }
+
+    /// The [`crate::Context`] that applies when compiling
+    /// primitives on the query side (LHS) of this rule. Under
+    /// seminaive evaluation, queries are pure (no DB reads or
+    /// writes); a `:naive` rule (or `eg.seminaive = false`) widens
+    /// this to [`Context::Read`] so reads from primitives are
+    /// admissible.
+    fn query_context(&self) -> crate::Context {
+        if self.seminaive {
+            crate::Context::Pure
+        } else {
+            crate::Context::Read
+        }
+    }
+
+    /// The [`crate::Context`] that applies when compiling
+    /// primitives on the action side (RHS) of this rule. Under
+    /// seminaive, actions may write but not read; a `:naive` rule
+    /// widens to [`Context::Full`] so writes and reads are both
+    /// admissible.
+    fn action_context(&self) -> crate::Context {
+        if self.seminaive {
+            crate::Context::Write
+        } else {
+            crate::Context::Full
         }
     }
 
@@ -1946,7 +2016,13 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
+        ctx: crate::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+        // The typechecker has already checked that this primitive is
+        // valid in `ctx`; pick the runtime id that stamps the same ctx
+        // onto the state wrapper when invoked.
+        let resolved_id = prim.external_id(ctx);
+
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
@@ -1954,44 +2030,85 @@ impl<'a> BackendRule<'a> {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
-                ResolvedFunctionId::Lookup(egglog_bridge::TableAction::new(
-                    self.rb.egraph(),
-                    self.func(f),
-                ))
-            } else if let Some(possible) = self.type_info.get_prims(name) {
-                let mut ps: Vec<_> = possible.iter().collect();
-                ps.retain(|p| {
-                    self.type_info
-                        .get_sorts::<FunctionSort>()
-                        .into_iter()
-                        .any(|f| {
-                            let types: Vec<_> = prim
-                                .input()
-                                .iter()
-                                .skip(1)
-                                .chain(f.inputs())
-                                .chain([&f.output()])
-                                .cloned()
-                                .collect();
-                            p.accept(&types, self.type_info)
-                        })
-                });
-                assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
+                // Distinguish constructor-table lookups (write-on-miss
+                // via `lookup_or_insert`) from custom-function lookups
+                // (pure read via `lookup`). `FunctionContainer::apply`
+                // uses this distinction to allow `unstable-app` over a
+                // custom function in any DB-read-capable context (e.g.
+                // global checks) while refusing constructors outright
+                // anywhere they can't mint — a no-mint constructor
+                // would silently miss instead of producing the eclass
+                // the user asked for.
+                let action = egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f));
+                match f.subtype {
+                    ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
+                    ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
+                }
             } else {
-                panic!("no callable for {name}");
+                let fn_sort = Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any())
+                    .unwrap_or_else(|_| panic!("expected `unstable-fn` to return a function sort"));
+                let types: Vec<_> = prim
+                    .input()
+                    .iter()
+                    .skip(1)
+                    .cloned()
+                    .chain(fn_sort.inputs().iter().cloned())
+                    .chain(std::iter::once(fn_sort.output()))
+                    .collect();
+                // Bake every exact-signature registration. The
+                // build-site `ctx` here is intentionally unused: the
+                // *application*-time context (carried on `state.ctx`
+                // by the wrapping HOF body) selects which candidate
+                // dispatches at runtime. Filtering by build-site ctx
+                // would trap an `unstable-fn` value in the context it
+                // was constructed in (e.g. a `let`-bound function value
+                // built at top-level `Full` couldn't be applied later
+                // from a `Read` query).
+                let ps: Vec<_> = self
+                    .type_info
+                    .get_prims(name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|p| p.accept(&types, self.type_info))
+                    .collect();
+                let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+                    let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
+                    match (ids.next(), ids.next()) {
+                        (None, _) => None,
+                        (Some(id), None) => Some(id),
+                        (Some(_), Some(_)) => panic!(
+                            "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                        ),
+                    }
+                });
+                assert!(
+                    context_ids.iter().any(|(_, id)| id.is_some()),
+                    "no callable for {name}"
+                );
+                ResolvedFunctionId::Primitive { context_ids }
             };
             let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
+
+            // Pre-register a panic id used by `FunctionContainer::apply`
+            // when the wrapped function is applied in a context that
+            // doesn't admit it. Triggered at runtime via the egglog
+            // panic side channel so misuse surfaces as an `Err` from
+            // `run_rules` rather than a thread unwind.
+            let panic_id = self.rb.new_panic(format!(
+                "unstable-fn over `{name}` was applied in a context where its wrapped \
+                 function is not valid for this call site, if in a rule, add :naive."
+            ));
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
                 partial_arcsorts,
                 name: name.clone(),
+                panic_id,
             });
         }
 
         (
-            prim.external_id(),
+            resolved_id,
             qe_args,
             prim.output().column_ty(self.rb.egraph()),
         )
@@ -2017,7 +2134,8 @@ impl<'a> BackendRule<'a> {
                     self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, args, ty) = self.prim(p, &atom.args);
+                    let ctx = self.query_context();
+                    let (p, args, ty) = self.prim(p, &atom.args, ctx);
                     self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
@@ -2041,7 +2159,8 @@ impl<'a> BackendRule<'a> {
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
-                            let (p, args, ty) = self.prim(p, args);
+                            let ctx = self.action_context();
+                            let (p, args, ty) = self.prim(p, args, ctx);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -2173,14 +2292,19 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use crate::constraint::SimpleTypeConstraint;
-    use crate::sort::*;
     use crate::*;
+
+    use crate::PureState;
 
     #[derive(Clone)]
     struct InnerProduct {
         vec: ArcSort,
     }
 
+    // `InnerProduct` is pure, so it declares
+    // `State = PureState` and is usable in all
+    // contexts. The Rust type checker enforces that the body only uses
+    // methods available on `PureState`.
     impl Primitive for InnerProduct {
         fn name(&self) -> &str {
             "inner-product"
@@ -2194,24 +2318,26 @@ mod tests {
             )
             .into_box()
         }
+    }
 
-        fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+    impl PurePrim for InnerProduct {
+        fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
-            let vec1 = exec_state
+            let vec1 = state
                 .container_values()
                 .get_val::<VecContainer>(args[0])
                 .unwrap();
-            let vec2 = exec_state
+            let vec2 = state
                 .container_values()
                 .get_val::<VecContainer>(args[1])
                 .unwrap();
             assert_eq!(vec1.data.len(), vec2.data.len());
             for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
-                let a = exec_state.base_values().unwrap::<i64>(*a);
-                let b = exec_state.base_values().unwrap::<i64>(*b);
+                let a = state.base_values().unwrap::<i64>(*a);
+                let b = state.base_values().unwrap::<i64>(*b);
                 sum += a * b;
             }
-            Some(exec_state.base_values().get::<i64>(sum))
+            Some(state.base_values().get::<i64>(sum))
         }
     }
 
@@ -2227,7 +2353,7 @@ mod tests {
                 && s.inner_sorts()[0].name() == I64Sort.name()
         });
 
-        egraph.add_primitive(InnerProduct { vec: int_vec_sort });
+        egraph.add_pure_primitive(InnerProduct { vec: int_vec_sort }, None);
 
         egraph
             .parse_and_run_program(
