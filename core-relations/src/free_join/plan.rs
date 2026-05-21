@@ -699,7 +699,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 /// siblings *and* their entire sub-trees — gets absorbed into the current chain node. The
 /// continuation is picked in a way that minimizes the maximum number of atoms in a bag, i.e.,
 /// the pathwidth.
-/// 
+///
 /// The pathwidth of a path decomposition is the maximum bag size (minus one) over all bags,
 /// and the size of a bag is measured as the number of atoms in the bag.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
