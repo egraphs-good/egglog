@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    common::HashMap,
+    common::{HashMap, IndexMap},
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
@@ -463,7 +463,7 @@ impl Database {
                                                 .unwrap(),
                                         )
                                         .into_iter()
-                                        .collect::<HashMap<_, _>>();
+                                        .collect::<IndexMap<_, _>>();
                                         binding_info
                                             .materializations
                                             .insert(mat_id, Arc::new(materialization));
@@ -551,7 +551,7 @@ impl Database {
                             let mut materializations =
                                 DenseIdMap::with_capacity(plan.stages.blocks.len());
                             for i in 0..plan.stages.blocks.len() {
-                                materializations.insert(MatId::from_usize(i), HashMap::default());
+                                materializations.insert(MatId::from_usize(i), Default::default());
                             }
                             let mut materializer = InPlaceMaterializer {
                                 specs: &plan
@@ -767,7 +767,7 @@ struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
     binding_sets: BindingSet,
     subsets: DenseIdMap<AtomId, Arc<TrieNode>>,
-    materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
+    materializations: DenseIdMap<MatId, Arc<IndexMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl BindingInfo {
@@ -2034,7 +2034,7 @@ fn flush_action_states(
 
 struct InPlaceMaterializer<'a> {
     specs: &'a DenseIdMap<MatId, MatSpec>,
-    materializations: DenseIdMap<MatId, HashMap<Vec<Value>, RowBuffer>>,
+    materializations: DenseIdMap<MatId, IndexMap<Vec<Value>, RowBuffer>>,
     scratch_key: Vec<Value>,
     scratch_val: Vec<Value>,
 }

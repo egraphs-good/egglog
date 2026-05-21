@@ -325,6 +325,19 @@ impl Function {
     pub fn is_let_binding(&self) -> bool {
         self.decl.internal_let
     }
+
+    /// Whether this function is internally hidden (e.g., compiler-generated
+    /// helper tables that should not appear in user-facing listings).
+    pub fn is_hidden(&self) -> bool {
+        self.decl.internal_hidden
+    }
+
+    /// The term-constructor name associated with this function table, if
+    /// any. Set on view tables created by the term/proof encoding to refer
+    /// back to the user-visible constructor name.
+    pub fn term_constructor(&self) -> Option<&str> {
+        self.decl.term_constructor.as_deref()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1062,6 +1075,12 @@ impl EGraph {
     /// Get the list of all functions in the e-graph.
     pub fn get_function_names(&self) -> Vec<String> {
         self.functions.keys().cloned().collect()
+    }
+
+    /// Iterate over every `(name, function)` pair registered in the
+    /// e-graph, in registration order.
+    pub fn functions_iter(&self) -> impl Iterator<Item = (&String, &Function)> {
+        self.functions.iter()
     }
 
     /// Read the contents of the given function.
