@@ -1,3 +1,4 @@
+use crate::exec_state::Internal;
 use egglog_bridge::UnionAction;
 use std::any::TypeId;
 use std::iter::zip;
@@ -137,11 +138,14 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
         if self.element.is_eq_sort() {
-            eg.add_primitive(Union {
-                name: "vec-union".into(),
-                vec: arc.clone(),
-                action: eg.new_union_action(),
-            });
+            eg.add_write_primitive(
+                Union {
+                    name: "vec-union".into(),
+                    vec: arc.clone(),
+                    action: eg.new_union_action(),
+                },
+                None,
+            );
         }
         // vec-range
         if self.element.name() == "i64" {
@@ -150,7 +154,7 @@ impl ContainerSort for VecSort {
                 data: {
                     let end: usize = end.try_into().unwrap_or(0);
                     (0..end)
-                        .map(|i| exec_state.base_values().get::<i64>(i as i64))
+                        .map(|i| state.base_values().get::<i64>(i as i64))
                         .collect()
                 }
             } });
@@ -202,12 +206,15 @@ pub(crate) fn try_registering_vec_map(
     {
         return;
     }
-    eg.add_primitive(VecMap {
-        name: "unstable-vec-map".into(),
-        vec: input_vec,
-        output_vec,
-        fn_: fn_.clone(),
-    });
+    eg.add_pure_primitive(
+        VecMap {
+            name: "unstable-vec-map".into(),
+            vec: input_vec,
+            output_vec,
+            fn_: fn_.clone(),
+        },
+        None,
+    );
 }
 
 pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -235,43 +242,43 @@ impl Primitive for VecMap {
     fn name(&self) -> &str {
         &self.name
     }
-
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            self.name(),
+            &self.name,
             vec![self.fn_.clone(), self.vec.clone(), self.output_vec.clone()],
             span.clone(),
         )
         .into_box()
     }
+}
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+impl PurePrim for VecMap {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
-        let vec = exec_state
+        let vec = state
             .container_values()
             .get_val::<VecContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            if let Some(mapped) = fc.apply(exec_state, &[v]) {
+            if let Some(mapped) = state.apply_function(&fc, &[v]) {
                 new_data.push(mapped);
             }
         }
-        let vec = VecContainer {
+        let new_vec = VecContainer {
             do_rebuild: self.output_vec.is_eq_container_sort(),
             data: new_data,
         };
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(vec, exec_state),
-        )
+        Some(state.register_container(new_vec))
     }
 }
 
@@ -285,6 +292,10 @@ struct Union {
     action: UnionAction,
 }
 
+// `Union` unions the corresponding entries of two vecs of equal length.
+// It writes to the union-find (via `UnionAction::union`), so it
+// implements `WritePrim` — valid in rule-action and global-action
+// contexts, rejected at rule-build time if used in a rule query.
 impl Primitive for Union {
     fn name(&self) -> &str {
         &self.name
@@ -298,14 +309,20 @@ impl Primitive for Union {
         )
         .into_box()
     }
+}
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let left = exec_state
+impl WritePrim for Union {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::WriteState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let left = state
             .container_values()
             .get_val::<VecContainer>(args[0])?
             .clone()
             .data;
-        let right = exec_state
+        let right = state
             .container_values()
             .get_val::<VecContainer>(args[1])?
             .clone()
@@ -313,8 +330,10 @@ impl Primitive for Union {
         if left.len() != right.len() {
             return None;
         }
+        let action = self.action;
+        let es = state.raw_exec_state();
         for (l, r) in zip(left, right) {
-            self.action.union(exec_state, l, r);
+            action.union(es, l, r);
         }
         Some(args[0])
     }

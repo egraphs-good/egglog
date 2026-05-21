@@ -178,6 +178,7 @@ impl GlobalRemover<'_> {
                     }),
                     name: rule.name.clone(),
                     ruleset: rule.ruleset.clone(),
+                    naive: rule.naive,
                 };
                 vec![GenericNCommand::NormRule { rule: new_rule }]
             }

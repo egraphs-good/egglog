@@ -488,7 +488,7 @@ impl<'a> ExecutionState<'a> {
         self.db.table_info[table].name()
     }
 
-    pub fn base_values(&self) -> &BaseValues {
+    pub fn base_values(&self) -> &'a BaseValues {
         self.db.bases
     }
 

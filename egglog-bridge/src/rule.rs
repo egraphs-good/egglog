@@ -167,6 +167,17 @@ impl RuleBuilder<'_> {
         self.egraph
     }
 
+    /// Register a runtime panic with a custom message and return its
+    /// id. When called via [`call_external_func`], the panic writes
+    /// the message to the egraph's panic side channel and triggers
+    /// early stop, so `run_rules` returns an `Err` carrying the
+    /// message rather than the calling thread unwinding.
+    ///
+    /// [`call_external_func`]: Self::call_external_func
+    pub fn new_panic(&mut self, message: String) -> crate::ExternalFunctionId {
+        self.egraph.new_panic(message)
+    }
+
     pub(crate) fn set_plan_strategy(&mut self, strategy: PlanStrategy) {
         self.query.plan_strategy = strategy;
     }

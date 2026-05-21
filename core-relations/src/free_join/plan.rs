@@ -147,6 +147,7 @@ pub(crate) enum JoinStage {
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        is_leaf_scan: bool,
     },
     FusedIntersectMat {
         cover: MatId,
@@ -163,62 +164,50 @@ impl JoinStage {
     /// scans that do no filtering whatsoever.
     fn fuse(&mut self, other: &JoinStage) -> bool {
         use JoinStage::*;
-        match (self, other) {
+        match (&*self, other) {
             (
                 FusedIntersect {
-                    cover,
-                    bind,
-                    to_intersect,
+                    cover: cover1,
+                    bind: bind1,
+                    to_intersect: to_intersect1,
+                    is_leaf_scan: is_leaf_scan1,
                 },
-                Intersect { var, scans },
-            ) if to_intersect.is_empty()
-                && scans.len() == 1
-                && cover.to_index.atom == scans[0].atom
-                && scans[0].cs.is_empty() =>
+                FusedIntersect {
+                    cover: cover2,
+                    bind: bind2,
+                    to_intersect: to_intersect2,
+                    is_leaf_scan: is_leaf_scan2,
+                },
+            ) if cover1.to_index.atom == cover2.to_index.atom
+                && to_intersect1.is_empty()
+                && to_intersect2.is_empty()
+                && (cover1.constraints.is_empty() || cover2.constraints.is_empty()) =>
             {
-                let col = scans[0].column;
-                bind.push((col, *var));
-                cover.to_index.vars.push(col);
-                true
-            }
-            (
-                x,
-                Intersect {
-                    var: var2,
-                    scans: scans2,
-                },
-            ) => {
-                // This is all somewhat mangled because of the borrowing rules
-                // when we pass &mut self into a tuple.
-                let (var1, mut scans1) = if let Intersect {
-                    var: var1,
-                    scans: scans1,
-                } = x
-                {
-                    if !(scans1.len() == 1
-                        && scans2.len() == 1
-                        && scans1[0].atom == scans2[0].atom
-                        && scans2[0].cs.is_empty())
-                    {
-                        return false;
-                    }
-                    (*var1, mem::take(scans1))
-                } else {
-                    return false;
+                assert!(!*is_leaf_scan1 && !is_leaf_scan2);
+                let to_index = SubAtom {
+                    atom: cover1.to_index.atom,
+                    vars: cover1
+                        .to_index
+                        .vars
+                        .iter()
+                        .chain(cover2.to_index.vars.iter())
+                        .copied()
+                        .collect(),
                 };
-                let atom = scans1[0].atom;
-                let col1 = scans1[0].column;
-                let col2 = scans2[0].column;
-                *x = FusedIntersect {
+                let bind = bind1.iter().chain(bind2.iter()).copied().collect();
+                *self = FusedIntersect {
                     cover: ScanSpec {
-                        to_index: SubAtom {
-                            atom,
-                            vars: smallvec![col1, col2],
-                        },
-                        constraints: mem::take(&mut scans1[0].cs),
+                        to_index,
+                        constraints: cover1
+                            .constraints
+                            .iter()
+                            .chain(cover2.constraints.iter())
+                            .cloned()
+                            .collect(),
                     },
-                    bind: smallvec![(col1, var1), (col2, *var2)],
+                    bind,
                     to_intersect: Default::default(),
+                    is_leaf_scan: false,
                 };
                 true
             }
@@ -352,6 +341,7 @@ impl SinglePlan {
                     cover,
                     bind: _,
                     to_intersect,
+                    is_leaf_scan: _,
                 } => {
                     let cover_atom_name = get_atom(cover.to_index.atom);
                     let cover_cols: Vec<(String, i64)> = cover
@@ -962,6 +952,13 @@ fn plan_single_bag(
     let (header, mut instrs) = plan_stages(&stripped_bag, strat);
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
+    // `plan_gj` decides `is_leaf_scan` based only on the stages it produces, so it cannot
+    // see the prologue/epilogue stages we just spliced in. A leaf scan factorizes its
+    // bound variables into `binding_info.binding_sets` rather than `binding_info.bindings`,
+    // which breaks any later `FusedIntersectMat::Value`/`Lookup` that reads those variables
+    // directly from `bindings`. Downgrade bad leaf scans now that the full instruction
+    // sequence is known.
+    revert_bad_leaf_scans(&mut instrs);
 
     let stages = JoinStages {
         instrs: Arc::new(instrs),
@@ -1054,6 +1051,66 @@ fn fuse_last_stage(
     last_block.instrs = Arc::new(instrs);
 
     (blocks, last_block)
+}
+
+/// Downgrade any `FusedIntersect { is_leaf_scan: true, .. }` whose factorized bindings
+/// would be observed as missing by a later stage.
+///
+/// `is_leaf_scan` instructs the executor to factorize the stage's bindings into
+/// `BindingInfo::binding_sets` instead of materializing them into `BindingInfo::bindings`.
+/// That is OK only if no subsequent stage in the same `JoinStages` reads any of those
+/// variables as a scalar value from `bindings`. The only stages that do so are
+/// `FusedIntersectMat::Value` / `Lookup`, whose `index_vars` are looked up directly.
+///
+/// `plan_gj` performs its own (cover-atom-based) check, but that runs before prologue /
+/// epilogue stages are spliced into the instruction list, so it cannot detect
+/// `FusedIntersectMat` lookups that come from the epilogue. This pass closes that gap.
+///
+/// # Example
+///
+/// Suppose `plan_gj` produces the following two stages for a bag, where stage 0 is
+/// the last `FusedIntersect` and binds variable `y` from atom `A` via a leaf scan
+/// (no atom later in `plan_gj`'s output reuses `A`):
+///
+/// ```text
+///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
+/// ```
+///
+/// `plan_single_bag` then splices an epilogue that looks up an earlier block's
+/// materialization keyed on `y`:
+///
+/// ```text
+///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
+///   stage 1: FusedIntersectMat { mode: Lookup([y]), ... }
+/// ```
+///
+/// With `is_leaf_scan: true`, stage 0 puts `y` into `binding_sets` instead of
+/// `bindings`. Stage 1 then tries `binding_info.bindings[y]` and panics on a missing
+/// entry. This pass detects the overlap (`y ∈ bound_vars ∩ Lookup`'s index_vars) and
+/// flips stage 0's `is_leaf_scan` back to `false`.
+fn revert_bad_leaf_scans(stages: &mut [JoinStage]) {
+    for i in 0..stages.len() {
+        let bound_vars: SmallVec<[Variable; 4]> = match &stages[i] {
+            JoinStage::FusedIntersect {
+                bind,
+                is_leaf_scan: true,
+                ..
+            } => bind.iter().map(|(_, v)| *v).collect(),
+            _ => continue,
+        };
+
+        let needs_scalar = ((i + 1)..stages.len()).any(|j| match &stages[j] {
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Value(vars) | MatScanMode::Lookup(vars),
+                ..
+            } => vars.iter().any(|v| bound_vars.contains(v)),
+            _ => false,
+        });
+
+        if needs_scalar && let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] {
+            *is_leaf_scan = false;
+        }
+    }
 }
 
 /// Eagerly lift materialization lookups up
@@ -1583,6 +1640,39 @@ fn plan_gj(
         }
         stages.push(next_stage);
     }
+    for i in 0..stages.len() {
+        if let JoinStage::FusedIntersect {
+            cover,
+            to_intersect,
+            ..
+        } = &stages[i]
+            && to_intersect.is_empty()
+        {
+            let cover_atom = cover.to_index.atom;
+            let mut used_later = false;
+            for later_stage in &stages[i + 1..] {
+                used_later = used_later
+                    || match later_stage {
+                        JoinStage::Intersect { scans, .. } => {
+                            scans.iter().any(|scan| scan.atom == cover_atom)
+                        }
+                        JoinStage::FusedIntersect { cover, .. } => {
+                            cover.to_index.atom == cover_atom
+                        }
+                        JoinStage::FusedIntersectMat { .. } => unreachable!(),
+                    };
+                if used_later {
+                    break;
+                }
+            }
+            if !used_later {
+                let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] else {
+                    unreachable!();
+                };
+                *is_leaf_scan = true;
+            }
+        }
+    }
 }
 
 /// Compile a stage info into a concrete join stage, updating constraint state.
@@ -1608,7 +1698,8 @@ fn compile_stage(
         }
     }
 
-    if vars.len() == 1 {
+    // Only do this if it's a join of more than one relations
+    if vars.len() == 1 && !filters.is_empty() {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
             iter::once(&cover)
                 .chain(filters.iter().map(|(x, _)| x))
@@ -1655,5 +1746,6 @@ fn compile_stage(
         cover: cover_spec,
         bind,
         to_intersect,
+        is_leaf_scan: false,
     }
 }
