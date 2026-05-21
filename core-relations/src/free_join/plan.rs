@@ -689,18 +689,70 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     bags
 }
 
-/// Topologically sorts bags based on variable dependencies.
+/// Topologically sorts bags based on variable dependencies, and merges bags so
+/// that the final result is a *chain*. This means `plan_single_bag` only ever
+/// needs a single prologue per bag and never an epilogue. This is because the
+/// epilogues do not participate in joins and are checked only after the main
+/// join loop, so they can easily lead to cartesian products.
 ///
-/// This ensures that we evaluate bags in order.
+/// At every DFS node we pick one child as the chain continuation. Every other reachable bag —
+/// siblings *and* their entire sub-trees — gets absorbed into the current chain node. The
+/// continuation is picked in a way that minimizes the maximum number of atoms in a bag, i.e.,
+/// the pathwidth.
 ///
-/// This method also merges bags. The case where a bag has multiple children in the tree decomposition
-/// has terrible performance currently, because all children but one has to be an innermost lookup.
-/// So in this function, we merge all the non-first children into the parent. This improves HardBoiled benchmarks
-/// significantly.
+/// The pathwidth of a path decomposition is the maximum bag size (minus one) over all bags,
+/// and the size of a bag is measured as the number of atoms in the bag.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
+    let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
+    // best_pathwidth[i] = the best pathwidth of the chain if we pick bag i
+    // to be the chain child.
+    let mut best_pathwidth = vec![usize::MAX; bags.len()];
+    let mut full = vec![HashSet::default(); bags.len()];
+    let mut choice = vec![usize::MAX; bags.len()];
+    for i in 0..bags.len() {
+        let mut full_i: HashSet<AtomId> =
+            bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+        for child in all_children_list[i].iter() {
+            full_i.extend(full[*child].iter().copied());
+        }
+        full[i] = full_i;
+        best_pathwidth[i] = full[i].len();
+        for chain_child in all_children_list[i].iter() {
+            let mut chain_score: HashSet<_> =
+                bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+            chain_score.extend(
+                all_children_list[*chain_child]
+                    .iter()
+                    .filter(|child| *child != chain_child)
+                    .flat_map(|child| full[*child].iter().copied()),
+            );
+            let s = chain_score.len().max(best_pathwidth[*chain_child]);
+            if s <= best_pathwidth[i] {
+                best_pathwidth[i] = s;
+                choice[i] = *chain_child;
+            }
+        }
+
+        // Find the parent of this bag, which must be the lowerest-numbered bag
+        // that shares the most variables with it.
+        let parent = bags
+            .iter()
+            .enumerate()
+            .skip(i + 1)
+            .map(|(j, b)| (j, b.common_vars_with(&bags[i]).count()))
+            .filter(|(_, count)| *count > 0)
+            .max_by_key(|(j, count)| (*count, -(*j as isize)));
+        if let Some((j, _count)) = parent {
+            all_children_list[j].push(i);
+        }
+    }
+
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
+    // Stack entries: (bag_id, parent). `parent` is None for chain nodes (the bag is
+    // pushed to `bags_topo` as a new standalone entry) and Some(idx) for nodes being
+    // absorbed into `bags_topo[idx]`.
     let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
 
     // Starting from the last, since early bags are more likely to be leaves and we don't
@@ -723,22 +775,30 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 this = bags_topo.len();
             }
 
-            let mut all_children: Vec<_> = bags_opt
-                .iter()
-                .enumerate()
-                .filter_map(|(i, b)| Some((i, b.as_ref()?)))
-                .map(|(i, b)| (i, b.common_vars_with(&bag).count()))
-                .filter(|(i, count)| *count > 0 && !visited[*i])
-                .collect();
-            all_children.sort_unstable_by_key(|(_, count)| *count);
+            let all_children = &mut all_children_list[bag_id];
 
-            if !all_children.is_empty() {
-                visited[all_children[0].0] = true;
-                stack.push((all_children[0].0, None));
-
-                for &(i, _) in all_children[1..].iter() {
+            if parent.is_some() {
+                // This bag is being absorbed into `bags_topo[this]`. To keep the
+                // result a chain, every descendant of this bag is also absorbed —
+                // none of them get to spawn a new chain node.
+                for &i in all_children.iter() {
                     visited[i] = true;
-                    stack.push((i, Some(this)))
+                    stack.push((i, Some(this)));
+                }
+            } else {
+                // This bag is a chain node. The child that minimizes pathwidth continues the
+                // chain; the rest (and all their descendants, via the branch above)
+                // are absorbed into this chain node.
+                if !all_children.is_empty() {
+                    for &i in all_children[1..].iter() {
+                        if i == choice[bag_id] {
+                            continue;
+                        }
+                        visited[i] = true;
+                        stack.push((i, Some(this)));
+                    }
+                    visited[choice[bag_id]] = true;
+                    stack.push((choice[bag_id], None));
                 }
             }
 
