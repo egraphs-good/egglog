@@ -905,9 +905,9 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched)?;
-                    let updated = rec.updated;
+                    let can_stop = rec.can_stop;
                     report.union(rec);
-                    if !updated {
+                    if can_stop {
                         break;
                     }
                 }
