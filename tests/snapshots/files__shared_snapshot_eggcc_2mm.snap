@@ -185,7 +185,7 @@ expression: snapshot_content_across_treatments
  (Shl 1)
  (Shr 1)
  (Single 957)
- (Smaller 1806)
+ (Smaller 1826)
  (Smax 1)
  (Smin 1)
  (StateT 1)
