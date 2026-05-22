@@ -1912,6 +1912,53 @@ impl EGraph {
         self.functions.get(name)
     }
 
+    /// Returns `true` if a user-defined command with the given name is
+    /// registered in this e-graph.
+    pub fn has_command(&self, name: &str) -> bool {
+        self.commands.contains_key(name)
+    }
+
+    /// Invoke a registered user-defined command by name, passing the given
+    /// unresolved expression arguments.
+    ///
+    /// This is equivalent to writing `(name args...)` at the top level, but
+    /// callable directly from Rust.  Returns an error if no command with the given
+    /// name is registered.
+    pub fn run_user_defined_command(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<CommandOutput>, Error> {
+        let command = self
+            .commands
+            .swap_remove(name)
+            .ok_or_else(|| Error::TypeError(TypeError::UnboundFunction(name.to_owned(), span!())))?;
+        let res = command.update(self, args);
+        self.commands.insert(name.to_owned(), command);
+        res
+    }
+
+    /// Run a closure with full read-write access to the database, then flush
+    /// pending writes.
+    ///
+    /// This is the top-level equivalent of [`FullPrim::apply`], and the closure receives a
+    ///  [`FullState`].
+    ///
+    /// Pending writes staged inside the closure are flushed (and the
+    /// union-find rebuilt if necessary) before this method returns.
+    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
+        // Clone the Arc so the guard is not lifetime-tied to &self.backend,
+        // allowing flush_updates(&mut self.backend) after the closure.
+        let registry_arc = self.backend.action_registry().clone();
+        let registry_guard = registry_arc.read().unwrap();
+        let result = self.backend.with_execution_state(|es| {
+            f(FullState::wrap(es, &*registry_guard, Context::Full))
+        });
+        drop(registry_guard);
+        self.backend.flush_updates();
+        result
+    }
+
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.backend.set_report_level(level);
     }
