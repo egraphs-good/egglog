@@ -1929,10 +1929,9 @@ impl EGraph {
         name: &str,
         args: &[Expr],
     ) -> Result<Option<CommandOutput>, Error> {
-        let command = self
-            .commands
-            .swap_remove(name)
-            .ok_or_else(|| Error::TypeError(TypeError::UnboundFunction(name.to_owned(), span!())))?;
+        let command = self.commands.swap_remove(name).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(name.to_owned(), span!()))
+        })?;
         let res = command.update(self, args);
         self.commands.insert(name.to_owned(), command);
         res
@@ -1951,9 +1950,9 @@ impl EGraph {
         // allowing flush_updates(&mut self.backend) after the closure.
         let registry_arc = self.backend.action_registry().clone();
         let registry_guard = registry_arc.read().unwrap();
-        let result = self.backend.with_execution_state(|es| {
-            f(FullState::wrap(es, &*registry_guard, Context::Full))
-        });
+        let result = self
+            .backend
+            .with_execution_state(|es| f(FullState::wrap(es, &registry_guard, Context::Full)));
         drop(registry_guard);
         self.backend.flush_updates();
         result
