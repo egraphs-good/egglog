@@ -819,6 +819,7 @@ impl TypeInfo {
             name,
             ruleset,
             naive,
+            no_decomp,
         } = rule;
         let mut constraints = vec![];
 
@@ -874,6 +875,7 @@ impl TypeInfo {
             name: name.clone(),
             ruleset: ruleset.clone(),
             naive: *naive,
+            no_decomp: *no_decomp,
         })
     }
 

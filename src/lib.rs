@@ -269,6 +269,7 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    pub no_decomp: bool,
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
@@ -379,6 +380,7 @@ impl Default for EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
+            no_decomp: false,
             overall_run_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -1013,14 +1015,15 @@ impl EGraph {
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
         let seminaive = self.seminaive && !rule.naive;
+        // The `:no-decomp` rule option (and the global `--no-decomp`
+        // flag) skips tree-decomposition in query planning, forcing
+        // the single-bag fast path.
+        let no_decomp = self.no_decomp || rule.no_decomp;
 
         let rule_id = {
-            let mut translator = BackendRule::new(
-                self.backend.new_rule(&rule.name, seminaive),
-                &self.functions,
-                &self.type_info,
-                seminaive,
-            );
+            let mut rb = self.backend.new_rule(&rule.name, seminaive);
+            rb.set_no_decomp(no_decomp);
+            let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
             translator.query(query, false);
             translator.actions(actions)?;
             translator.build()
@@ -1207,6 +1210,7 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
             naive: false,
+            no_decomp: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,

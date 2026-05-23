@@ -99,6 +99,10 @@ where
     /// contexts, allowing primitives that read or write the database
     /// inside queries and actions. Set via the `:naive` rule option.
     pub naive: bool,
+    /// If `true`, this rule skips tree-decomposition during query
+    /// planning and evaluate rules as a single-bag (without decomposing
+    /// it into smaller queries). Set via the `:no-decomp` rule option.
+    pub no_decomp: bool,
 }
 
 /// Change a function entry.

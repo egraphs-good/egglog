@@ -1724,6 +1724,7 @@ where
                     head: rule.head,
                     body: rule.body,
                     naive: rule.naive,
+                    no_decomp: rule.no_decomp,
                 };
                 GenericCommand::Rule { rule }
             }
