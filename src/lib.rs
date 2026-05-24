@@ -290,7 +290,7 @@ pub struct EGraph {
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
-    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
+    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error>;
 }
 
 /// A function in the e-graph.
@@ -1255,7 +1255,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Vec<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort {
@@ -1299,14 +1299,14 @@ impl EGraph {
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
-                return Ok(Some(CommandOutput::RunSchedule(report)));
+                return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
                 None => {
                     log::info!("Printed overall statistics");
-                    return Ok(Some(CommandOutput::OverallStatistics(
+                    return Ok(vec![CommandOutput::OverallStatistics(
                         self.overall_run_report.clone(),
-                    )));
+                    )]);
                 }
                 Some(path) => {
                     let mut file = std::fs::File::create(&path)
@@ -1349,7 +1349,7 @@ impl EGraph {
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                         }
-                        Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
+                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                     } else {
                         Err(Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
@@ -1369,7 +1369,7 @@ impl EGraph {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(Some(CommandOutput::ExtractVariants(termdag, terms)))
+                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1395,13 +1395,16 @@ impl EGraph {
                             .map_err(|e| Error::IoError(file.into(), e, span.clone()))
                     })
                     .transpose()?;
-                return self.print_function(&f, n, file, mode).map_err(|e| match e {
-                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
-                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
-                    }
-                    // This case is currently impossible
-                    _ => e,
-                });
+                return self
+                    .print_function(&f, n, file, mode)
+                    .map_err(|e| match e {
+                        Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                            Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                        }
+                        // This case is currently impossible
+                        _ => e,
+                    })
+                    .map(|opt| opt.into_iter().collect());
             }
             ResolvedNCommand::PrintSize(span, f) => {
                 let res = self.print_size(f.as_deref()).map_err(|e| match e {
@@ -1411,7 +1414,7 @@ impl EGraph {
                     // This case is currently impossible
                     _ => e,
                 })?;
-                return Ok(Some(res));
+                return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
@@ -1468,6 +1471,7 @@ impl EGraph {
                 self.commands.insert(name, command);
                 return res;
             }
+
             ResolvedNCommand::ProveExists(span, resolved_call) => {
                 let mut instrument = ProofInstrumentor { egraph: self };
                 let (proof_store, proof_id) =
@@ -1477,14 +1481,14 @@ impl EGraph {
                             span: span.clone(),
                             error,
                         })?;
-                return Ok(Some(CommandOutput::ProveExists {
+                return Ok(vec![CommandOutput::ProveExists {
                     proof_store,
                     proof_id,
-                }));
+                }]);
             }
         };
 
-        Ok(None)
+        Ok(vec![])
     }
 
     fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
@@ -1745,9 +1749,7 @@ impl EGraph {
                             )
                         {
                             let result = self.run_command(processed)?;
-                            if let Some(output) = result {
-                                outputs.push(output);
-                            }
+                            outputs.extend(result);
                         }
                     }
                 }
@@ -1928,7 +1930,7 @@ impl EGraph {
         &mut self,
         name: &str,
         args: &[Expr],
-    ) -> Result<Option<CommandOutput>, Error> {
+    ) -> Result<Vec<CommandOutput>, Error> {
         let command = self.commands.swap_remove(name).ok_or_else(|| {
             Error::TypeError(TypeError::UnboundFunction(name.to_owned(), span!()))
         })?;
