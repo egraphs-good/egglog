@@ -115,18 +115,36 @@ impl IterationReport {
 /// the database was updated.
 /// Calling `union` on two run reports adds the timing
 /// information together.
-#[derive(Debug, Serialize, Clone, Default)]
+#[derive(Debug, Serialize, Clone)]
 pub struct RunReport {
     // Since `IterationReport`s are immutable, we can reference count them to avoid
     // expensive cloning when e-graphs are cloned.
     pub iterations: Vec<Arc<IterationReport>>,
     /// If any changes were made to the database.
     pub updated: bool,
+    /// True if this run observed no database changes and there is no deferred
+    /// scheduler work requiring another iteration.
+    pub can_stop: bool,
     pub search_and_apply_time_per_rule: HashMap<Arc<str>, Duration>,
     pub num_matches_per_rule: HashMap<Arc<str>, usize>,
     pub search_and_apply_time_per_ruleset: HashMap<Arc<str>, Duration>,
     pub merge_time_per_ruleset: HashMap<Arc<str>, Duration>,
     pub rebuild_time_per_ruleset: HashMap<Arc<str>, Duration>,
+}
+
+impl Default for RunReport {
+    fn default() -> Self {
+        Self {
+            iterations: Vec::new(),
+            updated: false,
+            can_stop: true,
+            search_and_apply_time_per_rule: HashMap::default(),
+            num_matches_per_rule: HashMap::default(),
+            search_and_apply_time_per_ruleset: HashMap::default(),
+            merge_time_per_ruleset: HashMap::default(),
+            rebuild_time_per_ruleset: HashMap::default(),
+        }
+    }
 }
 
 impl Display for RunReport {
@@ -228,6 +246,7 @@ impl RunReport {
         report.merge_time_per_ruleset = per_ruleset(iteration.rule_set_report.merge_time);
         report.rebuild_time_per_ruleset = per_ruleset(iteration.rebuild_time);
         report.updated = iteration.changed();
+        report.can_stop = !report.updated;
         report.iterations.push(Arc::new(iteration));
 
         report
@@ -241,6 +260,7 @@ impl RunReport {
     pub fn union(&mut self, other: Self) {
         self.iterations.extend(other.iterations);
         self.updated |= other.updated;
+        self.can_stop &= other.can_stop;
         RunReport::union_times(
             &mut self.search_and_apply_time_per_rule,
             other.search_and_apply_time_per_rule,
