@@ -147,6 +147,7 @@ pub(crate) enum JoinStage {
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        is_leaf_scan: bool,
     },
     FusedIntersectMat {
         cover: MatId,
@@ -163,62 +164,50 @@ impl JoinStage {
     /// scans that do no filtering whatsoever.
     fn fuse(&mut self, other: &JoinStage) -> bool {
         use JoinStage::*;
-        match (self, other) {
+        match (&*self, other) {
             (
                 FusedIntersect {
-                    cover,
-                    bind,
-                    to_intersect,
+                    cover: cover1,
+                    bind: bind1,
+                    to_intersect: to_intersect1,
+                    is_leaf_scan: is_leaf_scan1,
                 },
-                Intersect { var, scans },
-            ) if to_intersect.is_empty()
-                && scans.len() == 1
-                && cover.to_index.atom == scans[0].atom
-                && scans[0].cs.is_empty() =>
+                FusedIntersect {
+                    cover: cover2,
+                    bind: bind2,
+                    to_intersect: to_intersect2,
+                    is_leaf_scan: is_leaf_scan2,
+                },
+            ) if cover1.to_index.atom == cover2.to_index.atom
+                && to_intersect1.is_empty()
+                && to_intersect2.is_empty()
+                && (cover1.constraints.is_empty() || cover2.constraints.is_empty()) =>
             {
-                let col = scans[0].column;
-                bind.push((col, *var));
-                cover.to_index.vars.push(col);
-                true
-            }
-            (
-                x,
-                Intersect {
-                    var: var2,
-                    scans: scans2,
-                },
-            ) => {
-                // This is all somewhat mangled because of the borrowing rules
-                // when we pass &mut self into a tuple.
-                let (var1, mut scans1) = if let Intersect {
-                    var: var1,
-                    scans: scans1,
-                } = x
-                {
-                    if !(scans1.len() == 1
-                        && scans2.len() == 1
-                        && scans1[0].atom == scans2[0].atom
-                        && scans2[0].cs.is_empty())
-                    {
-                        return false;
-                    }
-                    (*var1, mem::take(scans1))
-                } else {
-                    return false;
+                assert!(!*is_leaf_scan1 && !is_leaf_scan2);
+                let to_index = SubAtom {
+                    atom: cover1.to_index.atom,
+                    vars: cover1
+                        .to_index
+                        .vars
+                        .iter()
+                        .chain(cover2.to_index.vars.iter())
+                        .copied()
+                        .collect(),
                 };
-                let atom = scans1[0].atom;
-                let col1 = scans1[0].column;
-                let col2 = scans2[0].column;
-                *x = FusedIntersect {
+                let bind = bind1.iter().chain(bind2.iter()).copied().collect();
+                *self = FusedIntersect {
                     cover: ScanSpec {
-                        to_index: SubAtom {
-                            atom,
-                            vars: smallvec![col1, col2],
-                        },
-                        constraints: mem::take(&mut scans1[0].cs),
+                        to_index,
+                        constraints: cover1
+                            .constraints
+                            .iter()
+                            .chain(cover2.constraints.iter())
+                            .cloned()
+                            .collect(),
                     },
-                    bind: smallvec![(col1, var1), (col2, *var2)],
+                    bind,
                     to_intersect: Default::default(),
+                    is_leaf_scan: false,
                 };
                 true
             }
@@ -352,6 +341,7 @@ impl SinglePlan {
                     cover,
                     bind: _,
                     to_intersect,
+                    is_leaf_scan: _,
                 } => {
                     let cover_atom_name = get_atom(cover.to_index.atom);
                     let cover_cols: Vec<(String, i64)> = cover
@@ -699,18 +689,70 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     bags
 }
 
-/// Topologically sorts bags based on variable dependencies.
+/// Topologically sorts bags based on variable dependencies, and merges bags so
+/// that the final result is a *chain*. This means `plan_single_bag` only ever
+/// needs a single prologue per bag and never an epilogue. This is because the
+/// epilogues do not participate in joins and are checked only after the main
+/// join loop, so they can easily lead to cartesian products.
 ///
-/// This ensures that we evaluate bags in order.
+/// At every DFS node we pick one child as the chain continuation. Every other reachable bag —
+/// siblings *and* their entire sub-trees — gets absorbed into the current chain node. The
+/// continuation is picked in a way that minimizes the maximum number of atoms in a bag, i.e.,
+/// the pathwidth.
 ///
-/// This method also merges bags. The case where a bag has multiple children in the tree decomposition
-/// has terrible performance currently, because all children but one has to be an innermost lookup.
-/// So in this function, we merge all the non-first children into the parent. This improves HardBoiled benchmarks
-/// significantly.
+/// The pathwidth of a path decomposition is the maximum bag size (minus one) over all bags,
+/// and the size of a bag is measured as the number of atoms in the bag.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
+    let mut all_children_list: Vec<Vec<usize>> = vec![vec![]; bags.len()];
+    // best_pathwidth[i] = the best pathwidth of the chain if we pick bag i
+    // to be the chain child.
+    let mut best_pathwidth = vec![usize::MAX; bags.len()];
+    let mut full = vec![HashSet::default(); bags.len()];
+    let mut choice = vec![usize::MAX; bags.len()];
+    for i in 0..bags.len() {
+        let mut full_i: HashSet<AtomId> =
+            bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+        for child in all_children_list[i].iter() {
+            full_i.extend(full[*child].iter().copied());
+        }
+        full[i] = full_i;
+        best_pathwidth[i] = full[i].len();
+        for chain_child in all_children_list[i].iter() {
+            let mut chain_score: HashSet<_> =
+                bags[i].atoms.iter().map(|(atom_id, _)| atom_id).collect();
+            chain_score.extend(
+                all_children_list[*chain_child]
+                    .iter()
+                    .filter(|child| *child != chain_child)
+                    .flat_map(|child| full[*child].iter().copied()),
+            );
+            let s = chain_score.len().max(best_pathwidth[*chain_child]);
+            if s <= best_pathwidth[i] {
+                best_pathwidth[i] = s;
+                choice[i] = *chain_child;
+            }
+        }
+
+        // Find the parent of this bag, which must be the lowerest-numbered bag
+        // that shares the most variables with it.
+        let parent = bags
+            .iter()
+            .enumerate()
+            .skip(i + 1)
+            .map(|(j, b)| (j, b.common_vars_with(&bags[i]).count()))
+            .filter(|(_, count)| *count > 0)
+            .max_by_key(|(j, count)| (*count, -(*j as isize)));
+        if let Some((j, _count)) = parent {
+            all_children_list[j].push(i);
+        }
+    }
+
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
+    // Stack entries: (bag_id, parent). `parent` is None for chain nodes (the bag is
+    // pushed to `bags_topo` as a new standalone entry) and Some(idx) for nodes being
+    // absorbed into `bags_topo[idx]`.
     let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
 
     // Starting from the last, since early bags are more likely to be leaves and we don't
@@ -733,22 +775,30 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 this = bags_topo.len();
             }
 
-            let mut all_children: Vec<_> = bags_opt
-                .iter()
-                .enumerate()
-                .filter_map(|(i, b)| Some((i, b.as_ref()?)))
-                .map(|(i, b)| (i, b.common_vars_with(&bag).count()))
-                .filter(|(i, count)| *count > 0 && !visited[*i])
-                .collect();
-            all_children.sort_unstable_by_key(|(_, count)| *count);
+            let all_children = &mut all_children_list[bag_id];
 
-            if !all_children.is_empty() {
-                visited[all_children[0].0] = true;
-                stack.push((all_children[0].0, None));
-
-                for &(i, _) in all_children[1..].iter() {
+            if parent.is_some() {
+                // This bag is being absorbed into `bags_topo[this]`. To keep the
+                // result a chain, every descendant of this bag is also absorbed —
+                // none of them get to spawn a new chain node.
+                for &i in all_children.iter() {
                     visited[i] = true;
-                    stack.push((i, Some(this)))
+                    stack.push((i, Some(this)));
+                }
+            } else {
+                // This bag is a chain node. The child that minimizes pathwidth continues the
+                // chain; the rest (and all their descendants, via the branch above)
+                // are absorbed into this chain node.
+                if !all_children.is_empty() {
+                    for &i in all_children[1..].iter() {
+                        if i == choice[bag_id] {
+                            continue;
+                        }
+                        visited[i] = true;
+                        stack.push((i, Some(this)));
+                    }
+                    visited[choice[bag_id]] = true;
+                    stack.push((choice[bag_id], None));
                 }
             }
 
@@ -902,6 +952,13 @@ fn plan_single_bag(
     let (header, mut instrs) = plan_stages(&stripped_bag, strat);
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
+    // `plan_gj` decides `is_leaf_scan` based only on the stages it produces, so it cannot
+    // see the prologue/epilogue stages we just spliced in. A leaf scan factorizes its
+    // bound variables into `binding_info.binding_sets` rather than `binding_info.bindings`,
+    // which breaks any later `FusedIntersectMat::Value`/`Lookup` that reads those variables
+    // directly from `bindings`. Downgrade bad leaf scans now that the full instruction
+    // sequence is known.
+    revert_bad_leaf_scans(&mut instrs);
 
     let stages = JoinStages {
         instrs: Arc::new(instrs),
@@ -994,6 +1051,66 @@ fn fuse_last_stage(
     last_block.instrs = Arc::new(instrs);
 
     (blocks, last_block)
+}
+
+/// Downgrade any `FusedIntersect { is_leaf_scan: true, .. }` whose factorized bindings
+/// would be observed as missing by a later stage.
+///
+/// `is_leaf_scan` instructs the executor to factorize the stage's bindings into
+/// `BindingInfo::binding_sets` instead of materializing them into `BindingInfo::bindings`.
+/// That is OK only if no subsequent stage in the same `JoinStages` reads any of those
+/// variables as a scalar value from `bindings`. The only stages that do so are
+/// `FusedIntersectMat::Value` / `Lookup`, whose `index_vars` are looked up directly.
+///
+/// `plan_gj` performs its own (cover-atom-based) check, but that runs before prologue /
+/// epilogue stages are spliced into the instruction list, so it cannot detect
+/// `FusedIntersectMat` lookups that come from the epilogue. This pass closes that gap.
+///
+/// # Example
+///
+/// Suppose `plan_gj` produces the following two stages for a bag, where stage 0 is
+/// the last `FusedIntersect` and binds variable `y` from atom `A` via a leaf scan
+/// (no atom later in `plan_gj`'s output reuses `A`):
+///
+/// ```text
+///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
+/// ```
+///
+/// `plan_single_bag` then splices an epilogue that looks up an earlier block's
+/// materialization keyed on `y`:
+///
+/// ```text
+///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
+///   stage 1: FusedIntersectMat { mode: Lookup([y]), ... }
+/// ```
+///
+/// With `is_leaf_scan: true`, stage 0 puts `y` into `binding_sets` instead of
+/// `bindings`. Stage 1 then tries `binding_info.bindings[y]` and panics on a missing
+/// entry. This pass detects the overlap (`y ∈ bound_vars ∩ Lookup`'s index_vars) and
+/// flips stage 0's `is_leaf_scan` back to `false`.
+fn revert_bad_leaf_scans(stages: &mut [JoinStage]) {
+    for i in 0..stages.len() {
+        let bound_vars: SmallVec<[Variable; 4]> = match &stages[i] {
+            JoinStage::FusedIntersect {
+                bind,
+                is_leaf_scan: true,
+                ..
+            } => bind.iter().map(|(_, v)| *v).collect(),
+            _ => continue,
+        };
+
+        let needs_scalar = ((i + 1)..stages.len()).any(|j| match &stages[j] {
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Value(vars) | MatScanMode::Lookup(vars),
+                ..
+            } => vars.iter().any(|v| bound_vars.contains(v)),
+            _ => false,
+        });
+
+        if needs_scalar && let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] {
+            *is_leaf_scan = false;
+        }
+    }
 }
 
 /// Eagerly lift materialization lookups up
@@ -1523,6 +1640,39 @@ fn plan_gj(
         }
         stages.push(next_stage);
     }
+    for i in 0..stages.len() {
+        if let JoinStage::FusedIntersect {
+            cover,
+            to_intersect,
+            ..
+        } = &stages[i]
+            && to_intersect.is_empty()
+        {
+            let cover_atom = cover.to_index.atom;
+            let mut used_later = false;
+            for later_stage in &stages[i + 1..] {
+                used_later = used_later
+                    || match later_stage {
+                        JoinStage::Intersect { scans, .. } => {
+                            scans.iter().any(|scan| scan.atom == cover_atom)
+                        }
+                        JoinStage::FusedIntersect { cover, .. } => {
+                            cover.to_index.atom == cover_atom
+                        }
+                        JoinStage::FusedIntersectMat { .. } => unreachable!(),
+                    };
+                if used_later {
+                    break;
+                }
+            }
+            if !used_later {
+                let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] else {
+                    unreachable!();
+                };
+                *is_leaf_scan = true;
+            }
+        }
+    }
 }
 
 /// Compile a stage info into a concrete join stage, updating constraint state.
@@ -1548,7 +1698,8 @@ fn compile_stage(
         }
     }
 
-    if vars.len() == 1 {
+    // Only do this if it's a join of more than one relations
+    if vars.len() == 1 && !filters.is_empty() {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
             iter::once(&cover)
                 .chain(filters.iter().map(|(x, _)| x))
@@ -1595,5 +1746,6 @@ fn compile_stage(
         cover: cover_spec,
         bind,
         to_intersect,
+        is_leaf_scan: false,
     }
 }
