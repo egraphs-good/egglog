@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add f64 exp, log, and sqrt primitives.
 - Add `RunReport::can_stop` so scheduler progress can be reported separately from database updates.
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
