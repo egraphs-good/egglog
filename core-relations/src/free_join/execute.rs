@@ -7,11 +7,11 @@ use std::{
 };
 
 use crate::{
-    common::HashMap,
+    common::{HashMap, IndexMap},
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
-    row_buffer::RowBuffer,
+    row_buffer::{RowBuffer, SmallValueVec},
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
@@ -463,7 +463,7 @@ impl Database {
                                                 .unwrap(),
                                         )
                                         .into_iter()
-                                        .collect::<HashMap<_, _>>();
+                                        .collect::<IndexMap<_, _>>();
                                         binding_info
                                             .materializations
                                             .insert(mat_id, Arc::new(materialization));
@@ -551,7 +551,7 @@ impl Database {
                             let mut materializations =
                                 DenseIdMap::with_capacity(plan.stages.blocks.len());
                             for i in 0..plan.stages.blocks.len() {
-                                materializations.insert(MatId::from_usize(i), HashMap::default());
+                                materializations.insert(MatId::from_usize(i), Default::default());
                             }
                             let mut materializer = InPlaceMaterializer {
                                 specs: &plan
@@ -760,11 +760,14 @@ impl FrameUpdates {
     }
 }
 
+type BindingSet = Vec<(SmallVec<[Variable; 4]>, Arc<TaggedRowBuffer<SmallValueVec>>)>;
+
 #[derive(Default, Clone)]
 struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
+    binding_sets: BindingSet,
     subsets: DenseIdMap<AtomId, Arc<TrieNode>>,
-    materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
+    materializations: DenseIdMap<MatId, Arc<IndexMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl BindingInfo {
@@ -955,12 +958,16 @@ impl<'a> JoinState<'a> {
         }
 
         if cur >= instr_order.len() {
-            action_buf.push_bindings(action, &binding_info.bindings, || self.exec_state.clone());
+            action_buf.push_bindings_factorized(
+                action,
+                &mut binding_info.bindings,
+                &binding_info.binding_sets,
+                &self.exec_state,
+            );
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
         let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
-        // TODO: add dynamic sort plan back
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // If we have a reasonable number of tuples to process, adjust the variable order every
             // 3 rounds, but always make sure to readjust on the second roung.
@@ -995,9 +1002,12 @@ impl<'a> JoinState<'a> {
                             // a recursive run_plan call, avoiding function call
                             // overhead + an extra should_stop() check.
                             if cur + 1 >= instr_order.len() {
-                                action_buf.push_bindings(action, &binding_info.bindings, || {
-                                    self.exec_state.clone()
-                                });
+                                action_buf.push_bindings_factorized(
+                                    action,
+                                    &mut binding_info.bindings,
+                                    &binding_info.binding_sets,
+                                    &self.exec_state,
+                                );
                             } else {
                                 self.run_plan(
                                     stages,
@@ -1360,6 +1370,44 @@ impl<'a> JoinState<'a> {
                 cover,
                 bind,
                 to_intersect,
+                is_leaf_scan: true,
+            } if to_intersect.is_empty() => {
+                let cover_atom = cover.to_index.atom;
+                if binding_info.has_empty_subset(cover_atom) {
+                    return;
+                }
+                let table = self.db.tables[atoms[cover_atom].table].table.as_ref();
+                let cover_node = binding_info.unwrap_val(cover_atom);
+                let cover_subset = cover_node.subset.as_ref();
+
+                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                let vars = bind.iter().map(|(_, var)| *var).collect();
+                let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                table.scan_project(
+                    cover_subset,
+                    &proj,
+                    Offset::new(0),
+                    usize::MAX,
+                    &cover.constraints,
+                    &mut buf,
+                );
+
+                if buf.is_empty() {
+                    return;
+                }
+
+                binding_info.binding_sets.push((vars, Arc::new(buf)));
+                let mut updates = FrameUpdates::with_capacity(1);
+                updates.finish_frame();
+                drain_updates!(updates);
+                binding_info.binding_sets.pop();
+                binding_info.move_back_node(cover_atom, cover_node);
+            }
+            JoinStage::FusedIntersect {
+                cover,
+                bind,
+                to_intersect,
+                is_leaf_scan: false,
             } if to_intersect.is_empty() => {
                 let cover_atom = cover.to_index.atom;
                 if binding_info.has_empty_subset(cover_atom) {
@@ -1407,6 +1455,7 @@ impl<'a> JoinState<'a> {
                 cover,
                 bind,
                 to_intersect,
+                is_leaf_scan: _,
             } => {
                 let cover_atom = cover.to_index.atom;
                 if binding_info.has_empty_subset(cover_atom) {
@@ -1691,6 +1740,19 @@ trait ActionBuffer<'state, A: NumericId>: Send {
     type AsLocal<'a>: ActionBuffer<'state, A>
     where
         'state: 'a;
+
+    /// Expand the binding sets to individual bindings and
+    /// call push_bindings
+    fn push_bindings_factorized(
+        &mut self,
+        action: A,
+        bindings: &mut DenseIdMap<Variable, Value>,
+        binding_sets: &BindingSet,
+        exec_state: &ExecutionState<'state>,
+    ) {
+        expand_binding_sets(self, action, bindings, binding_sets, 0, exec_state);
+    }
+
     /// Push the given bindings to be executed for the specified action. If this
     /// buffer has built up a sufficient batch size, it may execute
     /// `to_exec_state` and then execute the action.
@@ -1910,6 +1972,50 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
     }
 }
 
+fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Sized>(
+    action_buf: &mut BUF,
+    action: A,
+    bindings: &mut DenseIdMap<Variable, Value>,
+    binding_sets: &BindingSet,
+    idx: usize,
+    exec_state: &ExecutionState<'state>,
+) {
+    if exec_state.should_stop() {
+        return;
+    }
+    if idx >= binding_sets.len() {
+        action_buf.push_bindings(action, bindings, || exec_state.clone());
+        return;
+    }
+    if idx + 1 == binding_sets.len() {
+        let (vars, buf) = &binding_sets[idx];
+        for (_, row) in buf.iter() {
+            if exec_state.should_stop() {
+                return;
+            }
+            for (var, val) in vars.iter().zip(row.iter()) {
+                bindings.insert(*var, *val);
+            }
+            action_buf.push_bindings(action, bindings, || exec_state.clone());
+        }
+        return;
+    }
+    let (vars, buf) = &binding_sets[idx];
+    for (_, row) in buf.iter() {
+        for (var, val) in vars.iter().zip(row.iter()) {
+            bindings.insert(*var, *val);
+        }
+        expand_binding_sets(
+            action_buf,
+            action,
+            bindings,
+            binding_sets,
+            idx + 1,
+            exec_state,
+        );
+    }
+}
+
 fn flush_action_states(
     exec_state: &mut ExecutionState,
     actions: &mut DenseIdMap<ActionId, ActionState>,
@@ -1928,7 +2034,7 @@ fn flush_action_states(
 
 struct InPlaceMaterializer<'a> {
     specs: &'a DenseIdMap<MatId, MatSpec>,
-    materializations: DenseIdMap<MatId, HashMap<Vec<Value>, RowBuffer>>,
+    materializations: DenseIdMap<MatId, IndexMap<Vec<Value>, RowBuffer>>,
     scratch_key: Vec<Value>,
     scratch_val: Vec<Value>,
 }

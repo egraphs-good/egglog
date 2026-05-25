@@ -6,16 +6,20 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::numeric_id::{IdVec, NumericId, define_id};
+use crate::{
+    common::IndexMap,
+    numeric_id::{IdVec, NumericId, define_id},
+};
 use egglog_concurrency::{Notification, ReadOptimizedLock};
 use hashbrown::HashTable;
+use indexmap::map::Entry;
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
 use crate::{
     OffsetRange, Subset,
-    common::{HashMap, ShardData, ShardId, Value},
+    common::{ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
     parallel_heuristics::parallelize_index_construction,
     pool::{Pooled, with_pool_set},
@@ -185,7 +189,7 @@ pub(crate) trait IndexBase {
 }
 
 struct ColumnIndexShard {
-    table: Pooled<HashMap<Value, BufferedSubset>>,
+    table: Pooled<IndexMap<Value, BufferedSubset>>,
     subsets: SubsetBuffer,
 }
 
@@ -210,7 +214,7 @@ impl IndexBase for ColumnIndex {
     type WriteKey = [Value];
     fn clear(&mut self) {
         for (_, shard) in self.shards.iter_mut() {
-            for (_, subset) in shard.table.drain() {
+            for (_, subset) in shard.table.drain(..) {
                 match subset {
                     BufferedSubset::Dense(_) => {}
                     BufferedSubset::Sparse(buffered_vec) => {
@@ -304,7 +308,6 @@ impl IndexBase for ColumnIndex {
             });
 
             self.shards.par_iter_mut().for_each(|(shard_id, shard)| {
-                use hashbrown::hash_map::Entry;
                 // Sort the vector by start row id to ensure we populate subsets in sorted order.
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
