@@ -2402,13 +2402,13 @@ mod tests {
                 r#"
                 (datatype Math)
                 (constructor container (Math) Math)
-                (constructor exp () Math :cost 100)
+                (constructor expensive () Math :cost 100)
                 (constructor cheap () Math)
                 (constructor cheap-1 () Math)
                 ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
-                ; so the (exp) expr should be extracted instead
+                ; so the (expensive) expr should be extracted instead
                 (let res (container (cheap)))
-                (union res (exp))
+                (union res (expensive))
                 (cheap)
                 (cheap-1)
                 (subsume (container (cheap)))
@@ -2441,7 +2441,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert_eq!(outputs[0].to_string(), "(exp)\n");
+        assert_eq!(outputs[0].to_string(), "(expensive)\n");
     }
 
     #[test]
@@ -2455,9 +2455,9 @@ mod tests {
                 r#"
                 (datatype Math)
                 (constructor container (Math) Math)
-                (constructor exp () Math :cost 100)
+                (constructor expensive () Math :cost 100)
                 (constructor cheap () Math)
-                (exp)
+                (expensive)
                 (let x (cheap))
                 (subsume (cheap))
                 "#,
@@ -2470,7 +2470,7 @@ mod tests {
             .parse_and_run_program(
                 None,
                 r#"
-                (union (exp) x)
+                (union (expensive) x)
                 "#,
             )
             .unwrap();
@@ -2487,6 +2487,6 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert_eq!(res[0].to_string(), "(exp)\n");
+        assert_eq!(res[0].to_string(), "(expensive)\n");
     }
 }
