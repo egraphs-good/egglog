@@ -2,6 +2,7 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
+(extraction-costs 33)
 ((B 0)
  (End 3)
  (NT 0)

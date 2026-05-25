@@ -18,10 +18,22 @@ pub(crate) fn desugar_command(
             merge,
             hidden,
             let_binding,
+            term_constructor,
+            unextractable,
         } => {
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
+            fdecl.term_constructor = term_constructor;
+            // Functions with term_constructor are view tables that should be
+            // extractable unless explicitly marked unextractable
+            if fdecl.term_constructor.is_some() {
+                fdecl.unextractable = unextractable;
+            } else if unextractable {
+                fdecl.unextractable = true;
+            }
+            // For regular functions without term_constructor, keep the default
+            // unextractable=true from FunctionDecl::function()
             vec![NCommand::Function(fdecl)]
         }
         Command::Constructor {
@@ -106,7 +118,12 @@ pub(crate) fn desugar_command(
             res
         }
         Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rule_name, rewrite, subsume, parser)
+            let resolved_name = if rewrite.name.is_empty() {
+                rule_name
+            } else {
+                rewrite.name.clone()
+            };
+            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)
         }
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rule_name, rewrite, parser)
@@ -242,6 +259,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
                 )),
                 ruleset: ruleset.clone(),
                 name,
+                naive: false,
             },
         },
         // run the rule
@@ -329,6 +347,7 @@ fn desugar_rewrite(
             head,
             ruleset,
             name,
+            naive: false,
         },
     }]
 }
@@ -340,22 +359,34 @@ fn desugar_birewrite(
     parser: &mut Parser,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
+    let rewrite_name = if rewrite.name.is_empty() {
+        name
+    } else {
+        rewrite.name.clone()
+    };
     let rw2 = Rewrite {
         span,
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
+        name: rewrite_name.clone(),
     };
-    desugar_rewrite(ruleset.clone(), format!("{name}=>"), rewrite, false, parser)
-        .into_iter()
-        .chain(desugar_rewrite(
-            ruleset,
-            format!("{name}<="),
-            rw2,
-            false,
-            parser,
-        ))
-        .collect()
+    desugar_rewrite(
+        ruleset.clone(),
+        format!("{rewrite_name}=>"),
+        rewrite,
+        false,
+        parser,
+    )
+    .into_iter()
+    .chain(desugar_rewrite(
+        ruleset,
+        format!("{rewrite_name}<="),
+        rw2,
+        false,
+        parser,
+    ))
+    .collect()
 }
 
 /// Desugar relation by making a new sort and a constructor for it.

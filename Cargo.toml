@@ -34,6 +34,7 @@ rustc-hash = "2.1"
 thiserror = "2.0"
 web-time = "1.1"
 dyn-clone = "1.0.17"
+enum-map = "2.7"
 rayon = "1.10.0"
 mimalloc = "0.1"
 quote = "1.0"
@@ -44,7 +45,6 @@ smallvec = "1.10"
 bumpalo = "3.12"
 anyhow = "1.0"
 crossbeam-queue = "0.3.11"
-petgraph = "0.8"
 crossbeam = "0.8.4"
 dashmap = "6.1.0"
 rand = "0.9"
@@ -100,6 +100,10 @@ name = "ci_benchmarking"
 harness = false
 
 [[bench]]
+name = "rust_api_benchmarking"
+harness = false
+
+[[bench]]
 name = "nightly_benchmarking"
 harness = false
 
@@ -141,7 +145,7 @@ rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 dyn-clone = { workspace = true }
-rayon = { workspace = true }
+enum-map = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
 egglog-core-relations = { workspace = true }
@@ -150,6 +154,7 @@ egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
 egglog-reports = { workspace = true }
+rayon = { workspace = true }
 serde_json = { workspace = true }
 
 [build-dependencies]

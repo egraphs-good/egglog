@@ -14,6 +14,11 @@
 (let $neg-one-alt (bigrat (bigint 1) (bigint -1)))
 (check (= $neg-one $neg-one-alt))
 
+(check (= (to-i64 $two) 2))
+(check (= (to-i64 $neg-one) -1))
+(fail (to-i64 $fourth))
+(fail (to-i64 (bigrat (from-string "9223372036854775808") (bigint 1))))
+
 (let $neg-two (* $neg-one $two))
 
 

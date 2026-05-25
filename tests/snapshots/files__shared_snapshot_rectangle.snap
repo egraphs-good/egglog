@@ -1,0 +1,12 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+1002001
+((R 1001)
+ (S 1001)
+ (T 1001)
+ (U 1001)
+ (range 1001)
+ (range-10 1)
+ (result 1002001))

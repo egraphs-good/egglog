@@ -91,10 +91,10 @@ impl BaseValues {
 
     /// Get a [`Value`] representing the given base value `p`.
     pub fn get<P: BaseValue>(&self, p: P) -> Value {
-        if P::MAY_UNBOX {
-            if let Some(v) = p.try_box() {
-                return v;
-            }
+        if P::MAY_UNBOX
+            && let Some(v) = p.try_box()
+        {
+            return v;
         }
         let id = self.get_ty::<P>();
         let table = self.tables[id]
@@ -106,10 +106,10 @@ impl BaseValues {
 
     /// Get the base value of type `P` corresponding to the given [`Value`].
     pub fn unwrap<P: BaseValue>(&self, v: Value) -> P {
-        if P::MAY_UNBOX {
-            if let Some(p) = P::try_unbox(v) {
-                return p;
-            }
+        if P::MAY_UNBOX
+            && let Some(p) = P::try_unbox(v)
+        {
+            return p;
         }
         let id = self.get_ty::<P>();
         let table = self

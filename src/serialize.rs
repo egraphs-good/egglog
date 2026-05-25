@@ -383,10 +383,10 @@ impl EGraph {
         };
         #[allow(clippy::disallowed_types)]
         let mut extra = std::collections::HashMap::default();
-        if let Some(let_bindings) = serializer.let_bindings.get(class_id) {
-            if !let_bindings.is_empty() {
-                extra.insert("let".to_string(), let_bindings.join(", "));
-            }
+        if let Some(let_bindings) = serializer.let_bindings.get(class_id)
+            && !let_bindings.is_empty()
+        {
+            extra.insert("let".to_string(), let_bindings.join(", "));
         }
         serializer.result.class_data.insert(
             class_id.clone(),

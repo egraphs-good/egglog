@@ -12,6 +12,9 @@
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
+use crate::exec_state::Internal;
+use enum_map::EnumMap;
+
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -19,6 +22,11 @@ pub struct FunctionContainer(
     pub ResolvedFunctionId,
     pub Vec<(ArcSort, Value)>,
     pub String,
+    /// Pre-registered panic id used by `FunctionContainer::apply`
+    /// on capability mismatch (see [`ResolvedFunction::panic_id`]).
+    /// Excluded from equality/hash — two function values that differ
+    /// only in their panic id are still the same function value.
+    pub ExternalFunctionId,
 );
 
 // implement hash and equality based on values only not arcsorts, since
@@ -192,14 +200,20 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_primitive(Ctor {
-            name: "unstable-fn".into(),
-            function: self.clone(),
-        });
-        eg.add_primitive(Apply {
-            name: "unstable-app".into(),
-            function: self.clone(),
-        });
+        eg.add_pure_primitive(
+            Ctor {
+                name: "unstable-fn".into(),
+                function: self.clone(),
+            },
+            None,
+        );
+        eg.add_pure_primitive(
+            Apply {
+                name: "unstable-app".into(),
+                function: self.clone(),
+            },
+            None,
+        );
 
         register_vec_primitives_for_function(eg, self.clone());
         register_multiset_primitives_for_function(eg, self.clone());
@@ -258,61 +272,61 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         );
         // If first arg is a literal string and we know the name of the function and can use that to know what
         // types to expect
-        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0] {
-            if let Some(func_type) = typeinfo.get_func_type(name) {
-                // The arguments contains the return sort as well as the function name
-                let n_partial_args = arguments.len() - 2;
-                // the number of partial args must match the number of inputs from the func type minus the number from
-                // this function sort
-                if self.function.inputs.len() + n_partial_args != func_type.input.len() {
-                    return vec![constraint::impossible(
-                        constraint::ImpossibleConstraint::ArityMismatch {
-                            atom: core::Atom {
-                                span: self.span.clone(),
-                                head: self.name.clone(),
-                                args: arguments.to_vec(),
-                            },
-                            expected: self.function.inputs.len() + func_type.input.len() + 1,
+        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0]
+            && let Some(func_type) = typeinfo.get_func_type(name)
+        {
+            // The arguments contains the return sort as well as the function name
+            let n_partial_args = arguments.len() - 2;
+            // the number of partial args must match the number of inputs from the func type minus the number from
+            // this function sort
+            if self.function.inputs.len() + n_partial_args != func_type.input.len() {
+                return vec![constraint::impossible(
+                    constraint::ImpossibleConstraint::ArityMismatch {
+                        atom: core::Atom {
+                            span: self.span.clone(),
+                            head: self.name.clone(),
+                            args: arguments.to_vec(),
                         },
-                    )];
-                }
-                // the output type and input types (starting after the partial args) must match between these functions
-                let expected_output = self.function.output.clone();
-                let expected_input = self.function.inputs.clone();
-                let actual_output = func_type.output.clone();
-                let actual_input: Vec<ArcSort> = func_type
-                    .input
-                    .iter()
-                    .skip(n_partial_args)
-                    .cloned()
-                    .collect();
-                if expected_output.name() != actual_output.name()
-                    || expected_input
-                        .iter()
-                        .map(|s| s.name())
-                        .ne(actual_input.iter().map(|s| s.name()))
-                {
-                    return vec![constraint::impossible(
-                        constraint::ImpossibleConstraint::FunctionMismatch {
-                            expected_output,
-                            expected_input,
-                            actual_output,
-                            actual_input,
-                        },
-                    )];
-                }
-                // if they match, then just make sure the partial args match as well
-                return func_type
-                    .input
-                    .iter()
-                    .take(n_partial_args)
-                    .zip(arguments.iter().skip(1))
-                    .map(|(expected_sort, actual_term)| {
-                        constraint::assign(actual_term.clone(), expected_sort.clone())
-                    })
-                    .chain(once(output_sort_constraint))
-                    .collect();
+                        expected: self.function.inputs.len() + func_type.input.len() + 1,
+                    },
+                )];
             }
+            // the output type and input types (starting after the partial args) must match between these functions
+            let expected_output = self.function.output.clone();
+            let expected_input = self.function.inputs.clone();
+            let actual_output = func_type.output.clone();
+            let actual_input: Vec<ArcSort> = func_type
+                .input
+                .iter()
+                .skip(n_partial_args)
+                .cloned()
+                .collect();
+            if expected_output.name() != actual_output.name()
+                || expected_input
+                    .iter()
+                    .map(|s| s.name())
+                    .ne(actual_input.iter().map(|s| s.name()))
+            {
+                return vec![constraint::impossible(
+                    constraint::ImpossibleConstraint::FunctionMismatch {
+                        expected_output,
+                        expected_input,
+                        actual_output,
+                        actual_input,
+                    },
+                )];
+            }
+            // if they match, then just make sure the partial args match as well
+            return func_type
+                .input
+                .iter()
+                .take(n_partial_args)
+                .zip(arguments.iter().skip(1))
+                .map(|(expected_sort, actual_term)| {
+                    constraint::assign(actual_term.clone(), expected_sort.clone())
+                })
+                .chain(once(output_sort_constraint))
+                .collect();
         }
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not
@@ -330,6 +344,11 @@ struct Ctor {
     function: Arc<FunctionSort>,
 }
 
+// `Ctor` (`unstable-fn "name" [...]`) builds a `FunctionContainer` and
+// interns it via `register_container`. Container interning is idempotent,
+// so it's safe in every context; declaring `State = PureState`
+// permits this primitive inside rule queries, actions, and global
+// contexts alike.
 impl Primitive for Ctor {
     fn name(&self) -> &str {
         &self.name
@@ -342,14 +361,21 @@ impl Primitive for Ctor {
             span: span.clone(),
         })
     }
+}
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+impl PurePrim for Ctor {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
         let ResolvedFunction {
             id,
             partial_arcsorts,
             name,
-        } = exec_state.base_values().unwrap(*rf);
+            panic_id,
+        } = state.base_values().unwrap(*rf);
         self.function
             .partial_arcsorts
             .lock()
@@ -360,13 +386,8 @@ impl Primitive for Ctor {
             .zip(args)
             .map(|(b, x)| (b.clone(), *x))
             .collect();
-        let y = FunctionContainer(id, args, name);
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(y, exec_state),
-        )
+        let y = FunctionContainer(id, args, name, panic_id);
+        Some(state.register_container(y))
     }
 }
 
@@ -375,6 +396,14 @@ pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub partial_arcsorts: Vec<ArcSort>,
     pub name: String,
+    /// Pre-registered runtime-panic id used by `FunctionContainer::apply`
+    /// when an `unstable-fn` value is applied in a context where its
+    /// wrapped function isn't valid (e.g. constructor minting in a
+    /// rule body without `:naive`). Calling this id writes a
+    /// descriptive message to the egraph's panic side channel and
+    /// triggers early stop, so `run_rules` returns an `Err` rather
+    /// than the calling thread unwinding.
+    pub panic_id: ExternalFunctionId,
 }
 // implement equality and hash based on id and  arcsort names, since arcsorts are not comparable
 
@@ -409,11 +438,37 @@ impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
-    Lookup(egglog_bridge::TableAction),
-    Prim(ExternalFunctionId),
+    /// Wraps a constructor-table lookup. Only admissible in
+    /// write-capable contexts (`Write`/`Full`), where
+    /// `FunctionContainer::apply` mints a fresh eclass via
+    /// `lookup_or_insert`. In any read-only context (`Read`/`Pure`)
+    /// it triggers the pre-registered runtime panic — a no-mint
+    /// constructor would silently miss instead of producing the
+    /// eclass the user asked for, so the call is rejected outright.
+    Constructor(egglog_bridge::TableAction),
+    /// Wraps a `(function …)` lookup — any non-constructor function,
+    /// regardless of its `:merge` strategy. `FunctionContainer::apply`
+    /// allows this only in DB-read-capable contexts (`Read`/`Full`);
+    /// `Pure` and `Write` would be untracked seminaive reads.
+    Function(egglog_bridge::TableAction),
+    /// Wraps a primitive. Carries the unique exact-signature runtime
+    /// id found for each context at build time. At dispatch time
+    /// `FunctionContainer::apply` picks the id for the application
+    /// context — so the runtime selection is independent of the
+    /// build-site context, and an `unstable-fn` value may flow freely
+    /// from one context to another.
+    Primitive {
+        context_ids: EnumMap<crate::Context, Option<ExternalFunctionId>>,
+    },
 }
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
+//
+// Registered as a `PurePrim`; `FunctionContainer::apply` reads the
+// runtime context to dispatch. Distinct `FunctionSort`s produce
+// different signature keys, so `unstable-app` for `MathFn` stays a
+// separate overload from `unstable-app` for `i64Fun`.
+
 #[derive(Clone)]
 struct Apply {
     name: String,
@@ -429,29 +484,75 @@ impl Primitive for Apply {
         let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
         sorts.extend(self.function.inputs.clone());
         sorts.push(self.function.output.clone());
-        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
+        SimpleTypeConstraint::new(&self.name, sorts, span.clone()).into_box()
     }
+}
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let (fc, args) = args.split_first().unwrap();
-        let fc = exec_state
+impl PurePrim for Apply {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let (fc_val, args) = args.split_first().unwrap();
+        let fc = state
             .container_values()
-            .get_val::<FunctionContainer>(*fc)
+            .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply(exec_state, args)
+        state.apply_function(&fc, args)
     }
 }
 
 impl FunctionContainer {
-    /// Call function (primitive or table) `name` with value args `args` and return the value.
-    ///
-    /// Public so that other primitive sorts (external or internal) have access.
-    pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+    /// Apply the wrapped function. `state` is always a `PureState`
+    /// (the type every primitive's `apply` receives). The surrounding
+    /// context is stamped onto that state by the primitive wrapper, so
+    /// callers do not pass a second copy of the same context.
+    pub(crate) fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value>
+    where
+        'db: 'a,
+    {
+        let ctx = state.ctx();
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
+        let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
+        let can_read = matches!(ctx, crate::Context::Read | crate::Context::Full);
+        let panic_id = self.3;
+        // On capability mismatch, trigger the egglog runtime panic
+        // pre-registered at the `unstable-fn` build site (see
+        // `BackendRule::prim`). The panic writes to the egraph's
+        // panic side channel and triggers early stop, so `run_rules`
+        // surfaces the misuse as an `Err`.
+        let mismatch = |state: &mut crate::PureState<'a, 'db>| -> Option<Value> {
+            state.call_external_func(panic_id, &[])
+        };
         match &self.0 {
-            ResolvedFunctionId::Lookup(action) => action.lookup(exec_state, &args),
-            ResolvedFunctionId::Prim(prim) => exec_state.call_external_func(*prim, &args),
+            ResolvedFunctionId::Constructor(action) => {
+                if can_mint {
+                    action.lookup_or_insert(state.raw_exec_state(), &args)
+                } else {
+                    mismatch(state)
+                }
+            }
+            ResolvedFunctionId::Function(action) => {
+                if can_read {
+                    action.lookup(state.raw_exec_state(), &args)
+                } else {
+                    mismatch(state)
+                }
+            }
+            ResolvedFunctionId::Primitive { context_ids } => {
+                // Pick the runtime id whose context matches the
+                // application ctx.
+                match context_ids[ctx] {
+                    Some(id) => state.call_external_func(id, &args),
+                    None => mismatch(state),
+                }
+            }
         }
     }
 }

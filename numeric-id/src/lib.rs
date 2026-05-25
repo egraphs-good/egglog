@@ -100,9 +100,9 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     }
 
     /// Insert the given mapping into the table.
-    pub fn insert(&mut self, key: K, value: V) {
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.reserve_space(key);
-        self.data[key.index()] = Some(value);
+        self.data[key.index()].replace(value)
     }
 
     /// Get the key that would be returned by the next call to [`DenseIdMap::push`].
@@ -174,6 +174,14 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
             .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
     }
 
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter(self) -> impl Iterator<Item = (K, V)> {
+        self.data
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, v)| Some((K::from_usize(i), v?)))
+    }
+
     /// Reserve space up to the given key in the table.
     pub fn reserve_space(&mut self, key: K) {
         let index = key.index();
@@ -188,6 +196,24 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
             .drain(..)
             .enumerate()
             .filter_map(|(i, v)| Some((K::from_usize(i), v?)))
+    }
+
+    pub fn retain(&mut self, mut f: impl FnMut(K, &V) -> bool) {
+        for (i, v) in self.data.iter_mut().enumerate() {
+            if let Some(inner) = v
+                && !f(K::from_usize(i), inner)
+            {
+                *v = None;
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.iter().filter(|v| v.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.iter().all(|v| v.is_none())
     }
 }
 
@@ -226,6 +252,16 @@ impl<K: NumericId, V> ops::IndexMut<K> for DenseIdMap<K, V> {
 impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     pub fn get_or_default(&mut self, key: K) -> &mut V {
         self.get_or_insert(key, V::default)
+    }
+}
+
+impl<K: NumericId, V: Clone> FromIterator<(K, V)> for DenseIdMap<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let mut res = DenseIdMap::new();
+        for (k, v) in iter {
+            res.insert(k, v);
+        }
+        res
     }
 }
 
@@ -298,7 +334,7 @@ impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
     /// want to use [`DenseIdMapWithReuse::push`] instead, unless you need to use
     /// the key to build the value, in which case you can
     /// use [`DenseIdMapWithReuse::reserve_slot`] to get the key for this method.
-    pub fn insert(&mut self, key: K, value: V) {
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.data.insert(key, value)
     }
 
@@ -431,8 +467,10 @@ macro_rules! atomic_of {
 
 #[macro_export]
 macro_rules! define_id {
-    ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
-    ($v:vis $name:ident, $repr:tt, $doc:tt) => {
+    ($v:vis $name:ident, $repr:tt) => { define_id!($v $name, $repr, "", pretty ""); };
+    ($v:vis $name:ident, $repr:tt, $doc:tt) => { define_id!($v $name, $repr, $doc, pretty ""); };
+    ($v:vis $name:ident, $repr:tt, pretty $pretty_name:expr) => { define_id!($v $name, $repr, "", pretty $pretty_name); };
+    ($v:vis $name:ident, $repr:tt, $doc:tt, pretty $pretty_name:tt) => {
         #[derive(Copy, Clone)]
         #[doc = $doc]
         $v struct $name {
@@ -504,7 +542,12 @@ macro_rules! define_id {
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(fmt, "{}({:?})", stringify!($name), self.rep)
+                let name = if $pretty_name.is_empty() {
+                    stringify!($name).to_string()
+                } else {
+                    $pretty_name.to_string()
+                };
+                write!(fmt, "{}({:?})", name, self.rep)
             }
         }
     };

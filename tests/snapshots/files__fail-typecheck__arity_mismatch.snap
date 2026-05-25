@@ -1,5 +1,6 @@
 ---
 source: tests/files.rs
+assertion_line: 103
 expression: err_msg
 ---
 All alternative definitions considered failed

@@ -115,11 +115,11 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 
     fn enode_cost(
         &self,
-        _egraph: &EGraph,
+        egraph: &EGraph,
         func: &Function,
         _row: &egglog_bridge::FunctionRow,
     ) -> DefaultCost {
-        func.decl.cost.unwrap_or(DefaultCost::unit())
+        func.extraction_head_cost(egraph)
     }
 }
 
@@ -222,11 +222,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 options.skip_view_tables && func.1.decl.term_constructor.is_some();
             let hidden = func.1.decl.internal_hidden && options.respect_hidden;
 
-            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
+            // only extract constructors (and functions with term_constructor), skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable
                 && !should_skip_view
                 && !hidden
-                && func.1.decl.subtype == FunctionSubtype::Constructor
+                && (func.1.decl.subtype == FunctionSubtype::Constructor
+                    || func.1.decl.term_constructor.is_some())
             {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input column
@@ -262,23 +263,23 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                         seen.insert(s.name().to_owned());
                     }
                 }
-            } else if sort.is_eq_sort() {
-                if let Some(head_symbols) = rev_index.get(sort.name()) {
-                    for h in head_symbols {
-                        if !funcs_set.contains(h) {
-                            let func = egraph.functions.get(h).unwrap();
-                            // For view tables, children are all but the last input (which is the e-class)
-                            let num_children = func.extraction_num_children();
-                            for ch in func.schema.input.iter().take(num_children) {
-                                let ch_name = ch.name();
-                                if !seen.contains(ch_name) {
-                                    q.push_back(ch.clone());
-                                    seen.insert(ch_name.to_owned());
-                                }
+            } else if sort.is_eq_sort()
+                && let Some(head_symbols) = rev_index.get(sort.name())
+            {
+                for h in head_symbols {
+                    if !funcs_set.contains(h) {
+                        let func = egraph.functions.get(h).unwrap();
+                        // For view tables, children are all but the last input (which is the e-class)
+                        let num_children = func.extraction_num_children();
+                        for ch in func.schema.input.iter().take(num_children) {
+                            let ch_name = ch.name();
+                            if !seen.contains(ch_name) {
+                                q.push_back(ch.clone());
+                                seen.insert(ch_name.to_owned());
                             }
-                            funcs_set.insert(h.clone());
-                            funcs.push(h.clone());
                         }
+                        funcs_set.insert(h.clone());
+                        funcs.push(h.clone());
                     }
                 }
             }
@@ -467,28 +468,25 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 if !row.subsumed {
                     let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
-                    {
-                        if Some(best_cost.clone())
+                        && Some(best_cost.clone())
                             == self.compute_cost_hyperedge(egraph, &row, func)
-                        {
-                            // one of the possible best parent edges
-                            let target_topo_rnk = *self
-                                .topo_rnk
-                                .get(target_sort.name())
+                    {
+                        // one of the possible best parent edges
+                        let target_topo_rnk = *self
+                            .topo_rnk
+                            .get(target_sort.name())
+                            .unwrap()
+                            .get(target)
+                            .unwrap();
+                        if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func) {
+                            // one of the parent edges that avoids cycles
+                            if let HEntry::Vacant(e) = self
+                                .parent_edge
+                                .get_mut(target_sort.name())
                                 .unwrap()
-                                .get(target)
-                                .unwrap();
-                            if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func)
+                                .entry(*target)
                             {
-                                // one of the parent edges that avoids cycles
-                                if let HEntry::Vacant(e) = self
-                                    .parent_edge
-                                    .get_mut(target_sort.name())
-                                    .unwrap()
-                                    .entry(*target)
-                                {
-                                    e.insert((func.decl.name.clone(), row.vals.to_vec()));
-                                }
+                                e.insert((func.decl.name.clone(), row.vals.to_vec()));
                             }
                         }
                     }
@@ -759,6 +757,20 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 }
 
 impl Function {
+    /// Returns the extraction head cost for this table.
+    /// View tables inherit the cost of their referenced hidden term constructor.
+    pub(crate) fn extraction_head_cost(&self, egraph: &EGraph) -> DefaultCost {
+        if let Some(term_constructor) = &self.decl.term_constructor {
+            egraph
+                .functions
+                .get(term_constructor)
+                .and_then(|func| func.decl.cost)
+                .unwrap_or(DefaultCost::unit())
+        } else {
+            self.decl.cost.unwrap_or(DefaultCost::unit())
+        }
+    }
+
     /// For view tables (with term_constructor), the effective output sort is the last input column.
     /// For regular tables, it's the output sort.
     /// This is used by extraction to determine which sort a table produces values for.

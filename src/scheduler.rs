@@ -15,8 +15,8 @@ use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, uti
 /// The matches that are not chosen in this iteration will be delayed
 /// to the next iteration.
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
-    /// Whether or not the rules can be considered as saturated (i.e.,
-    /// `run_report.updated == false`).
+    /// Whether or not the rules can be considered as saturated once no database
+    /// changes were made in the current iteration.
     ///
     /// This is only called when the runner is otherwise saturated.
     /// Default implementation just returns `true`.
@@ -62,7 +62,7 @@ impl Matches {
     fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>) -> Self {
         let total_len = matches.len();
         let tuple_len = vars.len();
-        assert!(total_len % tuple_len == 0);
+        assert!(total_len.is_multiple_of(tuple_len));
         Self {
             matches,
             vars,
@@ -105,7 +105,7 @@ impl Matches {
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
-        mut table_action: TableAction,
+        table_action: &TableAction,
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
         let unit = state.base_values().get(());
@@ -234,7 +234,7 @@ impl EGraph {
                         .scheduler
                         .filter_matches(rule_id, ruleset, &mut matches);
                 let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
+                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
             }
         });
         self.backend.flush_updates();
@@ -259,10 +259,11 @@ impl EGraph {
         // query matches don't count
         query_report.updated = false;
         query_report.num_matches_per_rule.clear();
-        // if the scheduler says it shouldn't stop, then it's considered updated (unsaturated)
-        action_report.updated = action_report.updated || {
+        // Scheduler state should not count as database progress. Instead it
+        // determines whether a no-op iteration can be treated as fully stopped.
+        action_report.can_stop = !action_report.updated && {
             let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
-            !record.scheduler.can_stop(&rule_ids, ruleset)
+            record.scheduler.can_stop(&rule_ids, ruleset)
         };
 
         query_report.union(action_report);
@@ -348,6 +349,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, true),
             &egraph.functions,
             &egraph.type_info,
+            true, // seminaive rule context
         );
         qrule_builder.query(&rule.body, true);
         let entries = free_vars
@@ -367,6 +369,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
+            false, // seminaive off for scheduler action rule
         );
         let mut entries = free_vars
             .iter()
@@ -467,11 +470,53 @@ mod test {
                 [&"test".into()]
             );
 
-            if !report.updated {
+            if report.can_stop {
                 break;
             }
         }
 
         assert_eq!(iter, 12);
+    }
+
+    #[derive(Clone, Default)]
+    struct DelayStopScheduler {
+        can_stop_calls: usize,
+    }
+
+    impl Scheduler for DelayStopScheduler {
+        fn can_stop(&mut self, _rules: &[&str], _ruleset: &str) -> bool {
+            self.can_stop_calls += 1;
+            self.can_stop_calls > 1
+        }
+
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, _matches: &mut Matches) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn test_scheduler_progress_is_separate_from_database_progress() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(DelayStopScheduler::default()));
+        let input = r#"
+        (ruleset test)
+        (relation R (i64))
+        (rule ((R x)) ((R x)) :ruleset test :name "noop")
+        (R 1)
+        (R 2)
+        (R 3)
+        (R 4)
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let before = egraph.get_size("R");
+        let report = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        let after = egraph.get_size("R");
+
+        assert_eq!(before, after);
+        assert!(!report.updated);
+        assert!(!report.can_stop);
     }
 }

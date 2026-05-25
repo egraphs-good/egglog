@@ -10,12 +10,14 @@ readme = { workspace = true }
 
 [dependencies]
 arc-swap = { workspace = true}
+bumpalo = { workspace = true}
 rayon = { workspace = true}
 egglog-numeric-id = { workspace = true }
 smallvec = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true}
+proptest = "1"
 rayon = { workspace = true}
 
 [[bench]]

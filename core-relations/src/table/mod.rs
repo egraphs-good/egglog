@@ -345,6 +345,10 @@ impl Table for SortedWritesTable {
         Subset::Dense(OffsetRange::new(RowId::new(0), self.data.next_row()))
     }
 
+    fn has_stale_rows(&self) -> bool {
+        self.data.stale_rows > 0
+    }
+
     fn len(&self) -> usize {
         self.data.data.len() - self.data.stale_rows
     }
@@ -363,13 +367,21 @@ impl Table for SortedWritesTable {
             hi.index(),
             self.data.data.len()
         );
-        // SAFETY: subsets are sorted, low must be at most hi, and hi is less
-        // than the length of the table.
-        subset.offsets(|row| unsafe {
-            if let Some(vals) = self.data.get_row_unchecked(row) {
-                f(row, vals)
-            }
-        })
+        if self.data.stale_rows == 0 {
+            // Fast path: no stale rows, skip is_stale check per row.
+            // SAFETY: subsets are sorted, low must be at most hi, and hi is less
+            // than the length of the table.
+            // TODO: provide a safe API for this `get_row_unchecked` usage since we have
+            // checked the full bounds above.
+            subset.offsets(|row| unsafe { f(row, self.data.data.get_row_unchecked(row)) })
+        } else {
+            // SAFETY: same as above.
+            subset.offsets(|row| unsafe {
+                if let Some(vals) = self.data.get_row_unchecked(row) {
+                    f(row, vals)
+                }
+            })
+        }
     }
 
     fn scan_generic_bounded(
@@ -383,19 +395,42 @@ impl Table for SortedWritesTable {
     where
         Self: Sized,
     {
+        let Some((_low, hi)) = subset.bounds() else {
+            // Empty subset
+            return None;
+        };
+        assert!(
+            hi.index() <= self.data.data.len(),
+            "{} vs. {}",
+            hi.index(),
+            self.data.data.len()
+        );
         if cs.is_empty() {
-            subset
-                .iter_bounded(start.index(), start.index() + n, |row| {
-                    let Some(entry) = self.data.get_row(row) else {
-                        return;
-                    };
-                    f(row, entry);
-                })
-                .map(Offset::from_usize)
+            if self.data.stale_rows == 0 {
+                // Fast path: no stale rows, skip bounds check and is_stale check.
+                // SAFETY: all row IDs are in-bounds.
+                subset
+                    .iter_bounded(start.index(), start.index() + n, |row| {
+                        let entry = unsafe { self.data.data.get_row_unchecked(row) };
+                        f(row, entry);
+                    })
+                    .map(Offset::from_usize)
+            } else {
+                subset
+                    .iter_bounded(start.index(), start.index() + n, |row| {
+                        // SAFETY: all row IDs are in-bounds.
+                        let Some(entry) = (unsafe { self.data.get_row_unchecked(row) }) else {
+                            return;
+                        };
+                        f(row, entry);
+                    })
+                    .map(Offset::from_usize)
+            }
         } else {
             subset
                 .iter_bounded(start.index(), start.index() + n, |row| {
-                    let Some(entry) = self.get_if(cs, row) else {
+                    // SAFETY: all row IDs are in-bounds.
+                    let Some(entry) = (unsafe { self.get_if_unchecked(cs, row) }) else {
                         return;
                     };
                     f(row, entry);
@@ -969,20 +1004,33 @@ impl SortedWritesTable {
         self.get_if(cs, row).is_some()
     }
 
+    fn eval_constraints(cs: &[Constraint], row: &[Value]) -> bool {
+        cs.iter().all(|constraint| match constraint {
+            Constraint::Eq { l_col, r_col } => row[l_col.index()] == row[r_col.index()],
+            Constraint::EqConst { col, val } => row[col.index()] == *val,
+            Constraint::LtConst { col, val } => row[col.index()] < *val,
+            Constraint::GtConst { col, val } => row[col.index()] > *val,
+            Constraint::LeConst { col, val } => row[col.index()] <= *val,
+            Constraint::GeConst { col, val } => row[col.index()] >= *val,
+        })
+    }
+
+    unsafe fn get_if_unchecked(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
+        let row = unsafe { self.data.data.get_row_unchecked(row) };
+        if Self::eval_constraints(cs, row) {
+            Some(row)
+        } else {
+            None
+        }
+    }
+
     fn get_if(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
         let row = self.data.get_row(row)?;
-        let mut res = true;
-        for constraint in cs {
-            match constraint {
-                Constraint::Eq { l_col, r_col } => res &= row[l_col.index()] == row[r_col.index()],
-                Constraint::EqConst { col, val } => res &= row[col.index()] == *val,
-                Constraint::LtConst { col, val } => res &= row[col.index()] < *val,
-                Constraint::GtConst { col, val } => res &= row[col.index()] > *val,
-                Constraint::LeConst { col, val } => res &= row[col.index()] <= *val,
-                Constraint::GeConst { col, val } => res &= row[col.index()] >= *val,
-            }
+        if Self::eval_constraints(cs, row) {
+            Some(row)
+        } else {
+            None
         }
-        if res { Some(row) } else { None }
     }
 
     fn maybe_rehash(&mut self) {

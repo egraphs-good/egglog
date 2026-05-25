@@ -1,0 +1,10 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((E 1)
+ (S1 1)
+ (S2 1)
+ (UF_Exp 1)
+ (UF_Stmt 1)
+ (View 1))

@@ -1,0 +1,7 @@
+(datatype Loc (L i64))
+(datatype Exp (Const i64))
+(datatype Stmt (Prog Loc) (Ass String Exp))
+
+(union (Prog (L 0)) (Ass "x" (Const 10)))
+
+(check (= (Prog l) (Ass "x" (Const 10))))

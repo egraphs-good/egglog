@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Ass 1)
+ (Const 1)
+ (L 1)
+ (Prog 1))

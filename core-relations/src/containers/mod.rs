@@ -285,20 +285,20 @@ impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary {
-        if let Some(subset) = subset {
-            if incremental_rebuild(
+        if let Some(subset) = subset
+            && incremental_rebuild(
                 subset.size(),
                 self.to_id.len(),
                 parallelize_intra_container_op(self.to_id.len()),
-            ) {
-                return self.apply_rebuild_incremental(
-                    table,
-                    rebuilder,
-                    exec_state,
-                    subset,
-                    rebuilder.hint_col().unwrap(),
-                );
-            }
+            )
+        {
+            return self.apply_rebuild_incremental(
+                table,
+                rebuilder,
+                exec_state,
+                subset,
+                rebuilder.hint_col().unwrap(),
+            );
         }
         self.apply_rebuild_nonincremental(rebuilder, exec_state)
     }
@@ -682,18 +682,10 @@ impl<C: ContainerValue> ContainerEnv<C> {
     }
 }
 
-fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {
-    #[cfg(debug_assertions)]
-    {
-        use rand::Rng;
-        rand::rng().random_bool(0.5)
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        if _parallel {
-            _table_size > 1000 && _uf_size * 512 <= _table_size
-        } else {
-            _table_size > 1000 && _uf_size * 8 <= _table_size
-        }
+fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> bool {
+    if parallel {
+        table_size > 1000 && uf_size * 512 <= table_size
+    } else {
+        table_size > 1000 && uf_size * 8 <= table_size
     }
 }

@@ -2,6 +2,10 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
+(extraction-costs 3)
+(extraction-costs 1)
+(extraction-costs 3)
+(extraction-costs 7)
 ((App 3)
  (Cons 6)
  (Lam 4)

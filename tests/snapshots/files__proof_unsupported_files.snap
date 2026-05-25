@@ -14,11 +14,15 @@ cyk.egg
 cykjson.egg
 datatypes.egg
 delete.egg
+eggcc-2mm.egg
 eggcc-extraction.egg
 eqsat-basic-multiset.egg
 extract-vec-bench.egg
+factoring-multisets.egg
 fibonacci.egg
 fusion.egg
+hardboiled_conv1d_128.egg
+hardboiled_conv1d_32.egg
 herbie-tutorial.egg
 herbie.egg
 interval.egg
@@ -28,10 +32,12 @@ levenshtein-distance.egg
 list.egg
 looking_up_global.egg
 looking_up_nonconstructor_in_rewrite_good.egg
+luminal-llama.egg
 map.egg
 math.egg
 merge_read.egg
 multiset.egg
+pair.egg
 prims.egg
 print-function.egg
 python_array_optimize.egg
@@ -39,6 +45,7 @@ rat-pow-eval.egg
 repro-665-set-union.egg
 repro-738-fn-sort.egg
 repro-desugar-143.egg
+repro-herbie-vanilla.egg
 repro-new-backend-python-vec.egg
 repro-querybug3.egg
 repro-unsound.egg
@@ -51,6 +58,7 @@ taylor51.egg
 towers-of-hanoi.egg
 tricky-type-checking.egg
 type-constraints-tests.egg
+typed_primitive_unstable_app.egg
 typeinfer.egg
 uf-extraction.egg
 unstable-fn.egg

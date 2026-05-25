@@ -55,12 +55,11 @@ impl Sexp {
     }
 
     pub fn expect_uint<UInt: TryFrom<u64>>(&self, e: &'static str) -> Result<UInt, ParseError> {
-        if let Sexp::Literal(Literal::Int(x), _) = self {
-            if *x >= 0 {
-                if let Ok(v) = (*x as u64).try_into() {
-                    return Ok(v);
-                }
-            }
+        if let Sexp::Literal(Literal::Int(x), _) = self
+            && *x >= 0
+            && let Ok(v) = (*x as u64).try_into()
+        {
+            return Ok(v);
         }
         error!(
             self.span(),
@@ -90,10 +89,10 @@ impl Sexp {
     }
 
     pub fn expect_call(&self, e: &'static str) -> Result<(String, &[Sexp], Span), ParseError> {
-        if let Sexp::List(sexps, span) = self {
-            if let [Sexp::Atom(func, _), args @ ..] = sexps.as_slice() {
-                return Ok((func.clone(), args, span.clone()));
-            }
+        if let Sexp::List(sexps, span) = self
+            && let [Sexp::Atom(func, _), args @ ..] = sexps.as_slice()
+        {
+            return Ok((func.clone(), args, span.clone()));
         }
         error!(self.span(), "expected {e}")
     }
@@ -339,6 +338,8 @@ impl Parser {
                     let mut merge = None;
                     let mut hidden = false;
                     let mut let_binding = false;
+                    let mut term_constructor = None;
+                    let mut unextractable = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
                             (":no-merge", []) => {
@@ -361,6 +362,10 @@ impl Parser {
                             }
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
+                            (":unextractable", []) => unextractable = true,
+                            (":internal-term-constructor", [tc]) => {
+                                term_constructor = Some(tc.expect_atom("term constructor name")?)
+                            }
                             _ => return error!(span, "could not parse function options"),
                         }
                     }
@@ -379,6 +384,8 @@ impl Parser {
                         merge,
                         hidden,
                         let_binding,
+                        term_constructor,
+                        unextractable,
                         span,
                     }]
                 }
@@ -393,24 +400,19 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                // (constructor <name> (<input sort>*) <output sort> :internal-term-constructor <constructor name>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
                         let mut unextractable = false;
                         let mut hidden = false;
                         let mut let_binding = false;
-                        let mut term_constructor = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
                                 (":unextractable", []) => unextractable = true,
                                 (":internal-hidden", []) => hidden = true,
                                 (":internal-let", []) => let_binding = true,
                                 (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
-                                (":term-constructor", [tc]) => {
-                                    term_constructor =
-                                        Some(tc.expect_atom("term constructor name")?)
-                                }
                                 _ => return error!(span, "could not parse constructor options"),
                             }
                         }
@@ -423,15 +425,14 @@ impl Parser {
                             unextractable,
                             hidden,
                             let_binding,
-                            term_constructor,
+                            term_constructor: None,
                         }]
                     }
                     _ => {
                         let a = "(constructor <name> (<input sort>*) <output sort>)";
                         let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
                         let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
-                        let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
-                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
+                        return error!(span, "usages:\n{a}\n{b}\n{c}");
                     }
                 }
             }
@@ -474,10 +475,12 @@ impl Parser {
 
                     let mut ruleset = String::new();
                     let mut name = String::new();
+                    let mut naive = false;
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":name", [s]) => name = s.expect_string("rule name")?,
+                            (":naive", []) => naive = true,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -489,6 +492,7 @@ impl Parser {
                             body,
                             name,
                             ruleset,
+                            naive,
                         },
                     }]
                 }
@@ -502,6 +506,7 @@ impl Parser {
                     let mut ruleset = String::new();
                     let mut conditions = Vec::new();
                     let mut subsume = false;
+                    let mut name = String::new();
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
@@ -513,6 +518,7 @@ impl Parser {
                                     Self::parse_fact,
                                 )?
                             }
+                            (":name", [s]) => name = s.expect_string("rule name")?,
                             _ => return error!(span, "could not parse rewrite options"),
                         }
                     }
@@ -524,6 +530,7 @@ impl Parser {
                             lhs,
                             rhs,
                             conditions,
+                            name,
                         },
                         subsume,
                     )]
@@ -537,6 +544,7 @@ impl Parser {
 
                     let mut ruleset = String::new();
                     let mut conditions = Vec::new();
+                    let mut name = String::new();
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
@@ -547,6 +555,7 @@ impl Parser {
                                     Self::parse_fact,
                                 )?
                             }
+                            (":name", [s]) => name = s.expect_string("rule name")?,
                             _ => return error!(span, "could not parse birewrite options"),
                         }
                     }
@@ -558,6 +567,7 @@ impl Parser {
                             lhs,
                             rhs,
                             conditions,
+                            name,
                         },
                     )]
                 }
@@ -966,10 +976,10 @@ impl Parser {
         sexps: &'a [Sexp],
     ) -> Result<Vec<(&'a str, &'a [Sexp])>, ParseError> {
         fn option_name(sexp: &Sexp) -> Option<&str> {
-            if let Sexp::Atom(s, _) = sexp {
-                if let Some(':') = s.chars().next() {
-                    return Some(s);
-                }
+            if let Sexp::Atom(s, _) = sexp
+                && let Some(':') = s.chars().next()
+            {
+                return Some(s);
             }
             None
         }

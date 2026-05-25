@@ -23,10 +23,10 @@ use crate::{
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
     pool::{PoolSet, Pooled, with_pool_set},
-    row_buffer::{RowBuffer, TaggedRowBuffer},
+    row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
 };
 
-define_id!(pub ColumnId, u32, "a particular column in a table");
+define_id!(pub ColumnId, u32, "a particular column in a table", pretty "Col");
 define_id!(
     pub Generation,
     u64,
@@ -263,6 +263,13 @@ pub trait Table: Any + Send + Sync {
         }
     }
 
+    /// Returns true if the table contains any stale rows (rows whose first column
+    /// has been set to [`Value::stale()`]). The default implementation returns `true`
+    /// (conservative). Tables that track stale-row counts should override this.
+    fn has_stale_rows(&self) -> bool {
+        true
+    }
+
     /// Filter a given subset of the table for the rows that are live
     fn refine_live(&self, subset: Subset) -> Subset {
         // NB: This relies on Value::stale() being strictly larger than any other value in the table.
@@ -398,12 +405,11 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         })
     }
     fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        let table = table.as_any().downcast_ref::<T>().unwrap();
-        let mut res = ColumnIndex::new();
-        table.scan_generic(subset, |row_id, row| {
-            res.add_row(&[row[col.index()]], row_id);
-        });
-        res
+        let wrapped = WrappedTableRef {
+            inner: table,
+            wrapper: self,
+        };
+        ColumnIndex::build_for_subset(wrapped, subset, col)
     }
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         let table = table.as_any().downcast_ref::<T>().unwrap();
@@ -432,6 +438,20 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         }
         res
     }
+    fn for_each_col(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        f: &mut dyn FnMut(RowId, Value),
+    ) {
+        let table = table.as_any().downcast_ref::<T>().unwrap();
+        let col_idx = col.index();
+        table.scan_generic(subset, |row_id, row| {
+            f(row_id, row[col_idx]);
+        });
+    }
+
     fn scan_project(
         &self,
         table: &dyn Table,
@@ -440,7 +460,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset> {
         let table = table.as_any().downcast_ref::<T>().unwrap();
         match cols {
@@ -590,7 +610,7 @@ impl WrappedTable {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset> {
         self.as_ref().scan_project(subset, cols, start, n, cs, out)
     }
@@ -664,6 +684,17 @@ pub(crate) trait TableWrapper: Send + Sync {
     fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex;
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex;
 
+    /// Scan each row in `subset`, calling `f(row_id, col_value)` for each.
+    /// Unlike `scan_project`, this writes directly to the callback with no
+    /// intermediate buffer.
+    fn for_each_col(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        f: &mut dyn FnMut(RowId, Value),
+    );
+
     #[allow(clippy::too_many_arguments)]
     fn scan_project(
         &self,
@@ -673,7 +704,7 @@ pub(crate) trait TableWrapper: Send + Sync {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset>;
 
     fn scan(&self, table: &dyn Table, subset: SubsetRef) -> TaggedRowBuffer {
@@ -754,6 +785,18 @@ impl WrappedTableRef<'_> {
         self.wrapper.group_by_key(self.inner, subset, cols)
     }
 
+    /// Scan each row in `subset` and call `f(row_id, col_value)` for each.
+    /// This is a zero-copy alternative to `scan_project` for single-column
+    /// scans over small subsets where an intermediate buffer is wasteful.
+    pub(crate) fn for_each_col(
+        &self,
+        subset: SubsetRef,
+        col: ColumnId,
+        f: &mut dyn FnMut(RowId, Value),
+    ) {
+        self.wrapper.for_each_col(self.inner, subset, col, f);
+    }
+
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of
     /// columns and only appends rows that match the given constraints.
     pub fn scan_project(
@@ -763,7 +806,7 @@ impl WrappedTableRef<'_> {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset> {
         self.wrapper
             .scan_project(self.inner, subset, cols, start, n, cs, out)

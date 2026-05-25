@@ -142,6 +142,8 @@ where
                     merge: f.merge.clone(),
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
+                    term_constructor: f.term_constructor.clone(),
+                    unextractable: f.unextractable,
                 },
             },
             GenericNCommand::AddRuleset(span, name) => {
@@ -636,8 +638,8 @@ where
         /// Internal-let constructors are let bindings, excluded from print-size output.
         /// Used for global let bindings that are converted to constructors.
         let_binding: bool,
-        /// For view tables in proof encoding: the constructor to use for building
-        /// terms from the first n-1 children during extraction.
+        /// Internal-only metadata for proof-encoding view tables.
+        /// Parsed user syntax only supports `:internal-term-constructor` on `function`.
         term_constructor: Option<String>,
     },
 
@@ -699,6 +701,8 @@ where
         merge: Option<GenericExpr<Head, Leaf>>,
         hidden: bool,
         let_binding: bool,
+        term_constructor: Option<String>,
+        unextractable: bool,
     },
 
     /// Using the `ruleset` command, defines a new
@@ -976,6 +980,8 @@ where
                 merge,
                 hidden,
                 let_binding,
+                term_constructor,
+                unextractable,
             } => {
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
@@ -983,11 +989,17 @@ where
                 } else {
                     write!(f, " :no-merge")?;
                 }
+                if *unextractable {
+                    write!(f, " :unextractable")?;
+                }
                 if *hidden {
                     write!(f, " :internal-hidden")?;
                 }
                 if *let_binding {
                     write!(f, " :internal-let")?;
+                }
+                if let Some(tc) = term_constructor {
+                    write!(f, " :internal-term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }
@@ -1015,7 +1027,7 @@ where
                     write!(f, " :internal-let")?;
                 }
                 if let Some(tc) = term_constructor {
-                    write!(f, " :term-constructor {tc}")?;
+                    write!(f, " :internal-term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }
@@ -1468,6 +1480,7 @@ pub struct GenericRewrite<Head, Leaf> {
     pub lhs: GenericExpr<Head, Leaf>,
     pub rhs: GenericExpr<Head, Leaf>,
     pub conditions: Vec<GenericFact<Head, Leaf>>,
+    pub name: String,
 }
 
 impl<Head, Leaf> GenericRewrite<Head, Leaf>
@@ -1494,6 +1507,7 @@ where
                 .into_iter()
                 .map(|fact| fact.map_symbols(head, leaf))
                 .collect(),
+            name: self.name,
         }
     }
 
@@ -1679,6 +1693,8 @@ where
                 merge,
                 hidden,
                 let_binding,
+                term_constructor,
+                unextractable,
             } => GenericCommand::Function {
                 span,
                 name: fun(name),
@@ -1689,6 +1705,8 @@ where
                 merge,
                 hidden,
                 let_binding,
+                term_constructor: term_constructor.map(&mut *fun),
+                unextractable,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, fun(name)),
             GenericCommand::UnstableCombinedRuleset(span, name, others) => {
@@ -1705,6 +1723,7 @@ where
                     ruleset: fun(rule.ruleset),
                     head: rule.head,
                     body: rule.body,
+                    naive: rule.naive,
                 };
                 GenericCommand::Rule { rule }
             }
@@ -1766,6 +1785,8 @@ where
                 merge,
                 hidden,
                 let_binding,
+                term_constructor,
+                unextractable,
             } => GenericCommand::Function {
                 span,
                 name,
@@ -1773,6 +1794,8 @@ where
                 merge: merge.map(|e| e.visit_exprs(f)),
                 hidden,
                 let_binding,
+                term_constructor,
+                unextractable,
             },
             GenericCommand::Rule { rule } => GenericCommand::Rule {
                 rule: rule.visit_exprs(f),
@@ -1788,6 +1811,7 @@ where
                         .into_iter()
                         .map(|fact| fact.visit_exprs(f))
                         .collect(),
+                    name: rewrite.name,
                 },
                 subsume,
             ),
@@ -1802,6 +1826,7 @@ where
                         .into_iter()
                         .map(|fact| fact.visit_exprs(f))
                         .collect(),
+                    name: rewrite.name,
                 },
             ),
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
@@ -1899,6 +1924,8 @@ where
                 merge,
                 hidden,
                 let_binding,
+                term_constructor,
+                unextractable,
             } => GenericCommand::Function {
                 span,
                 name,
@@ -1906,6 +1933,8 @@ where
                 merge: merge.map(|expr| expr.map_symbols(head, leaf)),
                 hidden,
                 let_binding,
+                term_constructor,
+                unextractable,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),
             GenericCommand::UnstableCombinedRuleset(span, name, others) => {

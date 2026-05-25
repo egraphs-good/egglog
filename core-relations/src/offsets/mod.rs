@@ -43,7 +43,7 @@ impl Offsets for OffsetRange {
 
 impl OffsetRange {
     pub fn new(start: RowId, end: RowId) -> OffsetRange {
-        assert!(
+        debug_assert!(
             start <= end,
             "attempting to create malformed range {start:?}..{end:?}"
         );
@@ -65,7 +65,6 @@ impl SortedOffsetVector {
 
     pub(crate) fn push(&mut self, offset: RowId) {
         assert!(self.0.last().is_none_or(|last| last <= &offset));
-        // SAFETY: we just checked the invariant
         unsafe { self.push_unchecked(offset) }
     }
 
@@ -141,9 +140,6 @@ impl SortedOffsetSlice {
         // SAFETY: SortedOffsetSlice is repr(transparent), so the two layouts are compatible.
         unsafe { mem::transmute::<&[RowId], &SortedOffsetSlice>(slice) }
     }
-    fn len(&self) -> usize {
-        self.0.len()
-    }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = RowId> + '_ {
         self.0.iter().copied()
@@ -176,12 +172,56 @@ impl SortedOffsetSlice {
         }
     }
 
+    #[inline]
     fn scan_for_offset(&self, start: usize, target: RowId) -> Result<usize, usize> {
-        let i = self.binary_search_from(start, target);
-        if i < self.len() && self.inner()[i] == target {
-            Ok(i)
-        } else {
-            Err(i)
+        let slice = self.inner();
+        let len = slice.len();
+
+        if start >= len {
+            return Err(len);
+        }
+        if slice[start] == target {
+            return Ok(start);
+        }
+        if slice[start] > target {
+            return Err(start);
+        }
+
+        // Galloping search: slice[start] < target, so probe at start+1, start+2, start+4, ...
+        // until we overshoot or reach the end, then binary search the narrowed range.
+        let mut lo = start;
+        let mut step = 1usize;
+        let hi = loop {
+            let probe = lo + step;
+            if probe >= len {
+                break len;
+            }
+            match slice[probe].cmp(&target) {
+                cmp::Ordering::Less => {
+                    lo = probe;
+                    step = step.saturating_mul(2);
+                }
+                cmp::Ordering::Equal => {
+                    let mut found = probe;
+                    while found > start && slice[found - 1] == target {
+                        found -= 1;
+                    }
+                    return Ok(found);
+                }
+                cmp::Ordering::Greater => break probe,
+            }
+        };
+
+        // Invariant: slice[lo] < target, and either hi == len or slice[hi] > target.
+        match slice[lo + 1..hi].binary_search(&target) {
+            Ok(mut found) => {
+                found += lo + 1;
+                while found > start && slice[found - 1] == target {
+                    found -= 1;
+                }
+                Ok(found)
+            }
+            Err(x) => Err(lo + 1 + x),
         }
     }
 }
@@ -358,6 +398,7 @@ impl Subset {
         }
     }
     /// Remove any elements of the current subset not present in `other`.
+    #[inline]
     pub(crate) fn intersect(&mut self, other: SubsetRef, pool: &Pool<SortedOffsetVector>) {
         match (self, other) {
             (Subset::Dense(cur), SubsetRef::Dense(other)) => {
@@ -372,34 +413,97 @@ impl Subset {
             (x @ Subset::Dense(_), SubsetRef::Sparse(sparse)) => {
                 let (low, hi) = x.bounds().unwrap();
                 if sparse.bounds().is_some() {
-                    let mut res = pool.get();
                     let l = sparse.binary_search_by_id(low);
                     let r = sparse.binary_search_by_id(hi);
-                    let subslice = sparse.subslice(l, r);
-                    res.extend_nonoverlapping(subslice);
-                    *x = Subset::Sparse(res);
+                    // Check emptiness before allocating from the pool.
+                    if l >= r {
+                        *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
+                    } else {
+                        let subslice = sparse.subslice(l, r);
+                        let mut res = pool.get();
+                        res.extend_nonoverlapping(subslice);
+                        *x = Subset::Sparse(res);
+                    }
                 } else {
                     // empty range
                     *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
                 }
             }
             (Subset::Sparse(sparse), SubsetRef::Dense(dense)) => {
-                let r = sparse.slice().binary_search_by_id(dense.end);
-                sparse.0.truncate(r);
-                sparse.retain(|row| row >= dense.start);
+                // Binary search for both bounds; avoid copy_within if no prefix to remove.
+                let l = sparse.slice().binary_search_by_id(dense.start);
+                let r = sparse.slice().binary_search_from(l, dense.end);
+                if l == 0 {
+                    sparse.0.truncate(r);
+                } else {
+                    sparse.0.copy_within(l..r, 0);
+                    sparse.0.truncate(r - l);
+                }
             }
             (Subset::Sparse(cur), SubsetRef::Sparse(other)) => {
-                let mut other_off = 0;
-                cur.retain(|rowid| match other.scan_for_offset(other_off, rowid) {
-                    Ok(found) => {
-                        other_off = found + 1;
-                        true
+                let cur_len = cur.0.len();
+                let other_inner = other.inner();
+                let other_len = other_inner.len();
+                if (cur_len <= 16 && other_len <= 16)
+                    || (cur_len / 4 <= other_len && other_len <= cur_len * 4)
+                {
+                    // Similar sizes: two-pointer intersection in O(cur_len + other_len).
+                    let mut write = 0usize;
+                    let mut oi = 0usize;
+                    for ci in 0..cur_len {
+                        let target = cur.0[ci];
+                        while oi < other_len && other_inner[oi] < target {
+                            oi += 1;
+                        }
+                        if oi == other_len {
+                            break;
+                        }
+                        if other_inner[oi] == target {
+                            cur.0[write] = target;
+                            write += 1;
+                            oi += 1;
+                        }
                     }
-                    Err(next_off) => {
-                        other_off = next_off;
-                        false
+                    cur.0.truncate(write);
+                } else if cur_len > other_len {
+                    // other is much smaller: iterate other and gallop in cur.
+                    // O(other_len * log(cur_len / other_len)) vs O(cur_len) for retain.
+                    let mut write = 0usize;
+                    let mut ci = 0usize;
+                    #[allow(clippy::needless_range_loop)]
+                    for oi in 0..other_len {
+                        if ci >= cur_len {
+                            break;
+                        }
+                        let target = other_inner[oi];
+                        let result = cur.slice().scan_for_offset(ci, target);
+                        match result {
+                            Ok(found) => {
+                                cur.0[write] = target;
+                                write += 1;
+                                ci = found + 1;
+                            }
+                            Err(next_ci) => {
+                                ci = next_ci;
+                            }
+                        }
                     }
-                })
+                    cur.0.truncate(write);
+                } else {
+                    // cur is much smaller than other: iterate cur and gallop in other.
+                    // O(cur_len * log(other_len / cur_len)).
+                    let mut other_off = 0;
+                    cur.retain(|rowid| match other.scan_for_offset(other_off, rowid) {
+                        Ok(found) => {
+                            other_off = found + 1;
+                            true
+                        }
+                        Err(next_off) => {
+                            other_off = next_off;
+                            false
+                        }
+                    });
+                }
             }
         }
     }

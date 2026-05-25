@@ -9,6 +9,7 @@
 (check (= (sqrt 4.0) 2.0))
 (fail (check (= (^ 4.0 2.5) 31.99)))
 (fail (log 0.0))
+(fail (log -1.0))
 (fail (sqrt -1.0))
 (fail (check (< 9.2 1.5)))
 (fail (check (= (+ 1.5 9.2) 10.6)))

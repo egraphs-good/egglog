@@ -43,6 +43,8 @@ mod r#fn;
 pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
+mod pair;
+pub use pair::*;
 
 /// A sort (type) in the e-graph that defines values in egglog. Sorts are user-extensible (e.g., [`prelude::BaseSort`]).
 pub trait Sort: Any + Send + Sync + Debug {

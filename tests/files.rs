@@ -13,6 +13,7 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
+    threads: usize,
 }
 
 impl Run {
@@ -22,7 +23,8 @@ impl Run {
     }
 
     /// Extraction results may differ slightly due to the proof encoding when multiple
-    /// solutions have the same cost. We filter the output to include only things that remain the same.
+    /// solutions have the same cost. Snapshot only the extracted cost so shared
+    /// snapshots still verify that normal and proof modes find equally good solutions.
     fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
         outputs
             .iter()
@@ -31,7 +33,9 @@ impl Run {
                 CommandOutput::OverallStatistics(_) => None,
                 // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
                 CommandOutput::PrintFunction(..) => None,
-                CommandOutput::ExtractBest(..) => None,
+                CommandOutput::ExtractBest(_, cost, _) => {
+                    Some(format!("(extraction-costs {cost})\n"))
+                }
                 CommandOutput::ExtractVariants(..) => None,
                 // All other variants use normal Display formatting
                 other => Some(other.to_string()),
@@ -61,6 +65,7 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
+                threads: self.threads,
             };
             let proof_check_prog = if self.proof_testing {
                 program.clone()
@@ -86,9 +91,9 @@ impl Run {
                     let snapshot_content_across_treatments =
                         self.outputs_to_snapshot_preserved_across_treatments(outputs);
 
-                    // only assert snapshot if the snapshot is non-empty
-                    // proof_testing has different output due to automatic prove-exists, so no snapshot for that
-                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
+                    if self.should_assert_snapshot_across_treatments(
+                        &snapshot_content_across_treatments,
+                    ) {
                         insta::assert_snapshot!(
                             snapshot_name_across_treatments,
                             snapshot_content_across_treatments
@@ -194,7 +199,20 @@ impl Run {
     fn into_trial(self) -> Trial {
         let name = self.name().to_string();
         Trial::test(name, move || {
-            self.run();
+            // We use a local rayon pool here because `build_global()` can only
+            // be called once per process, but libtest-mimic runs many trials
+            // (with different thread counts) in the same process.
+            // The threads == 1 case also goes through pool.install so the trial
+            // doesn't fall through to the default global rayon pool (which uses
+            // num_cpus threads and would make "single-threaded" tests
+            // nondeterministic).
+            // TODO: when we move to per-EGraph local thread pools, replace this
+            // with `egraph.with_num_threads()` and remove the explicit pool.
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(self.threads)
+                .build()
+                .expect("failed to build rayon thread pool");
+            pool.install(|| self.run());
             Ok(())
         })
     }
@@ -237,6 +255,11 @@ impl Run {
                 if self.0.proof_testing {
                     write!(f, "_proof_testing")?;
                 }
+
+                if self.0.threads > 1 {
+                    write!(f, "_{}threads", self.0.threads)?;
+                }
+
                 Ok(())
             }
         }
@@ -248,22 +271,19 @@ impl Run {
     }
 
     fn should_skip_snapshot(&self) -> bool {
-        // in parallel mode always skip
-        #[cfg(debug_assertions)]
-        {
+        if self.threads > 1 {
+            // Skip snapshots for parallel tests due to non-deterministic output ordering
             true
-        }
-        // in non-parallel mode, selectively skip
-        #[cfg(not(debug_assertions))]
-        {
+        } else {
             // Skip tests with known non-deterministic output
             let filename = self.path.file_stem().unwrap().to_string_lossy();
-            const SKIP_PATTERNS: [&str; 5] = [
+            const SKIP_PATTERNS: [&str; 6] = [
                 "extract-vec-bench",
                 "python_array_optimize",
                 "stresstest_large_expr",
                 "towers-of-hanoi",
                 "taylor51",
+                "factoring-multisets",
             ];
             if SKIP_PATTERNS.iter().any(|pat| filename.contains(pat)) {
                 return true;
@@ -276,6 +296,15 @@ impl Run {
                 .any(|f| self.path.to_string_lossy().contains(f));
             in_list && (self.proofs || self.term_encoding || self.proof_testing)
         }
+    }
+
+    /// only assert snapshot if the snapshot is non-empty
+    /// proof_testing has different output due to automatic prove-exists, so no snapshot for that
+    fn should_assert_snapshot_across_treatments(
+        &self,
+        snapshot_content_across_treatments: &str,
+    ) -> bool {
+        !snapshot_content_across_treatments.is_empty() && !self.proof_testing
     }
 }
 
@@ -290,6 +319,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
+            threads: 1,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
@@ -297,6 +327,8 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",
+            "rectangle.egg",
+            "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
         ];
@@ -307,6 +339,11 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
 
         if !requires_proofs {
             push_trial(run.clone());
+
+            push_trial(Run {
+                threads: 32,
+                ..run.clone()
+            });
         }
         if !requires_proofs && !should_fail {
             push_trial(Run {

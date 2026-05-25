@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Num 1)
+ (Trigger 1)
+ (dbl 1)
+ (dbl-out 1))

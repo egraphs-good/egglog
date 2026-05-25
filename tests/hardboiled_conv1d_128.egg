@@ -1,0 +1,2253 @@
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Datatype declarations
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(datatype Loc 
+    (Mem) ; This is where the generic computation happens
+    (AMX) ; AMX tiles
+    (WMMA_A) ; CUDA Warp-level Matrix Multiplication registers
+    (WMMA_B)
+    (WMMA_C)
+)
+
+(datatype BinOp
+    (Add)
+    (Sub)
+    (Mul)
+    (Div)
+    (Mod)
+    (Min)
+    (Max)
+    (EQ)
+    (NE)
+    (LT)
+    (LE)
+    (GT)
+    (GE)
+    (And)
+    (Or))
+(datatype UnaOp
+    (Not))
+
+; TODO
+(datatype Buffer)
+(datatype Parameter)
+(datatype Type
+    ;;  bits x lanes
+    (Int i64 i64)
+    (UInt i64 i64)
+    (Float i64 i64)
+    (BFloat i64 i64)
+    (Handle i64)
+)
+(datatype CallType
+    (Image)
+    (Extern)
+    (ExternCPlusPlus)
+    (PureExtern)
+    (Halide)
+    (Intrinsic)
+    (PureIntrinsic)
+)
+
+(sort Stmt)
+(sort VecInt (Vec i64))
+(sort Expr)
+(sort VecExpr (Vec Expr))
+
+(sort Variable)
+(constructor V (String) Variable)
+
+;; Expr
+(constructor Cast (Type Expr) Expr)
+(constructor Reinterpret (Type Expr) Expr)
+(constructor Bop (BinOp Expr Expr) Expr)
+(constructor Uop (UnaOp Expr) Expr)
+;; condition true_val false_val
+(constructor Select (Expr Expr Expr) Expr)
+;; name index
+(constructor Load (Type Variable Expr) Expr)
+;; base stride lanes
+(constructor Ramp (Expr Expr i64) Expr :cost 100)
+;; value lanes
+(constructor Broadcast (Expr i64) Expr :cost 100)
+;; name value body
+;; TODO: Not sure if we need this one, binding is tricky
+(constructor Let (String Expr Expr) Expr)
+;; This one is also tricky
+(constructor Call (String Type VecExpr CallType) Expr)
+;; name
+;; TODO: there are some arguments that are ignored here
+(constructor Var (Type Variable) Expr)
+(constructor Shuffle (VecExpr VecInt) Expr)
+(constructor VectorReduce (Type BinOp Expr) Expr)
+;;                bits val
+(constructor IntImm (i64  i64) Expr)
+; u64 is not supported in egglog
+(constructor UIntImm (i64  i64) Expr)
+(constructor FloatImm (i64 f64) Expr)
+
+
+;; Stmt
+
+;;                name  value index
+(constructor Store (String Expr  Expr) Stmt)
+(constructor Evaluate (Expr) Stmt)
+
+
+;; Some secondary stmts that we may not use
+;; Not supported: Provide, Realize, Acquire, Prefetch, HoistedStorage
+
+;; TODO: MemoryType, ForType, Partition, DeviceAPI
+; (constructor LetStmt (String Expr Stmt) Stmt)
+; (constructor AssertStmt (Expr Expr) Stmt)
+; (constructor ProducerConsumer (String bool Stmt) Stmt)
+; ;;                 name    type mem_type   extents cond body 
+; (constructor Allocate (String Type MemoryType VecExpr Expr Stmt) Stmt)
+; (constructor Free (String) Stmt)
+; (constructor Block (Stmt Stmt) Stmt)
+; (constructor Fork (Stmt Stmt) Stmt)
+; (constructor IfThenElse (Expr Stmt Stmt) Stmt)
+; (constructor For (String Expr Expr ForType Partition DeviceAPI Stmt) Stmt)
+; (constructor Atomic (String String Stmt) Stmt)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Extensions to the IR
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(constructor Loc2Loc (Loc Loc Expr) Expr :unextractable)
+; (constructor Mem2AMX (Expr) Expr :unextractable)
+(constructor Mem2AMX (Expr) Expr :cost 100000)
+; (constructor AMX2Mem (Expr) Expr :unextractable)
+(constructor AMX2Mem (Expr) Expr :cost 100000)
+(constructor WMMA2Mem (Expr) Expr :cost 100000)
+(constructor Mem2WMMA (Expr) Expr :cost 100000)
+
+(birewrite (Mem2AMX e) (Loc2Loc (Mem) (AMX) e))
+(birewrite (AMX2Mem e) (Loc2Loc (AMX) (Mem) e))
+(birewrite (WMMA2Mem e) (Loc2Loc (WMMA_C) (Mem) e))
+(birewrite (Mem2WMMA e) (Loc2Loc (Mem) (WMMA_C) e))
+(rewrite (Loc2Loc a b (Loc2Loc b a e)) e)
+
+(constructor ExprVar (Loc Expr) Variable)
+;; See `optimization/vector_axioms.egg` for conversion between `Broadcast` and `BroadcastPer`
+(constructor BroadcastPer (i64 Expr i64) Expr :cost 200) ;; cost 200 to prioritize `Broadcast` over `BroadcastPer`
+
+;; list of intrinsics
+; KWayInterleave(i64 k, Expr base, i64 lanes): i64x(height*width)
+
+;; We don't need StoreAndLoad... Use ExprVar instead
+; ;; takes an expression over loc1, stores it in loc1, 
+; ;; and then loads it back in loc2
+; ;; There is actually no load happening here:
+; ;;       *StoreAndLoad returns the base address and by itself
+; ;;       it does not load the value
+; ;;       It may be better named as StoreAndReturnBaseAddress (This name is suggested by Copilot)
+; ;;       Or Spill
+; (constructor GenericStoreAndLoad (Loc Loc Expr) Expr)
+; ;; Takes a Mem expression, stores it in memory, and then loads it back
+; (constructor StoreAndLoad (Expr) Expr)
+; ;; takes an AMX expression, tile_store it in memory, 
+; ;; and then load this memory back
+; (constructor AMXStoreAndLoad (Expr) Expr)
+; (birewrite (AMXStoreAndLoad e) (GenericStoreAndLoad (AMX) (Mem) e))
+; (birewrite (StoreAndLoad e) (GenericStoreAndLoad (Mem) (Mem) e))
+
+
+;; This is for use with StoreAndLoad
+(constructor Computed () Expr)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Helpers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; true if the type is signed
+(constructor UIntOrInt (bool i64 i64) Type)
+(birewrite (UIntOrInt false i l) (UInt i l))
+(birewrite (UIntOrInt true i l) (Int i l))
+
+(constructor UIntOrIntImm (bool i64 i64) Expr)
+(birewrite (UIntOrIntImm false b x) (UIntImm b x))
+(birewrite (UIntOrIntImm true b x) (IntImm b x))
+
+(constructor IntImm64 (i64) Expr)
+(birewrite (IntImm64 x) (IntImm 64 x))
+(constructor IntImm32 (i64) Expr)
+(birewrite (IntImm32 x) (IntImm 32 x))
+(constructor IntImm16 (i64) Expr)
+(birewrite (IntImm16 x) (IntImm 16 x))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Constants
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Rulesets
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(ruleset amx)
+; (ruleset amx-alwaysrun)
+
+(ruleset canonicalize)
+(ruleset assemble)
+(ruleset typechecking)
+(ruleset push-down-vector-reduce)
+
+; 
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Properties
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(relation CommBop (BinOp))
+(rule () (
+    (CommBop (Add))
+    (CommBop (Mul))
+    (CommBop (And))
+    (CommBop (Or))
+    (CommBop (Min))
+    (CommBop (Max))
+    (CommBop (EQ))
+    (CommBop (NE))
+))
+
+(relation AddOrSub (BinOp))
+(rule () (
+    (AddOrSub (Add))
+    (AddOrSub (Sub))
+))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Analysis rules
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; IsExpr
+(relation IsExpr (Expr))
+(rule ((= e (Cast _type _expr))) ((IsExpr e)))
+(rule ((= e (Reinterpret _type _expr))) ((IsExpr e)))
+(rule ((= e (Bop _binop _expr1 _expr2))) ((IsExpr e)))
+(rule ((= e (Select _expr1 _expr2 _expr3))) ((IsExpr e)))
+(rule ((= e (Load _type _string _expr))) ((IsExpr e)))
+(rule ((= e (Ramp _expr1 _expr2 _i64))) ((IsExpr e)))
+(rule ((= e (Broadcast _expr _i64))) ((IsExpr e)))
+(rule ((= e (Let _string _expr1 _expr2))) ((IsExpr e)))
+(rule ((= e (Call _string _type _vecexpr _calltype))) ((IsExpr e)))
+(rule ((= e (Var _type _string))) ((IsExpr e)))
+(rule ((= e (Shuffle _vecexpr _vecint))) ((IsExpr e)))
+(rule ((= e (VectorReduce _type _binop _expr))) ((IsExpr e)))
+(rule ((= e (IntImm _bits _i64))) ((IsExpr e)))
+
+; 
+
+
+;; Type checking
+(constructor MultipliedLanes (Type i64) Type)
+(rewrite (MultipliedLanes (Int i l) x) (Int i (* l x)) :ruleset typechecking)
+(rewrite (MultipliedLanes (UInt i l) x) (UInt i (* l x)) :ruleset typechecking)
+(rewrite (MultipliedLanes (Float i l) x) (Float i (* l x)) :ruleset typechecking)
+(rewrite (MultipliedLanes (BFloat i l) x) (BFloat i (* l x)) :ruleset typechecking)
+(rewrite (MultipliedLanes (Handle l) x) (Handle (* l x)) :ruleset typechecking)
+
+(function LanesInType (Type) i64 :no-merge)
+(rule ((= t (Int i l)))
+      ((set (LanesInType t) l)) :ruleset typechecking)
+(rule ((= t (UInt i l)))
+      ((set (LanesInType t) l)) :ruleset typechecking)
+(rule ((= t (Float i l)))
+      ((set (LanesInType t) l)) :ruleset typechecking)
+(rule ((= t (BFloat i l)))
+      ((set (LanesInType t) l)) :ruleset typechecking)
+(rule ((= t (Handle l)))
+      ((set (LanesInType t) l)) :ruleset typechecking)
+
+(constructor WithLanes (Type i64) Type)
+(rewrite (WithLanes (Int i l) x) (Int i x) :ruleset typechecking)
+(rewrite (WithLanes (UInt i l) x) (UInt i x) :ruleset typechecking)
+(rewrite (WithLanes (Float i l) x) (Float i x) :ruleset typechecking)
+(rewrite (WithLanes (BFloat i l) x) (BFloat i x) :ruleset typechecking)
+(rewrite (WithLanes (Handle l) x) (Handle x) :ruleset typechecking)
+
+(relation has-type (Expr Type))
+(rule ((= e (Cast ty expr))) ((has-type e ty)) :ruleset typechecking)
+(rule ((= e (Reinterpret ty expr))) ((has-type e ty)) :ruleset typechecking)
+(rule (
+    (= e (Bop bop e1 e2))
+    (has-type e1 t)
+    (has-type e2 t)
+) ((has-type e t)) :ruleset typechecking)
+(rule (
+    (= e (Uop uop e1))
+    (has-type e1 t)
+) ((has-type e t)) :ruleset typechecking)
+(rule ((= e (Select cond tval fval))
+    (has-type cond (UInt 1 _lanes))
+    (has-type tval ty)
+    (has-type fval ty)
+) ((has-type e ty)) :ruleset typechecking)
+(rule ((= e (Load ty name child))) ((has-type e ty)) :ruleset typechecking)
+(rule ((= e (Ramp child s l)) 
+    (has-type child ty)
+) ((has-type e (MultipliedLanes ty l))) :ruleset typechecking)
+(rule ((= e (Broadcast child l)) (has-type child ty)) 
+    ((has-type e (MultipliedLanes ty l))) :ruleset typechecking)
+(rule ((= e (Let x e1 e2))) 
+    ((panic "let not supported")) :ruleset typechecking)
+(rule ((= e (Call fn out-type args calltype))
+) ((has-type e out-type)) :ruleset typechecking)
+(rule ((= e (Var ty x))) ((has-type e ty)) :ruleset typechecking)
+(rule ((= e (Shuffle vecexpr vecint))) 
+    ((panic "not supported")) :ruleset typechecking)
+(rule ((= e (VectorReduce ty binop expr))) 
+    ((has-type e ty)) :ruleset typechecking)
+(rule ((= e (IntImm bits i64))) ((has-type e (Int bits 1))) :ruleset typechecking)
+(rule ((= e (UIntImm bits i64))) ((has-type e (UInt bits 1))) :ruleset typechecking)
+(rule ((= e (FloatImm bits f64))) ((has-type e (Float bits 1))) :ruleset typechecking)
+
+;; extensions
+(rule (
+    (= e (Loc2Loc l1 l2 e1))
+    (has-type e1 t)
+) (
+    (has-type e t)
+) :ruleset typechecking)
+(rule (
+    (= e (BroadcastPer p e1 l))
+    (has-type e1 t)
+) (
+    (has-type e (MultipliedLanes t l))
+) :ruleset typechecking)
+
+(rule ((has-type e t1) (has-type e t2) (!= t1 t2)) ((panic "type error")))
+
+; 
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; !!Dangerous!!
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rewrite
+    (VectorReduce t-outer bop (Cast t-inner e))
+    (Cast t-outer (VectorReduce (WithLanes t-e l-outer) bop e))
+  :when (
+    (has-type e t-e) 
+    (= l-outer (LanesInType t-outer))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Axiomatic rewrites
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Conversion between `Broadcast` and `BroadcastPer`
+(rule (
+    (= bc (Broadcast e lo))
+    (has-type e t)
+    (= p (LanesInType t))
+) (
+    (union bc (BroadcastPer p e lo))
+))
+(rule (
+    (= bcp (BroadcastPer p e lo))
+    (has-type e t)
+    (= p (LanesInType t))
+) (
+    (union bcp (Broadcast e lo))
+))
+;; end conversion
+
+(rewrite 
+    (Broadcast (Broadcast x l0) l1)
+    (Broadcast x (* l0 l1))
+)
+
+(rewrite (Bop bop a b) (Bop bop b a) :when ((CommBop bop)))
+
+
+;; broadcast related axioms
+;; TODO: these rules are still not replaceable, why??
+;; TODO: missing the cast-broadcastper rule for the degenerate rules
+(rewrite (Broadcast x 1) x)
+(rewrite (Broadcast (Load type name index) lanes) 
+         (Load (MultipliedLanes type lanes) name (Broadcast index lanes)))
+(rewrite (Broadcast (Cast type expr) lanes) 
+         (Cast (MultipliedLanes type lanes) (Broadcast expr lanes)))
+;; same rules generalized to BroadcastPer
+(rewrite (BroadcastPer p x 1) x)
+(rewrite (BroadcastPer p (Load type name index) lanes) 
+         (Load (MultipliedLanes type lanes) name (BroadcastPer p index lanes)))
+(rewrite (BroadcastPer p (Cast type expr) lanes) 
+         (Cast (MultipliedLanes type lanes) (BroadcastPer p expr lanes)))
+(rewrite (Cast type (BroadcastPer p x l))
+         (BroadcastPer p (Cast (WithLanes type lx) x) l)
+    :when ((has-type x t)
+           (= (LanesInType t) lx)))
+
+;; Reverse the pulled out BroadcastPer
+;; TODO: in its own ruleset
+(rewrite (BroadcastPer p (Broadcast x l0) l1)
+         (Broadcast (BroadcastPer p x l1) l0)
+    :when ((has-type x t)
+           (= curr-p (LanesInType t))
+           (>= curr-p p)))
+(rewrite (BroadcastPer p (Ramp x (Broadcast s curr-p) l0) l1)
+         (Ramp (BroadcastPer p x l1) (Broadcast s (* curr-p l1)) l0)
+    :when ((has-type x t)
+           (= curr-p (LanesInType t))
+           (>= curr-p p)))
+;; in the case the larger broadcast cannot be compressed
+;; this seems to be "confluent" with even considering multiple variants in the E-class,
+;; because this same rule can be achieved by running other rules on an equivalent version of the expression
+;; (that unnests the inner Broadcast to two Broadcasts)
+(rewrite (BroadcastPer p (Broadcast x l0) l1)
+         (Broadcast x (* l0 l1))
+    :when ((has-type x t)
+           (= curr-p (LanesInType t))
+           (< curr-p p)
+           (> (* curr-p l0) p)))
+(rewrite (BroadcastPer p (Ramp x (Broadcast s curr-p) l0) l1)
+         (Ramp 
+            (Broadcast 
+                (Ramp 
+                    x 
+                    ; TODO: need to make sure all the lanes of the stride of the Ramp 
+                    ; must be the lanes of the type of `x`
+                    (Broadcast s curr-p) 
+                    (/ p curr-p))
+                l1)
+            (Broadcast (Bop (Mul) s (UIntOrIntImm signed bits (/ p curr-p))) (* p l1))
+            (/ l0 (/ p curr-p)))
+    :when ((has-type x (UIntOrInt signed bits curr-p))
+           (< curr-p p)
+           (> (* curr-p l0) p)
+           (= 0 (% p curr-p))
+           (= 0 (% l0 (/ p curr-p)))
+           ))
+
+;; More broadcast axioms
+(rewrite (Bop bop (Broadcast a l1) (Broadcast b l2))
+         (Broadcast (Bop bop (Broadcast a (/ l1 l2)) b) l2)
+    :when ((> l1 l2)
+           (= 0 (% l1 l2))))
+
+;; Also see `make-aligned` for the more nested version
+(rewrite (Bop bop (Broadcast a l1) (Broadcast b l2))
+         (Broadcast (Bop bop a (Broadcast b (/ l2 l1))) l1)
+    :when ((< l1 l2)
+           (= 0 (% l2 l1))))
+
+(rewrite (Bop bop (Broadcast a l1) (Ramp x s l2))
+         (Bop bop (Broadcast (Broadcast a (/ l1 l2)) l2) (Ramp x s l2))
+    :when ((> l1 l2)
+           (= 0 (% l1 l2))))
+
+(rewrite (Bop bop (Ramp x s l2) (Broadcast a l1))
+         (Bop bop (Ramp x s l2) (Broadcast (Broadcast a (/ l1 l2)) l2))
+    :when ((> l1 l2)
+           (= 0 (% l1 l2))))
+
+
+(birewrite (Bop bop (BroadcastPer p a l) (BroadcastPer p b l))
+         (BroadcastPer p (Bop bop a b) l))
+
+(rewrite (Bop add-or-sub (Ramp base stride lanes) (Broadcast x lanes))
+         (Ramp (Bop add-or-sub base x) stride lanes)
+    :when ((AddOrSub add-or-sub)))
+(rewrite (Bop add-or-sub (Ramp b1 s1 l) (Ramp b2 s2 l))
+         (Ramp (Bop add-or-sub b1 b2) (Bop add-or-sub s1 s2) l)
+    :when ((AddOrSub add-or-sub)))
+(rewrite (Bop (Mul) (Ramp b s l) (Broadcast x l))
+         (Ramp (Bop (Mul) b x) (Bop (Mul) s x) l))
+
+; TODO: this can be generalized
+(rewrite (Bop (Mod) (Ramp (IntImm bits base) (IntImm bits 1) lanes) (Broadcast (IntImm bits x) lanes))
+         (Broadcast (Ramp (IntImm bits 0) (IntImm bits 1) x) (/ lanes x))
+    :when ((= (% lanes x) 0)
+           (= (% base x) 0)))
+; (0:1:8) / x8(4) -> (x4(0):x4(1):2)
+(rewrite (Bop (Div) (Ramp (IntImm bits base) (IntImm bits 1) lanes) (Broadcast (IntImm bits x) lanes))
+         (Ramp (Broadcast (IntImm bits (/ base x)) x) (Broadcast (IntImm bits 1) x) (/ lanes x))
+        :when ((= (% lanes x) 0)
+               (= (% base x) 0)))
+
+
+(rewrite (Bop add-or-sub (Ramp base stride r-lanes) (Broadcast x b-lanes))
+         (Ramp (Bop add-or-sub base (Broadcast x (/ b-lanes r-lanes))) stride r-lanes)
+    :when ((= 0 (% b-lanes r-lanes))
+           (AddOrSub add-or-sub) ))
+(rewrite (Ramp x s 1) x)
+
+(rewrite x (Ramp x (Broadcast (IntImm b 0) l) 1) 
+    :when (
+        (IsExpr x) 
+        (has-type x (Int b l))))
+(rewrite x (Broadcast x 1) :when ((IsExpr x)))
+; reorganize a ramp as a 4-column tiles
+; TODO: do we need these rules now we have `make-aligned`?
+; Yes - otherwise performance/tiled_matmul.cpp does not pass
+(rewrite (Ramp e (IntImm b 1) l) 
+         (Ramp (Ramp e (IntImm b 1) 4) (Broadcast (IntImm b 4) 4) (/ l 4)) 
+  :when ((= 0 (% l 4))))
+(rewrite (Ramp e (IntImm b 1) l) 
+         (Ramp (Ramp e (IntImm b 1) 2) (Broadcast (IntImm b 2) 2) (/ l 2)) 
+  :when ((= 0 (% l 2))))
+(rewrite (Ramp e (IntImm b 1) l) 
+         (Ramp (Ramp e (IntImm b 1) 16) (Broadcast (IntImm b 16) 16) (/ l 16)) 
+  :when ((= 0 (% l 16))))
+
+;; Cast identity
+(rule (
+    (has-type e t)
+) (
+    (union e (Cast t e))
+))
+
+
+; 
+
+
+(rule (
+    (has-type e (UIntOrInt sign bits lanes))
+) (
+    (union e (Bop (Add) e (Broadcast (UIntOrIntImm sign bits 0) lanes)))
+))
+
+; 
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Constant folding
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rewrite (Bop (Add) (IntImm bits a) (IntImm bits b)) (IntImm bits (+ a b)))
+(rewrite (Bop (Sub) (IntImm bits a) (IntImm bits b)) (IntImm bits (- a b)))
+(rewrite (Bop (Mul) (IntImm bits a) (IntImm bits b)) (IntImm bits (* a b)))
+(rewrite (Bop (Div) (IntImm bits a) (IntImm bits b)) (IntImm bits (/ a b)))
+(rewrite (Bop (Mod) (IntImm bits a) (IntImm bits b)) (IntImm bits (% a b)))
+(rewrite (Bop (Min) (IntImm bits a) (IntImm bits b)) (IntImm bits (min a b)))
+(rewrite (Bop (Max) (IntImm bits a) (IntImm bits b)) (IntImm bits (max a b)))
+(rewrite (Bop (EQ) (IntImm bits a) (IntImm bits b)) (UIntImm 1 1) :when ((= a b)))
+(rewrite (Bop (EQ) (IntImm bits a) (IntImm bits b)) (UIntImm 1 0) :when ((!= a b)))
+(rewrite (Bop (NE) (IntImm bits a) (IntImm bits b)) (UIntImm 1 0) :when ((= a b)))
+(rewrite (Bop (NE) (IntImm bits a) (IntImm bits b)) (UIntImm 1 1) :when ((!= a b)))
+(rewrite (Bop (LT) (IntImm bits a) (IntImm bits b)) (UIntImm 1 1) :when ((< a b)))
+(rewrite (Bop (LT) (IntImm bits a) (IntImm bits b)) (UIntImm 1 0) :when ((>= a b)))
+(rewrite (Bop (LE) (IntImm bits a) (IntImm bits b)) (UIntImm 1 1) :when ((<= a b)))
+(rewrite (Bop (LE) (IntImm bits a) (IntImm bits b)) (UIntImm 1 0) :when ((> a b)))
+(rewrite (Bop (GT) (IntImm bits a) (IntImm bits b)) (UIntImm 1 1) :when ((> a b)))
+(rewrite (Bop (GT) (IntImm bits a) (IntImm bits b)) (UIntImm 1 0) :when ((<= a b)))
+(rewrite (Bop (GE) (IntImm bits a) (IntImm bits b)) (UIntImm 1 1) :when ((>= a b)))
+(rewrite (Bop (GE) (IntImm bits a) (IntImm bits b)) (UIntImm 1 0) :when ((< a b)))
+; TODO: logical operators
+
+; 
+
+
+;; Given two index expressions, make-aligned tries to 
+;; un-nest Broadcast and Ramp expressions
+
+(relation make-aligned (Expr Expr))
+
+(rule (
+    (make-aligned a b)
+) (
+    (make-aligned b a)
+) :ruleset canonicalize)
+
+;; can do prime factorization to further generalize these rules
+(rule (
+    (make-aligned (Broadcast e1 b1) (Broadcast e2 b2))
+    (< b1 b2)
+    (= (% b2 b1) 0)
+    (!= b1 1)
+) (
+    (union (Broadcast e2 b2) (Broadcast (Broadcast e2 (/ b2 b1)) b1))
+    ; (subsume (Broadcast e2 b2))
+) :ruleset canonicalize)
+
+(rule (
+    (make-aligned (Ramp e1 s1 l1) (Broadcast e2 b2))
+    (< l1 b2)
+    (= (% b2 l1) 0)
+    (!= l1 1)
+) (
+    (union (Broadcast e2 b2) (Broadcast (Broadcast e2 (/ b2 l1)) l1))
+    ; (subsume (Broadcast e2 b2))
+) :ruleset canonicalize)
+
+(rule (
+    (make-aligned (Broadcast e1 b1) (Ramp e2 s2 l2))
+    (< b1 l2)
+    (= (% l2 b1) 0)
+    (!= b1 1)
+
+    (has-type e2 (UIntOrInt sign bits lanes))
+) (
+    (union (Ramp e2 s2 l2) 
+           (Ramp (Ramp e2 s2 (/ l2 b1))
+                 (Broadcast (Bop (Mul) s2 (Broadcast (UIntOrIntImm sign bits (/ l2 b1)) lanes)) (/ l2 b1))
+                 b1))
+    ; (subsume (Ramp e2 s2 l2))
+) :ruleset canonicalize)
+
+(rule (
+    (make-aligned (Ramp e1 s1 l1) (Ramp e2 s2 l2))
+    (< l1 l2)
+    (= (% l2 l1) 0)
+    (!= l1 1)
+
+    (has-type e2 (UIntOrInt sign bits lanes))
+) (
+    (union (Ramp e2 s2 l2) 
+           (Ramp (Ramp e2 s2 (/ l2 l1))
+                 (Bop (Mul) s2 (Broadcast (UIntOrIntImm sign bits (/ l2 l1)) lanes))
+                 l1))
+    ; (subsume (Ramp e2 s2 l2))
+) :ruleset canonicalize)
+
+;; Propagating down make-aligned
+;; TODO: should we ban the case when l is equal to 1??
+
+(rule (
+    (make-aligned (Ramp e1 s1 l) (Ramp e2 s2 l))
+) (
+    (make-aligned e1 e2)
+) :ruleset canonicalize)
+
+(rule (
+    (make-aligned (Ramp e1 s1 l) (Broadcast e2 l))
+) (
+    (make-aligned e1 e2)
+) :ruleset canonicalize)
+
+(rule (
+    (make-aligned (Broadcast e1 b) (Broadcast e2 b))
+) (
+    (make-aligned e1 e2)
+) :ruleset canonicalize)
+
+;; Instantiation of make-aligned for general matrix multiplication
+(rule (
+    (= e (VectorReduce out-type (Add)
+        (Bop (Mul)
+            (Cast lhs-op-type lhs)
+            (Cast rhs-op-type rhs))))
+    (= lhs (Load lhs-type lhs-name lhs-idx))
+    (= rhs (Load rhs-type rhs-name rhs-idx))
+) (
+    (make-aligned lhs-idx rhs-idx)
+) :ruleset canonicalize)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Pulling out aligned broadcasts
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(sort I64ExprBinFn (UnstableFn (i64 i64 Expr Expr) Expr))
+(datatype InvertedIndex
+    (InvRamp InvertedIndex Expr i64)
+    (InvBroadcast InvertedIndex i64)
+    (InvertedIndexEnd))
+(constructor assemble-inv-ind (
+    i64 ;; multiplicity
+    Expr 
+    InvertedIndex) Expr :unextractable)
+(rewrite (assemble-inv-ind m e (InvertedIndexEnd)) e 
+    :ruleset assemble)
+(rewrite (assemble-inv-ind m e (InvRamp i (Broadcast s sl) l)) 
+         (assemble-inv-ind m (Ramp e (Broadcast s (/ sl m)) l) i)
+    :when ((= (% sl m) 0))
+    :ruleset assemble)
+(rewrite (assemble-inv-ind m e (InvBroadcast i l))
+         (assemble-inv-ind m (Broadcast e l) i)
+    :ruleset assemble)
+
+;; Main interface
+;;
+;; This relation kicks off the following procedure:
+;;  1. it scans lhs and rhs in lock step, finds the first
+;;     "co-located" Broadcasts with same broadcast lanes, and removes them.
+;;  2. it apply the assemble constructor to the modified lhs and rhs.
+;;  3. at this stage, the result should be equivalent to the original expression,
+;;     and remove-aligned-bc will union the result with the original expression.
+(relation remove-aligned-bc (
+    ;; origin
+    Expr 
+    ;; assmble constructor for lhs and rhs
+    I64ExprBinFn 
+    ;; lhs
+    Expr
+    ;; rhs
+    Expr 
+))
+
+(relation remove-aligned-bc-impl (
+    ;; origin
+    Expr 
+    ;; assmble constructor for lhs and rhs
+    I64ExprBinFn 
+    ;; lhs
+    Expr
+    ;; rhs
+    Expr 
+    ;; continuation for lhs
+    InvertedIndex 
+    ;; continuation for rhs
+    InvertedIndex
+))
+
+(rule (
+    (remove-aligned-bc origin modified left right)
+) (
+    (remove-aligned-bc-impl origin modified left right (InvertedIndexEnd) (InvertedIndexEnd))
+) :ruleset canonicalize)
+
+(rule (
+    (remove-aligned-bc-impl origin modified left right inv-left inv-right)
+
+    (= (Broadcast e1+ l) left)
+    (= (Broadcast e2+ l) right)
+    (!= l 1)
+    (has-type e1+ t)
+    (= broadcast-per (LanesInType t))
+) (
+    (let new-left (assemble-inv-ind l e1+ inv-left))
+    (let new-right (assemble-inv-ind l e2+ inv-right))
+    (union origin (unstable-app modified broadcast-per l new-left new-right))
+) :ruleset canonicalize)
+
+(rule (
+    (remove-aligned-bc-impl origin modified left right inv-left inv-right)
+
+    (= (Ramp e1+ s1 l) left)
+    (= (Broadcast e2+ l) right)
+    (!= l 1)
+) (
+    (remove-aligned-bc-impl origin modified e1+ e2+ 
+        (InvRamp inv-left s1 l) 
+        (InvBroadcast inv-right l))
+) :ruleset canonicalize)
+
+(rule (
+    (remove-aligned-bc-impl origin modified left right inv-left inv-right)
+
+    (= (Broadcast e1+ l) left)
+    (= (Ramp e2+ s2 l) right)
+    (!= l 1)
+) (
+    (remove-aligned-bc-impl origin modified e1+ e2+ 
+        (InvBroadcast inv-left l)
+        (InvRamp inv-right s2 l))
+) :ruleset canonicalize)
+
+(rule (
+    (remove-aligned-bc-impl origin modified left right inv-left inv-right)
+
+    (= (Ramp e1+ s1 l) left)
+    (= (Ramp e2+ s2 l) right)
+    (!= l 1)
+) (
+    (remove-aligned-bc-impl origin modified e1+ e2+ 
+        (InvRamp inv-left s1 l)
+        (InvRamp inv-right s2 l))
+) :ruleset canonicalize)
+
+;; Instantiation of remove-aligned-bc for general matrix multiplication
+(constructor matrix-multiplication-int/uint-cont (
+    ;; signedness
+    bool
+    ;; lhs-name
+    Variable
+    ;; rhs-name
+    Variable
+    ;; out-lanes
+    i64
+    ;; tot-lanes
+    i64
+    ;; broadcast-per
+    i64
+    ;; multiplicity
+    i64
+    ;; lhs
+    Expr
+    ;; rhs
+    Expr
+    ) Expr :unextractable)
+
+;; TODO: explain what multiplicity does
+(constructor matrix-multiplication-float-cont (
+    ;; lhs-name
+    Variable
+    ;; rhs-name
+    Variable
+    ;; out-lanes
+    i64
+    ;; tot-lanes
+    i64
+    ;; broadcast-per
+    i64
+    ;; multiplicity
+    i64
+    ;; lhs
+    Expr
+    ;; rhs
+    Expr
+    ) Expr
+    :unextractable)
+
+(constructor matrix-multiplication-float-16-cont (
+    ;; lhs-name
+    Variable
+    ;; rhs-name
+    Variable
+    ;; out-lanes
+    i64
+    ;; tot-lanes
+    i64
+    ;; broadcast-per
+    i64
+    ;; multiplicity
+    i64
+    ;; lhs
+    Expr
+    ;; rhs
+    Expr
+    ) Expr
+    :unextractable)
+
+(rewrite (matrix-multiplication-int/uint-cont signed lhs-name rhs-name old-out-lanes old-tot-lanes broadcast-per m lhs-idx rhs-idx)
+         ;; (/ tot-lanes out-lanes) computes how many values are reduced into one value
+         ;; We divide broadcast-per by this to account for the actual broadcasting after reduction
+         (BroadcastPer (/ broadcast-per (/ tot-lanes out-lanes))
+            (VectorReduce (UIntOrInt signed 32 out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (UIntOrInt signed 32 tot-lanes)
+                        (Load (UIntOrInt signed 8 tot-lanes) lhs-name lhs-idx))
+                    (Cast (UIntOrInt signed 32 tot-lanes) 
+                        (Load (UIntOrInt signed 8 tot-lanes) rhs-name rhs-idx)
+                        )))
+            m
+         )
+    :when ((= out-lanes (/ old-out-lanes m))
+           (= tot-lanes (/ old-tot-lanes m)))
+    :ruleset assemble
+    )
+
+(rewrite (matrix-multiplication-float-cont lhs-name rhs-name old-out-lanes old-tot-lanes broadcast-per m lhs-idx rhs-idx)
+         (BroadcastPer (/ broadcast-per (/ tot-lanes out-lanes))
+            (VectorReduce (Float 32 out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (Float 32 tot-lanes)
+                        (Load (BFloat 16 tot-lanes) lhs-name lhs-idx))
+                    (Cast (Float 32 tot-lanes)
+                        (Load (BFloat 16 tot-lanes) rhs-name rhs-idx)
+                        )))
+            m
+         )
+    :when ((= out-lanes (/ old-out-lanes m))
+           (= tot-lanes (/ old-tot-lanes m)))
+    :ruleset assemble
+    )
+
+(rewrite (matrix-multiplication-float-16-cont lhs-name rhs-name old-out-lanes old-tot-lanes broadcast-per m lhs-idx rhs-idx)
+         (BroadcastPer (/ broadcast-per (/ tot-lanes out-lanes))
+            (VectorReduce (Float 16 out-lanes) (Add)
+                (Bop (Mul)
+                    (Load (Float 16 tot-lanes) lhs-name lhs-idx)
+                    (Load (Float 16 tot-lanes) rhs-name rhs-idx)))
+            m
+         )
+    :when ((= out-lanes (/ old-out-lanes m))
+           (= tot-lanes (/ old-tot-lanes m)))
+    :ruleset assemble
+    )
+
+(rule (
+    (= e (VectorReduce (UIntOrInt signed 32 out-lanes) (Add)
+        (Bop (Mul)
+            (Cast (UIntOrInt signed 32 tot-lanes) lhs)
+            (Cast (UIntOrInt signed 32 tot-lanes) rhs))))
+    (= lhs (Load (UIntOrInt signed 8 tot-lanes) lhs-name lhs-idx))
+    (= rhs (Load (UIntOrInt signed 8 tot-lanes) rhs-name rhs-idx))
+) (
+    (remove-aligned-bc e (unstable-fn "matrix-multiplication-int/uint-cont" signed lhs-name rhs-name out-lanes tot-lanes) lhs-idx rhs-idx)
+) :ruleset canonicalize)
+
+(rule (
+    (= e (VectorReduce (Float 32 out-lanes) (Add)
+        (Bop (Mul)
+            (Cast (Float 32 tot-lanes) lhs)
+            (Cast (Float 32 tot-lanes) rhs))))
+    (= lhs (Load (BFloat 16 tot-lanes) lhs-name lhs-idx))
+    (= rhs (Load (BFloat 16 tot-lanes) rhs-name rhs-idx))
+) (
+    (remove-aligned-bc e (unstable-fn "matrix-multiplication-float-cont" lhs-name rhs-name out-lanes tot-lanes) lhs-idx rhs-idx)
+) :ruleset canonicalize)
+
+(rule (
+    (= e (VectorReduce (Float 16 out-lanes) (Add)
+        (Bop (Mul)
+            lhs
+            rhs)))
+    (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-idx))
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-idx))
+) (
+    (remove-aligned-bc e (unstable-fn "matrix-multiplication-float-16-cont" lhs-name rhs-name out-lanes tot-lanes) lhs-idx rhs-idx)
+) :ruleset canonicalize)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Push down broadcasts
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; See `vector_axioms.egg`
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; push down VectorReduce
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; TODO: decompose remove-innermost-bc into pull-out-bc rule and match rule
+(relation remove-innermost-bc-demand (Expr))
+(relation remove-innermost-bc (
+    ;; original
+    Expr
+    ;; removed
+    Expr
+    ;; multiplicity shrinked
+    i64
+    ))
+
+(rule (
+    (VectorReduce ty (Add) (Bop (Mul) a b))
+) (
+    ;; We only do right child because of commutativity
+    (remove-innermost-bc-demand b)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (= e (VectorReduce ty (Add)
+        (Bop (Mul) a b)
+    ))
+
+    (remove-innermost-bc b shrinked-b m)
+    (has-type shrinked-b arg-type)
+) (
+    ;; Subsuming the top level of the original lhs:
+    ;; There are likely no accelerable pattern where 
+    ;; the innermost expression is a broadcast
+    (subsume (VectorReduce ty (Add) (Bop (Mul) a b)))
+    (union e (VectorReduce ty (Add)
+        (Bop (Mul) 
+            (VectorReduce arg-type (Add) a)
+            shrinked-b
+            )))
+) :ruleset push-down-vector-reduce)
+
+;; Going down
+
+(rule (
+    (remove-innermost-bc-demand (Cast ty e))
+) (
+    (remove-innermost-bc-demand e)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand (Load ty x e))
+) (
+    (remove-innermost-bc-demand e)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand (Ramp e s l))
+    (!= l 1)
+) (
+    (remove-innermost-bc-demand e)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand (Broadcast e l))
+    (has-type e ty)
+    (> (LanesInType ty) 1)
+) (
+    (remove-innermost-bc-demand e)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand (Broadcast e l))
+    (has-type e ty)
+    (= (LanesInType ty) 1)
+    (!= l 1)
+) (
+    (remove-innermost-bc (Broadcast e l) e l)
+) :ruleset push-down-vector-reduce)
+
+;; Going back up
+
+(rule (
+    (remove-innermost-bc-demand e)
+    (= e (Cast ty e1))
+    (remove-innermost-bc e1 removed m)
+
+    (= l (LanesInType ty))
+    (= (% l m) 0)
+) (
+    (remove-innermost-bc e (Cast (WithLanes ty (/ l m)) removed) m)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand e)
+    (= e (Load ty x e1))
+    (remove-innermost-bc e1 removed m)
+
+    (= l (LanesInType ty))
+    (= (% l m) 0)
+) (
+    (remove-innermost-bc e (Load (WithLanes ty (/ l m)) x removed) m)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand e)
+    (= e (Broadcast e1 l))
+    (remove-innermost-bc e1 removed m)
+
+    (!= l 1)
+) (
+    (remove-innermost-bc e (Broadcast removed l) m)
+) :ruleset push-down-vector-reduce)
+
+(rule (
+    (remove-innermost-bc-demand e)
+    (= e (Ramp e1 (Broadcast s ml) l))
+    (remove-innermost-bc e1 removed m)
+
+    (!= l 1)
+    (= (% ml m) 0)
+) (
+    (remove-innermost-bc e (Ramp removed (Broadcast s (/ ml l)) l) m)
+) :ruleset push-down-vector-reduce)
+
+
+; 
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; AMX helpers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; {
+    ; (relation _LoadAMXType (Type))
+    ; (_LoadAMXType (Int 32 256))
+    ; (_LoadAMXType (Float 32 256))
+;; }
+; (constructor LoadAMX (Type String) Expr :unextractable)
+; (birewrite (LoadAMX ty x) (Load ty x R256) :when ((_LoadAMXType ty)))
+
+; (constructor StoreAMX (String Expr) Stmt :unextractable)
+; (birewrite (Store name value R256) (StoreAMX name value))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Shape inference
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;                       var    rows colbytes
+(relation AMXAllocation (String i64  i64))
+(relation AMXShape (Expr i64  i64))
+
+(rule (
+    (AMXAllocation name rows colbytes)
+    (= e (Var t (V name)))
+) (
+    (AMXShape e rows colbytes)
+) :ruleset amx)
+(rule (
+    (AMXShape e rows colbytes)
+    (Store name e index)
+) (
+    (AMXAllocation name rows colbytes)
+) :ruleset amx)
+(rule (
+    (AMXAllocation name rows colbytes)
+    (Store name e index)
+) (
+    (AMXShape e rows colbytes)
+) :ruleset amx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; tile_matmul
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Abstract AMX left-hand side access patterns
+(relation amx-int/uint-lhs (
+    Expr ;; orig-expr
+    i64 ;; x-lanes
+    i64 ;; y-lanes
+    i64 ;; r-lanes
+    Expr ;; rhs-expr
+))
+
+(relation amx-float-lhs (
+    Expr ;; orig-expr
+    i64 ;; x-lanes
+    i64 ;; y-lanes
+    i64 ;; r-lanes
+    Expr ;; rhs-expr
+))
+
+
+(rule (
+    (= orig-lhs (Load (UIntOrInt lhs-signed 8 tot-lanes) lhs-name lhs-index))
+    (= lhs-index
+        (Ramp (Broadcast (Ramp lhs-base (IntImm32 1) r-lanes) y-lanes) 
+              (Broadcast x-stride (* y-lanes r-lanes))
+              x-lanes)
+    )
+) (
+    (let new-lhs (Call "tile_load" (UIntOrInt lhs-signed 8 (* x-lanes r-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 r-lanes) (Var (Handle 1) lhs-name) lhs-base x-stride) (Intrinsic)))
+    (amx-int/uint-lhs orig-lhs x-lanes y-lanes r-lanes new-lhs)
+) :ruleset amx)
+
+(rule (
+    (= orig-lhs (Load (BFloat 16 tot-lanes) lhs-name lhs-index))
+    (= lhs-index
+        (Ramp (Broadcast (Ramp lhs-base (IntImm32 1) r-lanes) y-lanes) 
+              (Broadcast x-stride (* y-lanes r-lanes))
+              x-lanes)
+    )
+) (
+    (let new-lhs (Call "tile_load" (BFloat 16 (* x-lanes r-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 r-lanes) (Var (Handle 1) lhs-name) lhs-base x-stride) (Intrinsic)))
+    (amx-float-lhs orig-lhs x-lanes y-lanes r-lanes new-lhs)
+) :ruleset amx)
+
+;; Abstract AMX right-hand side access patterns
+
+(relation amx-int/uint-rhs (
+    Expr ;; orig-expr
+    i64 ;; x-lanes
+    i64 ;; y-lanes
+    i64 ;; r-lanes
+    Expr ;; rhs-expr
+))
+
+(relation amx-float-rhs (
+    Expr ;; orig-expr
+    i64 ;; x-lanes
+    i64 ;; y-lanes
+    i64 ;; r-lanes
+    Expr ;; rhs-expr
+))
+
+(rule (
+    (= orig-rhs (Load (UIntOrInt rhs-signed 8 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        ; 4 is for (u)int8
+        (Broadcast
+            (Ramp (Ramp (Ramp rhs-base (IntImm32 1) 4) 
+                        (Broadcast rhs-r-stride 4) 
+                        (/ r-lanes 4)
+                        )
+                  (Broadcast (IntImm32 4) r-lanes)
+                  y-lanes
+            )
+            x-lanes
+        )
+    )
+) (
+    (let amx-rhs (Call "tile_load" (UIntOrInt rhs-signed 8 (* r-lanes y-lanes)) (vec-of (IntImm16 (/ r-lanes 4)) (IntImm16 (* y-lanes 4)) (Var (Handle 1) rhs-name) rhs-base rhs-r-stride) (Intrinsic)))
+    (amx-int/uint-rhs orig-rhs x-lanes y-lanes r-lanes amx-rhs)
+) :ruleset amx)
+
+(rule (
+    (= orig-rhs (Load (BFloat 16 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp (Ramp rhs-base (IntImm32 1) 2) 
+                        (Broadcast rhs-r-stride 2)
+                        (/ r-lanes 2)
+                        )
+                  (Broadcast (IntImm32 2) r-lanes)
+                  y-lanes
+            )
+            x-lanes
+        )
+    )
+) (
+    (let amx-rhs (Call "tile_load" (BFloat 16 (* r-lanes y-lanes)) (vec-of (IntImm16 (/ r-lanes 2)) (IntImm16 (* y-lanes 2)) (Var (Handle 1) rhs-name) rhs-base rhs-r-stride) (Intrinsic)))
+    (amx-float-rhs orig-rhs x-lanes y-lanes r-lanes amx-rhs)
+) :ruleset amx)
+
+(rule (
+    (= orig-rhs-mem (AMX2Mem orig-rhs))
+    (= orig-rhs (Load (UIntOrInt rhs-signed 8 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        ; 4 is for (u)int8
+        (Broadcast
+            (Ramp (Ramp (Ramp rhs-base (IntImm32 1) 4) 
+                        (Broadcast rhs-r-stride 4) 
+                        (/ r-lanes 4)
+                        )
+                  (Broadcast (IntImm32 4) r-lanes)
+                  y-lanes
+            )
+            x-lanes
+        )
+    )
+) (
+    (let amx-rhs (Load (UIntOrInt rhs-signed 8 (* r-lanes y-lanes)) rhs-name (Ramp rhs-base (IntImm32 1) (* r-lanes y-lanes))))
+    (amx-int/uint-rhs orig-rhs-mem x-lanes y-lanes r-lanes amx-rhs)
+) :ruleset amx)
+
+
+(rule (
+    (= orig-rhs-mem (AMX2Mem orig-rhs))
+    (= orig-rhs (Load (BFloat 16 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp (Ramp rhs-base (IntImm32 1) 2) 
+                        (Broadcast rhs-r-stride 2)
+                        (/ r-lanes 2)
+                        )
+                  (Broadcast (IntImm32 2) r-lanes)
+                  y-lanes
+            )
+            x-lanes
+        )
+    )
+) (
+    (let amx-rhs (Load (BFloat 16 (* r-lanes y-lanes)) rhs-name (Ramp rhs-base (IntImm32 1) (* r-lanes y-lanes))))
+    (amx-float-rhs orig-rhs-mem x-lanes y-lanes r-lanes amx-rhs)
+) :ruleset amx)
+
+
+(rule (
+    (= orig-rhs (Load (UIntOrInt rhs-signed 8 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp rhs-base 
+                        rhs-r-stride
+                        r-lanes
+                        )
+                  (Broadcast (IntImm32 1) r-lanes)
+                  y-lanes
+            )
+            x-lanes
+        )
+    )
+) (
+    (let rhs-type (UIntOrInt rhs-signed 8 (* r-lanes y-lanes)))
+    (let amx-rhs (Call "tile_load"
+        rhs-type
+        (vec-of
+            (IntImm16 (/ r-lanes 4))
+            (IntImm16 (* y-lanes 4))
+            (Var (Handle 1) (ExprVar (Mem) 
+                (Call "KWayInterleave" (BFloat 16 (* y-lanes r-lanes)) 
+                    (vec-of (IntImm32 4) 
+                            (Load rhs-type rhs-name (Ramp (Ramp rhs-base (IntImm32 1) y-lanes) (Broadcast rhs-r-stride y-lanes) r-lanes))
+                            (IntImm32 r-lanes))
+                    (Intrinsic))))
+            (IntImm32 0)
+            (IntImm32 (* y-lanes 4))
+            )
+        (Intrinsic)))
+    (amx-int/uint-rhs orig-rhs x-lanes y-lanes r-lanes amx-rhs)
+) :ruleset amx)
+
+
+(rule (
+    (= orig-rhs (Load (BFloat 16 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp rhs-base 
+                        rhs-r-stride
+                        r-lanes
+                        )
+                  (Broadcast (IntImm32 1) r-lanes)
+                  y-lanes
+            )
+            x-lanes
+        )
+    )
+) (
+    (let rhs-type (BFloat 16 (* r-lanes y-lanes)))
+    (let amx-rhs (Call "tile_load"
+        rhs-type
+        (vec-of
+            (IntImm16 (/ r-lanes 2))
+            (IntImm16 (* y-lanes 2))
+            (Var (Handle 1) (ExprVar (Mem) 
+                (Call "KWayInterleave" (BFloat 16 (* y-lanes r-lanes)) 
+                    (vec-of (IntImm32 2) 
+                            (Load rhs-type rhs-name (Ramp (Ramp rhs-base (IntImm32 1) y-lanes) (Broadcast rhs-r-stride y-lanes) r-lanes))
+                            (IntImm32 r-lanes))
+                    (Intrinsic))))
+            (IntImm32 0)
+            (IntImm32 (* y-lanes 2))
+            )
+        (Intrinsic)))
+    (amx-float-rhs orig-rhs x-lanes y-lanes r-lanes amx-rhs)
+) :ruleset amx)
+
+
+; Int8/UInt8
+(rule (
+    (= e (Bop (Add) 
+            (VectorReduce (Int 32 out-lanes) (Add) 
+                (Bop (Mul) 
+                    (Cast (Int 32 tot-lanes) lhs) 
+                    (Cast (Int 32 tot-lanes) rhs))
+                )
+            mat))
+    (= out-lanes (* x-lanes y-lanes))
+    (= tot-lanes (* out-lanes r-lanes))
+
+    (amx-int/uint-lhs lhs x-lanes y-lanes r-lanes new-lhs)
+    (amx-int/uint-rhs rhs x-lanes y-lanes r-lanes new-rhs)
+) (
+    (let new-e (Call "tile_matmul" (Int 32 (* x-lanes y-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 (* y-lanes 4)) (IntImm16 r-lanes) (Mem2AMX mat) new-lhs new-rhs) (Intrinsic)))
+    (AMXShape new-e x-lanes (* y-lanes 4))
+    (union e (AMX2Mem new-e))
+) :ruleset amx)
+
+;; Same rule, but does C = AxB instead of C = AxB+C
+(rule (
+    (= e (VectorReduce (Int 32 out-lanes) (Add) 
+            (Bop (Mul) 
+                (Cast (Int 32 tot-lanes) lhs) 
+                (Cast (Int 32 tot-lanes) rhs))
+            ))
+    (= out-lanes (* x-lanes y-lanes))
+    (= tot-lanes (* out-lanes r-lanes))
+
+    (amx-int/uint-lhs lhs x-lanes y-lanes r-lanes new-lhs)
+    (amx-int/uint-rhs rhs x-lanes y-lanes r-lanes new-rhs)
+) (
+    (let initial (Call "tile_zero" (Int 32 (* x-lanes y-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 (* y-lanes 4))) (Intrinsic)))
+    (let new-e (Call "tile_matmul" (Int 32 (* x-lanes y-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 (* y-lanes 4)) (IntImm16 r-lanes) initial new-lhs new-rhs) (Intrinsic)))
+    (AMXShape new-e x-lanes (* y-lanes 4))
+    (union e (AMX2Mem new-e))
+) :ruleset amx)
+
+; Float16
+(rule (
+    (= e (Bop (Add) 
+        (VectorReduce (Float 32 out-lanes) (Add) 
+            (Bop (Mul) 
+                (Cast (Float 32 tot-lanes) lhs)
+                (Cast (Float 32 tot-lanes) rhs))
+            )
+        mat))
+    (= out-lanes (* x-lanes y-lanes))
+    (= tot-lanes (* out-lanes r-lanes))
+
+    (amx-float-lhs lhs x-lanes y-lanes r-lanes new-lhs)
+    (amx-float-rhs rhs x-lanes y-lanes r-lanes new-rhs)
+) (
+    (let new-e (Call "tile_matmul" (Float 32 (* x-lanes y-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 (* y-lanes 4)) (IntImm16 r-lanes) (Mem2AMX mat) new-lhs new-rhs) (Intrinsic)))
+    (AMXShape new-e x-lanes (* y-lanes 4))
+    (union e (AMX2Mem new-e))
+) :ruleset amx)
+
+(rule (
+    (= e
+        (VectorReduce (Float 32 out-lanes) (Add) 
+            (Bop (Mul) 
+                (Cast (Float 32 tot-lanes) lhs)
+                (Cast (Float 32 tot-lanes) rhs))
+            ))
+    (= out-lanes (* x-lanes y-lanes))
+    (= tot-lanes (* out-lanes r-lanes))
+
+    (amx-float-lhs lhs x-lanes y-lanes r-lanes new-lhs)
+    (amx-float-rhs rhs x-lanes y-lanes r-lanes new-rhs)
+) (
+    (let initial (Call "tile_zero" (Float 32 (* x-lanes y-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 (* y-lanes 4))) (Intrinsic)))
+    (let new-e (Call "tile_matmul" (Float 32 (* x-lanes y-lanes)) (vec-of (IntImm16 x-lanes) (IntImm16 (* y-lanes 4)) (IntImm16 r-lanes) initial new-lhs new-rhs) (Intrinsic)))
+    (AMXShape new-e x-lanes (* y-lanes 4))
+
+    (union e (AMX2Mem new-e))
+) :ruleset amx)
+
+(birewrite (Cast ty (AMX2Mem e)) (AMX2Mem (Cast ty e)) :ruleset amx)
+(birewrite (Cast ty (Mem2AMX e)) (Mem2AMX (Cast ty e)) :ruleset amx)
+(birewrite (BroadcastPer p (Mem2AMX e) l) (Mem2AMX (BroadcastPer p e l)) :ruleset amx)
+(birewrite (AMX2Mem (BroadcastPer p e l)) (BroadcastPer p (AMX2Mem e) l) :ruleset amx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; tilezero
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rule (
+    (= e (Mem2AMX
+        (Broadcast
+            (UIntOrIntImm _sign 32 0)
+            lanes
+        )))
+    (AMXShape e rows colbytes)
+) (
+    (let new-e (Call "tile_zero" (Int 32 lanes) (vec-of (IntImm16 rows) (IntImm16 colbytes)) (Intrinsic)))
+    (union e new-e)
+) :ruleset amx)
+
+(rule (
+    (= e (Mem2AMX
+        (Broadcast
+            (FloatImm 32 0.0)
+            lanes
+        )))
+    (AMXShape e rows colbytes)
+) (
+    (let new-e (Call "tile_zero" (Float 32 lanes) (vec-of (IntImm16 rows) (IntImm16 colbytes)) (Intrinsic)))
+    (union e new-e)
+) :ruleset amx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; tile_load
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; there are two ways to translate an Mem2AMX:
+;; We can use computes the entire computation in memory (`(ExprVar (Mem) ...)`),
+;; followed by an tileload,
+;; Or if the argument to Mem2AMX is a load of a specific pattern,
+;; then we can just to a tileload
+
+; The generic case
+
+(rule (
+    (= e (Mem2AMX value))
+    ; We need to know the shape of the computation 
+    ; before loading it
+    (AMXShape e row colbytes)
+    (has-type value (UIntOrInt sign 8 lanes))
+) (
+    (let new-e (Call "tile_load" (UIntOrInt sign 8 lanes)
+                   (vec-of (IntImm16 row)
+                           (IntImm16 colbytes)
+                           (Var (Handle 1) (ExprVar (Mem) value))
+                           ;; (Computed)
+                           (IntImm32 0) ;; offset
+                           ;; (Computed)
+                           (IntImm32 colbytes) ;; stride
+                           )
+                    (Intrinsic)))
+    (union e new-e)
+) :ruleset amx)
+
+(rule (
+    (= e (Mem2AMX value))
+    ; We need to know the shape of the computation 
+    ; before loading it
+    (AMXShape e row colbytes)
+    (has-type value (BFloat 16 lanes))
+) (
+    (let new-e (Call "tile_load" (BFloat 16 lanes)
+                   (vec-of (IntImm16 row)
+                           (IntImm16 colbytes)
+                           (Var (Handle 1) (ExprVar (Mem) value))
+                           ;; (Computed)
+                           (IntImm32 0) ;; offset
+                           ;; (Computed)
+                           (IntImm32 colbytes) ;; stride
+                           )
+                    (Intrinsic)))
+    (union e new-e)
+) :ruleset amx)
+
+; The specialized case
+
+(rule (
+    (= e (Mem2AMX
+        (Load ty name index)))
+    (= index (Ramp (Ramp base (IntImm32 1) m-lanes) (Broadcast n-stride m-lanes) n-lanes))
+    (= ty (UIntOrInt _sign 8 _lanes))
+) (
+    (let new-e (Call "tile_load" ty (vec-of (IntImm16 n-lanes) (IntImm16 m-lanes) (Var (Handle 1) name) base n-stride) (Intrinsic)))
+    (union e new-e)
+) :ruleset amx)
+
+(rule (
+    (= e (Mem2AMX
+        (Load ty name index)))
+    (= index (Ramp (Ramp base (IntImm32 1) m-lanes) (Broadcast n-stride m-lanes) n-lanes))
+    (= ty (BFloat 16 _lanes))
+) (
+    (let new-e (Call "tile_load" ty (vec-of (IntImm16 n-lanes) (IntImm16 (* m-lanes 2)) (Var (Handle 1) name) base n-stride) (Intrinsic)))
+    (union e new-e)
+) :ruleset amx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; tile_store
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; there are two ways to translate an AMX2Mem:
+;; We can compute the expression as is, and stores the
+;; AMX result in some temporary buffer contiguously,
+;; Or if the statement has the form (Store name (AMX2Mem value) index),
+;; and the index has a specific pattern, then we can directly tile_store it.
+
+;; (rewrite (AMX2Mem value) (Load ty (ExprVar (AMX) value) (Computed))
+;;     :when ((has-type value ty)))
+(rule ((= e (AMX2Mem value))
+       (has-type value ty)
+       (= extent (LanesInType ty)))
+      ((union e (Load ty (ExprVar (AMX) value) (Ramp (IntImm32 0) (IntImm32 1) extent))))
+    :ruleset amx)
+;; there are some problems here
+;; ExprVar at least need to know the matrix dimension of `value`
+;; to properly codegen.
+(rewrite (AMX2Mem value) 
+         (Load ty (ExprVar (AMX) value) (Ramp (IntImm32 0) (IntImm32 1) extent))
+    :when (
+        (has-type value ty)
+        (= extent (LanesInType ty))
+    )
+    :ruleset amx)
+; de-specialization
+(rewrite (Load ty (ExprVar (AMX) value) (Ramp (IntImm32 0) (IntImm32 1) extent)) (AMX2Mem value)
+    :ruleset amx)
+
+(rule (
+    (= s (Store store-name (AMX2Mem tile) index))
+    (= index (Ramp (Ramp base (IntImm32 1) m-lanes) (Broadcast n-stride m-lanes) n-lanes))
+    (= bytes 4)
+    (has-type value ty)
+) (
+    (let new-s (Evaluate 
+        (Call "tile_store" (Int 32 1) 
+            (vec-of (IntImm16 n-lanes) 
+                    (IntImm16 (* m-lanes bytes))
+                    (Var (Handle 1) (V store-name))
+                    (Bop (Mul) base (IntImm32 bytes))
+                    (Bop (Mul) n-stride (IntImm32 bytes))
+                    tile
+                    )
+            (Intrinsic))))
+    (union s new-s)
+) :ruleset amx)
+
+; 
+
+
+
+;; Specification of different tile sizes for WMMA
+;; We leave the type (f16 vs bf16) and layout (row major vs column major) as a future TODO
+(datatype WMMATileConfig 
+    (Tile i64 i64 i64))
+(datatype Layout
+    (RowMajor)
+    (ColMajor))
+
+(relation WMMATileA (WMMATileConfig Layout String))
+(WMMATileA (Tile 16 16 16) (RowMajor) "wmma.load.a.sync.aligned.row.m16n16k16.f16")
+(WMMATileA (Tile 32 8 16) (RowMajor) "wmma.load.a.sync.aligned.row.m32n8k16.f16")
+(WMMATileA (Tile 8 32 16) (RowMajor) "wmma.load.a.sync.aligned.row.m8n32k16.f16")
+(relation WMMATileB (WMMATileConfig Layout String))
+(WMMATileB (Tile 16 16 16) (RowMajor) "wmma.load.b.sync.aligned.row.m16n16k16.f16")
+(WMMATileB (Tile 16 16 16) (ColMajor) "wmma.load.b.sync.aligned.col.m16n16k16.f16")
+(WMMATileB (Tile 32 8 16) (RowMajor) "wmma.load.b.sync.aligned.row.m32n8k16.f16")
+(WMMATileB (Tile 8 32 16) (RowMajor) "wmma.load.b.sync.aligned.row.m8n32k16.f16")
+(relation WMMATileC (WMMATileConfig Layout String i64))
+(WMMATileC (Tile 16 16 16) (RowMajor) "wmma.load.c.sync.aligned.row.m16n16k16.f32" 32)
+(WMMATileC (Tile 32 8 16) (RowMajor) "wmma.load.c.sync.aligned.row.m32n8k16.f32" 32)
+(WMMATileC (Tile 8 32 16) (RowMajor) "wmma.load.c.sync.aligned.row.m8n32k16.f32" 32)
+(WMMATileC (Tile 16 16 16) (RowMajor) "wmma.load.c.sync.aligned.row.m16n16k16.f16" 16)
+(WMMATileC (Tile 32 8 16) (RowMajor) "wmma.load.c.sync.aligned.row.m32n8k16.f16" 16)
+(WMMATileC (Tile 8 32 16) (RowMajor) "wmma.load.c.sync.aligned.row.m8n32k16.f16" 16)
+(relation WMMAGEMM (WMMATileConfig Layout Layout String i64))
+(WMMAGEMM (Tile 16 16 16) (RowMajor) (RowMajor) "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32" 32)
+(WMMAGEMM (Tile 16 16 16) (RowMajor) (ColMajor) "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32" 32)
+(WMMAGEMM (Tile 32 8 16) (RowMajor) (RowMajor) "wmma.mma.sync.aligned.row.row.m32n8k16.f32.f32" 32)
+(WMMAGEMM (Tile 8 32 16) (RowMajor) (RowMajor) "wmma.mma.sync.aligned.row.row.m8n32k16.f32.f32" 32)
+(WMMAGEMM (Tile 16 16 16) (RowMajor) (RowMajor) "wmma.mma.sync.aligned.row.row.m16n16k16.f16.f16" 16)
+(WMMAGEMM (Tile 16 16 16) (RowMajor) (ColMajor) "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16" 16)
+(WMMAGEMM (Tile 32 8 16) (RowMajor) (RowMajor) "wmma.mma.sync.aligned.row.row.m32n8k16.f16.f16" 16)
+(WMMAGEMM (Tile 8 32 16) (RowMajor) (RowMajor) "wmma.mma.sync.aligned.row.row.m8n32k16.f16.f16" 16)
+(relation WMMATileD (WMMATileConfig Layout String i64))
+(WMMATileD (Tile 16 16 16) (RowMajor) "wmma.store.d.sync.aligned.row.m16n16k16.f32" 32)
+(WMMATileD (Tile 32 8 16) (RowMajor) "wmma.store.d.sync.aligned.row.m32n8k16.f32" 32)
+(WMMATileD (Tile 8 32 16) (RowMajor) "wmma.store.d.sync.aligned.row.m8n32k16.f32" 32)
+(WMMATileD (Tile 16 16 16) (RowMajor) "wmma.store.d.sync.aligned.row.m16n16k16.f16" 16)
+(WMMATileD (Tile 32 8 16) (RowMajor) "wmma.store.d.sync.aligned.row.m32n8k16.f16" 16)
+(WMMATileD (Tile 8 32 16) (RowMajor) "wmma.store.d.sync.aligned.row.m8n32k16.f16" 16)
+
+;; different from WMMA, the last column denotes number of elements rather than colbytes
+(relation WMMAAllocation (String i64 i64))
+(relation WMMAShape (Expr i64 i64))
+
+(rule (
+        (WMMAAllocation name rows cols)
+        (= e (Var t (V name)))
+    ) (
+        (WMMAShape e rows cols)
+    ))
+(rule (
+        (WMMAShape e rows cols)
+        (Store name e index)
+    ) (
+        (WMMAAllocation name rows cols)
+    ))
+; TODO: this rule is wrong: it requires the index to be a linear scan instead of an arbitrary expression
+(rule (
+        (WMMAAllocation name rows cols)
+        (Store name e index)
+    ) (
+        (WMMAShape e rows cols)
+    ))
+
+;; Axiomatic rules about WMMA2Mem and Mem2WMMA
+
+(birewrite (Cast ty (WMMA2Mem e)) (WMMA2Mem (Cast ty e)))
+(birewrite (Cast ty (Mem2WMMA e)) (Mem2WMMA (Cast ty e)))
+(birewrite (BroadcastPer p (Mem2WMMA e) l) (Mem2WMMA (BroadcastPer p e l)))
+(birewrite (WMMA2Mem (BroadcastPer p e l)) (BroadcastPer p (WMMA2Mem e) l))
+(birewrite (Broadcast (Mem2WMMA e) l) (Mem2WMMA (Broadcast e l)))
+(birewrite (WMMA2Mem (Broadcast e l)) (Broadcast (WMMA2Mem e) l))
+
+
+(relation wmma-f16-rhs (
+    Expr ;; orig-expr
+    WMMATileConfig
+    Layout
+    Expr ;; rhs-expr
+))
+
+(rule (
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp rhs-base
+                    rhs-r-stride
+                    r-lanes
+                )
+                (Broadcast (IntImm32 1) r-lanes)
+                y-lanes
+            )
+            x-lanes
+        )
+    )
+
+    (= tile (Tile x-lanes y-lanes r-lanes))
+    (WMMATileB tile (RowMajor) wmma-intrinsic)
+) (
+    (let new-rhs (Call wmma-intrinsic (Float 16 256) (vec-of (Var (Handle 1) rhs-name) rhs-base rhs-r-stride) (Intrinsic)))
+    (wmma-f16-rhs rhs tile (RowMajor) new-rhs)
+))
+
+(rule (
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp rhs-base
+                    (IntImm32 1)
+                    r-lanes
+                )
+                (Broadcast rhs-r-stride r-lanes)
+                y-lanes
+            )
+            x-lanes
+        )
+    )
+
+    (= tile (Tile x-lanes y-lanes r-lanes))
+    (WMMATileB tile (ColMajor) wmma-intrinsic)
+) (
+    (let new-rhs (Call wmma-intrinsic (Float 16 256) (vec-of (Var (Handle 1) rhs-name) rhs-base rhs-r-stride) (Intrinsic)))
+    (wmma-f16-rhs rhs tile (ColMajor) new-rhs)
+))
+
+; (wmma-f16-rhs 
+;     (WMMA2Mem (Load ty name (Ramp (Ramp (IntImm32 0) (IntImm32 16) 16) (Broadcast (IntImm32 ) 16) 16))) 
+;     16 16 16
+;     (Load ty name (Ramp (Ramp (IntImm32 0) (IntImm32 16) 16) (Broadcast (IntImm32 1) 16) 16)))
+(rule (
+    (= orig-rhs-mem (WMMA2Mem orig-rhs))
+    (= orig-rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        (Broadcast
+            (Ramp (Ramp rhs-base rhs-r-stride r-lanes)
+                  (Broadcast (IntImm32 1) r-lanes)
+                   y-lanes)
+            x-lanes))
+) (
+    (let new-rhs (Load (Float 16 (* r-lanes y-lanes)) rhs-name (Ramp rhs-base (IntImm32 1) (* r-lanes y-lanes))))
+    (wmma-f16-rhs orig-rhs-mem (Tile x-lanes y-lanes r-lanes) (RowMajor) new-rhs)
+))
+
+(rule (
+        (= e (Bop (Add)
+                (VectorReduce (Float acc-bits out-lanes) (Add)
+                    (Bop (Mul)
+                        (Cast (Float acc-bits tot-lanes) lhs)
+                        (Cast (Float acc-bits tot-lanes) rhs))
+                )
+                mat))
+        (= out-lanes (* x-lanes y-lanes))
+        (= tot-lanes (* out-lanes r-lanes))
+
+        (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-index))
+        (= lhs-index
+            (Ramp (Broadcast (Ramp lhs-base (IntImm32 1) r-lanes) y-lanes)
+                (Broadcast x-stride (* y-lanes r-lanes))
+                x-lanes)
+        )
+
+        (= tile (Tile x-lanes y-lanes r-lanes))
+        (wmma-f16-rhs rhs tile rhs-layout new-rhs)
+
+        (WMMATileA tile lhs-layout intrinsic-A)
+        (WMMAGEMM tile lhs-layout rhs-layout intrinsic-GEMM acc-bits)
+
+    ) (
+        (let new-lhs (Call intrinsic-A (Float 16 256) (vec-of (Var (Handle 1) lhs-name) lhs-base x-stride) (Intrinsic)))
+        (let new-mat (Mem2WMMA mat))
+        (let new-e (Call intrinsic-GEMM (Float acc-bits 256) (vec-of new-lhs new-rhs new-mat) (Intrinsic)))
+        (WMMAShape new-e x-lanes y-lanes)
+
+        (union e (WMMA2Mem new-e))
+    ))
+
+(rule (
+        (= e 
+                (VectorReduce (Float acc-bits out-lanes) (Add)
+                    (Bop (Mul)
+                        (Cast (Float acc-bits tot-lanes) lhs)
+                        (Cast (Float acc-bits tot-lanes) rhs))
+                ))
+        (= out-lanes (* x-lanes y-lanes))
+        (= tot-lanes (* out-lanes r-lanes))
+
+        (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-index))
+        (= lhs-index
+            (Ramp (Broadcast (Ramp lhs-base (IntImm32 1) r-lanes) y-lanes)
+                (Broadcast x-stride (* y-lanes r-lanes))
+                x-lanes)
+        )
+
+        (= tile (Tile x-lanes y-lanes r-lanes))
+        (wmma-f16-rhs rhs tile rhs-layout new-rhs)
+
+        (WMMATileA tile lhs-layout intrinsic-A)
+        (WMMAGEMM tile lhs-layout rhs-layout intrinsic-GEMM acc-bits)
+        ;; The layout of the accumulator does not seem to affect the gemm intrinsic to be used
+        (WMMATileC tile acc-layout intrinsic-C acc-bits)
+
+    ) (
+        (let initial (Call (+ intrinsic-C ".ZERO") (Float acc-bits 256) (vec-of (IntImm32 0)) (Intrinsic)))
+        (let new-lhs (Call intrinsic-A (Float 16 256) (vec-of (Var (Handle 1) lhs-name) lhs-base x-stride) (Intrinsic)))
+        (let new-e (Call intrinsic-GEMM (Float acc-bits 256) (vec-of new-lhs new-rhs initial) (Intrinsic)))
+        (WMMAShape new-e x-lanes y-lanes)
+        (union e (WMMA2Mem new-e))
+    ))
+
+
+(rule (
+        (= e (Mem2WMMA
+                (Broadcast
+                    (FloatImm bits 0.0)
+                    lanes
+                )))
+        (WMMAShape e rows cols)
+        (= lanes (* rows cols))
+
+        ;; we arbitrarily pick row major as the intrinsic for initialization
+        (WMMATileC (Tile rows cols _k) (RowMajor) intrinsic bits)
+    ) (
+        (let new-e (Call (+ intrinsic ".ZERO") (Float bits lanes) (vec-of (IntImm32 0)) (Intrinsic)))
+        ; (let new-e (Call intrinsic (Float 32 lanes) (vec-of (Var (Handle 1) (ExprVar (Mem) 
+        (union e new-e)
+    ))
+
+(rule (
+    (= e (WMMA2Mem wmma-expr))
+    (WMMAShape wmma-expr n-lanes k-lanes)
+    (has-type e (Float bits 256))
+    (WMMATileD (Tile n-lanes _m k-lanes) (RowMajor) intrinsic bits)
+) (
+    (let load-var (ExprVar (Mem)
+        (Call intrinsic (Int 32 1) (vec-of (Var (Handle 1) (V "DUMMY_STORE_NAME")) wmma-expr (IntImm32 0) (IntImm32 k-lanes)) (Intrinsic))))
+    (let index (Ramp (Ramp (IntImm32 0) (IntImm32 1) k-lanes) (Broadcast (IntImm32 k-lanes) k-lanes) n-lanes))
+    (let new-e (Load (Float bits (* n-lanes k-lanes)) load-var index))
+    (union e new-e)
+))
+
+(rule (
+        (= s (Store store-name (WMMA2Mem tile) index))
+        (= tile (Load (Float bits _lanes) (V tile-name) load-index))
+        (= index (Ramp (Ramp base (IntImm32 1) m-lanes) (Broadcast n-stride m-lanes) n-lanes))
+        (has-type tile (Float bits _lanes))
+        (WMMAAllocation tile-name n-lanes m-lanes)
+        (WMMATileD (Tile n-lanes m-lanes _k) (RowMajor) intrinsic bits)
+    ) (
+        (let new-s (Evaluate
+                (Call intrinsic (Int 32 1)
+                    (vec-of (Var (Handle 1) (V store-name))
+                        tile
+                        base
+                        n-stride
+                    )
+                    (Intrinsic))))
+        (union s new-s)
+    ))
+
+(rule (
+    (= s (Store store-name (WMMA2Mem tile) store-index))
+    (= tile (Load (Float bits _lanes) (V tile-name) load-index))
+
+    (= store-index (Ramp store-base (IntImm32 1) tot-lanes))
+    (= load-index (Ramp tile-base (IntImm32 1) tot-lanes))
+    (WMMAAllocation tile-name n-lanes m-lanes)
+
+    (WMMATileD (Tile n-lanes m-lanes _k) (RowMajor) intrinsic bits)
+) (
+    (let new-s (Evaluate
+            (Call intrinsic (Int 32 1)
+                (vec-of (Var (Handle 1) (V store-name))
+                    tile
+                    store-base
+                    (IntImm32 m-lanes)
+                )
+                (Intrinsic))))
+    (union s new-s)
+))
+
+
+;; loading matrices A and B
+
+(rule (
+    (= e (Mem2WMMA
+        (Load ty name index)))
+    (= index (Ramp (Ramp base (IntImm32 1) m-lanes) (Broadcast n-stride m-lanes) n-lanes))
+    (= ty (Float 16 _lanes))
+
+    (WMMATileB (Tile _l m-lanes n-lanes) (RowMajor) wmma-intrinsic)
+) (
+    (let new-e (Call wmma-intrinsic ty (vec-of (Var (Handle 1) name) base n-stride) (Intrinsic)))
+    (union e new-e)
+))
+
+(rule (
+    (= e (Bop (Add)
+            (VectorReduce (Float 32 out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (Float 32 tot-lanes) lhs)
+                    (Cast (Float 32 tot-lanes) rhs))
+            )
+            mat))
+    (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-index))
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+
+    (= lhs-index 
+        (Ramp 
+            (Ramp 
+                (Ramp bl s1a l1) 
+                (Broadcast s2 l1) 
+                l2) 
+            (Broadcast s3 (* l1 l2)) 
+            l3))
+    (= rhs-index 
+        (Broadcast 
+            (Broadcast (Ramp br s1b l1) l2) l3))
+
+    (= s2 s1a)
+    (= s1a (IntImm32 1))
+    (= lhs-inner-offset 1)
+    ;; NB: if we relax the restriction to be that lhs-inner-offset 
+    ;; can be greater than 0, then we need to pass that
+    ;; lhs-inner-offset to ConvolutionShuffle
+    ; (= (% s2 s1a) 0)
+    ; (= (/ s1 s1a) lhs-inner-offset)
+) (
+    (let new-l1 (+ l1 (* lhs-inner-offset l2)))
+    (let new-tot-lanes (* (* new-l1 l2) l3))
+    (let new-lhs-index
+        (Ramp 
+            (Broadcast 
+                (Ramp bl s1a new-l1)
+                l2)
+            (Broadcast s3 (* new-l1 l2))
+            l3)
+    )
+    (let new-lhs (Load (Float 16 new-tot-lanes) lhs-name new-lhs-index))
+    
+    (let new-rhs-index 
+        (Broadcast 
+            (Ramp 
+                (Ramp (IntImm32 0) (IntImm32 l2) new-l1)
+                (Broadcast (IntImm32 1) new-l1)
+                l2)
+            l3))
+    (let new-rhs-name
+        (ExprVar (Mem)
+            (Call "ConvolutionShuffle" (Float 16 (* new-l1 l2))
+                (vec-of (Var (Handle 1) rhs-name) br s1b (IntImm32 l1) (IntImm32 l2) (IntImm32 1) (IntImm32 0))
+                (Intrinsic))
+        )
+    )
+    (let new-rhs (Load (Float 16 new-tot-lanes) new-rhs-name new-rhs-index))
+
+    (let new-e 
+        (Bop (Add)
+                (VectorReduce (Float 32 out-lanes) (Add)
+                    (Bop (Mul)
+                        (Cast (Float 32 new-tot-lanes) new-lhs)
+                        (Cast (Float 32 new-tot-lanes) new-rhs))
+                )
+                mat))
+
+    (union e new-e)
+))
+
+(rule (
+    (= e (Bop (Add)
+            (VectorReduce (Float 32 out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (Float 32 tot-lanes) lhs)
+                    (Cast (Float 32 tot-lanes) rhs))
+            )
+            mat))
+    (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-index))
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+
+    (= lhs-index 
+        (Ramp 
+            (Ramp bl s1a l1)
+            (Broadcast s2 l1) 
+            l2))
+    (= rhs-index 
+        (Broadcast (Ramp br s1b l1) l2))
+
+    (= s2 s1a)
+    (= s1a (IntImm32 1))
+    (= lhs-inner-offset 1)
+    (= 0 (% l2 32))
+    (= 0 (% l2 8))
+) (
+    (let new-l2 (/ l2 32))
+    (let new-l3 (/ l2 8))
+    (let new-l1 (+ l1 (* lhs-inner-offset new-l2)))
+    (let new-tot-lanes (* (* new-l1 new-l2) new-l3))
+    (let new-lhs-index
+        (Ramp 
+            (Broadcast 
+                (Ramp bl s1a new-l1)
+                new-l2)
+            (Broadcast (IntImm32 new-l2) (* new-l1 new-l2))
+            new-l3)
+    )
+    (let new-lhs (Load (Float 16 new-tot-lanes) lhs-name new-lhs-index))
+    
+    (let new-rhs-index 
+        (Broadcast 
+            (Ramp 
+                (Ramp (IntImm32 0) (IntImm32 new-l2) new-l1)
+                (Broadcast (IntImm32 1) new-l1)
+                new-l2)
+            new-l3)
+    )
+    (let new-rhs-name
+        (ExprVar (Mem)
+            (Call "ConvolutionShuffle" (Float 16 (* new-l1 new-l2))
+                (vec-of (Var (Handle 1) rhs-name) br s1b (IntImm32 l1) (IntImm32 new-l2) (IntImm32 1) (IntImm32 0))
+                (Intrinsic))
+        )
+    )
+    (let new-rhs (Load (Float 16 new-tot-lanes) new-rhs-name new-rhs-index))
+
+    (let new-e 
+        (Bop (Add)
+                (VectorReduce (Float 32 out-lanes) (Add)
+                    (Bop (Mul)
+                        (Cast (Float 32 new-tot-lanes) new-lhs)
+                        (Cast (Float 32 new-tot-lanes) new-rhs))
+                )
+                mat))
+
+    (union e new-e)
+))
+
+
+;; Downsampling
+(rule (
+    (= e (Bop (Add)
+            (VectorReduce (Float 32 out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (Float 32 tot-lanes) lhs)
+                    (Cast (Float 32 tot-lanes) rhs))
+            )
+            mat))
+    (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-index))
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+
+    (= lhs-index 
+        (Ramp 
+            (Ramp bl s1a l1)
+            (Broadcast s2 l1) 
+            l2))
+    (= rhs-index 
+        (Broadcast (Ramp br s1b l1) l2))
+
+    (= s2 (IntImm32 2))
+    (= s1a (IntImm32 1))
+    (= lhs-inner-offset 1)
+    (= l1 16)
+    (= l2 256)
+) (
+    (let new-l2 8)
+    (let new-l3 32)
+    (let new-l1 16)
+    (let new-tot-lanes (* (* new-l1 new-l2) new-l3))
+
+    ; the rhs index is invariant to both exprs
+    (let new-rhs-index
+        (Broadcast 
+            (Ramp 
+                (Ramp (IntImm32 0) (IntImm32 new-l2) new-l1)
+                (Broadcast (IntImm32 1) new-l1)
+                new-l2)
+            new-l3)
+    )
+
+    (let new-lhs-index-1
+        (Ramp 
+            (Broadcast 
+                (Ramp bl s1a new-l1)
+                new-l2)
+            (Broadcast (IntImm32 new-l1) (* new-l1 new-l2))
+            new-l3)
+    )
+    (let new-lhs-index-2
+        (Ramp 
+            (Broadcast 
+                (Ramp (Bop (Add) bl (IntImm32 new-l1)) s1a new-l1)
+                new-l2)
+            (Broadcast (IntImm32 new-l1) (* new-l1 new-l2))
+            new-l3)
+    )
+    (let new-lhs-1 (Load (Float 16 new-tot-lanes) lhs-name new-lhs-index-1))
+    (let new-lhs-2 (Load (Float 16 new-tot-lanes) lhs-name new-lhs-index-2))
+    
+    (let new-rhs-name-1
+        (ExprVar (Mem)
+            (Call "ConvolutionShuffle" (Float 16 (* new-l1 new-l2))
+                (vec-of (Var (Handle 1) rhs-name) br s1b (IntImm32 16) (IntImm32 8) (IntImm32 2) (IntImm32 0))
+                (Intrinsic))
+        )
+    )
+    (let new-rhs-name-2
+        (ExprVar (Mem)
+            (Call "ConvolutionShuffle" (Float 16 (* new-l1 new-l2))
+                (vec-of (Var (Handle 1) rhs-name) br s1b (IntImm32 16) (IntImm32 8) (IntImm32 2) (IntImm32 16))
+                (Intrinsic))
+        )
+    )
+    (let new-rhs-1 (Load (Float 16 new-tot-lanes) new-rhs-name-1 new-rhs-index))
+    (let new-rhs-2 (Load (Float 16 new-tot-lanes) new-rhs-name-2 new-rhs-index))
+
+    (let new-e-1
+        (VectorReduce (Float 32 out-lanes) (Add)
+            (Bop (Mul)
+                (Cast (Float 32 new-tot-lanes) new-lhs-1)
+                (Cast (Float 32 new-tot-lanes) new-rhs-1))
+        ))
+    (let new-e-2
+        (VectorReduce (Float 32 out-lanes) (Add)
+            (Bop (Mul)
+                (Cast (Float 32 new-tot-lanes) new-lhs-2)
+                (Cast (Float 32 new-tot-lanes) new-rhs-2))
+        ))
+    
+    (let new-e (Bop (Add) new-e-1 (Bop (Add) new-e-2 mat)))
+
+    (union e new-e)
+))
+
+(rule (
+    (= e (Bop (Add)
+            (VectorReduce (Float acc-bits out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (Float acc-bits tot-lanes) lhs)
+                    (Cast (Float acc-bits tot-lanes) rhs))
+            )
+            mat))
+    (= out-lanes (* x-lanes y-lanes))
+    (= tot-lanes (* out-lanes r-lanes))
+
+    (= lhs (Load (Float 16 tot-lanes) lhs-name lhs-index))
+    (= lhs-index
+        (Ramp 
+            (Broadcast
+                (Ramp lhs-base (IntImm32 1) r-lanes)
+                x-lanes)
+                ; step = 1 means this is actually a convolution
+            (Broadcast (IntImm32 1) (* r-lanes x-lanes))
+            y-lanes
+        )
+    )
+    
+    (= rhs (Load (Float 16 tot-lanes) rhs-name rhs-index))
+    (= rhs-index
+        (Broadcast (Ramp (Ramp rhs-base (IntImm32 1) r-lanes) 
+            (Broadcast x-stride r-lanes)
+            x-lanes)
+        y-lanes)
+    )
+) (
+    (let new-r-lanes (* r-lanes 2))
+    (let new-y-lanes (/ y-lanes r-lanes))
+    (let new-x-lanes (* x-lanes r-lanes))
+
+    (let new-tot-lanes ( * (* new-x-lanes new-y-lanes) new-r-lanes))
+    (let new-out-lanes (* new-x-lanes new-y-lanes))
+
+    (let new-lhs-index
+        (Ramp 
+            (Broadcast 
+                (Ramp lhs-base (IntImm32 1) new-r-lanes)
+                new-x-lanes)
+            (Broadcast (IntImm32 r-lanes) (* new-r-lanes new-x-lanes))
+            new-y-lanes)
+    )
+    (let new-lhs (Load (Float 16 new-tot-lanes) lhs-name new-lhs-index)) ;; r-lanes so it's an overlapping load
+
+    (let new-rhs-index
+        (Broadcast 
+            (Ramp 
+                (Ramp (IntImm32 0) (IntImm32 new-x-lanes) new-r-lanes)
+                (Broadcast (IntImm32 1) new-r-lanes)
+                new-x-lanes)
+            new-y-lanes))
+    (let new-rhs-name
+        (ExprVar (Mem)
+            (Call "ConvolutionShuffle+" (Float 16 (* new-r-lanes new-x-lanes))
+                (vec-of (Var (Handle 1) rhs-name) rhs-base (IntImm32 1) (IntImm32 r-lanes) (IntImm32 r-lanes) (IntImm32 1) (IntImm32 0) x-stride (IntImm32 x-lanes))
+                (Intrinsic))
+        )
+    )
+    (let new-rhs (Load (Float 16 new-tot-lanes) new-rhs-name new-rhs-index))
+    (let new-e 
+        (Bop (Add)
+            (VectorReduce (Float 32 out-lanes) (Add)
+                (Bop (Mul)
+                    (Cast (Float 32 new-tot-lanes) new-lhs)
+                    (Cast (Float 32 new-tot-lanes) new-rhs))
+            )
+            mat))
+    (union e new-e)
+))
+
+; 
+(let collectstoresplaceholderconvBBBeqsatBBB0 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Broadcast (FloatImm 32 0.000000) 256)) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB1 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Broadcast (FloatImm 32 0.000000) 256)) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB10 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 32)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 32) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB11 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 32)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 32) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB12 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 40)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 40) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB13 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 40)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 40) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB14 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 48)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 48) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB15 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 48)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 48) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB16 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 56)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 56) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB17 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 56)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 56) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB18 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 64)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 64) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB19 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 64)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 64) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB2 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 0) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB20 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 72)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 72) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB21 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 72)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 72) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB22 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 80)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 80) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB23 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 80)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 80) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB24 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 88)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 88) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB25 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 88)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 88) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB26 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 96)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 96) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB27 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 96)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 96) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB28 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 104)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 104) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB29 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 104)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 104) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB3 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 0) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB30 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 112)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 112) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB31 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 112)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 112) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB32 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 120)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 120) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB33 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 120)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 120) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB4 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 8)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 8) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB5 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 8)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 8) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB6 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 16)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 16) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB7 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 16)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 16) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB8 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 24)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 24) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))))) (Ramp (IntImm 32 0) (IntImm 32 1) 256)))
+(let collectstoresplaceholderconvBBBeqsatBBB9 (Store "conv" (Loc2Loc (Mem) (WMMA_C) (Bop (Add) (VectorReduce (Float 32 256) (Add) (Bop (Mul) (Cast (Float 32 2048) (Load (Float 16 2048) (V "image" ) (Ramp (Ramp (Bop (Add) (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "image.min.1" )) (Var (Int 32 1) (V "image.stride.1" ))) (Var (Int 32 1) (V "image.min.0" )))) (IntImm 32 24)) (IntImm 32 1) 8) (Broadcast (IntImm 32 1) 8) 256))) (Broadcast (Cast (Float 32 8) (Load (Float 16 8) (V "kernel" ) (Ramp (Bop (Sub) (IntImm 32 24) (Var (Int 32 1) (V "kernel.min.0" ))) (IntImm 32 1) 8))) 256))) (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))))) (Ramp (IntImm 32 256) (IntImm 32 1) 256)))
+(let collectstoresplaceholderoutputBBBeqsatBBB34 (Store "output" (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 0) (IntImm 32 1) 256))) (Ramp (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (Var (Int 32 1) (V "output.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.min.1" )) (Var (Int 32 1) (V "output.stride.1" ))) (Var (Int 32 1) (V "output.min.0" )))) (IntImm 32 1) 256)))
+(let collectstoresplaceholderoutputBBBeqsatBBB35 (Store "output" (Loc2Loc (WMMA_C) (Mem) (Load (Float 32 256) (V "conv" ) (Ramp (IntImm 32 256) (IntImm 32 1) 256))) (Ramp (Bop (Sub) (Bop (Add) (Bop (Mul) (Bop (Add) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.s0.y.mmy.mmy" )) (IntImm 32 2)) (Var (Int 32 1) (V "output.s0.y.mmy.base" ))) (IntImm 32 1)) (Var (Int 32 1) (V "output.stride.1" ))) (Var (Int 32 1) (V "output.s0.x.mmx.base" ))) (Bop (Add) (Bop (Mul) (Var (Int 32 1) (V "output.min.1" )) (Var (Int 32 1) (V "output.stride.1" ))) (Var (Int 32 1) (V "output.min.0" )))) (IntImm 32 1) 256)))
+
+
+
+
+(run-schedule 
+    (repeat 20
+        (saturate (run typechecking))
+        (run)
+        (run amx)))
+; ;; These are not currently used
+; (run-schedule (repeat 15 
+;     (saturate (run typechecking))
+;     (run push-down-vector-reduce)))
+
+; ; (keep-best "collectstoresplaceholderconvBBBeqsatBBB0" "collectstoresplaceholderconvBBBeqsatBBB1" "collectstoresplaceholderconvBBBeqsatBBB10" "collectstoresplaceholderconvBBBeqsatBBB11" "collectstoresplaceholderconvBBBeqsatBBB12" "collectstoresplaceholderconvBBBeqsatBBB13" "collectstoresplaceholderconvBBBeqsatBBB14" "collectstoresplaceholderconvBBBeqsatBBB15" "collectstoresplaceholderconvBBBeqsatBBB16" "collectstoresplaceholderconvBBBeqsatBBB17" "collectstoresplaceholderconvBBBeqsatBBB18" "collectstoresplaceholderconvBBBeqsatBBB19" "collectstoresplaceholderconvBBBeqsatBBB2" "collectstoresplaceholderconvBBBeqsatBBB20" "collectstoresplaceholderconvBBBeqsatBBB21" "collectstoresplaceholderconvBBBeqsatBBB22" "collectstoresplaceholderconvBBBeqsatBBB23" "collectstoresplaceholderconvBBBeqsatBBB24" "collectstoresplaceholderconvBBBeqsatBBB25" "collectstoresplaceholderconvBBBeqsatBBB26" "collectstoresplaceholderconvBBBeqsatBBB27" "collectstoresplaceholderconvBBBeqsatBBB28" "collectstoresplaceholderconvBBBeqsatBBB29" "collectstoresplaceholderconvBBBeqsatBBB3" "collectstoresplaceholderconvBBBeqsatBBB30" "collectstoresplaceholderconvBBBeqsatBBB31" "collectstoresplaceholderconvBBBeqsatBBB32" "collectstoresplaceholderconvBBBeqsatBBB33" "collectstoresplaceholderconvBBBeqsatBBB4" "collectstoresplaceholderconvBBBeqsatBBB5" "collectstoresplaceholderconvBBBeqsatBBB6" "collectstoresplaceholderconvBBBeqsatBBB7" "collectstoresplaceholderconvBBBeqsatBBB8" "collectstoresplaceholderconvBBBeqsatBBB9" "collectstoresplaceholderoutputBBBeqsatBBB34" "collectstoresplaceholderoutputBBBeqsatBBB35"  "AMXShape" "AMXAllocation" "WMMAShape" "WMMAAllocation" "CommBop" "AddOrSub" "WMMATileA" "WMMATileB" "WMMATileC" "WMMAGEMM" "WMMATileD")
+
+; (run-schedule (repeat 15
+;     (saturate (run typechecking))
+;     (repeat 1 (run))
+;     ))
+; (run-schedule (repeat 20
+;     (saturate (run typechecking))
+;     (repeat 1 (run canonicalize) (run))
+;     ))
+; (run-schedule (saturate
+;     (saturate (run typechecking))
+;     (repeat 1 (run assemble))
+;     ))
+; (run-schedule (repeat 6
+;     (saturate (run typechecking))
+;     (repeat 1 (run))
+;     ))
+
+; (keep-best "collectstoresplaceholderconvBBBeqsatBBB0" "collectstoresplaceholderconvBBBeqsatBBB1" "collectstoresplaceholderconvBBBeqsatBBB10" "collectstoresplaceholderconvBBBeqsatBBB11" "collectstoresplaceholderconvBBBeqsatBBB12" "collectstoresplaceholderconvBBBeqsatBBB13" "collectstoresplaceholderconvBBBeqsatBBB14" "collectstoresplaceholderconvBBBeqsatBBB15" "collectstoresplaceholderconvBBBeqsatBBB16" "collectstoresplaceholderconvBBBeqsatBBB17" "collectstoresplaceholderconvBBBeqsatBBB18" "collectstoresplaceholderconvBBBeqsatBBB19" "collectstoresplaceholderconvBBBeqsatBBB2" "collectstoresplaceholderconvBBBeqsatBBB20" "collectstoresplaceholderconvBBBeqsatBBB21" "collectstoresplaceholderconvBBBeqsatBBB22" "collectstoresplaceholderconvBBBeqsatBBB23" "collectstoresplaceholderconvBBBeqsatBBB24" "collectstoresplaceholderconvBBBeqsatBBB25" "collectstoresplaceholderconvBBBeqsatBBB26" "collectstoresplaceholderconvBBBeqsatBBB27" "collectstoresplaceholderconvBBBeqsatBBB28" "collectstoresplaceholderconvBBBeqsatBBB29" "collectstoresplaceholderconvBBBeqsatBBB3" "collectstoresplaceholderconvBBBeqsatBBB30" "collectstoresplaceholderconvBBBeqsatBBB31" "collectstoresplaceholderconvBBBeqsatBBB32" "collectstoresplaceholderconvBBBeqsatBBB33" "collectstoresplaceholderconvBBBeqsatBBB4" "collectstoresplaceholderconvBBBeqsatBBB5" "collectstoresplaceholderconvBBBeqsatBBB6" "collectstoresplaceholderconvBBBeqsatBBB7" "collectstoresplaceholderconvBBBeqsatBBB8" "collectstoresplaceholderconvBBBeqsatBBB9" "collectstoresplaceholderoutputBBBeqsatBBB34" "collectstoresplaceholderoutputBBBeqsatBBB35"  "AMXShape" "AMXAllocation" "WMMAShape" "WMMAAllocation" "CommBop" "AddOrSub" "WMMATileA" "WMMATileB" "WMMATileC" "WMMAGEMM" "WMMATileD")
+
+; (run-schedule (repeat 8
+;     (saturate (run typechecking))
+;     (repeat 1 (run))
+;     ))
+
+
+; (ruleset subsume-invalid-exprs)
+
+; 
+;; (extract collectstoresplaceholderconvBBBeqsatBBB0)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB1)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB10)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB11)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB12)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB13)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB14)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB15)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB16)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB17)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB18)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB19)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB2)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB20)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB21)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB22)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB23)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB24)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB25)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB26)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB27)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB28)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB29)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB3)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB30)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB31)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB32)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB33)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB4)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB5)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB6)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB7)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB8)
+;; (extract collectstoresplaceholderconvBBBeqsatBBB9)
+;; (extract collectstoresplaceholderoutputBBBeqsatBBB34)
+;; (extract collectstoresplaceholderoutputBBBeqsatBBB35)
