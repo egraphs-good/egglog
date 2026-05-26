@@ -350,6 +350,11 @@ impl IndexBase for ColumnIndex {
 
         radix_sort_pairs_by_value(&mut pairs);
         if cols.len() > 1 {
+            // Multi-column collection is column-major, so a stable value sort
+            // can leave each value's rows out of order across columns.
+            for group in pairs.chunk_by_mut(|a, b| a.0 == b.0) {
+                group.sort_unstable_by_key(|&(_, row)| row);
+            }
             // Remove duplicates (same value in multiple columns of the same row).
             pairs.dedup();
         }

@@ -1,7 +1,8 @@
-use crate::numeric_id::NumericId;
+use crate::{numeric_id::NumericId, offsets::Offsets};
 
 use crate::{
     TupleIndex,
+    hash_index::ColumnIndex,
     table_shortcuts::{fill_table, v},
     table_spec::{ColumnId, WrappedTable},
 };
@@ -88,4 +89,45 @@ fn basic_updates() {
             });
         }
     }
+}
+
+#[test]
+fn multi_column_column_index_rebuild_orders_each_value_by_row() {
+    let rows = (0..128).map(|i| {
+        let left = if i >= 96 { v(7) } else { v(1_000 + i) };
+        let right = if i < 32 { v(7) } else { v(2_000 + i) };
+        vec![v(i), left, right]
+    });
+    let mut table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+        assert_eq!(old, new, "no conflicts in this test");
+        None
+    }));
+    let mut index = Index::new(vec![ColumnId::new(1), ColumnId::new(2)], ColumnIndex::new());
+    index.refresh(table.as_ref());
+
+    empty_execution_state!(es);
+    let start_version = table.version().major;
+    while table.version().major == start_version {
+        table.new_buffer().stage_remove(&[v(0)]);
+        table.merge(&mut es);
+        table.new_buffer().stage_insert(&[v(0), v(1000), v(7)]);
+        table.merge(&mut es);
+    }
+
+    index.refresh(table.as_ref());
+    let key = v(7);
+    let subset = index.get_subset(&key).unwrap();
+    let mut row_ids = Vec::new();
+    subset.offsets(|row_id| row_ids.push(row_id.index()));
+
+    let mut expected = Vec::new();
+    table
+        .scan(table.all().as_ref())
+        .iter()
+        .for_each(|(row_id, row)| {
+            if row[1] == key || row[2] == key {
+                expected.push(row_id.index());
+            }
+        });
+    assert_eq!(row_ids, expected);
 }
