@@ -1,0 +1,7 @@
+;; A primitive target must be partially applied enough to match the declared
+;; function sort. Here `+` is treated as an i64 => i64 function, but no `old`
+;; argument was supplied, so no `+` overload can resolve to that sort.
+
+(sort I64ToI64 (UnstableFn (i64) i64))
+(function merge-plus () i64 :merge (unstable-app (unstable-fn "+") new))
+(set (merge-plus) 1)

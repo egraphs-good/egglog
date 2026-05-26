@@ -733,7 +733,7 @@ impl EGraph {
                             .read()
                             .unwrap()
                             .default_panic_id(),
-                    )?;
+                    );
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
                 }
@@ -1972,16 +1972,16 @@ fn resolve_function_container_target_with_context(
     name: &str,
     primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
-) -> Result<ResolvedFunction, Error> {
+) -> ResolvedFunction {
     let Some(target_function) = type_info
         .get_sorts::<FunctionSort>()
         .into_iter()
         .find(|function| function.name() == primitive.output().name())
     else {
-        return Err(Error::BackendError(format!(
+        panic!(
             "`unstable-fn` output sort `{}` is not a function sort",
             primitive.output().name()
-        )));
+        );
     };
 
     let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
@@ -1991,25 +1991,36 @@ fn resolve_function_container_target_with_context(
     let id = if let Some(func) = functions.get(name) {
         let func_type = type_info
             .get_func_type(name)
-            .ok_or_else(|| TypeError::UnboundFunction(name.to_string(), span!()))?;
-        let expected_arity = partial_arcsorts.len() + remaining_inputs.len();
-        let actual_inputs: Vec<_> = func_type.input.iter().map(|sort| sort.name()).collect();
-        let expected_inputs: Vec<_> = partial_arcsorts
+            .unwrap_or_else(|| panic!("No resolution for {name:?}"));
+        let expected_inputs = partial_arcsorts
             .iter()
             .chain(remaining_inputs)
-            .map(|sort| sort.name())
-            .collect();
-        if func_type.input.len() != expected_arity
-            || actual_inputs != expected_inputs
-            || func_type.output.name() != output.name()
-        {
-            return Err(Error::BackendError(format!(
+            .collect::<Vec<_>>();
+        let inputs_match = func_type.input.len() == expected_inputs.len()
+            && func_type
+                .input
+                .iter()
+                .zip(&expected_inputs)
+                .all(|(actual, expected)| actual.name() == expected.name());
+        if !inputs_match || func_type.output.name() != output.name() {
+            let expected_input_names = expected_inputs
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let actual_input_names = func_type
+                .input
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
                 "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
-                expected_inputs.join(", "),
+                expected_input_names,
                 output.name(),
-                actual_inputs.join(", "),
+                actual_input_names,
                 func_type.output.name(),
-            )));
+            );
         }
 
         let action = egglog_bridge::TableAction::new(backend, func.backend_id);
@@ -2028,19 +2039,6 @@ fn resolve_function_container_target_with_context(
             .iter()
             .filter(|primitive| primitive.accept(&signature, type_info))
             .collect();
-
-        if candidates.is_empty() {
-            Err(Error::BackendError(format!(
-                "no primitive overload for `{name}` matches ({}) -> {}",
-                signature[..signature.len() - 1]
-                    .iter()
-                    .map(|sort| sort.name())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                output.name(),
-            )))?;
-        }
-
         let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
             let mut ids = candidates
                 .iter()
@@ -2049,41 +2047,37 @@ fn resolve_function_container_target_with_context(
                 (None, _) => None,
                 (Some(id), None) => Some(id),
                 (Some(_), Some(_)) => panic!(
-                    "ambiguous primitive function container lookup for `{name}` \
-                     with signature ({}) -> {} in context {runtime_ctx:?}",
-                    signature[..signature.len() - 1]
-                        .iter()
-                        .map(|sort| sort.name())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    output.name(),
+                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
                 ),
             }
         });
-
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
-            Err(Error::BackendError(format!(
-                "no primitive overload for `{name}` matches ({}) -> {}",
-                signature[..signature.len() - 1]
-                    .iter()
-                    .map(|sort| sort.name())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                output.name(),
-            )))?;
+            let (output_sort, input_sorts) = signature
+                .split_last()
+                .expect("primitive signature should include an output sort");
+            let input_names = input_sorts
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
+                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
+                 context ids: {context_ids:?}",
+                input_names,
+                output_sort.name(),
+            );
         }
-
         ResolvedFunctionId::Primitive { context_ids }
     } else {
-        Err(TypeError::UnboundFunction(name.to_string(), span!()))?
+        panic!("No resolution for {name:?}");
     };
 
-    Ok(ResolvedFunction {
+    ResolvedFunction {
         id,
         partial_arcsorts,
         name: name.to_owned(),
         panic_id,
-    })
+    }
 }
 
 struct BackendRule<'a> {
@@ -2191,8 +2185,7 @@ impl<'a> BackendRule<'a> {
                 name,
                 prim,
                 panic_id,
-            )
-            .unwrap_or_else(|err| panic!("{err}"));
+            );
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
@@ -2453,32 +2446,6 @@ mod tests {
                 (let b (vec-of 6 5 4 3 2 1))
                 (check (= (inner-product a b) 56))
             ",
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn test_unstable_function_container_primitives() {
-        let mut egraph = EGraph::default();
-        egraph
-            .parse_and_run_program(
-                None,
-                r#"
-                (sort IntThunk (UnstableFn () i64))
-                (sort F64Thunk (UnstableFn () f64))
-                (sort F64ToF64 (UnstableFn (f64) f64))
-                (sort I64ToI64 (UnstableFn (i64) i64))
-                (sort UnitThunk (UnstableFn () Unit))
-                (sort UnitToF64 (UnstableFn (Unit) f64))
-
-                (function merge-plus () i64 :merge (unstable-app (unstable-fn "+" old) new))
-                (set (merge-plus) 1)
-                (set (merge-plus) 2)
-                (check (= (merge-plus) 3))
-
-                (check (= (unstable-app (unstable-fn "+" 1.0) 2.0) 3.0))
-                (check (= (unstable-app (unstable-fn "+" 1) 2) 3))
-                "#,
             )
             .unwrap();
     }

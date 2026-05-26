@@ -329,6 +329,19 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
             }
 
             if let Some(primitives) = typeinfo.get_prims(name) {
+                // Primitive targets are checked by asking each overload whether
+                // a full call would typecheck after stitching together:
+                //
+                //   explicit partial args from `(unstable-fn "name" ...)`
+                //   + synthetic future args from the requested UnstableFn sort
+                //   + one synthetic output term
+                //
+                // For example, `(unstable-fn "+" old)` as `UnstableFn (i64) i64`
+                // checks each `+` overload as though it were called with
+                // `(old, future_arg) -> future_output`. The i64 overload matches;
+                // f64/string/etc. overloads become impossible constraints. If
+                // `old` is omitted, the same sort only provides one future arg,
+                // so no binary `+` overload has enough arguments to match.
                 let mut primitive_constraints = Vec::with_capacity(primitives.len());
                 for primitive in primitives {
                     let mut primitive_args = arguments[1..arguments.len() - 1].to_vec();
@@ -360,6 +373,10 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                     primitive_constraints.push(constraints);
                 }
 
+                // No alternatives is defensive, one alternative is ordinary
+                // non-overloaded primitive resolution, and multiple alternatives
+                // are overloaded primitives such as `+`; the xor lets the type
+                // solver pick exactly one viable overload.
                 return match primitive_constraints.len() {
                     0 => vec![constraint::impossible(
                         constraint::ImpossibleConstraint::ArityMismatch {

@@ -1,0 +1,15 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+All alternative definitions considered failed
+  In 6:50-66 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+ Expect expression __unstable_fn_target_+_I64ToI64_arg_1 to have type String, but get type i64
+  In 6:50-66 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+  In 6:50-66 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+  In 6:50-66 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+  In 6:50-66 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
