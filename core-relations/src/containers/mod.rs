@@ -221,8 +221,8 @@ impl ContainerValues {
     /// later rule like `(rewrite (p (vec-of (vec-of (b)))) (b))` can miss the
     /// newly matchable parent row.
     fn expand_dirty_id_closure(&self, summary: &mut ContainerRebuildSummary) {
-        let mut seen = summary.dirty_ids.clone();
-        let mut frontier = seen.clone();
+        let mut frontier = summary.dirty_ids.clone();
+        let mut seen = frontier.iter().copied().collect::<IndexSet<_>>();
 
         while !frontier.is_empty() {
             let mut next = IndexSet::default();
