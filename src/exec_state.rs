@@ -30,11 +30,17 @@
 //! [`ReadPrim`]: crate::ReadPrim
 //! [`FullPrim`]: crate::FullPrim
 
-use std::ops::Deref;
+use std::{fmt, ops::Deref};
 
 use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
     TableId, Value,
+};
+use crate::{
+    ast::{FunctionSubtype, Literal, ResolvedExpr},
+    core::ResolvedCall,
+    sort::{F, S},
+    typechecking::FuncType,
 };
 use egglog_bridge::{ActionRegistry, TableAction};
 
@@ -100,6 +106,26 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
     }
     fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
         self.es_mut()
+    }
+    fn apply_resolved_function(&mut self, _func: &FuncType, _args: &[Value]) -> Option<Value> {
+        None
+    }
+
+    fn apply_table_function(
+        &mut self,
+        subtype: FunctionSubtype,
+        action: &TableAction,
+        args: &[Value],
+    ) -> Option<Value> {
+        match (subtype, self.ctx()) {
+            (FunctionSubtype::Constructor, Context::Write | Context::Full) => {
+                action.lookup_or_insert(self.es_mut(), args)
+            }
+            (FunctionSubtype::Custom, Context::Read | Context::Full) => {
+                action.lookup(self.es(), args)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -199,7 +225,9 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     }
 
     /// Dispatch an already type-specialized primitive in the current
-    /// call-site context.
+    /// call-site context. The primitive should have been resolved for
+    /// this same context, for example by typechecking the expression
+    /// under the context where it will run.
     fn apply_primitive(
         &mut self,
         primitive: &crate::core::SpecializedPrimitive,
@@ -207,6 +235,72 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     ) -> Option<Value> {
         let id = primitive.external_id(self.ctx());
         self.es_mut().call_external_func(id, args)
+    }
+
+    /// Evaluate an already typechecked expression in this primitive call
+    /// context, using `bindings` for local variables.
+    ///
+    /// Primitive calls dispatch through the current call-site context.
+    /// Table-backed function calls follow the same capability split as
+    /// `unstable-app`: custom functions require a read-capable state,
+    /// and constructors require a write-capable state that can mint on miss.
+    fn eval_resolved_expr(
+        &mut self,
+        expr: &ResolvedExpr,
+        bindings: &[(&str, Value)],
+    ) -> Option<Value> {
+        eval_resolved_expr_result(self, expr, bindings).ok()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum EvalError {
+    UnboundVariable(String),
+    FunctionFailed(String),
+    PrimitiveFailed(String),
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EvalError::UnboundVariable(name) => write!(f, "unbound variable {name}"),
+            EvalError::FunctionFailed(name) => write!(f, "lookup of function {name} failed"),
+            EvalError::PrimitiveFailed(name) => write!(f, "call of primitive {name} failed"),
+        }
+    }
+}
+
+pub(crate) fn eval_resolved_expr_result<'a, 'db: 'a>(
+    state: &mut (impl Core<'a, 'db> + ?Sized),
+    expr: &ResolvedExpr,
+    bindings: &[(&str, Value)],
+) -> Result<Value, EvalError> {
+    match expr {
+        ResolvedExpr::Lit(_, literal) => Ok(match literal {
+            Literal::Int(x) => state.base_to_value(*x),
+            Literal::Float(x) => state.base_to_value(F::from(*x)),
+            Literal::String(x) => state.base_to_value(S::new(x.clone())),
+            Literal::Bool(x) => state.base_to_value(*x),
+            Literal::Unit => state.base_to_value(()),
+        }),
+        ResolvedExpr::Var(_, resolved_var) => bindings
+            .iter()
+            .find_map(|(name, value)| (*name == resolved_var.name).then_some(*value))
+            .ok_or_else(|| EvalError::UnboundVariable(resolved_var.name.clone())),
+        ResolvedExpr::Call(_, resolved_call, children) => {
+            let mut values = Vec::with_capacity(children.len());
+            for child in children {
+                values.push(eval_resolved_expr_result(state, child, bindings)?);
+            }
+            match resolved_call {
+                ResolvedCall::Primitive(primitive) => state
+                    .apply_primitive(primitive, &values)
+                    .ok_or_else(|| EvalError::PrimitiveFailed(primitive.name().to_owned())),
+                ResolvedCall::Func(func) => state
+                    .apply_resolved_function(func, &values)
+                    .ok_or_else(|| EvalError::FunctionFailed(func.name.clone())),
+            }
+        }
     }
 }
 
@@ -279,6 +373,15 @@ fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableActio
     registry
         .lookup_table(name)
         .unwrap_or_else(|| panic!("missing table action for table: {name}"))
+}
+
+fn apply_registered_function<'a, 'db: 'a>(
+    state: &mut impl RegistrySealed<'a, 'db>,
+    func: &FuncType,
+    args: &[Value],
+) -> Option<Value> {
+    let action = lookup_action(state.registry(), &func.name).clone();
+    state.apply_table_function(func.subtype, &action, args)
 }
 
 // =====================================================================
@@ -433,6 +536,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {
     fn ctx(&self) -> Context {
         self.ctx
     }
+    fn apply_resolved_function(&mut self, func: &FuncType, args: &[Value]) -> Option<Value> {
+        apply_registered_function(self, func, args)
+    }
 }
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for ReadState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
@@ -452,6 +558,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {
     fn ctx(&self) -> Context {
         self.ctx
     }
+    fn apply_resolved_function(&mut self, func: &FuncType, args: &[Value]) -> Option<Value> {
+        apply_registered_function(self, func, args)
+    }
 }
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for WriteState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
@@ -470,6 +579,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {
     }
     fn ctx(&self) -> Context {
         self.ctx
+    }
+    fn apply_resolved_function(&mut self, func: &FuncType, args: &[Value]) -> Option<Value> {
+        apply_registered_function(self, func, args)
     }
 }
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for FullState<'a, 'db> {

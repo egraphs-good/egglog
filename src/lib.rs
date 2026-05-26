@@ -1125,29 +1125,20 @@ impl EGraph {
         Ok((sort, value))
     }
 
-    /// Typecheck an expression with an expected output sort.
-    ///
-    /// `output_sort` constrains overload resolution and output-type inference
-    /// for `expr`.
-    pub fn typecheck_expr_with_output(
-        &mut self,
-        expr: &Expr,
-        output_sort: ArcSort,
-    ) -> Result<ResolvedExpr, TypeError> {
-        self.typecheck_expr_with_bindings_and_output(expr, &[], output_sort)
-    }
-
-    /// Typecheck an expression under explicit local bindings and an expected output sort.
+    /// Typecheck an expression under explicit local bindings, an expected
+    /// output sort, and a primitive call context.
     ///
     /// `bindings` contains the local variables in scope while resolving `expr`.
     /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
     /// tied to that binding. `output_sort` constrains overload resolution and
-    /// output-type inference for the expression.
+    /// output-type inference for the expression. `context` should match the
+    /// runtime context where the resolved expression will be evaluated.
     pub fn typecheck_expr_with_bindings_and_output(
         &mut self,
         expr: &Expr,
         bindings: &[(String, Span, ArcSort)],
         output_sort: ArcSort,
+        context: Context,
     ) -> Result<ResolvedExpr, TypeError> {
         let mut binding_map = IndexMap::default();
         binding_map.reserve(bindings.len());
@@ -1164,6 +1155,7 @@ impl EGraph {
             expr,
             &binding_map,
             output_sort,
+            context,
         )
     }
 
@@ -2392,6 +2384,26 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FullOnly;
+
+    impl Primitive for FullOnly {
+        fn name(&self) -> &str {
+            "full-only"
+        }
+
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+            SimpleTypeConstraint::new(self.name(), vec![I64Sort.to_arcsort()], span.clone())
+                .into_box()
+        }
+    }
+
+    impl FullPrim for FullOnly {
+        fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+            Some(state.base_values().get::<i64>(1))
+        }
+    }
+
     #[test]
     fn test_user_defined_primitive() {
         let mut egraph = EGraph::default();
@@ -2419,18 +2431,28 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_expr_with_output_rejects_mismatch() {
+    fn test_typecheck_expr_with_bindings_and_output_rejects_mismatch() {
         let mut egraph = EGraph::default();
         let mut parser = crate::ast::Parser::default();
         let expr = parser.get_expr_from_string(None, "(+ 1 2)").unwrap();
 
         let resolved = egraph
-            .typecheck_expr_with_output(&expr, I64Sort.to_arcsort())
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
             .unwrap();
         assert_eq!(resolved.output_type().name(), I64Sort.name());
 
         let err = egraph
-            .typecheck_expr_with_output(&expr, BoolSort.to_arcsort())
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                BoolSort.to_arcsort(),
+                Context::Pure,
+            )
             .unwrap_err();
         match err {
             TypeError::Mismatch {
@@ -2441,24 +2463,79 @@ mod tests {
             }
             other => panic!("expected mismatch, got {other:?}"),
         }
+
+        let literal = parser.get_expr_from_string(None, "1").unwrap();
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &literal,
+                &[],
+                BoolSort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::Mismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected.name(), BoolSort.name());
+                assert_eq!(actual.name(), I64Sort.name());
+            }
+            other => panic!("expected literal mismatch, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_typecheck_expr_with_output_uses_explicit_bindings() {
+    fn test_typecheck_expr_with_bindings_and_output_uses_explicit_bindings() {
         let mut egraph = EGraph::default();
         let mut parser = crate::ast::Parser::default();
         let expr = parser.get_expr_from_string(None, "(+ x 2)").unwrap();
         let bindings = vec![("x".to_string(), span!(), I64Sort.to_arcsort())];
 
         let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(&expr, &bindings, I64Sort.to_arcsort())
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &bindings,
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
             .unwrap();
 
         assert_eq!(resolved.output_type().name(), I64Sort.name());
     }
 
     #[test]
-    fn test_typecheck_expr_with_output_rejects_duplicate_bindings() {
+    fn test_typecheck_expr_with_bindings_and_output_uses_context() {
+        let mut egraph = EGraph::default();
+        egraph.add_full_primitive(FullOnly, None);
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Full,
+            )
+            .unwrap();
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
+            other => panic!("expected unbound function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rejects_duplicate_bindings() {
         let mut egraph = EGraph::default();
         let mut parser = crate::ast::Parser::default();
         let expr = parser.get_expr_from_string(None, "x").unwrap();
@@ -2468,7 +2545,12 @@ mod tests {
         ];
 
         let err = egraph
-            .typecheck_expr_with_bindings_and_output(&expr, &bindings, I64Sort.to_arcsort())
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &bindings,
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
             .unwrap_err();
 
         match err {

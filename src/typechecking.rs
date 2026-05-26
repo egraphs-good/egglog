@@ -1000,6 +1000,7 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<&str, (Span, ArcSort)>,
         output_sort: ArcSort,
+        context: Context,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Expr(expr.span(), expr.clone());
         let mut binding_set: IndexSet<String> =
@@ -1008,7 +1009,7 @@ impl TypeInfo {
         let (actions, mapped_action) = Actions::singleton(action).to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
-        problem.add_actions(&actions, self, symbol_gen, Context::Full)?;
+        problem.add_actions(&actions, self, symbol_gen, context)?;
 
         for (var, (span, sort)) in binding {
             problem.assign_local_var_type(var, span.clone(), sort.clone())?;
@@ -1018,15 +1019,25 @@ impl TypeInfo {
             unreachable!("typechecking an expression should produce one expression action")
         };
         let output_atom = mapped_expr.get_corresponding_var_or_lit(self);
-        problem.add_binding(output_atom, output_sort);
+        problem.add_binding(output_atom, output_sort.clone());
 
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let annotated_actions = assignment.annotate_actions(&mapped_action, self, Context::Full)?;
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self, context)?;
         match annotated_actions.0.into_iter().next().unwrap() {
-            ResolvedAction::Expr(_, expr) => Ok(expr),
+            ResolvedAction::Expr(_, resolved_expr) => {
+                let actual = resolved_expr.output_type();
+                if actual.name() != output_sort.name() {
+                    return Err(TypeError::Mismatch {
+                        expr: expr.clone(),
+                        expected: output_sort,
+                        actual,
+                    });
+                }
+                Ok(resolved_expr)
+            }
             _ => unreachable!(),
         }
     }
