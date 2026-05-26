@@ -325,6 +325,19 @@ impl Function {
     pub fn is_let_binding(&self) -> bool {
         self.decl.internal_let
     }
+
+    /// Whether this function is internally hidden (e.g., compiler-generated
+    /// helper tables that should not appear in user-facing listings).
+    pub fn is_hidden(&self) -> bool {
+        self.decl.internal_hidden
+    }
+
+    /// The term-constructor name associated with this function table, if
+    /// any. Set on view tables created by the term/proof encoding to refer
+    /// back to the user-visible constructor name.
+    pub fn term_constructor(&self) -> Option<&str> {
+        self.decl.term_constructor.as_deref()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -892,9 +905,9 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched)?;
-                    let updated = rec.updated;
+                    let can_stop = rec.can_stop;
                     report.union(rec);
-                    if !updated {
+                    if can_stop {
                         break;
                     }
                 }
@@ -1062,6 +1075,12 @@ impl EGraph {
     /// Get the list of all functions in the e-graph.
     pub fn get_function_names(&self) -> Vec<String> {
         self.functions.keys().cloned().collect()
+    }
+
+    /// Iterate over every `(name, function)` pair registered in the
+    /// e-graph, in registration order.
+    pub fn functions_iter(&self) -> impl Iterator<Item = (&String, &Function)> {
+        self.functions.iter()
     }
 
     /// Read the contents of the given function.
@@ -2383,13 +2402,13 @@ mod tests {
                 r#"
                 (datatype Math)
                 (constructor container (Math) Math)
-                (constructor exp () Math :cost 100)
+                (constructor expensive () Math :cost 100)
                 (constructor cheap () Math)
                 (constructor cheap-1 () Math)
                 ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
-                ; so the (exp) expr should be extracted instead
+                ; so the (expensive) expr should be extracted instead
                 (let res (container (cheap)))
-                (union res (exp))
+                (union res (expensive))
                 (cheap)
                 (cheap-1)
                 (subsume (container (cheap)))
@@ -2422,7 +2441,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert_eq!(outputs[0].to_string(), "(exp)\n");
+        assert_eq!(outputs[0].to_string(), "(expensive)\n");
     }
 
     #[test]
@@ -2436,9 +2455,9 @@ mod tests {
                 r#"
                 (datatype Math)
                 (constructor container (Math) Math)
-                (constructor exp () Math :cost 100)
+                (constructor expensive () Math :cost 100)
                 (constructor cheap () Math)
-                (exp)
+                (expensive)
                 (let x (cheap))
                 (subsume (cheap))
                 "#,
@@ -2451,7 +2470,7 @@ mod tests {
             .parse_and_run_program(
                 None,
                 r#"
-                (union (exp) x)
+                (union (expensive) x)
                 "#,
             )
             .unwrap();
@@ -2468,6 +2487,6 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert_eq!(res[0].to_string(), "(exp)\n");
+        assert_eq!(res[0].to_string(), "(expensive)\n");
     }
 }
