@@ -20,25 +20,3 @@
 (let $resolved (l (vec-of (k (b)))))
 (run-schedule (saturate (run)))
 (check (= $resolved (b)))
-
-;; Regression for nested container dirty propagation. The first case starts
-;; with `p(vec-of(vec-of(w(b))))`. Rebuilding `w(b)` to `b` dirties the inner
-;; Vec, but the outer Vec still contains the same inner Vec id. Without
-;; transitive dirty-id closure, the `p(outer)` row is not revisited, so the
-;; rewrite below misses the newly matchable `p(vec-of(vec-of(b)))`.
-(sort VVE (Vec VE))
-(constructor p (VVE) E)
-
-(rewrite (p (vec-of (vec-of (b)))) (b))
-
-(push)
-(let $nested (p (vec-of (vec-of (w (b))))))
-(run-schedule (saturate (run)))
-(check (= $nested (b)))
-(pop)
-
-;; Control: the rewrite itself works when the outer Vec is inserted in its
-;; already-rebuilt shape.
-(let $nested-resolved (p (vec-of (vec-of (b)))))
-(run-schedule (saturate (run)))
-(check (= $nested-resolved (b)))

@@ -1,0 +1,19 @@
+;; Regression for PR #888, which extends the #831/#832 container refresh fix to
+;; nested containers. Rebuilding `w(b)` to `b` dirties the inner Vec, but the
+;; outer Vec still contains the same inner Vec id. Without transitive dirty-id
+;; closure, the `p(outer)` row is not revisited, so the rewrite below misses the
+;; newly matchable `p(vec-of(vec-of(b)))`.
+(sort E)
+(sort VE (Vec E))
+(sort VVE (Vec VE))
+
+(constructor b () E)
+(constructor w (E) E)
+(constructor p (VVE) E)
+
+(rewrite (w x) x)
+(rewrite (p (vec-of (vec-of (b)))) (b))
+
+(let $nested (p (vec-of (vec-of (w (b))))))
+(run-schedule (saturate (run)))
+(check (= $nested (b)))
