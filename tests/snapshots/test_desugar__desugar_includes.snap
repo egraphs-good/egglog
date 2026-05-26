@@ -7,6 +7,6 @@ expression: snapshot
 (sort Math)
 (constructor Test () Math)
 (function x () Math :no-merge :unextractable :internal-let)
-(set (x) (Test ))
+(set (x) (Test))
 (function y () Math :no-merge :unextractable :internal-let)
-(set (y) (Test ))
+(set (y) (Test))

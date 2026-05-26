@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Render nullary AST calls without a trailing space, e.g. (foo) instead of (foo ).
 - Add a BigRat to-i64 primitive for integral rationals.
 - Add f64 exp, log, and sqrt primitives.
 - Add `RunReport::can_stop` so scheduler progress can be reported separately from database updates.
