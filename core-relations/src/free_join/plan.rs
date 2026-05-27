@@ -425,7 +425,7 @@ fn next_var_to_eliminate(
 ) -> Option<IndexSet<Variable>> {
     let (_var, subquery_vars) = vars
         .iter()
-        .map(|(var, _vinfo)| {
+        .map(|(var, vinfo)| {
             let subquery_vars = atoms
                 .iter()
                 // every atom that contains this variable
@@ -435,14 +435,14 @@ fn next_var_to_eliminate(
 
             // Optimization: use functional dependencies to find all variables inferred by the
             // current neightborhood.
-            let subquery_vars = fun_deps.closure(subquery_vars);
-            // let subquery_vars:DenseIdMap<_, ()> = subquery_vars.map(|v| (v, ())).collect();
+            // let subquery_vars = fun_deps.closure(subquery_vars);
+            let subquery_vars:DenseIdMap<_, ()> = subquery_vars.map(|v| (v, ())).collect();
 
             let occ = atoms
                 .iter()
                 .filter(|(_, atom)| atom.vars().any(|v| subquery_vars.contains_key(v)))
                 .count();
-            let inv_selectivity = _vinfo
+            let size_estimation = vinfo
                 .occurrences
                 .iter()
                 .filter_map(|occ| {
@@ -457,13 +457,13 @@ fn next_var_to_eliminate(
                     Some(col_est.col_uniqueness(table, col))
                 })
                 .fold(ColUniqueness::default(), |a, b| a.join(&b));
-            // ((occ, inv_selectivity), var, subquery_vars)
-            (occ, var, subquery_vars)
+            ((occ, size_estimation), var, subquery_vars)
+            // (occ, var, subquery_vars)
         })
         .min_by_key(|a| a.0)
         .map(|a| (a.1, a.2))?;
     Some(IndexSet::from_iter(
-        subquery_vars.into_iter().map(|(var, _)| var),
+        fun_deps.closure(subquery_vars.iter().map(|(var, _)| var)).into_iter().map(|(var, _)| var),
     ))
 }
 
