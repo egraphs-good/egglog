@@ -3,6 +3,7 @@
 ## [Unreleased] - ReleaseDate
 
 - Report full source file paths in egglog span and error messages.
+- Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.
 - Render nullary AST calls without a trailing space, e.g. (foo) instead of (foo ).
 - Add a BigRat to-i64 primitive for integral rationals.
 - Add f64 exp, log, and sqrt primitives.
