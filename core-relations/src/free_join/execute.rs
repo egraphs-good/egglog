@@ -1572,6 +1572,81 @@ impl<'a> JoinState<'a> {
                 mode,
                 bind,
                 to_intersect,
+            } if leaf_scans[cur]
+                && to_intersect.is_empty()
+                && matches!(
+                    mode,
+                    MatScanMode::Full | MatScanMode::KeyOnly | MatScanMode::Value(_)
+                ) =>
+            {
+                // Leaf-scan factorization for FusedIntersectMat: flatten the materialization into
+                // one `TaggedRowBuffer`, push it onto `binding_sets`, and recurse to the leaf once.
+                let cover_mat = binding_info.materializations[*cover].clone();
+                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
+                let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                let mut row_scratch: SmallVec<[Value; 8]> = SmallVec::new();
+                match mode {
+                    MatScanMode::Full => {
+                        for group in cover_mat.iter() {
+                            let group_key = group.0;
+                            let group_key_len = group_key.len();
+                            for non_keys in group.1.iter() {
+                                row_scratch.clear();
+                                for (col, _) in bind.iter() {
+                                    let val = if col.index() < group_key_len {
+                                        group_key[col.index()]
+                                    } else {
+                                        non_keys[col.index() - group_key_len]
+                                    };
+                                    row_scratch.push(val);
+                                }
+                                buf.add_row(RowId::new(0), &row_scratch);
+                            }
+                        }
+                    }
+                    MatScanMode::KeyOnly => {
+                        for group in cover_mat.iter() {
+                            let group_key = group.0;
+                            row_scratch.clear();
+                            for (col, _) in bind.iter() {
+                                debug_assert!(col.index() < group_key.len());
+                                row_scratch.push(group_key[col.index()]);
+                            }
+                            buf.add_row(RowId::new(0), &row_scratch);
+                        }
+                    }
+                    MatScanMode::Value(index_vars) => {
+                        let keys: Vec<Value> = index_vars
+                            .iter()
+                            .map(|var| binding_info.bindings[*var])
+                            .collect();
+                        if let Some(group) = cover_mat.get(&keys) {
+                            for vals in group.iter() {
+                                debug_assert!(vals.len() == bind.len());
+                                row_scratch.clear();
+                                for (col, _) in bind.iter() {
+                                    row_scratch.push(vals[col.index()]);
+                                }
+                                buf.add_row(RowId::new(0), &row_scratch);
+                            }
+                        }
+                    }
+                    MatScanMode::Lookup(_) => unreachable!("guarded above"),
+                }
+                if buf.is_empty() {
+                    return;
+                }
+                binding_info.binding_sets.push((vars, Arc::new(buf)));
+                let mut updates = FrameUpdates::with_capacity(1);
+                updates.finish_frame();
+                drain_updates!(updates);
+                binding_info.binding_sets.pop();
+            }
+            JoinStage::FusedIntersectMat {
+                cover,
+                mode,
+                bind,
+                to_intersect,
             } => {
                 let cover_mat = binding_info.materializations[*cover].clone();
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -2234,9 +2309,11 @@ fn sort_plan_by_size(
 }
 
 /// Recompute `leaf_scans[i]` for every position `i` in `[start, order.len())` against the
-/// current order. A position is a leaf scan iff its stage is a `FusedIntersect` with empty
-/// `to_intersect`, no later stage references the same cover atom, and no later
-/// `FusedIntersectMat { mode: Value | Lookup }` reads any of the bound variables.
+/// current order. A position is a leaf scan iff its stage is either a `FusedIntersect` or a
+/// `FusedIntersectMat { mode: Full | KeyOnly | Value }`, both with empty `to_intersect`, AND no
+/// later stage either (a) for `FusedIntersect`, references the same cover atom, or (b) reads
+/// any of the bound variables as a scalar via `FusedIntersectMat { mode: Value | Lookup }`.
+/// `FusedIntersectMat::Lookup` itself binds nothing, so it is never marked a leaf scan.
 fn recompute_leaf_scans(
     order: &InstrOrder,
     leaf_scans: &mut LeafScans,
@@ -2252,7 +2329,21 @@ fn recompute_leaf_scans(
                 to_intersect,
             } if to_intersect.is_empty() => {
                 let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
-                (cover.to_index.atom, vars)
+                (Some(cover.to_index.atom), vars)
+            }
+            JoinStage::FusedIntersectMat {
+                mode,
+                bind,
+                to_intersect,
+                ..
+            } if to_intersect.is_empty()
+                && matches!(
+                    mode,
+                    MatScanMode::Full | MatScanMode::KeyOnly | MatScanMode::Value(_)
+                ) =>
+            {
+                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
+                (None, vars)
             }
             _ => {
                 leaf_scans[i] = false;
@@ -2263,7 +2354,9 @@ fn recompute_leaf_scans(
         for j in (i + 1)..order.len() {
             match &instrs[order.get(j)] {
                 JoinStage::Intersect { scans, .. } => {
-                    if scans.iter().any(|scan| scan.atom == cover_atom) {
+                    if let Some(ca) = cover_atom
+                        && scans.iter().any(|scan| scan.atom == ca)
+                    {
                         blocked = true;
                         break;
                     }
@@ -2273,10 +2366,9 @@ fn recompute_leaf_scans(
                     to_intersect,
                     ..
                 } => {
-                    if cover.to_index.atom == cover_atom
-                        || to_intersect
-                            .iter()
-                            .any(|(s, _)| s.to_index.atom == cover_atom)
+                    if let Some(ca) = cover_atom
+                        && (cover.to_index.atom == ca
+                            || to_intersect.iter().any(|(s, _)| s.to_index.atom == ca))
                     {
                         blocked = true;
                         break;
@@ -2285,9 +2377,8 @@ fn recompute_leaf_scans(
                 JoinStage::FusedIntersectMat {
                     mode, to_intersect, ..
                 } => {
-                    if to_intersect
-                        .iter()
-                        .any(|(s, _)| s.to_index.atom == cover_atom)
+                    if let Some(ca) = cover_atom
+                        && to_intersect.iter().any(|(s, _)| s.to_index.atom == ca)
                     {
                         blocked = true;
                         break;
