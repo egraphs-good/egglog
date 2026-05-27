@@ -71,7 +71,8 @@ where
             "".into()
         };
         let naive = if self.naive { " :naive" } else { "" };
-        write!(f, ")\n{indent} {ruleset} {name}{naive})")
+        let no_decomp = if self.no_decomp { " :no-decomp" } else { "" };
+        write!(f, ")\n{indent} {ruleset} {name}{naive}{no_decomp})")
     }
 }
 
@@ -220,6 +221,7 @@ where
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
             naive: self.naive,
+            no_decomp: self.no_decomp,
         }
     }
 
@@ -235,6 +237,7 @@ where
             name: self.name,
             ruleset: self.ruleset,
             naive: self.naive,
+            no_decomp: self.no_decomp,
         }
     }
 
@@ -259,6 +262,7 @@ where
             name: self.name,
             ruleset: self.ruleset,
             naive: self.naive,
+            no_decomp: self.no_decomp,
         }
     }
 

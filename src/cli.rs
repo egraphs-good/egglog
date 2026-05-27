@@ -14,6 +14,19 @@ struct Args {
     /// Turns off the seminaive optimization
     #[clap(long)]
     naive: bool,
+    /// Skips tree-decomposition during query planning. Tree decomposition
+    /// tries to decompose complex queries into smaller independent subqueries,
+    /// and evaluate them separately. It has a better theoretical guarantee,
+    /// but sometimes the decomposed subqueries (called "bags") can be much larger
+    /// than the final output, which leads to worse performance sometimes.
+    ///
+    /// Setting this flag forces the query planner to skip tree decomposition and
+    /// evaluate the query as a single bag.
+    ///
+    /// You can also disable tree decomposition on a per-rule basis with the `:no-decomp` label
+    /// on rules.
+    #[clap(long)]
+    no_decomp: bool,
     /// Prints extra information, which can be useful for debugging
     #[clap(long, default_value_t = RunMode::Normal)]
     mode: RunMode,
@@ -93,6 +106,7 @@ pub fn cli(mut egraph: EGraph) {
     EGraph::set_num_threads(args.threads);
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
+    egraph.no_decomp = args.no_decomp;
     egraph.set_report_level(args.report_level);
     if args.strict_mode {
         egraph.set_strict_mode(true);

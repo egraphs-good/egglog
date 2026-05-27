@@ -1159,6 +1159,7 @@ pub(crate) fn tree_decompose_and_plan(
     ctx: PlanningContext,
     strat: PlanStrategy,
     actions: ActionId,
+    no_decomp: bool,
 ) -> Plan {
     macro_rules! fast_path {
         () => {{
@@ -1175,7 +1176,7 @@ pub(crate) fn tree_decompose_and_plan(
             })
         }};
     }
-    if ctx.atoms.len() <= 2 {
+    if no_decomp || ctx.atoms.len() <= 2 {
         return fast_path!();
     }
 
@@ -1241,7 +1242,7 @@ pub(crate) fn plan_query(query: Query) -> Plan {
         atoms,
         fun_deps: Arc::new(query.fun_deps),
     };
-    tree_decompose_and_plan(ctx, query.plan_strategy, query.action)
+    tree_decompose_and_plan(ctx, query.plan_strategy, query.action, query.no_decomp)
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
