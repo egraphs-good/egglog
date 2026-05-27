@@ -816,7 +816,7 @@ impl Database {
     }
 
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
-        plan::plan_query(query)
+        plan::plan_query(query, ColumnCardEst::new(self))
     }
 }
 
@@ -873,4 +873,93 @@ fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> Has
             .needs_refresh(table_info.table.as_ref())
     );
     index
+}
+
+#[derive(Clone)]
+pub struct ColumnCardEst<'a> {
+    db: &'a Database,
+}
+
+impl ColumnCardEst<'_> {
+    pub fn new(db: &Database) -> ColumnCardEst<'_> {
+        ColumnCardEst { db }
+    }
+
+    pub fn col_uniqueness(&self, table: TableId, col: ColumnId) -> ColUniqueness {
+        // dbg!(self.db.tables.iter().map(|(id, info)| (id, info.name.as_deref())).collect::<Vec<_>>());
+        // dbg!(table, col);
+        let col_idx = get_column_index_from_tableinfo(&self.db.tables[table], col);
+        let table = &self.db.tables[table].table;
+        ColUniqueness {
+            col_size: col_idx.get().unwrap().len(),
+            table_size: table.len(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ColumnCardEst<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnCardEst").finish_non_exhaustive()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct ColUniqueness {
+    table_size: usize,
+    col_size: usize,
+}
+
+impl Default for ColUniqueness {
+    fn default() -> ColUniqueness {
+        ColUniqueness {
+            table_size: 1,
+            col_size: 1,
+        }
+    }
+}
+
+impl ColUniqueness {
+    fn scale(&self, subset_size: usize) -> ColUniqueness {
+        if self.table_size == 0 || subset_size == 0 {
+            return ColUniqueness {
+                table_size: 0,
+                col_size: 0,
+            };
+        }
+        ColUniqueness {
+            table_size: subset_size,
+            col_size: self.col_size * subset_size / self.table_size,
+        }
+    }
+    fn join(&self, other: &ColUniqueness) -> ColUniqueness {
+        ColUniqueness {
+            table_size: self.table_size * other.table_size,
+            col_size: self.col_size.max(other.col_size),
+        }
+    }
+
+    fn col_size(&self) -> usize {
+        self.col_size
+    }
+}
+
+impl PartialEq for ColUniqueness {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for ColUniqueness {}
+
+impl PartialOrd for ColUniqueness {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ColUniqueness {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.table_size.saturating_mul(other.col_size))
+            .cmp(&(other.table_size.saturating_mul(self.col_size)))
+    }
 }
