@@ -1,21 +1,67 @@
-//! This module makes it easier to use `egglog` from Rust.
+//! Rust entry point for egglog.
+//!
 //! ```
 //! use egglog::prelude::*;
 //! ```
 //!
-//! Common entry points:
+//! The typical Rust workflow is: declare your program once (rules,
+//! datatypes, functions) via [`crate::EGraph::parse_and_run_program`],
+//! then drive the e-graph from Rust — adding/reading facts and
+//! stepping rulesets.
 //!
-//! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
-//!   Rust closure (the closure receives an
-//!   [`crate::WriteState`]).
-//! - [`query`] — run a one-shot query and read out matches.
-//! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
-//! - [`crate::PurePrim`] / [`crate::WritePrim`] / [`crate::ReadPrim`] /
-//!   [`crate::FullPrim`] — register custom primitives via the matching
-//!   `EGraph::add_*_primitive` method.
-//! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
-//!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
-//!   the simple "pure native function" case.
+//! ## Adding and reading facts
+//!
+//! [`crate::EGraph::with_full_state`] hands the closure a
+//! [`crate::FullState`] that implements [`crate::Read`] and
+//! [`crate::Write`]. From there:
+//!
+//! - [`crate::Write::set`] writes a function-table cell `(set (f k) v)`.
+//! - [`crate::Write::add_node`] mints / looks up a constructor eclass.
+//! - [`crate::Write::remove`] removes a row from any subtype.
+//! - [`crate::Read::lookup`] reads a function's output value.
+//! - [`crate::Read::eclass_of`] reads a constructor's eclass without
+//!   minting.
+//! - [`crate::Read::contains`] checks row presence on any subtype.
+//!
+//! The same trait methods are available on [`crate::WriteState`] and
+//! [`crate::FullState`] inside a [`rust_rule`] / [`rust_rule_full`]
+//! callback — same surface inside and outside a rule.
+//!
+//! ## Iterating and querying
+//!
+//! - [`crate::EGraph::table_rows`] iterates a named table; the row
+//!   shape depends on the table's subtype (`(input..., output)` for
+//!   functions, `(input..., eclass)` for constructors and relations).
+//! - [`crate::EGraph::query`] runs a pattern query and binds the
+//!   named variables. Compiles against the rule registry, so it stays
+//!   on `EGraph`.
+//!
+//! ## Rules
+//!
+//! - [`rule`] — add a rule whose RHS is egglog code.
+//! - [`rust_rule`] / [`rust_rule_full`] — add a rule whose RHS is a Rust
+//!   closure `Fn(&mut WriteState, &[Value]) -> Option<()>` (or
+//!   `FullState` for action-side reads).
+//! - [`run_ruleset`] / [`add_ruleset`] step rules forward.
+//!
+//! ## Extending egglog
+//!
+//! - **Custom sort types:** [`BaseSort`] / [`ContainerSort`].
+//! - **Custom primitives:** implement [`crate::Primitive`] plus one of
+//!   [`crate::PurePrim`] / [`crate::ReadPrim`] / [`crate::WritePrim`] /
+//!   [`crate::FullPrim`] and register via the matching
+//!   `EGraph::add_*_primitive`. The state wrapper the body sees
+//!   enforces what the body can do. See the trait docs and issue #772
+//!   for the seminaive-safety reasoning.
+//! - **Simple pure primitives:** the [`add_primitive!`] /
+//!   [`add_primitive_with_validator!`] / [`add_literal_prim!`] macros
+//!   handle the common "pure native function" case.
+//!
+//! ## Legacy
+//!
+//! [`query`] is the older free-function pattern query — returns
+//! untyped `Vec<Value>` rows. New code should use
+//! [`crate::EGraph::query`].
 
 use crate::*;
 use std::any::{Any, TypeId};
@@ -436,7 +482,7 @@ where
 ///
 ///         let y = ctx.base_to_value::<i64>(x + 2);
 ///         let f2 = ctx.base_to_value::<i64>(f0 + f1);
-///         ctx.insert("fib", [y, f2].into_iter());
+///         ctx.set("fib", (y,), f2);
 ///
 ///         Some(())
 ///     },
@@ -1117,9 +1163,7 @@ mod tests {
                 let f0 = ctx.value_to_base::<i64>(*f0);
                 let f1 = ctx.value_to_base::<i64>(*f1);
 
-                let y = ctx.base_to_value::<i64>(x + 2);
-                let f2 = ctx.base_to_value::<i64>(f0 + f1);
-                ctx.insert("fib", [y, f2].into_iter());
+                ctx.set("fib", (x + 2,), f0 + f1).ok()?;
 
                 Some(())
             },

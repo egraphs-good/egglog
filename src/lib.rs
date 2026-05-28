@@ -1,15 +1,28 @@
 //! # egglog
-//! egglog is a language specialized for writing equality saturation
-//! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
-//! egglog is faster and more general than egg.
 //!
-//! # Documentation
-//! Documentation for the egglog language can be found here: [`Command`].
+//! egglog is a language for writing equality saturation applications.
+//! It is the successor to the Rust library [egg](https://github.com/egraphs-good/egg) —
+//! faster and more general.
 //!
-//! # Tutorial
-//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
-//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
+//! - **Tutorial:** [text](https://egraphs-good.github.io/egglog-tutorial/01-basics.html),
+//!   [video (slightly outdated)](https://www.youtube.com/watch?v=N2RDQGRBrSY).
+//! - **Egglog language reference:** [`Command`].
+//! - **Using egglog from Rust:** see [`prelude`] — it's the entry point
+//!   for everything below.
 //!
+//! ## Using egglog from Rust
+//!
+//! Start with `use egglog::prelude::*;`. The [`prelude`] module docs
+//! list the common entry points (declaring rules and tables, adding
+//! and reading facts, writing custom primitives, etc.) and link to
+//! the underlying types and methods.
+//!
+//! The typical workflow is: declare your program (rules, datatypes,
+//! functions) once — usually via a static egglog block passed to
+//! [`EGraph::parse_and_run_program`] — then drive the e-graph from
+//! Rust via [`EGraph::with_full_state`] and stepping rulesets with
+//! [`prelude::run_ruleset`].
+pub mod api;
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
@@ -774,6 +787,11 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
+        let sort_names: Vec<std::sync::Arc<str>> = input
+            .iter()
+            .chain([&output])
+            .map(|sort| std::sync::Arc::<str>::from(sort.name()))
+            .collect();
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             schema: input
                 .iter()
@@ -793,6 +811,7 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
+            sort_names,
         });
 
         let function = Function {
@@ -1917,7 +1936,8 @@ impl EGraph {
         &self.overall_run_report
     }
 
-    /// Convert from an egglog value to a Rust type.
+    /// Convert from an egglog value to a Rust type. Untyped — does
+    /// not check whether `x` actually belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
     }
@@ -1947,6 +1967,17 @@ impl EGraph {
         })
     }
 
+
+    /// Convert a Rust container value into an interned egglog [`Value`].
+    ///
+    /// This is currently an alias for [`EGraph::container_to_value`] and
+    /// requires `&mut self`. A future change will relax this to `&self`
+    /// once the underlying container store's interior mutability is
+    /// surfaced.
+    pub fn intern_container<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.container_to_value::<T>(x)
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
@@ -1955,11 +1986,15 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
-    /// Lookup a tuple in afunction in the e-graph.
+    /// Lookup a tuple in a function in the e-graph.
     ///
     /// Returns `None` if the tuple does not exist.
     /// `panics` if the function does not exist.
-    pub fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
+    ///
+    /// Internal: external callers should use
+    /// [`EGraph::with_full_state`] + [`crate::Read::lookup`] (typed) or
+    /// [`crate::Read::lookup_raw`] (untyped).
+    pub(crate) fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
         let func = self
             .functions
             .get(name)
@@ -2031,132 +2066,114 @@ impl EGraph {
         self.backend.dump_debug_info();
     }
 
-    /// Get the canonical representation for `val` based on type.
-    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
-        self.backend
-            .get_canon_repr(val, sort.column_ty(&self.backend))
-    }
-
     /// Create a new union action that can be used to union two values.
-    pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
+    ///
+    /// Internal: used by container sorts (`vec`, `multiset`) to build
+    /// their own union machinery. User code should call
+    /// [`crate::Write::union`] via [`EGraph::with_full_state`] instead.
+    pub(crate) fn new_union_action(&self) -> egglog_bridge::UnionAction {
         UnionAction::new(&self.backend)
     }
-}
 
-fn resolve_function_container_target_with_context(
-    backend: &egglog_bridge::EGraph,
-    functions: &IndexMap<String, Function>,
-    type_info: &TypeInfo,
-    name: &str,
-    primitive: &core::SpecializedPrimitive,
-    panic_id: ExternalFunctionId,
-) -> ResolvedFunction {
-    let Some(target_function) = type_info
-        .get_sorts::<FunctionSort>()
-        .into_iter()
-        .find(|function| function.name() == primitive.output().name())
-    else {
-        panic!(
-            "`unstable-fn` output sort `{}` is not a function sort",
-            primitive.output().name()
-        );
-    };
-
-    let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
-    let remaining_inputs = target_function.inputs();
-    let output = target_function.output();
-
-    let id = if let Some(func) = functions.get(name) {
-        let func_type = type_info
-            .get_func_type(name)
-            .unwrap_or_else(|| panic!("No resolution for {name:?}"));
-        let expected_inputs = partial_arcsorts
-            .iter()
-            .chain(remaining_inputs)
-            .collect::<Vec<_>>();
-        let inputs_match = func_type.input.len() == expected_inputs.len()
-            && func_type
-                .input
-                .iter()
-                .zip(&expected_inputs)
-                .all(|(actual, expected)| actual.name() == expected.name());
-        if !inputs_match || func_type.output.name() != output.name() {
-            let expected_input_names = expected_inputs
-                .iter()
-                .map(|sort| sort.name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let actual_input_names = func_type
-                .input
-                .iter()
-                .map(|sort| sort.name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
-                expected_input_names,
-                output.name(),
-                actual_input_names,
-                func_type.output.name(),
-            );
-        }
-
-        let action = egglog_bridge::TableAction::new(backend, func.backend_id);
-        match func_type.subtype {
-            ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
-            ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
-        }
-    } else if let Some(primitives) = type_info.get_prims(name) {
-        let signature: Vec<_> = partial_arcsorts
-            .iter()
-            .chain(remaining_inputs)
-            .chain(once(&output))
-            .cloned()
-            .collect();
-        let candidates: Vec<_> = primitives
-            .iter()
-            .filter(|primitive| primitive.accept(&signature, type_info))
-            .collect();
-        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
-            let mut ids = candidates
-                .iter()
-                .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
-            match (ids.next(), ids.next()) {
-                (None, _) => None,
-                (Some(id), None) => Some(id),
-                (Some(_), Some(_)) => panic!(
-                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                ),
-            }
-        });
-        if !context_ids.iter().any(|(_, id)| id.is_some()) {
-            let (output_sort, input_sorts) = signature
-                .split_last()
-                .expect("primitive signature should include an output sort");
-            let input_names = input_sorts
-                .iter()
-                .map(|sort| sort.name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
-                 context ids: {context_ids:?}",
-                input_names,
-                output_sort.name(),
-            );
-        }
-        ResolvedFunctionId::Primitive { context_ids }
-    } else {
-        panic!("No resolution for {name:?}");
-    };
-
-    ResolvedFunction {
-        id,
-        partial_arcsorts,
-        name: name.to_owned(),
-        panic_id,
+    /// Run `f` with a [`FullState`] handle on this EGraph's database
+    /// — the same handle a `:naive` rule's `add_rust_rule_full`
+    /// callback receives. Use to drive typed reads / writes
+    /// (`fs.set`, `fs.add_node`, `fs.lookup`, `fs.eclass_of`,
+    /// `fs.contains`, `fs.remove`, …) from outside a rule.
+    ///
+    /// # Flush semantics
+    ///
+    /// Pending writes flush once, **after** `f` returns. Two
+    /// consequences:
+    ///
+    /// 1. A `set` / `add_node` / `remove` inside the closure is *not*
+    ///    visible to a subsequent `lookup` / `contains` / `eclass_of`
+    ///    in the **same** closure. Split write-then-read into separate
+    ///    `with_full_state` calls.
+    /// 2. Conversely, batching multiple writes in one closure is the
+    ///    fast path — only one flush + rebuild happens, regardless of
+    ///    how many writes occurred.
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::prelude::*;
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
+    /// eg.with_full_state(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
+    /// let got: Option<i64> = eg.with_full_state(|fs| fs.lookup::<_, i64>("f", 1_i64))?;
+    /// assert_eq!(got, Some(42));
+    /// # Ok::<(), egglog::Error>(())
+    /// ```
+    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        let result = self
+            .backend
+            .with_execution_state(|es| f(FullState::wrap(es, &guard, Context::Full)));
+        drop(guard);
+        self.backend.flush_updates();
+        result
     }
+
+    /// Iterate all rows of a named table as typed tuples.
+    ///
+    /// The row shape matches what the backend stores, which differs
+    /// by subtype:
+    ///
+    /// - **Function tables** (`(function f (i64) i64 :no-merge)`) — rows
+    ///   are `(input..., output)`. `table_rows::<(i64, i64)>("f")` gets
+    ///   `(key, value)`.
+    /// - **Constructor / relation tables** (`(constructor Cons (i64 List) List)`,
+    ///   `(relation R (i64))`) — rows are `(input..., eclass)` where
+    ///   `eclass` is the minted eclass `Value`. Relations desugar to
+    ///   constructors with a synthetic non-unionable eq-sort output, so
+    ///   their rows also expose the trailing eclass column — there is
+    ///   no special-casing for relations.
+    ///
+    /// Use `Vec<Value>` to inspect arbitrary shapes, or
+    /// [`EGraph::query`] to bind only the columns you name.
+    pub fn table_rows<R: FromRow>(&self, table: &str) -> Result<Vec<R>, Error> {
+        let func = self.functions.get(table).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+        })?;
+        let backend_id = func.backend_id;
+        let bv = self.backend.base_values();
+        let mut out = Vec::new();
+        self.backend.for_each(backend_id, |row| {
+            out.push(R::from_values(row.vals, bv));
+        });
+        Ok(out)
+    }
+
+    /// Run a pattern query: bind the variables in `vars` against
+    /// `facts` and return one typed row per match.
+    ///
+    /// With zero vars, returns one empty `R` per match (so `Vec<()>`
+    /// has length = number of matches).
+    pub fn query<R: FromRow>(
+        &mut self,
+        vars: &[(&str, ArcSort)],
+        facts: ast::Facts<String, String>,
+    ) -> Result<Vec<R>, Error> {
+        let raw = prelude::query(self, vars, facts)?;
+        let bv = self.backend.base_values();
+        if vars.is_empty() {
+            // QueryResult::iter() panics on cols == 0; use rows count.
+            let n = if raw.any_matches() { 1 } else { 0 };
+            Ok((0..n).map(|_| R::from_values(&[], bv)).collect())
+        } else {
+            Ok(raw.iter().map(|row| R::from_values(row, bv)).collect())
+        }
+    }
+
+
 }
+
+pub use crate::api::{ApiError, ColumnSort, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};
+// Note: previously `BaseSortName` was a re-export here. It's been
+// removed — `EGraph::intern::<T>` now looks the sort name up by
+// `TypeId` from the registered sorts, so user-added base sorts work
+// without any extra trait impls.
 
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
@@ -2403,6 +2420,8 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
+    #[error(transparent)]
+    ApiError(#[from] crate::api::ApiError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]

@@ -99,7 +99,7 @@ impl Primitive for ReadLookup {
 }
 impl ReadPrim for ReadLookup {
     fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
-        state.lookup(self.table_name, args)
+        state.lookup_raw(self.table_name, args).ok().flatten()
     }
 }
 

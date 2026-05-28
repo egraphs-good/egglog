@@ -17,8 +17,9 @@
 //!   sugar. Implemented for all four wrappers.
 //! - [`Read`] — name-indexed table lookup (`state.lookup("name", &[…])`).
 //!   Implemented for [`ReadState`] and [`FullState`].
-//! - [`Write`] — name-indexed writes (`insert`/`remove`/`subsume`/
-//!   `union`/`panic`). Implemented for [`WriteState`] and [`FullState`].
+//! - [`Write`] — name-indexed writes (`set`/`add_node`/`remove`/
+//!   `subsume`/`union`/`panic`). Implemented for [`WriteState`] and
+//!   [`FullState`].
 //!
 //! Privileged seams (`call_external_func`, `table_lookup`, raw
 //! `&mut ExecutionState`) used by the `FunctionContainer` higher-order
@@ -32,11 +33,13 @@
 
 use std::ops::Deref;
 
+use crate::api::{ApiError, ColumnSort, IntoColumn, IntoRow};
 use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
-    TableId, Value,
+    Value,
 };
-use egglog_bridge::{ActionRegistry, TableAction};
+use crate::Error;
+use egglog_bridge::{ActionRegistry, TableAction, TableKind};
 
 /// The four contexts a primitive may run in, named after the
 /// capability profile they grant. Each variant maps 1:1 to one of the
@@ -132,11 +135,6 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     fn should_stop(&self) -> bool {
         self.es().should_stop()
     }
-    /// Human-readable name for a table id, if registered.
-    fn table_name(&self, table: TableId) -> Option<&'a str> {
-        self.es().table_name(table)
-    }
-
     /// Container values for this EGraph.
     fn container_values(&self) -> &'a ContainerValues {
         self.es().container_values()
@@ -155,12 +153,13 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         cv.register_val(container, es)
     }
 
-    /// Convert an egglog [`Value`] to a Rust base type.
+    /// Convert an egglog [`Value`] to a Rust base type. Untyped: trust
+    /// that `x` belongs to sort `T`.
     fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.es().base_values().unwrap::<T>(x)
     }
 
-    /// Convert a Rust base type to an egglog [`Value`].
+    /// Convert a Rust base type to an egglog [`Value`]. Untyped.
     fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.es().base_values().get::<T>(x)
     }
@@ -203,13 +202,73 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// [`ReadState`] and [`FullState`]; *not* for [`PureState`] or
 /// [`WriteState`] (a `Write` context body must not depend on live DB
 /// state). Returns `None` if the row is absent — never inserts.
+///
+/// Misuse (wrong table subtype, wrong arity, mismatched column sort)
+/// is reported as [`crate::ApiError`] via the method's `Result`.
 #[allow(private_bounds)]
 pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
-    /// Look up the return-value column of a row in the named table.
-    /// Returns `None` if the key is not present.
-    fn lookup(&self, name: &str, key: &[Value]) -> Option<Value> {
-        let action = lookup_action(self.registry(), name);
-        action.lookup(self.es(), key)
+    /// Look up a function's output value at the given key. Returns
+    /// `Ok(None)` if the row is absent.
+    ///
+    /// **Only valid for `function` tables.** Constructors error;
+    /// use [`Read::eclass_of`] for those.
+    fn lookup<K: IntoRow, V: BaseValue>(
+        &self,
+        name: &str,
+        key: K,
+    ) -> Result<Option<V>, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(name, &action, TableKind::Function, "function")?;
+        let sorts = key.column_sorts();
+        check_input_sorts(name, &action, &sorts)?;
+        let bv = self.base_values();
+        let key_values = key.into_values(bv);
+        Ok(action.lookup(self.es(), &key_values).map(|v| bv.unwrap::<V>(v)))
+    }
+
+    /// Look up a constructor's eclass at the given inputs, without
+    /// minting a fresh one on miss. Returns `Ok(None)` if absent.
+    ///
+    /// **Only valid for constructor tables.** Functions error;
+    /// use [`Read::lookup`] for those.
+    fn eclass_of<K: IntoRow>(
+        &self,
+        name: &str,
+        inputs: K,
+    ) -> Result<Option<Value>, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(
+            name,
+            &action,
+            TableKind::Constructor,
+            "constructor",
+        )?;
+        let sorts = inputs.column_sorts();
+        check_input_sorts(name, &action, &sorts)?;
+        let key_values = inputs.into_values(self.base_values());
+        Ok(action.lookup(self.es(), &key_values))
+    }
+
+    /// True iff a row with the given key exists in the table. Works
+    /// for any subtype — never mints.
+    fn contains<K: IntoRow>(
+        &self,
+        name: &str,
+        key: K,
+    ) -> Result<bool, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        let sorts = key.column_sorts();
+        check_input_sorts(name, &action, &sorts)?;
+        let key_values = key.into_values(self.base_values());
+        Ok(action.lookup(self.es(), &key_values).is_some())
+    }
+
+    /// Untyped raw-`Value` lookup, escape hatch for code that already
+    /// has `&[Value]` and doesn't want to round-trip through
+    /// [`Read::lookup`]'s base-value conversion. Skips sort checking.
+    fn lookup_raw(&self, name: &str, key: &[Value]) -> Result<Option<Value>, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        Ok(action.lookup(self.es(), key))
     }
 
     /// Return the current row count for the named table, or `None` if no table
@@ -229,30 +288,99 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 /// Action-side write methods — name-indexed inserts/removes/subsumes
 /// plus union and panic. Implemented for [`WriteState`] and
 /// [`FullState`]; *not* for [`PureState`] or [`ReadState`].
+///
+/// Misuse (wrong table subtype, wrong arity, mismatched column or
+/// output sort, cross-sort union) is reported as [`crate::ApiError`]
+/// via the method's `Result`.
 #[allow(private_bounds)]
 pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
-    /// Insert a row into the named table.
-    fn insert(&mut self, name: &str, row: impl Iterator<Item = Value>) {
-        let action = lookup_action(self.registry(), name).clone();
-        action.insert(self.es_mut(), row);
+    /// Set a function table's value at the given key — mirrors the
+    /// egglog `(set (f k) v)` action.
+    ///
+    /// **Only valid for `function` tables.** Constructors error;
+    /// use [`Write::add_node`] for those.
+    fn set<K: IntoRow, V: IntoColumn>(
+        &mut self,
+        name: &str,
+        key: K,
+        value: V,
+    ) -> Result<(), Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(name, &action, TableKind::Function, "function")?;
+        let key_sorts = key.column_sorts();
+        check_input_sorts(name, &action, &key_sorts)?;
+        check_output_sort(name, &action, &value.column_sort())?;
+        let bv = self.base_values();
+        let mut row = key.into_values(bv);
+        row.push(value.into_value(bv));
+        action.insert(self.es_mut(), row.into_iter());
+        Ok(())
     }
 
-    /// Remove a row from the named table.
-    fn remove(&mut self, name: &str, key: &[Value]) {
-        let action = lookup_action(self.registry(), name).clone();
-        action.remove(self.es_mut(), key);
+    /// Mint or look up an eclass for a constructor — mirrors the
+    /// egglog `(Cons k1 k2 ...)` expression form. Pass inputs only;
+    /// the output eclass is minted (or returned if a row with these
+    /// inputs already exists).
+    ///
+    /// **Only valid for constructor tables.** Functions error;
+    /// use [`Write::set`] for those.
+    fn add_node<R: IntoRow>(
+        &mut self,
+        name: &str,
+        inputs: R,
+    ) -> Result<Value, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(
+            name,
+            &action,
+            TableKind::Constructor,
+            "constructor",
+        )?;
+        let sorts = inputs.column_sorts();
+        check_input_sorts(name, &action, &sorts)?;
+        let bv = self.base_values();
+        let key = inputs.into_values(bv);
+        let value = action
+            .lookup_or_insert(self.es_mut(), &key)
+            .expect("constructor lookup_or_insert returned None");
+        Ok(value)
+    }
+
+    /// Remove a row from the named table. Works for any subtype.
+    fn remove<K: IntoRow>(
+        &mut self,
+        name: &str,
+        key: K,
+    ) -> Result<(), Error> {
+        let action = lookup_action(self.registry(), name)?;
+        let sorts = key.column_sorts();
+        check_input_sorts(name, &action, &sorts)?;
+        let key_values = key.into_values(self.base_values());
+        action.remove(self.es_mut(), &key_values);
+        Ok(())
     }
 
     /// Subsume a row in the named table.
-    fn subsume(&mut self, name: &str, key: &[Value]) {
-        let action = lookup_action(self.registry(), name).clone();
-        action.subsume(self.es_mut(), key.iter().copied());
+    fn subsume<K: IntoRow>(
+        &mut self,
+        name: &str,
+        key: K,
+    ) -> Result<(), Error> {
+        let action = lookup_action(self.registry(), name)?;
+        let sorts = key.column_sorts();
+        check_input_sorts(name, &action, &sorts)?;
+        let key_values = key.into_values(self.base_values());
+        action.subsume(self.es_mut(), key_values.into_iter());
+        Ok(())
     }
 
-    /// Union two values in the e-graph's union-find.
-    fn union(&mut self, x: Value, y: Value) {
+    /// Union two values in the e-graph's union-find. The caller is
+    /// responsible for ensuring both values belong to the same
+    /// eq-sort — there is no runtime sort check.
+    fn union(&mut self, x: Value, y: Value) -> Result<(), Error> {
         let action = *self.registry().union_action();
         action.union(self.es_mut(), x, y);
+        Ok(())
     }
 
     /// Trigger a panic from a primitive. Always returns `None` so the
@@ -264,10 +392,93 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 }
 
-fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableAction {
+fn lookup_action(
+    registry: &ActionRegistry,
+    name: &str,
+) -> Result<TableAction, Error> {
     registry
         .lookup_table(name)
-        .unwrap_or_else(|| panic!("missing table action for table: {name}"))
+        .cloned()
+        .ok_or_else(|| ApiError::MissingTable { name: name.to_string() }.into())
+}
+
+fn check_subtype(
+    name: &str,
+    action: &TableAction,
+    expected: TableKind,
+    expected_label: &'static str,
+) -> Result<(), Error> {
+    if action.kind() == expected {
+        return Ok(());
+    }
+    let actual_label = match action.kind() {
+        TableKind::Function => "function",
+        TableKind::Constructor => "constructor",
+    };
+    Err(ApiError::WrongSubtype {
+        name: name.to_string(),
+        expected: expected_label,
+        actual: actual_label,
+    }
+    .into())
+}
+
+fn check_input_sorts(
+    table: &str,
+    action: &TableAction,
+    provided: &[ColumnSort],
+) -> Result<(), Error> {
+    let expected = action.input_sort_names();
+    if expected.is_empty() {
+        // Table registered without sort names — skip the check
+        // entirely (the typed API can't validate; raw is fine).
+        return Ok(());
+    }
+    if provided.len() != expected.len() {
+        return Err(ApiError::WrongArity {
+            table: table.to_string(),
+            expected: expected.len(),
+            got: provided.len(),
+        }
+        .into());
+    }
+    for (i, (got, want)) in provided.iter().zip(expected.iter()).enumerate() {
+        if let ColumnSort::Named(got) = got {
+            if got.as_ref() != want.as_ref() {
+                return Err(ApiError::WrongColumnSort {
+                    table: table.to_string(),
+                    column: i,
+                    expected: want.to_string(),
+                    actual: got.to_string(),
+                }
+                .into());
+            }
+        }
+        // Unchecked columns (e.g. bare `Value`) skip.
+    }
+    Ok(())
+}
+
+fn check_output_sort(
+    table: &str,
+    action: &TableAction,
+    provided: &ColumnSort,
+) -> Result<(), Error> {
+    let Some(expected) = action.output_sort_name() else {
+        // No sort name registered — skip.
+        return Ok(());
+    };
+    if let ColumnSort::Named(got) = provided {
+        if got.as_ref() != expected.as_ref() {
+            return Err(ApiError::WrongOutputSort {
+                table: table.to_string(),
+                expected: expected.to_string(),
+                actual: got.to_string(),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 // =====================================================================
@@ -277,10 +488,10 @@ fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableActio
 /// Wrapper for [`Context::Pure`]. Implements [`Core`] only.
 ///
 /// ```compile_fail
-/// // Pure context cannot insert: `Write` is not implemented.
+/// // Pure context cannot write: `Write` is not implemented.
 /// use egglog::Write;
 /// fn _no_writes<'a, 'db>(state: &mut egglog::PureState<'a, 'db>) {
-///     state.insert("foo", std::iter::empty());
+///     state.set("foo", (1_i64,), 2_i64);
 /// }
 /// ```
 ///

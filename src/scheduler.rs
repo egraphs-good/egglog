@@ -342,6 +342,7 @@ impl SchedulerRuleInfo {
             merge: MergeFn::AssertEq,
             name: "backend".to_string(),
             can_subsume: false,
+            sort_names: Vec::new(),
         });
 
         // Step 1: build the query rule
