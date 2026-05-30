@@ -1100,6 +1100,30 @@ impl EGraph {
         Ok(())
     }
 
+    /// Remove every row from the named function in bulk.
+    ///
+    /// This is intended as a faster alternative to issuing a `(delete …)` for
+    /// every row of the function: it drops the backing row storage in
+    /// O(1)-in-row-count time, rather than O(n) per-row teardown. Any pending
+    /// staged inserts/removes for this function are dropped as part of the
+    /// clear, so callers that have staged updates they want to land first
+    /// should arrange for those to be flushed beforehand.
+    ///
+    /// Cached indexes and subsets that reference this table are invalidated by
+    /// a generation bump and are lazily rebuilt against the now-empty table on
+    /// next access.
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn clear_function(&mut self, func_name: &str) -> Result<(), Error> {
+        let backend_id = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?
+            .backend_id;
+        self.backend.clear_table(backend_id);
+        Ok(())
+    }
+
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
