@@ -655,8 +655,19 @@ impl TypeInfo {
         assert_eq!(
             results.len(),
             1,
-            "Expected exactly one sort for type {}",
-            std::any::type_name::<S>()
+            "Expected exactly one sort matching the given predicate"
+        );
+        results.into_iter().next().unwrap()
+    }
+
+    /// Returns the unique sort whose runtime values have Rust type `T`.
+    pub fn get_arcsort_for_value_type<T: 'static>(&self) -> ArcSort {
+        let results = self.get_arcsorts_by(|s| s.value_type() == Some(std::any::TypeId::of::<T>()));
+        assert_eq!(
+            results.len(),
+            1,
+            "Expected exactly one sort for type `{}`",
+            std::any::type_name::<T>()
         );
         results.into_iter().next().unwrap()
     }

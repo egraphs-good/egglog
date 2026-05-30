@@ -430,7 +430,7 @@ impl Parse for Type {
             Some((field_def, field_use))
         } else if let Some((t, _)) = &cast {
             let field_use = Expr::Verbatim(quote! {
-                eg.get_arcsort_by(|s| s.value_type() == Some(TypeId::of::<#t>()))
+                eg.get_arcsort_for_value_type::<#t>()
             });
 
             Some((field_def, field_use))

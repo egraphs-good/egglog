@@ -1843,6 +1843,11 @@ impl EGraph {
         self.type_info.get_arcsort_by(f)
     }
 
+    /// Returns the unique sort whose runtime values have Rust type `T`.
+    pub fn get_arcsort_for_value_type<T: 'static>(&self) -> ArcSort {
+        self.type_info.get_arcsort_for_value_type::<T>()
+    }
+
     /// Returns all sorts that satisfy the predicate.
     pub fn get_arcsorts_by(&self, f: impl Fn(&ArcSort) -> bool) -> Vec<ArcSort> {
         self.type_info.get_arcsorts_by(f)
