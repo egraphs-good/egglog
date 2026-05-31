@@ -1488,12 +1488,14 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
-                let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
-                    panic!("Unrecognized user-defined command: {name}");
-                });
-                let res = command.update(self, &exprs);
-                self.commands.insert(name, command);
-                return res;
+                let command = self
+                    .commands
+                    .get(&name)
+                    .unwrap_or_else(|| {
+                        panic!("Unrecognized user-defined command: {name}");
+                    })
+                    .clone();
+                return command.update(self, &exprs);
             }
 
             ResolvedNCommand::ProveExists(span, resolved_call) => {
@@ -1955,12 +1957,11 @@ impl EGraph {
         name: &str,
         args: &[Expr],
     ) -> Result<Vec<CommandOutput>, Error> {
-        let command = self.commands.swap_remove(name).ok_or_else(|| {
-            Error::TypeError(TypeError::UnboundFunction(name.to_owned(), span!()))
-        })?;
-        let res = command.update(self, args);
-        self.commands.insert(name.to_owned(), command);
-        res
+        self.run_command(ResolvedNCommand::UserDefined(
+            span!(),
+            name.to_string(),
+            args.to_vec(),
+        ))
     }
 
     /// Run a closure with full read-write access to the database, then flush

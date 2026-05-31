@@ -1150,9 +1150,7 @@ fn clear_function_lifecycle() {
         assert!(egraph.lookup_function("Num", &[key_a]).is_some());
 
         let mut seen = 0;
-        egraph
-            .function_for_each("Num", |_row| seen += 1)
-            .unwrap();
+        egraph.function_for_each("Num", |_row| seen += 1).unwrap();
         assert_eq!(seen, 3);
 
         // Now clear and re-read through every access path: each must
