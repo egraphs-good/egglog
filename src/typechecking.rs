@@ -1184,6 +1184,10 @@ pub enum TypeError {
         crate::GLOBAL_NAME_PREFIX
     )]
     GlobalMissingPrefix { name: String, span: Span },
+    #[error(
+        "{span}\nGlobal `{name}` is not supported in expressions typechecked with explicit bindings."
+    )]
+    GlobalInExprWithBindings { name: String, span: Span },
 }
 
 #[cfg(test)]
