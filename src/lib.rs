@@ -1182,51 +1182,51 @@ impl EGraph {
         match expr {
             ResolvedExpr::Lit(..) | ResolvedExpr::Var(..) => Ok(expr.clone()),
             ResolvedExpr::Call(span, resolved_call, children) => {
-                if let ResolvedCall::Primitive(prim) = resolved_call {
-                    if prim.name() == "unstable-fn" {
-                        let Some(ResolvedExpr::Lit(target_span, Literal::String(name))) =
-                            children.first()
-                        else {
-                            return Err(Error::BackendError(format!(
-                                "{}\nunstable-fn requires a literal string function name",
-                                children
-                                    .first()
-                                    .map(ResolvedExpr::span)
-                                    .unwrap_or_else(|| Span::Panic)
-                            )));
-                        };
-                        let panic_id = self.backend.new_panic(unstable_fn_panic_message(name));
-                        let resolved_function = resolved_function_for_unstable_fn(
-                            &self.backend,
-                            &self.functions,
-                            &self.type_info,
-                            prim,
-                            name,
-                            panic_id,
-                        )?;
-                        let fn_value = self.backend.base_values().get(resolved_function);
-                        let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
-                        bindings.push((binding_name.clone(), fn_value));
-                        let mut prepared_children = Vec::with_capacity(children.len());
-                        prepared_children.push(ResolvedExpr::Var(
-                            target_span.clone(),
-                            ResolvedVar {
-                                name: binding_name,
-                                sort: children[0].output_type(),
-                                is_global_ref: false,
-                            },
-                        ));
-                        for child in &children[1..] {
-                            prepared_children.push(
-                                self.prepare_unstable_fn_targets_for_eval_inner(child, bindings)?,
-                            );
-                        }
-                        return Ok(ResolvedExpr::Call(
-                            span.clone(),
-                            resolved_call.clone(),
-                            prepared_children,
-                        ));
+                if let ResolvedCall::Primitive(prim) = resolved_call
+                    && prim.name() == "unstable-fn"
+                {
+                    let Some(ResolvedExpr::Lit(target_span, Literal::String(name))) =
+                        children.first()
+                    else {
+                        return Err(Error::BackendError(format!(
+                            "{}\nunstable-fn requires a literal string function name",
+                            children
+                                .first()
+                                .map(ResolvedExpr::span)
+                                .unwrap_or_else(|| Span::Panic)
+                        )));
+                    };
+                    let panic_id = self.backend.new_panic(unstable_fn_panic_message(name));
+                    let resolved_function = resolved_function_for_unstable_fn(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        prim,
+                        name,
+                        panic_id,
+                    )?;
+                    let fn_value = self.backend.base_values().get(resolved_function);
+                    let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
+                    bindings.push((binding_name.clone(), fn_value));
+                    let mut prepared_children = Vec::with_capacity(children.len());
+                    prepared_children.push(ResolvedExpr::Var(
+                        target_span.clone(),
+                        ResolvedVar {
+                            name: binding_name,
+                            sort: children[0].output_type(),
+                            is_global_ref: false,
+                        },
+                    ));
+                    for child in &children[1..] {
+                        prepared_children.push(
+                            self.prepare_unstable_fn_targets_for_eval_inner(child, bindings)?,
+                        );
                     }
+                    return Ok(ResolvedExpr::Call(
+                        span.clone(),
+                        resolved_call.clone(),
+                        prepared_children,
+                    ));
                 }
 
                 let prepared_children = children
