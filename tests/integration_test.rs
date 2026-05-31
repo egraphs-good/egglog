@@ -3,7 +3,6 @@ use egglog::{
     extract::DefaultCost,
     *,
 };
-use egglog_ast::span::{RustSpan, Span};
 
 #[test]
 fn globals_missing_prefix_errors_when_opted_in() {
