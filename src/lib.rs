@@ -1131,10 +1131,8 @@ impl EGraph {
     /// `bindings` contains the local variables in scope while resolving `expr`.
     /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
     /// tied to that binding. `output_sort` constrains overload resolution and
-    /// output-type inference for the expression. Global references are not
-    /// supported; callers should pass captured values explicitly in `bindings`.
-    /// `context` should match the runtime context where the resolved expression
-    /// will be evaluated.
+    /// output-type inference for the expression. `context` should match the
+    /// runtime context where the resolved expression will be evaluated.
     pub fn typecheck_expr_with_bindings_and_output(
         &mut self,
         expr: &Expr,
@@ -1152,27 +1150,13 @@ impl EGraph {
                 return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
             }
         }
-        fn global_ref(expr: &ResolvedExpr) -> Option<(String, Span)> {
-            match expr {
-                ResolvedExpr::Var(span, resolved_var) if resolved_var.is_global_ref => {
-                    Some((resolved_var.name.clone(), span.clone()))
-                }
-                ResolvedExpr::Call(_, _, children) => children.iter().find_map(global_ref),
-                _ => None,
-            }
-        }
-
-        let resolved = self.type_info.typecheck_expr_with_output(
+        self.type_info.typecheck_expr_with_output(
             &mut self.parser.symbol_gen,
             expr,
             &binding_map,
             output_sort,
             context,
-        )?;
-        if let Some((name, span)) = global_ref(&resolved) {
-            return Err(TypeError::GlobalInExprWithBindings { name, span });
-        }
-        Ok(resolved)
+        )
     }
 
     /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
@@ -2674,28 +2658,6 @@ mod tests {
         match err {
             TypeError::AlreadyDefined(name, _) => assert_eq!(name, "x"),
             other => panic!("expected duplicate binding, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_typecheck_expr_with_bindings_and_output_rejects_globals() {
-        let mut egraph = EGraph::default();
-        egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "$x").unwrap();
-
-        let err = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Read,
-            )
-            .unwrap_err();
-
-        match err {
-            TypeError::GlobalInExprWithBindings { name, .. } => assert_eq!(name, "$x"),
-            other => panic!("expected global rejection, got {other:?}"),
         }
     }
 
