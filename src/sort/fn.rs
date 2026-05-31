@@ -345,7 +345,8 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 let mut primitive_constraints = Vec::with_capacity(primitives.len());
                 for primitive in primitives {
                     let mut primitive_args = arguments[1..arguments.len() - 1].to_vec();
-                    let mut constraints = Vec::new();
+                    primitive_constraints.push(Vec::new());
+                    let alternative_constraints = primitive_constraints.last_mut().unwrap();
                     for (index, sort) in self
                         .function
                         .inputs
@@ -361,16 +362,16 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                                 self.function.name()
                             ),
                         );
-                        constraints.push(constraint::assign(term.clone(), sort.clone()));
+                        alternative_constraints
+                            .push(constraint::assign(term.clone(), sort.clone()));
                         primitive_args.push(term);
                     }
-                    constraints.extend(
+                    alternative_constraints.extend(
                         primitive
                             .primitive
                             .get_type_constraints(&self.span)
                             .get(&primitive_args, typeinfo),
                     );
-                    primitive_constraints.push(constraints);
                 }
 
                 // No alternatives is defensive, one alternative is ordinary
