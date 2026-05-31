@@ -225,9 +225,15 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     }
 
     /// Dispatch an already type-specialized primitive in the current
-    /// call-site context. The primitive should have been resolved for
-    /// this same context, for example by typechecking the expression
-    /// under the context where it will run.
+    /// call-site context.
+    ///
+    /// This is a trusted evaluator hook, not an authorization boundary:
+    /// callers must only pass primitives that were resolved for this same
+    /// call-site context and whose surrounding expression has already been
+    /// checked to require no more capability than this state wrapper provides.
+    /// For example, a primitive body evaluator should typecheck the body under
+    /// the runtime context it will register for, infer the body's required
+    /// context, and register the primitive using the matching state wrapper.
     fn apply_primitive(
         &mut self,
         primitive: &crate::core::SpecializedPrimitive,
@@ -244,6 +250,12 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// Table-backed function calls follow the same capability split as
     /// `unstable-app`: custom functions require a read-capable state,
     /// and constructors require a write-capable state that can mint on miss.
+    ///
+    /// This method assumes `expr` came from a trusted preparation pipeline that
+    /// typechecked it for this exact runtime context and rejected expressions
+    /// whose required capabilities exceed the receiver's state wrapper. It
+    /// should not be used to evaluate arbitrary resolved expressions from a
+    /// wider context inside a less-capable wrapper.
     fn eval_resolved_expr(
         &mut self,
         expr: &ResolvedExpr,
