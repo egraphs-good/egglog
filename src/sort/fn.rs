@@ -12,7 +12,7 @@
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
-use crate::exec_state::{ApplyCallError, Internal};
+use crate::exec_state::Internal;
 use enum_map::EnumMap;
 
 use super::*;
@@ -517,7 +517,10 @@ impl FunctionContainer {
     where
         'db: 'a,
     {
+        let ctx = state.ctx();
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
+        let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
+        let can_read = matches!(ctx, crate::Context::Read | crate::Context::Full);
         let panic_id = self.3;
         // On capability mismatch, trigger the egglog runtime panic
         // pre-registered at the `unstable-fn` build site (see
@@ -527,10 +530,29 @@ impl FunctionContainer {
         let mismatch = |state: &mut crate::PureState<'a, 'db>| -> Option<Value> {
             state.call_external_func(panic_id, &[])
         };
-        match state.try_apply_resolved_function_id(&self.0, &args) {
-            Ok(value) => Some(value),
-            Err(ApplyCallError::InvalidContext) => mismatch(state),
-            Err(ApplyCallError::Failed) => None,
+        match &self.0 {
+            ResolvedFunctionId::Constructor(action) => {
+                if can_mint {
+                    action.lookup_or_insert(state.raw_exec_state(), &args)
+                } else {
+                    mismatch(state)
+                }
+            }
+            ResolvedFunctionId::Function(action) => {
+                if can_read {
+                    action.lookup(state.raw_exec_state(), &args)
+                } else {
+                    mismatch(state)
+                }
+            }
+            ResolvedFunctionId::Primitive { context_ids } => {
+                // Pick the runtime id whose context matches the
+                // application ctx.
+                match context_ids[ctx] {
+                    Some(id) => state.call_external_func(id, &args),
+                    None => mismatch(state),
+                }
+            }
         }
     }
 }

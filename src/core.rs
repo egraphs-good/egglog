@@ -65,16 +65,12 @@ impl SpecializedPrimitive {
 
     /// Get the external function ID of this primitive
     pub(crate) fn external_id(&self, ctx: crate::Context) -> ExternalFunctionId {
-        self.external_id_in(ctx).unwrap_or_else(|| {
+        self.prim_with_id.context_ids[ctx].unwrap_or_else(|| {
             panic!(
                 "primitive {:?} is not valid in context {ctx:?}",
                 self.prim_with_id.primitive.name()
             )
         })
-    }
-
-    pub(crate) fn external_id_in(&self, ctx: crate::Context) -> Option<ExternalFunctionId> {
-        self.prim_with_id.context_ids[ctx]
     }
 
     /// Get the validator function of this primitive, if any

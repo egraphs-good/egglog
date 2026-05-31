@@ -926,12 +926,6 @@ impl EGraph {
         self.db.with_execution_state(f)
     }
 
-    /// Take any panic message recorded by a previously invoked panic external
-    /// function.
-    pub fn take_panic_message(&self) -> Option<String> {
-        self.panic_message.lock().unwrap().take()
-    }
-
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {

@@ -470,45 +470,6 @@ struct ResolvedNCommandsWithOutput {
 #[error("Not found: {0}")]
 pub struct NotFoundError(String);
 
-/// A resolved expression prepared for direct runtime evaluation.
-#[derive(Clone)]
-pub struct PreparedResolvedExpr {
-    actions: core::ResolvedCoreActions,
-    result: ResolvedVar,
-    bindings: Vec<(String, Value)>,
-}
-
-impl PreparedResolvedExpr {
-    fn eval_result<'a, 'db: 'a>(
-        &self,
-        state: &mut (impl Core<'a, 'db> + ?Sized),
-        bindings: &[(&str, Value)],
-    ) -> Result<Value, exec_state::EvalError> {
-        let mut all_bindings = Vec::with_capacity(self.bindings.len() + bindings.len());
-        all_bindings.extend(
-            self.bindings
-                .iter()
-                .map(|(name, value)| (name.as_str(), *value)),
-        );
-        all_bindings.extend_from_slice(bindings);
-        exec_state::eval_resolved_core_actions_result(
-            state,
-            &self.actions,
-            &self.result,
-            &all_bindings,
-        )
-    }
-
-    /// Evaluate this expression in a primitive runtime state.
-    pub fn eval<'a, 'db: 'a>(
-        &self,
-        state: &mut (impl Core<'a, 'db> + ?Sized),
-        bindings: &[(&str, Value)],
-    ) -> Option<Value> {
-        self.eval_result(state, bindings).ok()
-    }
-}
-
 impl EGraph {
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
@@ -1198,110 +1159,148 @@ impl EGraph {
         )
     }
 
-    fn eval_resolved_expr(&mut self, _span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
-        let prepared = self.prepare_resolved_expr_for_eval(expr)?;
-        let registry = self.backend.action_registry().clone();
-
-        let result = self.backend.with_execution_state(|es| {
-            let registry = registry.read().unwrap();
-            let mut state = FullState::wrap(es, &registry, Context::Full);
-            prepared.eval_result(&mut state, &[])
-        });
-
-        let panic_before_flush = self.backend.take_panic_message();
-        self.backend.flush_updates();
-        let panic_after_flush = self.backend.take_panic_message();
-        if let Some(message) = panic_before_flush.or(panic_after_flush) {
-            return Err(Error::BackendError(format!(
-                "Failed to evaluate expression '{expr}': Panic: {message}"
-            )));
-        }
-
-        result.map_err(|e| {
-            Error::BackendError(format!("Failed to evaluate expression '{expr}': {e}"))
-        })
-    }
-
-    /// Prepare a resolved expression for direct runtime evaluation.
-    pub fn prepare_resolved_expr_for_eval(
+    /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
+    ///
+    /// The returned expression must be evaluated with the returned bindings in
+    /// scope before any caller-supplied local bindings. This lets direct
+    /// execution-state evaluation use the same hidden `ResolvedFunction` value
+    /// that backend rule lowering injects for `unstable-fn`.
+    pub fn prepare_unstable_fn_targets_for_eval(
         &mut self,
         expr: &ResolvedExpr,
-    ) -> Result<PreparedResolvedExpr, Error> {
+    ) -> Result<(ResolvedExpr, Vec<(String, Value)>), Error> {
         let mut bindings = Vec::new();
-        let mut binding = IndexSet::default();
-        let mut stack = vec![expr];
-        while let Some(expr) = stack.pop() {
-            match expr {
-                ResolvedExpr::Lit(..) => {}
-                ResolvedExpr::Var(_, var) => {
-                    binding.insert(var.clone());
+        let expr = self.prepare_unstable_fn_targets_for_eval_inner(expr, &mut bindings)?;
+        Ok((expr, bindings))
+    }
+
+    fn prepare_unstable_fn_targets_for_eval_inner(
+        &mut self,
+        expr: &ResolvedExpr,
+        bindings: &mut Vec<(String, Value)>,
+    ) -> Result<ResolvedExpr, Error> {
+        match expr {
+            ResolvedExpr::Lit(..) | ResolvedExpr::Var(..) => Ok(expr.clone()),
+            ResolvedExpr::Call(span, resolved_call, children) => {
+                if let ResolvedCall::Primitive(prim) = resolved_call {
+                    if prim.name() == "unstable-fn" {
+                        let Some(ResolvedExpr::Lit(target_span, Literal::String(name))) =
+                            children.first()
+                        else {
+                            return Err(Error::BackendError(format!(
+                                "{}\nunstable-fn requires a literal string function name",
+                                children
+                                    .first()
+                                    .map(ResolvedExpr::span)
+                                    .unwrap_or_else(|| Span::Panic)
+                            )));
+                        };
+                        let panic_id = self.backend.new_panic(unstable_fn_panic_message(name));
+                        let resolved_function = resolved_function_for_unstable_fn(
+                            &self.backend,
+                            &self.functions,
+                            &self.type_info,
+                            prim,
+                            name,
+                            panic_id,
+                        )?;
+                        let fn_value = self.backend.base_values().get(resolved_function);
+                        let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
+                        bindings.push((binding_name.clone(), fn_value));
+                        let mut prepared_children = Vec::with_capacity(children.len());
+                        prepared_children.push(ResolvedExpr::Var(
+                            target_span.clone(),
+                            ResolvedVar {
+                                name: binding_name,
+                                sort: children[0].output_type(),
+                                is_global_ref: false,
+                            },
+                        ));
+                        for child in &children[1..] {
+                            prepared_children.push(
+                                self.prepare_unstable_fn_targets_for_eval_inner(child, bindings)?,
+                            );
+                        }
+                        return Ok(ResolvedExpr::Call(
+                            span.clone(),
+                            resolved_call.clone(),
+                            prepared_children,
+                        ));
+                    }
                 }
-                ResolvedExpr::Call(_, _, children) => stack.extend(children),
+
+                let prepared_children = children
+                    .iter()
+                    .map(|child| self.prepare_unstable_fn_targets_for_eval_inner(child, bindings))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ResolvedExpr::Call(
+                    span.clone(),
+                    resolved_call.clone(),
+                    prepared_children,
+                ))
             }
         }
+    }
 
-        let result = ResolvedVar {
+    fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
+        let unit_id = self.backend.base_values().get_ty::<()>();
+        let unit_val = self.backend.base_values().get(());
+
+        let result: egglog_bridge::SideChannel<Value> = Default::default();
+        let result_ref = result.clone();
+        let ext_id = self
+            .backend
+            .register_external_func(Box::new(make_external_func(move |_es, vals| {
+                debug_assert!(vals.len() == 1);
+                *result_ref.lock().unwrap() = Some(vals[0]);
+                Some(unit_val)
+            })));
+
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("eval_resolved_expr", false),
+            &self.functions,
+            &self.type_info,
+            false, // global action context
+        );
+
+        let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
             sort: expr.output_type(),
             is_global_ref: false,
         };
         let actions = ResolvedActions::singleton(ResolvedAction::Let(
-            expr.span().clone(),
-            result.clone(),
+            span.clone(),
+            result_var.clone(),
             expr.clone(),
         ));
+        let mut binding = IndexSet::default();
         let mut ctx = CoreActionContext::new(
             &self.type_info,
             &mut binding,
             &mut self.parser.symbol_gen,
             self.proof_state.original_typechecking.is_none(),
         );
-        let mut actions = actions.to_core_actions(&mut ctx)?.0;
+        let actions = actions.to_core_actions(&mut ctx)?.0;
+        translator.actions(&actions)?;
 
-        for action in &mut actions.0 {
-            let core::GenericCoreAction::Let(_, _, ResolvedCall::Primitive(prim), args) = action
-            else {
-                continue;
-            };
-            if prim.name() != "unstable-fn" {
-                continue;
-            }
-            let Some(ResolvedAtomTerm::Literal(target_span, Literal::String(name))) = args.first()
-            else {
-                return Err(Error::BackendError(format!(
-                    "{}\nunstable-fn requires a literal string function name",
-                    args.first()
-                        .map(ResolvedAtomTerm::span)
-                        .unwrap_or_else(|| &Span::Panic)
-                )));
-            };
-            let panic_id = self.backend.new_panic(unstable_fn_panic_message(name));
-            let resolved_function = resolved_function_for_unstable_fn(
-                &self.backend,
-                &self.functions,
-                &self.type_info,
-                prim,
-                name,
-                panic_id,
-            );
-            let fn_value = self.backend.base_values().get(resolved_function);
-            let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
-            bindings.push((binding_name.clone(), fn_value));
-            args[0] = ResolvedAtomTerm::Var(
-                target_span.clone(),
-                ResolvedVar {
-                    name: binding_name,
-                    sort: args[0].output(),
-                    is_global_ref: false,
-                },
-            );
-        }
+        let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+        translator.rb.call_external_func(
+            ext_id,
+            &[arg],
+            egglog_bridge::ColumnTy::Base(unit_id),
+            || "this function will never panic".to_string(),
+        );
 
-        Ok(PreparedResolvedExpr {
-            actions,
-            result,
-            bindings,
-        })
+        let id = translator.build();
+        let rule_result = self.backend.run_rules(&[id]);
+        self.backend.free_rule(id);
+        self.backend.free_external_func(ext_id);
+        let _ = rule_result.map_err(|e| {
+            Error::BackendError(format!("Failed to evaluate expression '{expr}': {e}"))
+        })?;
+
+        let result = result.lock().unwrap().unwrap();
+        Ok(result)
     }
 
     fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
@@ -2069,21 +2068,26 @@ fn resolved_function_for_unstable_fn(
     prim: &SpecializedPrimitive,
     name: &str,
     panic_id: ExternalFunctionId,
-) -> ResolvedFunction {
+) -> Result<ResolvedFunction, Error> {
     let id = if let Some(f) = type_info.get_func_type(name) {
         // Distinguish constructor-table lookups (write-on-miss via
         // `lookup_or_insert`) from custom-function lookups (pure read via
         // `lookup`). `FunctionContainer::apply` uses this distinction to
         // allow `unstable-app` over a custom function in any DB-read-capable
         // context while refusing constructors anywhere they can't mint.
-        let action = egglog_bridge::TableAction::new(backend, functions[&f.name].backend_id);
+        let function = functions.get(&f.name).ok_or_else(|| {
+            Error::BackendError(format!("missing function definition for {name:?}"))
+        })?;
+        let action = egglog_bridge::TableAction::new(backend, function.backend_id);
         match f.subtype {
             ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
             ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
         }
     } else {
-        let fn_sort = Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any())
-            .unwrap_or_else(|_| panic!("expected `unstable-fn` to return a function sort"));
+        let fn_sort =
+            Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any()).map_err(|_| {
+                Error::BackendError("expected `unstable-fn` to return a function sort".to_owned())
+            })?;
         let types: Vec<_> = prim
             .input()
             .iter()
@@ -2101,29 +2105,31 @@ fn resolved_function_for_unstable_fn(
             .flatten()
             .filter(|p| p.accept(&types, type_info))
             .collect();
-        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
+        for runtime_ctx in Context::ALL {
             let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
             match (ids.next(), ids.next()) {
-                (None, _) => None,
-                (Some(id), None) => Some(id),
-                (Some(_), Some(_)) => panic!(
-                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                ),
+                (None, _) => {}
+                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
+                (Some(_), Some(_)) => {
+                    return Err(Error::BackendError(format!(
+                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                    )));
+                }
             }
-        });
-        assert!(
-            context_ids.iter().any(|(_, id)| id.is_some()),
-            "no callable for {name}"
-        );
+        }
+        if !context_ids.iter().any(|(_, id)| id.is_some()) {
+            return Err(Error::BackendError(format!("no callable for {name}")));
+        }
         ResolvedFunctionId::Primitive { context_ids }
     };
 
-    ResolvedFunction {
+    Ok(ResolvedFunction {
         id,
         partial_arcsorts: prim.input().iter().skip(1).cloned().collect(),
         name: name.to_owned(),
         panic_id,
-    }
+    })
 }
 
 fn unstable_fn_panic_message(name: &str) -> String {
@@ -2240,7 +2246,8 @@ impl<'a> BackendRule<'a> {
                 prim,
                 name,
                 panic_id,
-            );
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved_function);
         }

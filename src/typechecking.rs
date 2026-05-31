@@ -188,6 +188,11 @@ impl PrimitiveWithId {
         };
         problem.solve(|sort| sort.name()).is_ok()
     }
+
+    /// Returns whether this primitive has a runtime entrypoint for `context`.
+    pub fn is_valid_in_context(&self, context: Context) -> bool {
+        self.context_ids[context].is_some()
+    }
 }
 
 impl Debug for PrimitiveWithId {
