@@ -37,9 +37,9 @@ use crate::core_relations::{
     TableId, Value,
 };
 use crate::{
-    ast::{FunctionSubtype, Literal, ResolvedExpr},
-    core::ResolvedCall,
-    sort::{F, S},
+    ast::{FunctionSubtype, Literal, ResolvedVar},
+    core::{GenericCoreAction, ResolvedAtomTerm, ResolvedCall, ResolvedCoreActions},
+    sort::{F, ResolvedFunctionId, S},
     typechecking::FuncType,
 };
 use egglog_bridge::{ActionRegistry, TableAction};
@@ -107,26 +107,81 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
     fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
         self.es_mut()
     }
-    fn apply_resolved_function(&mut self, _func: &FuncType, _args: &[Value]) -> Option<Value> {
-        None
-    }
 
-    fn apply_table_function(
+    fn try_apply_resolved_function(
+        &mut self,
+        _func: &FuncType,
+        _args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
+        Err(ApplyCallError::InvalidContext)
+    }
+    fn try_apply_table_function(
         &mut self,
         subtype: FunctionSubtype,
         action: &TableAction,
         args: &[Value],
-    ) -> Option<Value> {
+    ) -> Result<Value, ApplyCallError> {
         match (subtype, self.ctx()) {
-            (FunctionSubtype::Constructor, Context::Write | Context::Full) => {
-                action.lookup_or_insert(self.es_mut(), args)
-            }
+            (FunctionSubtype::Constructor, Context::Write | Context::Full) => action
+                .lookup_or_insert(self.es_mut(), args)
+                .ok_or(ApplyCallError::Failed),
             (FunctionSubtype::Custom, Context::Read | Context::Full) => {
-                action.lookup(self.es(), args)
+                action.lookup(self.es(), args).ok_or(ApplyCallError::Failed)
             }
-            _ => None,
+            _ => Err(ApplyCallError::InvalidContext),
         }
     }
+
+    fn try_apply_primitive(
+        &mut self,
+        primitive: &crate::core::SpecializedPrimitive,
+        args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
+        let id = primitive
+            .external_id_in(self.ctx())
+            .ok_or(ApplyCallError::InvalidContext)?;
+        self.es_mut()
+            .call_external_func(id, args)
+            .ok_or(ApplyCallError::Failed)
+    }
+
+    fn try_apply_resolved_function_id(
+        &mut self,
+        id: &ResolvedFunctionId,
+        args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
+        match id {
+            ResolvedFunctionId::Constructor(action) => {
+                self.try_apply_table_function(FunctionSubtype::Constructor, action, args)
+            }
+            ResolvedFunctionId::Function(action) => {
+                self.try_apply_table_function(FunctionSubtype::Custom, action, args)
+            }
+            ResolvedFunctionId::Primitive { context_ids } => {
+                let id = context_ids[self.ctx()].ok_or(ApplyCallError::InvalidContext)?;
+                self.es_mut()
+                    .call_external_func(id, args)
+                    .ok_or(ApplyCallError::Failed)
+            }
+        }
+    }
+
+    fn try_apply_resolved_call(
+        &mut self,
+        call: &ResolvedCall,
+        args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
+        match call {
+            ResolvedCall::Primitive(primitive) => self.try_apply_primitive(primitive, args),
+            ResolvedCall::Func(func) => self.try_apply_resolved_function(func, args),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum ApplyCallError {
+    InvalidContext,
+    Failed,
 }
 
 /// Sealed accessor for the [`ActionRegistry`]. Implemented by every
@@ -223,34 +278,6 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
         fc.apply(&mut pure, args)
     }
-
-    /// Dispatch an already type-specialized primitive in the current
-    /// call-site context. The primitive should have been resolved for
-    /// this same context, for example by typechecking the expression
-    /// under the context where it will run.
-    fn apply_primitive(
-        &mut self,
-        primitive: &crate::core::SpecializedPrimitive,
-        args: &[Value],
-    ) -> Option<Value> {
-        let id = primitive.external_id(self.ctx());
-        self.es_mut().call_external_func(id, args)
-    }
-
-    /// Evaluate an already typechecked expression in this primitive call
-    /// context, using `bindings` for local variables.
-    ///
-    /// Primitive calls dispatch through the current call-site context.
-    /// Table-backed function calls follow the same capability split as
-    /// `unstable-app`: custom functions require a read-capable state,
-    /// and constructors require a write-capable state that can mint on miss.
-    fn eval_resolved_expr(
-        &mut self,
-        expr: &ResolvedExpr,
-        bindings: &[(&str, Value)],
-    ) -> Option<Value> {
-        eval_resolved_expr_result(self, expr, bindings).ok()
-    }
 }
 
 #[derive(Debug)]
@@ -258,6 +285,7 @@ pub(crate) enum EvalError {
     UnboundVariable(String),
     FunctionFailed(String),
     PrimitiveFailed(String),
+    UnsupportedAction(&'static str),
 }
 
 impl fmt::Display for EvalError {
@@ -266,40 +294,83 @@ impl fmt::Display for EvalError {
             EvalError::UnboundVariable(name) => write!(f, "unbound variable {name}"),
             EvalError::FunctionFailed(name) => write!(f, "lookup of function {name} failed"),
             EvalError::PrimitiveFailed(name) => write!(f, "call of primitive {name} failed"),
+            EvalError::UnsupportedAction(action) => {
+                write!(f, "unsupported action in expression eval: {action}")
+            }
         }
     }
 }
 
-pub(crate) fn eval_resolved_expr_result<'a, 'db: 'a>(
+pub(crate) fn eval_resolved_core_actions_result<'a, 'db: 'a>(
     state: &mut (impl Core<'a, 'db> + ?Sized),
-    expr: &ResolvedExpr,
+    actions: &ResolvedCoreActions,
+    result: &ResolvedVar,
     bindings: &[(&str, Value)],
 ) -> Result<Value, EvalError> {
-    match expr {
-        ResolvedExpr::Lit(_, literal) => Ok(match literal {
+    let mut values: Vec<_> = bindings
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), *value))
+        .collect();
+
+    for action in &actions.0 {
+        let (var, value) = match action {
+            GenericCoreAction::Let(_, var, call, args) => {
+                let mut arg_values = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_values.push(eval_resolved_atom_term(state, &values, arg)?);
+                }
+                let value =
+                    state
+                        .try_apply_resolved_call(call, &arg_values)
+                        .map_err(|_| match call {
+                            ResolvedCall::Primitive(primitive) => {
+                                EvalError::PrimitiveFailed(primitive.name().to_owned())
+                            }
+                            ResolvedCall::Func(func) => {
+                                EvalError::FunctionFailed(func.name.clone())
+                            }
+                        })?;
+                (var, value)
+            }
+            GenericCoreAction::LetAtomTerm(_, var, atom_term) => {
+                (var, eval_resolved_atom_term(state, &values, atom_term)?)
+            }
+            GenericCoreAction::Set(..) => return Err(EvalError::UnsupportedAction("set")),
+            GenericCoreAction::Change(..) => return Err(EvalError::UnsupportedAction("change")),
+            GenericCoreAction::Union(..) => return Err(EvalError::UnsupportedAction("union")),
+            GenericCoreAction::Panic(..) => return Err(EvalError::UnsupportedAction("panic")),
+        };
+        if let Some((_, existing)) = values.iter_mut().find(|(name, _)| *name == var.name) {
+            *existing = value;
+        } else {
+            values.push((var.name.clone(), value));
+        }
+    }
+
+    values
+        .iter()
+        .find_map(|(name, value)| (*name == result.name).then_some(*value))
+        .ok_or_else(|| EvalError::UnboundVariable(result.name.clone()))
+}
+
+fn eval_resolved_atom_term<'a, 'db: 'a>(
+    state: &mut (impl Core<'a, 'db> + ?Sized),
+    values: &[(String, Value)],
+    atom_term: &ResolvedAtomTerm,
+) -> Result<Value, EvalError> {
+    match atom_term {
+        ResolvedAtomTerm::Literal(_, literal) => Ok(match literal {
             Literal::Int(x) => state.base_to_value(*x),
             Literal::Float(x) => state.base_to_value(F::from(*x)),
             Literal::String(x) => state.base_to_value(S::new(x.clone())),
             Literal::Bool(x) => state.base_to_value(*x),
             Literal::Unit => state.base_to_value(()),
         }),
-        ResolvedExpr::Var(_, resolved_var) => bindings
-            .iter()
-            .find_map(|(name, value)| (*name == resolved_var.name).then_some(*value))
-            .ok_or_else(|| EvalError::UnboundVariable(resolved_var.name.clone())),
-        ResolvedExpr::Call(_, resolved_call, children) => {
-            let mut values = Vec::with_capacity(children.len());
-            for child in children {
-                values.push(eval_resolved_expr_result(state, child, bindings)?);
-            }
-            match resolved_call {
-                ResolvedCall::Primitive(primitive) => state
-                    .apply_primitive(primitive, &values)
-                    .ok_or_else(|| EvalError::PrimitiveFailed(primitive.name().to_owned())),
-                ResolvedCall::Func(func) => state
-                    .apply_resolved_function(func, &values)
-                    .ok_or_else(|| EvalError::FunctionFailed(func.name.clone())),
-            }
+        ResolvedAtomTerm::Var(_, resolved_var) | ResolvedAtomTerm::Global(_, resolved_var) => {
+            values
+                .iter()
+                .find_map(|(name, value)| (*name == resolved_var.name).then_some(*value))
+                .ok_or_else(|| EvalError::UnboundVariable(resolved_var.name.clone()))
         }
     }
 }
@@ -379,9 +450,9 @@ fn apply_registered_function<'a, 'db: 'a>(
     state: &mut impl RegistrySealed<'a, 'db>,
     func: &FuncType,
     args: &[Value],
-) -> Option<Value> {
+) -> Result<Value, ApplyCallError> {
     let action = lookup_action(state.registry(), &func.name).clone();
-    state.apply_table_function(func.subtype, &action, args)
+    state.try_apply_table_function(func.subtype, &action, args)
 }
 
 // =====================================================================
@@ -536,7 +607,11 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {
     fn ctx(&self) -> Context {
         self.ctx
     }
-    fn apply_resolved_function(&mut self, func: &FuncType, args: &[Value]) -> Option<Value> {
+    fn try_apply_resolved_function(
+        &mut self,
+        func: &FuncType,
+        args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
         apply_registered_function(self, func, args)
     }
 }
@@ -558,7 +633,11 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {
     fn ctx(&self) -> Context {
         self.ctx
     }
-    fn apply_resolved_function(&mut self, func: &FuncType, args: &[Value]) -> Option<Value> {
+    fn try_apply_resolved_function(
+        &mut self,
+        func: &FuncType,
+        args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
         apply_registered_function(self, func, args)
     }
 }
@@ -580,7 +659,11 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {
     fn ctx(&self) -> Context {
         self.ctx
     }
-    fn apply_resolved_function(&mut self, func: &FuncType, args: &[Value]) -> Option<Value> {
+    fn try_apply_resolved_function(
+        &mut self,
+        func: &FuncType,
+        args: &[Value],
+    ) -> Result<Value, ApplyCallError> {
         apply_registered_function(self, func, args)
     }
 }
