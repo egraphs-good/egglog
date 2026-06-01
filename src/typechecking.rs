@@ -480,8 +480,9 @@ impl EGraph {
             NCommand::Fail(span, cmd) => {
                 ResolvedNCommand::Fail(span.clone(), Box::new(self.typecheck_command(cmd)?))
             }
-            NCommand::RunSchedule(schedule) => ResolvedNCommand::RunSchedule(
+            NCommand::RunSchedule(schedule, size_limit) => ResolvedNCommand::RunSchedule(
                 self.type_info.typecheck_schedule(symbol_gen, schedule)?,
+                *size_limit,
             ),
             NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
             NCommand::Push(n) => ResolvedNCommand::Push(*n),

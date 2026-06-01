@@ -1196,8 +1196,11 @@ impl<'a> ProofInstrumentor<'a> {
                     self.parse_facts(&instrumented),
                 ));
             }
-            ResolvedNCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
+            ResolvedNCommand::RunSchedule(schedule, size_limit) => {
+                res.push(Command::RunSchedule(
+                    self.instrument_schedule(schedule),
+                    *size_limit,
+                ));
             }
             ResolvedNCommand::Fail(span, cmd) => {
                 self.term_encode_command(cmd, res);
@@ -1217,7 +1220,7 @@ impl<'a> ProofInstrumentor<'a> {
                     res.extend(self.parse_program(&stmt));
                 }
                 // Rebuild before extract; we may have added new view rows that need canonicalization
-                res.push(Command::RunSchedule(self.rebuild()));
+                res.push(Command::RunSchedule(self.rebuild(), None));
                 res.push(Command::Extract(
                     span.clone(),
                     self.parse_expr(&instrumented_expr),
@@ -1281,7 +1284,7 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
-                res.push(Command::RunSchedule(self.rebuild()));
+                res.push(Command::RunSchedule(self.rebuild(), None));
             }
         }
 

@@ -74,7 +74,7 @@ where
     },
     CoreAction(GenericAction<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    RunSchedule(GenericSchedule<Head, Leaf>),
+    RunSchedule(GenericSchedule<Head, Leaf>, Option<usize>),
     PrintOverallStatistics(Span, Option<String>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     PrintFunction(
@@ -153,7 +153,9 @@ where
                 GenericCommand::UnstableCombinedRuleset(span.clone(), name.clone(), others.clone())
             }
             GenericNCommand::NormRule { rule } => GenericCommand::Rule { rule: rule.clone() },
-            GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
+            GenericNCommand::RunSchedule(schedule, limit) => {
+                GenericCommand::RunSchedule(schedule.clone(), *limit)
+            }
             GenericNCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
             }
@@ -205,8 +207,8 @@ where
                 rule.body = f(rule.body);
                 GenericNCommand::NormRule { rule }
             }
-            GenericNCommand::RunSchedule(schedule) => {
-                GenericNCommand::RunSchedule(schedule.visit_queries(f))
+            GenericNCommand::RunSchedule(schedule, limit) => {
+                GenericNCommand::RunSchedule(schedule.visit_queries(f), limit)
             }
             GenericNCommand::Fail(span, cmd) => {
                 GenericNCommand::Fail(span, Box::new(cmd.visit_queries(f)))
@@ -258,8 +260,8 @@ where
             GenericNCommand::NormRule { rule } => GenericNCommand::NormRule {
                 rule: rule.visit_exprs(f),
             },
-            GenericNCommand::RunSchedule(schedule) => {
-                GenericNCommand::RunSchedule(schedule.visit_exprs(f))
+            GenericNCommand::RunSchedule(schedule, limit) => {
+                GenericNCommand::RunSchedule(schedule.visit_exprs(f), limit)
             }
             GenericNCommand::PrintOverallStatistics(span, file) => {
                 GenericNCommand::PrintOverallStatistics(span, file)
@@ -847,7 +849,7 @@ where
     /// then runs `my-ruleset-2` four times.
     ///
     /// See [`Schedule`] for more details.
-    RunSchedule(GenericSchedule<Head, Leaf>),
+    RunSchedule(GenericSchedule<Head, Leaf>, Option<usize>),
     /// Print runtime statistics about rules
     /// and rulesets so far.
     PrintOverallStatistics(Span, Option<String>),
@@ -1049,7 +1051,10 @@ where
                 )
             }
             GenericCommand::Rule { rule } => rule.fmt(f),
-            GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
+            GenericCommand::RunSchedule(sched, limit) => match limit {
+                Some(n) => write!(f, "(run-schedule {sched} :size-limit {n})"),
+                None => write!(f, "(run-schedule {sched})"),
+            },
             GenericCommand::PrintOverallStatistics(_span, file) => match file {
                 Some(file) => write!(f, "(print-stats :file {file})"),
                 None => write!(f, "(print-stats)"),
@@ -1737,8 +1742,8 @@ where
             GenericCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span, expr, variants)
             }
-            GenericCommand::RunSchedule(schedule) => {
-                GenericCommand::RunSchedule(schedule.map_string_symbols(fun))
+            GenericCommand::RunSchedule(schedule, limit) => {
+                GenericCommand::RunSchedule(schedule.map_string_symbols(fun), limit)
             }
             GenericCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span, file)
@@ -1846,8 +1851,8 @@ where
                 file,
                 exprs: exprs.into_iter().map(|e| e.visit_exprs(f)).collect(),
             },
-            GenericCommand::RunSchedule(schedule) => {
-                GenericCommand::RunSchedule(schedule.visit_exprs(f))
+            GenericCommand::RunSchedule(schedule, limit) => {
+                GenericCommand::RunSchedule(schedule.visit_exprs(f), limit)
             }
             GenericCommand::Fail(span, cmd) => {
                 GenericCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
@@ -1957,8 +1962,8 @@ where
                 expr.map_symbols(head, leaf),
                 variants.map_symbols(head, leaf),
             ),
-            GenericCommand::RunSchedule(schedule) => {
-                GenericCommand::RunSchedule(schedule.map_symbols(head, leaf))
+            GenericCommand::RunSchedule(schedule, limit) => {
+                GenericCommand::RunSchedule(schedule.map_symbols(head, leaf), limit)
             }
             GenericCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span, file)

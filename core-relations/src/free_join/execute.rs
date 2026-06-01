@@ -22,7 +22,7 @@ use web_time::Instant;
 
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
-    action::{Bindings, ExecutionState},
+    action::{Bindings, ExecutionState, Instr},
     common::{DashMap, Value},
     free_join::{
         frame_update::{FrameUpdates, UpdateInstr},
@@ -349,7 +349,7 @@ impl Database {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
-        let match_counter = Arc::new(MatchCounter::new(rule_set.actions.n_ids()));
+        let match_counter = Arc::new(MatchCounter::new(rule_set));
 
         let search_and_apply_timer = Instant::now();
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
@@ -1761,6 +1761,12 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         bindings: &DenseIdMap<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'a>,
     ) {
+        // Size cap: once the cumulative cap is reached, stop the
+        // join and drop further matches instead of buffering/applying them.
+        if self.match_counter.over_cap() {
+            to_exec_state().trigger_early_stop();
+            return;
+        }
         let action_state = self.batches.get_or_default(action);
         action_state.n_runs += 1;
         action_state.len += 1;
@@ -1770,12 +1776,15 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         unsafe {
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
-        if action_state.len >= VAR_BATCH_SIZE {
+        if action_state.len >= self.match_counter.batch_size() {
             let mut state = to_exec_state();
             let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
             action_state.bindings.clear();
             self.match_counter.inc_matches(action, succeeded);
             action_state.len = 0;
+            if self.match_counter.over_cap() {
+                state.trigger_early_stop();
+            }
         }
     }
 
@@ -1838,6 +1847,10 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         bindings: &DenseIdMap<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
+        if self.match_counter.over_cap() {
+            to_exec_state().trigger_early_stop();
+            return;
+        }
         self.needs_flush = true;
         let action_state = self.batches.get_or_default(action);
         action_state.n_runs += 1;
@@ -1848,7 +1861,7 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         unsafe {
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
-        if action_state.len >= VAR_BATCH_SIZE {
+        if action_state.len >= self.match_counter.batch_size() {
             let mut state = to_exec_state();
             let mut bindings =
                 mem::replace(&mut action_state.bindings, Bindings::new(VAR_BATCH_SIZE));
@@ -1857,6 +1870,9 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
             self.scope.spawn(move |_| {
                 let succeeded = state.run_instrs(&action_info.instrs, &mut bindings);
                 match_counter.inc_matches(action, succeeded);
+                if match_counter.over_cap() {
+                    state.trigger_early_stop();
+                }
             });
         }
     }
@@ -1916,6 +1932,9 @@ fn flush_action_states(
     rule_set: &RuleSet,
     match_counter: &MatchCounter,
 ) {
+    if match_counter.over_cap() {
+        return;
+    }
     for (action, ActionState { bindings, len, .. }) in actions.iter_mut() {
         if *len > 0 {
             let succeeded = exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
@@ -2062,22 +2081,108 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Size cap
+//
+// A *mid-iteration* bound on how much an e-graph may grow. `run_rule_set`
+// applies all matches in batches; with a cap set, it stops applying (and halts
+// the join via `ExecutionState::trigger_early_stop`) once the budget is spent.
+//
+// The budget is measured in *applied action rows* weighted by how many rows
+// each action inserts (`action_enode_bound`). True net e-node count is only
+// known at table-merge time (iteration boundary), too late to stop a single
+// exploding iteration, so we use applied rows as a per-batch proxy. Applied
+// rows over-count net nodes (duplicate terms, congruence).
+//
+// State is process-global so the single counter is contention-free (one atomic
+// add per batch, not per row). The cap is cumulative across `run_rule_set`
+// calls (reset only by `set_action_row_cap`) so it bounds *total* growth over a
+// whole schedule, not per-iteration growth.
+// ---------------------------------------------------------------------------
+
+/// The cumulative budget on applied action rows. `usize::MAX` disables the cap.
+pub static ACTION_ROW_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Rows applied since the cap was last set via [`set_action_row_cap`].
+pub static ACTION_ROWS_APPLIED: AtomicUsize = AtomicUsize::new(0);
+
+/// Set the cumulative cap on applied action rows and reset the running total.
+/// Pass `usize::MAX` to disable.
+pub fn set_action_row_cap(cap: usize) {
+    ACTION_ROW_CAP.store(cap, std::sync::atomic::Ordering::Relaxed);
+    ACTION_ROWS_APPLIED.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The number of row-inserting instructions in an action -- an upper bound on
+/// the e-nodes one firing of that action adds.
+fn action_enode_bound(instrs: &[Instr]) -> usize {
+    instrs
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Instr::Insert { .. }
+                    | Instr::InsertIfEq { .. }
+                    | Instr::LookupOrInsertDefault { .. }
+            )
+        })
+        .count()
+}
+
 struct MatchCounter {
     matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
+    enode_bounds: IdVec<ActionId, usize>,
+    cap: usize,
 }
 
 impl MatchCounter {
-    fn new(n_ids: usize) -> Self {
+    fn new(rule_set: &RuleSet) -> Self {
+        let n_ids = rule_set.actions.n_ids();
         let mut matches = IdVec::with_capacity(n_ids);
         matches.resize_with(n_ids, || CachePadded::new(AtomicUsize::new(0)));
-        Self { matches }
+        let cap = ACTION_ROW_CAP.load(std::sync::atomic::Ordering::Relaxed);
+        let mut enode_bounds = IdVec::with_capacity(if cap == usize::MAX { 0 } else { n_ids });
+        if cap != usize::MAX {
+            enode_bounds.resize_with(n_ids, || 0usize);
+            for (action, info) in rule_set.actions.iter() {
+                enode_bounds[action] = action_enode_bound(&info.instrs);
+            }
+        }
+        Self {
+            matches,
+            enode_bounds,
+            cap,
+        }
     }
 
     fn inc_matches(&self, action: ActionId, by: usize) {
         self.matches[action].fetch_add(by, std::sync::atomic::Ordering::Relaxed);
+        if self.cap != usize::MAX {
+            let added = by * self.enode_bounds[action];
+            if added > 0 {
+                ACTION_ROWS_APPLIED.fetch_add(added, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
     }
     fn read_matches(&self, action: ActionId) -> usize {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn over_cap(&self) -> bool {
+        ACTION_ROWS_APPLIED.load(std::sync::atomic::Ordering::Relaxed) >= self.cap
+    }
+
+    /// The batch size to flush at (size cap). With no cap this is
+    /// the constant `VAR_BATCH_SIZE` (max throughput). With a cap, shrink the
+    /// batch as we approach it so concurrent in-flight batches across threads
+    /// can't collectively overshoot by much: bound total in-flight (~threads ×
+    /// batch) to the remaining budget.
+    fn batch_size(&self) -> usize {
+        if self.cap == usize::MAX {
+            return VAR_BATCH_SIZE;
+        }
+        let total = ACTION_ROWS_APPLIED.load(std::sync::atomic::Ordering::Relaxed);
+        let remaining = self.cap.saturating_sub(total);
+        let threads = rayon::current_num_threads().max(1);
+        (remaining / (threads * 2)).clamp(1, VAR_BATCH_SIZE)
     }
 }
 

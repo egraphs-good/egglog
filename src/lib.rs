@@ -40,7 +40,7 @@ use core::CoreActionContext;
 use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
-pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
+pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
@@ -1275,8 +1275,15 @@ impl EGraph {
                 self.add_rule(rule)?;
                 log::info!("Declared rule {name}.")
             }
-            ResolvedNCommand::RunSchedule(sched) => {
-                let report = self.run_schedule(&sched)?;
+            ResolvedNCommand::RunSchedule(sched, size_limit) => {
+                if let Some(limit) = size_limit {
+                    set_action_row_cap(limit);
+                }
+                let result = self.run_schedule(&sched);
+                if size_limit.is_some() {
+                    set_action_row_cap(usize::MAX);
+                }
+                let report = result?;
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
