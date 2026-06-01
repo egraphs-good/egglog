@@ -1491,9 +1491,9 @@ impl EGraph {
                 let command = self
                     .commands
                     .get(&name)
-                    .unwrap_or_else(|| {
-                        panic!("Unrecognized user-defined command: {name}");
-                    })
+                    .ok_or_else(|| {
+                        NotFoundError(format!("Unrecognized user-defined command: {name}"))
+                    })?
                     .clone();
                 return command.update(self, &exprs);
             }

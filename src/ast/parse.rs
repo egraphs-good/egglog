@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 #[macro_export]
 macro_rules! span {
     () => {{
-        use egglog_ast::span::{RustSpan, Span};
+        use $crate::ast::{RustSpan, Span};
         Span::Rust(std::sync::Arc::new(RustSpan {
             file: file!(),
             line: line!(),
