@@ -269,6 +269,7 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    pub no_decomp: bool,
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
@@ -325,6 +326,19 @@ impl Function {
     pub fn is_let_binding(&self) -> bool {
         self.decl.internal_let
     }
+
+    /// Whether this function is internally hidden (e.g., compiler-generated
+    /// helper tables that should not appear in user-facing listings).
+    pub fn is_hidden(&self) -> bool {
+        self.decl.internal_hidden
+    }
+
+    /// The term-constructor name associated with this function table, if
+    /// any. Set on view tables created by the term/proof encoding to refer
+    /// back to the user-visible constructor name.
+    pub fn term_constructor(&self) -> Option<&str> {
+        self.decl.term_constructor.as_deref()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -366,6 +380,7 @@ impl Default for EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
+            no_decomp: false,
             overall_run_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -892,9 +907,9 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched)?;
-                    let updated = rec.updated;
+                    let can_stop = rec.can_stop;
                     report.union(rec);
-                    if !updated {
+                    if can_stop {
                         break;
                     }
                 }
@@ -1000,14 +1015,15 @@ impl EGraph {
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
         let seminaive = self.seminaive && !rule.naive;
+        // The `:no-decomp` rule option (and the global `--no-decomp`
+        // flag) skips tree-decomposition in query planning, forcing
+        // the single-bag fast path.
+        let no_decomp = self.no_decomp || rule.no_decomp;
 
         let rule_id = {
-            let mut translator = BackendRule::new(
-                self.backend.new_rule(&rule.name, seminaive),
-                &self.functions,
-                &self.type_info,
-                seminaive,
-            );
+            let mut rb = self.backend.new_rule(&rule.name, seminaive);
+            rb.set_no_decomp(no_decomp);
+            let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
             translator.query(query, false);
             translator.actions(actions)?;
             translator.build()
@@ -1062,6 +1078,12 @@ impl EGraph {
     /// Get the list of all functions in the e-graph.
     pub fn get_function_names(&self) -> Vec<String> {
         self.functions.keys().cloned().collect()
+    }
+
+    /// Iterate over every `(name, function)` pair registered in the
+    /// e-graph, in registration order.
+    pub fn functions_iter(&self) -> impl Iterator<Item = (&String, &Function)> {
+        self.functions.iter()
     }
 
     /// Read the contents of the given function.
@@ -1188,6 +1210,7 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
             naive: false,
+            no_decomp: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1820,6 +1843,11 @@ impl EGraph {
         self.type_info.get_arcsort_by(f)
     }
 
+    /// Returns the unique sort whose runtime values have Rust type `T`.
+    pub fn get_arcsort_for_value_type<T: 'static>(&self) -> ArcSort {
+        self.type_info.get_arcsort_for_value_type::<T>()
+    }
+
     /// Returns all sorts that satisfy the predicate.
     pub fn get_arcsorts_by(&self, f: impl Fn(&ArcSort) -> bool) -> Vec<ArcSort> {
         self.type_info.get_arcsorts_by(f)
@@ -2383,13 +2411,13 @@ mod tests {
                 r#"
                 (datatype Math)
                 (constructor container (Math) Math)
-                (constructor exp () Math :cost 100)
+                (constructor expensive () Math :cost 100)
                 (constructor cheap () Math)
                 (constructor cheap-1 () Math)
                 ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
-                ; so the (exp) expr should be extracted instead
+                ; so the (expensive) expr should be extracted instead
                 (let res (container (cheap)))
-                (union res (exp))
+                (union res (expensive))
                 (cheap)
                 (cheap-1)
                 (subsume (container (cheap)))
@@ -2422,7 +2450,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert_eq!(outputs[0].to_string(), "(exp)\n");
+        assert_eq!(outputs[0].to_string(), "(expensive)\n");
     }
 
     #[test]
@@ -2436,9 +2464,9 @@ mod tests {
                 r#"
                 (datatype Math)
                 (constructor container (Math) Math)
-                (constructor exp () Math :cost 100)
+                (constructor expensive () Math :cost 100)
                 (constructor cheap () Math)
-                (exp)
+                (expensive)
                 (let x (cheap))
                 (subsume (cheap))
                 "#,
@@ -2451,7 +2479,7 @@ mod tests {
             .parse_and_run_program(
                 None,
                 r#"
-                (union (exp) x)
+                (union (expensive) x)
                 "#,
             )
             .unwrap();
@@ -2468,6 +2496,6 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert_eq!(res[0].to_string(), "(exp)\n");
+        assert_eq!(res[0].to_string(), "(expensive)\n");
     }
 }

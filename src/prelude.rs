@@ -325,6 +325,7 @@ pub fn rule(
         name: "".into(),
         ruleset: ruleset.into(),
         naive: false,
+        no_decomp: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -494,6 +495,7 @@ pub fn rust_rule(
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
         naive: false,
+        no_decomp: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -596,6 +598,7 @@ pub fn rust_rule_full(
         // FullPrim action requires `Context::Full`, which is only
         // available in `:naive` rules.
         naive: true,
+        no_decomp: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])

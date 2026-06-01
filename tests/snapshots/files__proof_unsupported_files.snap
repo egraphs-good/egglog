@@ -37,6 +37,7 @@ map.egg
 math.egg
 merge_read.egg
 multiset.egg
+nested-container-dirty-propagation.egg
 pair.egg
 prims.egg
 print-function.egg
@@ -45,6 +46,7 @@ rat-pow-eval.egg
 repro-665-set-union.egg
 repro-738-fn-sort.egg
 repro-desugar-143.egg
+repro-herbie-vanilla.egg
 repro-new-backend-python-vec.egg
 repro-querybug3.egg
 repro-unsound.egg

@@ -71,7 +71,8 @@ where
             "".into()
         };
         let naive = if self.naive { " :naive" } else { "" };
-        write!(f, ")\n{indent} {ruleset} {name}{naive})")
+        let no_decomp = if self.no_decomp { " :no-decomp" } else { "" };
+        write!(f, ")\n{indent} {ruleset} {name}{naive}{no_decomp})")
     }
 }
 
@@ -120,16 +121,20 @@ where
                     Change::Delete => "delete",
                     Change::Subsume => "subsume",
                 };
-                write!(
-                    f,
-                    "({} ({} {}))",
-                    change_str,
-                    lhs,
-                    args.iter()
-                        .map(|a| format!("{a}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
+                if args.is_empty() {
+                    write!(f, "({change_str} ({lhs}))")
+                } else {
+                    write!(
+                        f,
+                        "({} ({} {}))",
+                        change_str,
+                        lhs,
+                        args.iter()
+                            .map(|a| format!("{a}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                }
             }
             GenericAction::Panic(_, msg) => write!(f, "(panic \"{msg}\")"),
             GenericAction::Expr(_, e) => write!(f, "{e}"),
@@ -146,10 +151,42 @@ where
         match self {
             GenericExpr::Lit(_ann, lit) => write!(f, "{lit}"),
             GenericExpr::Var(_ann, var) => write!(f, "{var}"),
-            GenericExpr::Call(_ann, op, children) => {
-                write!(f, "({} {})", op, ListDisplay(children, " "))
-            }
+            GenericExpr::Call(_ann, op, children) => match children.is_empty() {
+                true => write!(f, "({op})"),
+                false => write!(f, "({} {})", op, ListDisplay(children, " ")),
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_nullary_call_without_trailing_space() {
+        let expr = GenericExpr::<String, String>::Call(Span::Panic, "foo".into(), vec![]);
+
+        assert_eq!(expr.to_string(), "(foo)");
+    }
+
+    #[test]
+    fn display_nullary_change_without_trailing_space() {
+        let delete = GenericAction::<String, String>::Change(
+            Span::Panic,
+            Change::Delete,
+            "foo".into(),
+            vec![],
+        );
+        let subsume = GenericAction::<String, String>::Change(
+            Span::Panic,
+            Change::Subsume,
+            "foo".into(),
+            vec![],
+        );
+
+        assert_eq!(delete.to_string(), "(delete (foo))");
+        assert_eq!(subsume.to_string(), "(subsume (foo))");
     }
 }
 
@@ -184,6 +221,7 @@ where
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
             naive: self.naive,
+            no_decomp: self.no_decomp,
         }
     }
 
@@ -199,6 +237,7 @@ where
             name: self.name,
             ruleset: self.ruleset,
             naive: self.naive,
+            no_decomp: self.no_decomp,
         }
     }
 
@@ -223,6 +262,7 @@ where
             name: self.name,
             ruleset: self.ruleset,
             naive: self.naive,
+            no_decomp: self.no_decomp,
         }
     }
 

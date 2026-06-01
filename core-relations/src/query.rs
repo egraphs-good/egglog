@@ -125,6 +125,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                 action: ActionId::new(u32::MAX),
                 plan_strategy: Default::default(),
                 fun_deps: Default::default(),
+                no_decomp: false,
             },
         }
     }
@@ -297,6 +298,12 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// Set the target plan strategy to use to execute this query.
     pub fn set_plan_strategy(&mut self, strategy: PlanStrategy) {
         self.query.plan_strategy = strategy;
+    }
+
+    /// If `true`, the query planner will skip tree-decomposition
+    /// for query decomposition and always use evaluate the query as a single bag.
+    pub fn set_no_decomp(&mut self, no_decomp: bool) {
+        self.query.no_decomp = no_decomp;
     }
 
     /// Create a new variable of the given type.
@@ -1036,4 +1043,9 @@ pub(crate) struct Query {
     pub(crate) action: ActionId,
     pub(crate) plan_strategy: PlanStrategy,
     pub(crate) fun_deps: FunDeps,
+    /// If `true`, skip tree-decomposition during query planning and
+    /// always use the single-bag fast path in
+    /// [`crate::free_join::plan::tree_decompose_and_plan`]. Set via
+    /// [`QueryBuilder::set_no_decomp`].
+    pub(crate) no_decomp: bool,
 }

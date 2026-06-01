@@ -12,6 +12,7 @@
 //! - Duplicate same-signature primitive registrations are ambiguous for direct
 //!   calls and higher-order primitive dispatch.
 
+use egglog::add_primitive;
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::sort::{I64Sort, S, StringSort};
@@ -494,6 +495,15 @@ fn two_same_signature_registrations_panic_on_use() {
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
 
     let _ = egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))");
+}
+
+/// Registering a primitive whose argument type has no corresponding sort must
+/// fail with a message naming the missing type.
+#[test]
+#[should_panic(expected = "Expected exactly one sort for type `u32`")]
+fn missing_sort_panics_with_type_name() {
+    let mut egraph = EGraph::default();
+    add_primitive!(&mut egraph, "u32-id" = |a: u32| -> i64 { a as i64 });
 }
 
 /// `unstable-fn` over a primitive must preserve the same exact-one ambiguity
