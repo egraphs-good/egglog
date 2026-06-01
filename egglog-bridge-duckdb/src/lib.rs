@@ -1603,6 +1603,21 @@ pub struct EGraph {
     /// Set once by `enable_native_uf` before any tables/rules are
     /// registered; everything downstream branches on this.
     native_uf_enabled: bool,
+    /// Whether the program was term-encoded in proof-tracking mode.
+    /// Set once by `enable_proofs` from the frontend's
+    /// `with_duckdb_backend` when `DuckBackendConfig::proofs` is on.
+    ///
+    /// In proof mode the rule-action hash-cons for eq-sort
+    /// constructors looks up the *bare* term table (which keeps each
+    /// application's own id) rather than the canonicalized
+    /// `@<name>View` (whose id column the rebuild rewrites to the
+    /// e-class leader). Reusing the leader is faster — it folds
+    /// congruent terms onto one id — but it discards which
+    /// constructor the rule actually produced, so proof extraction
+    /// reconstructs a different (equal) term than the rule head and
+    /// the proof checker rejects it. Term identity only matters for
+    /// proofs, so non-proof runs keep the faster leader hash-cons.
+    proofs_enabled: bool,
     /// Per-sort native union-find tables, keyed by the egglog
     /// function name they're standing in for (the `:merge
     /// (ordering-min old new)` function emitted by term encoding).
@@ -1798,6 +1813,7 @@ impl EGraph {
             table_watermarks: HashMap::new(),
             rules_skipped: 0,
             native_uf_enabled: false,
+            proofs_enabled: false,
             native_ufs: HashMap::new(),
             native_uf_pname: HashMap::new(),
             last_uf_sync_ts: HashMap::new(),
@@ -1820,6 +1836,17 @@ impl EGraph {
     /// to decide whether to also spin up a `UfTable` + UDF.
     pub fn enable_native_uf(&mut self) {
         self.native_uf_enabled = true;
+    }
+
+    /// Mark this `EGraph` as running a proof-tracking term encoding.
+    /// Must be called before any rules are registered. Switches the
+    /// eq-sort constructor hash-cons (in rule actions) to look up the
+    /// bare term table instead of the canonicalized view, so each
+    /// constructor application keeps its own id and proof extraction
+    /// reconstructs the term the rule actually produced. See
+    /// [`EGraph::proofs_enabled`].
+    pub fn enable_proofs(&mut self) {
+        self.proofs_enabled = true;
     }
 
     /// Return (registering if necessary) the [`BaseValueId`] used as a
@@ -2779,7 +2806,7 @@ impl EGraph {
         if self.native_uf_enabled && is_uf_maintenance_ruleset(&rule.ruleset) {
             return Ok(());
         }
-        let mut compiled = compile::compile_rule(&rule, &self.functions)?;
+        let mut compiled = compile::compile_rule(&rule, &self.functions, self.proofs_enabled)?;
         // Body tables = distinct Atom::Func names. The watermark gate
         // reads this set to decide whether the rule has anything new
         // to look at on a given iteration.

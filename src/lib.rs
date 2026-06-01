@@ -459,6 +459,12 @@ impl EGraph {
         if config.native_uf {
             db.enable_native_uf();
         }
+        if config.proofs {
+            // Switch the eq-sort constructor hash-cons to the bare term
+            // table so each application keeps its own id; reusing the
+            // canonicalized view's leader id breaks proof extraction.
+            db.enable_proofs();
+        }
         let backend: Box<dyn egglog_backend_trait::Backend> = Box::new(db);
         let mut eg = Self::with_backend(backend);
 

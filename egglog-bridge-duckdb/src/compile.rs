@@ -350,6 +350,25 @@ fn dedupe_body_atoms(rule: &Rule, functions: &HashMap<String, FunctionInfo>) -> 
                     (Vec::new(), None)
                 };
                 let _ = info; // kept for future per-table policy
+                // Output-equivalence dedup is sound only when the
+                // leading columns form a key that functionally
+                // determines the last column. With *no* input columns
+                // the table is many-valued: a nullary `:merge`
+                // function's view (e.g. `@foo_view` for `(function foo
+                // () i64 :merge (min old new))`) holds every set value
+                // until the merge rule reconciles them, so two atoms
+                // over it bind *different* outputs. The merge rule is a
+                // self-join (`old`/`new` reading the same view); merging
+                // those atoms would collapse it to `old <> old`
+                // (always false) and the merge would never fire. Never
+                // dedup zero-input atoms — keep them all.
+                if inputs.is_empty() {
+                    new_body.push(Atom::Func {
+                        name: name.clone(),
+                        args: canon_args,
+                    });
+                    continue;
+                }
                 let key = (name.clone(), inputs);
                 if let Some(prev_out) = seen.get(&key) {
                     // Duplicate. If both have an output var, rename
@@ -483,6 +502,7 @@ fn dedupe_body_atoms(rule: &Rule, functions: &HashMap<String, FunctionInfo>) -> 
 pub(crate) fn compile_rule(
     rule: &Rule,
     functions: &HashMap<String, FunctionInfo>,
+    proofs_enabled: bool,
 ) -> Result<CompiledRule> {
     // Rewrite the rule before validation/compilation so any nested
     // eq-sort constructor calls in action positions become explicit
@@ -603,6 +623,7 @@ pub(crate) fn compile_rule(
         functions,
         &demote,
         None,
+        proofs_enabled,
     )?];
     // For each distinct table referenced by a demoted atom, emit
     // one gated "UF-changed" recovery variant: scan the body with
@@ -635,6 +656,7 @@ pub(crate) fn compile_rule(
             functions,
             &demote,
             Some(&gate_pname),
+            proofs_enabled,
         )?);
     }
     Ok(CompiledRule {
@@ -661,6 +683,7 @@ fn compile_fused_variant(
     functions: &HashMap<String, FunctionInfo>,
     demote: &[bool],
     gate_table: Option<&str>,
+    proofs_enabled: bool,
 ) -> Result<CompiledVariant> {
     // 1) Build the body's FROM/WHERE and a binding for body vars.
     let (from, base_where_parts, mut binding) =
@@ -804,9 +827,32 @@ fn compile_fused_variant(
                     Term::Var(v) => binding.contains_key(v),
                     _ => true,
                 });
+                // Which table to hash-cons against. In non-proof mode
+                // we use the canonicalized `@<name>View`: its id column
+                // is rewritten to the e-class leader by rebuild, so
+                // congruent terms fold onto one id (faster, fewer
+                // rows). In proof mode that is incorrect — reusing the
+                // leader gives the constructed term a *different*
+                // constructor's id, so proof extraction reconstructs
+                // the wrong (equal) term and the checker rejects it.
+                // The bare term table (`name`) keeps each application's
+                // own id, like the bridge backend, so proofs stay
+                // faithful. See `EGraph::proofs_enabled`.
                 let view = format!("@{name}View");
-                // Hash-cons is only meaningful when the constructor's
-                // view actually stores the output ID (i.e., it has
+                // Only redirect to the bare term table for genuine
+                // eq-sort *user* constructors — those that have a
+                // `@<name>View` (whose id column the rebuild rewrites
+                // to the leader). Proof-machinery constructors (AstC,
+                // Rule, Trans, …) have no view and keep their existing
+                // hash-cons/nextval behavior.
+                let view_exists = functions.contains_key(&view);
+                let hc_table = if proofs_enabled && view_exists {
+                    name.clone()
+                } else {
+                    view.clone()
+                };
+                // Hash-cons is only meaningful when the hash-cons table
+                // actually stores the output ID (i.e., it has
                 // args.len() + 1 columns: inputs + id). For
                 // constructors whose original return type was a
                 // primitive (e.g., a `(function foo () i64 :merge …)`
@@ -815,7 +861,7 @@ fn compile_fused_variant(
                 // that only tracks existence, no id), there's no id
                 // to look up — fall back to plain nextval.
                 let view_has_id = functions
-                    .get(&view)
+                    .get(&hc_table)
                     .map(|i| i.cols.len() > args.len())
                     .unwrap_or(false);
                 // Hash-cons: look up an existing canonical id for
@@ -840,7 +886,7 @@ fn compile_fused_variant(
                         // Cross join with a 1-row aggregate.
                         hc_joins.push(format!(
                             "LEFT JOIN (SELECT MIN(c{id_col_idx}) AS id FROM {}) {hc_alias} ON TRUE",
-                            q(&view)
+                            q(&hc_table)
                         ));
                     } else {
                         let on_conds: Vec<String> = arg_sqls
@@ -851,7 +897,7 @@ fn compile_fused_variant(
                         hc_joins.push(format!(
                             "LEFT JOIN (SELECT {}, MIN(c{id_col_idx}) AS id FROM {} GROUP BY {}) {hc_alias} ON {}",
                             in_cols.join(", "),
-                            q(&view),
+                            q(&hc_table),
                             in_cols.join(", "),
                             on_conds.join(" AND ")
                         ));
