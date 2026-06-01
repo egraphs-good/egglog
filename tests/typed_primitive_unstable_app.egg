@@ -10,6 +10,34 @@
 (let plus (unstable-fn "+"))
 (check (= (unstable-app plus 2 3) 5))
 
+; --- 1b. Primitive targets cover nullary, unary, Unit-returning, overloaded,
+;     higher-order, container-specific, and merge-function contexts. The merge
+;     case partially applies `+` to `old`, so the resulting unstable function
+;     consumes only `new`.
+(sort IntVec (Vec i64))
+(sort IntVecThunk (UnstableFn () IntVec))
+(sort BoolVec (Vec bool))
+(sort MapI64String (Map i64 String))
+(sort MapI64StringThunk (UnstableFn () MapI64String))
+(sort BoolToBool (UnstableFn (bool) bool))
+(sort VecBoolMap (UnstableFn (BoolToBool BoolVec) BoolVec))
+(sort IntToUnit (UnstableFn (i64) Unit))
+(sort F64ToF64 (UnstableFn (f64) f64))
+(sort I2I (UnstableFn (i64) i64))
+
+(function merge-plus () i64 :merge (unstable-app (unstable-fn "+" old) new))
+(set (merge-plus) 1)
+(set (merge-plus) 2)
+(check (= (merge-plus) 3))
+
+(check (= (unstable-app (unstable-fn "vec-empty")) (vec-empty)))
+(check (= (unstable-app (unstable-fn "map-empty")) (map-empty)))
+(check (= (unstable-app (unstable-fn "not") true) false))
+(check (= (unstable-app (unstable-fn "unstable-vec-map") (unstable-fn "not") (vec-of true false)) (vec-of false true)))
+(check (= (unstable-app (unstable-fn "<" 1) 2) ()))
+(check (= (unstable-app (unstable-fn "+" 1.0) 2.0) 3.0))
+(check (= (unstable-app (unstable-fn "+" 1) 2) 3))
+
 ; --- 2. unstable-app over a constructor in an action mints the eclass.
 (datatype Math (Num i64))
 (sort MathFn (UnstableFn (i64) Math))
@@ -43,7 +71,6 @@
 ;     `Context::Full` with `:naive`.
 (function dbl (i64) i64 :no-merge)
 (set (dbl 7) 14)
-(sort I2I (UnstableFn (i64) i64))
 (let twice (unstable-fn "dbl"))
 (function dbl-out (i64) i64 :no-merge)
 (rule ((Trigger)) ((set (dbl-out 7) (unstable-app twice 7))) :naive)

@@ -712,10 +712,31 @@ impl EGraph {
                 ))
             }
             GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
-                let translated_args = args
+                let mut translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
+                if p.name() == "unstable-fn" {
+                    let Some(GenericExpr::Lit(_, Literal::String(name))) = args.first() else {
+                        return Err(Error::BackendError(
+                            "expected string literal after `unstable-fn`".into(),
+                        ));
+                    };
+                    let resolved = resolve_function_container_target_with_context(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        name,
+                        p,
+                        self.backend
+                            .action_registry()
+                            .read()
+                            .unwrap()
+                            .default_panic_id(),
+                    );
+                    translated_args[0] =
+                        egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
+                }
                 Ok(egglog_bridge::MergeFn::Primitive(
                     p.external_id(crate::Context::Write),
                     translated_args,
@@ -2017,6 +2038,121 @@ impl EGraph {
     }
 }
 
+fn resolve_function_container_target_with_context(
+    backend: &egglog_bridge::EGraph,
+    functions: &IndexMap<String, Function>,
+    type_info: &TypeInfo,
+    name: &str,
+    primitive: &core::SpecializedPrimitive,
+    panic_id: ExternalFunctionId,
+) -> ResolvedFunction {
+    let Some(target_function) = type_info
+        .get_sorts::<FunctionSort>()
+        .into_iter()
+        .find(|function| function.name() == primitive.output().name())
+    else {
+        panic!(
+            "`unstable-fn` output sort `{}` is not a function sort",
+            primitive.output().name()
+        );
+    };
+
+    let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
+    let remaining_inputs = target_function.inputs();
+    let output = target_function.output();
+
+    let id = if let Some(func) = functions.get(name) {
+        let func_type = type_info
+            .get_func_type(name)
+            .unwrap_or_else(|| panic!("No resolution for {name:?}"));
+        let expected_inputs = partial_arcsorts
+            .iter()
+            .chain(remaining_inputs)
+            .collect::<Vec<_>>();
+        let inputs_match = func_type.input.len() == expected_inputs.len()
+            && func_type
+                .input
+                .iter()
+                .zip(&expected_inputs)
+                .all(|(actual, expected)| actual.name() == expected.name());
+        if !inputs_match || func_type.output.name() != output.name() {
+            let expected_input_names = expected_inputs
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let actual_input_names = func_type
+                .input
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
+                "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
+                expected_input_names,
+                output.name(),
+                actual_input_names,
+                func_type.output.name(),
+            );
+        }
+
+        let action = egglog_bridge::TableAction::new(backend, func.backend_id);
+        match func_type.subtype {
+            ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
+            ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
+        }
+    } else if let Some(primitives) = type_info.get_prims(name) {
+        let signature: Vec<_> = partial_arcsorts
+            .iter()
+            .chain(remaining_inputs)
+            .chain(once(&output))
+            .cloned()
+            .collect();
+        let candidates: Vec<_> = primitives
+            .iter()
+            .filter(|primitive| primitive.accept(&signature, type_info))
+            .collect();
+        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+            let mut ids = candidates
+                .iter()
+                .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
+            match (ids.next(), ids.next()) {
+                (None, _) => None,
+                (Some(id), None) => Some(id),
+                (Some(_), Some(_)) => panic!(
+                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                ),
+            }
+        });
+        if !context_ids.iter().any(|(_, id)| id.is_some()) {
+            let (output_sort, input_sorts) = signature
+                .split_last()
+                .expect("primitive signature should include an output sort");
+            let input_names = input_sorts
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
+                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
+                 context ids: {context_ids:?}",
+                input_names,
+                output_sort.name(),
+            );
+        }
+        ResolvedFunctionId::Primitive { context_ids }
+    } else {
+        panic!("No resolution for {name:?}");
+    };
+
+    ResolvedFunction {
+        id,
+        partial_arcsorts,
+        name: name.to_owned(),
+        panic_id,
+    }
+}
+
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
@@ -2111,82 +2247,20 @@ impl<'a> BackendRule<'a> {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
-            let id = if let Some(f) = self.type_info.get_func_type(name) {
-                // Distinguish constructor-table lookups (write-on-miss
-                // via `lookup_or_insert`) from custom-function lookups
-                // (pure read via `lookup`). `FunctionContainer::apply`
-                // uses this distinction to allow `unstable-app` over a
-                // custom function in any DB-read-capable context (e.g.
-                // global checks) while refusing constructors outright
-                // anywhere they can't mint — a no-mint constructor
-                // would silently miss instead of producing the eclass
-                // the user asked for.
-                let action = egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f));
-                match f.subtype {
-                    ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
-                    ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
-                }
-            } else {
-                let fn_sort = Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any())
-                    .unwrap_or_else(|_| panic!("expected `unstable-fn` to return a function sort"));
-                let types: Vec<_> = prim
-                    .input()
-                    .iter()
-                    .skip(1)
-                    .cloned()
-                    .chain(fn_sort.inputs().iter().cloned())
-                    .chain(std::iter::once(fn_sort.output()))
-                    .collect();
-                // Bake every exact-signature registration. The
-                // build-site `ctx` here is intentionally unused: the
-                // *application*-time context (carried on `state.ctx`
-                // by the wrapping HOF body) selects which candidate
-                // dispatches at runtime. Filtering by build-site ctx
-                // would trap an `unstable-fn` value in the context it
-                // was constructed in (e.g. a `let`-bound function value
-                // built at top-level `Full` couldn't be applied later
-                // from a `Read` query).
-                let ps: Vec<_> = self
-                    .type_info
-                    .get_prims(name)
-                    .into_iter()
-                    .flatten()
-                    .filter(|p| p.accept(&types, self.type_info))
-                    .collect();
-                let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
-                    let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
-                    match (ids.next(), ids.next()) {
-                        (None, _) => None,
-                        (Some(id), None) => Some(id),
-                        (Some(_), Some(_)) => panic!(
-                            "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                        ),
-                    }
-                });
-                assert!(
-                    context_ids.iter().any(|(_, id)| id.is_some()),
-                    "no callable for {name}"
-                );
-                ResolvedFunctionId::Primitive { context_ids }
-            };
-            let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
-
-            // Pre-register a panic id used by `FunctionContainer::apply`
-            // when the wrapped function is applied in a context that
-            // doesn't admit it. Triggered at runtime via the egglog
-            // panic side channel so misuse surfaces as an `Err` from
-            // `run_rules` rather than a thread unwind.
             let panic_id = self.rb.new_panic(format!(
                 "unstable-fn over `{name}` was applied in a context where its wrapped \
                  function is not valid for this call site, if in a rule, add :naive."
             ));
-
-            qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
-                id,
-                partial_arcsorts,
-                name: name.clone(),
+            let resolved = resolve_function_container_target_with_context(
+                self.rb.egraph(),
+                self.functions,
+                self.type_info,
+                name,
+                prim,
                 panic_id,
-            });
+            );
+
+            qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
 
         (
