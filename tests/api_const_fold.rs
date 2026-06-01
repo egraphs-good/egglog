@@ -3,7 +3,7 @@
 //! folds `(Add (Num a) (Num b))` to `(Num (a+b))`, run to saturation,
 //! and read back the canonical eclass.
 //!
-//! Exercises: `update`, `Write::add_node` (constructor minting),
+//! Exercises: `update`, `Write::add` (constructor minting),
 //! `Read::eclass_of` (constructor lookup without minting),
 //! `Read::contains`, `rust_rule_full` (rule body needs both
 //! `Read::lookup_raw` and `Write::union`), `add_ruleset`,
@@ -39,7 +39,7 @@ fn make_egraph() -> EGraph {
 ///
 /// The rule body uses `Read::lookup_raw` to look up the integer
 /// payload of each `Num` row directly (the row is a single i64
-/// column), then `Write::add_node` + `Write::union` on the WriteState.
+/// column), then `Write::add` + `Write::union` on the WriteState.
 fn install_const_fold_rule(eg: &mut EGraph) -> Result<(), Error> {
     let ruleset = "const_fold";
     add_ruleset(eg, ruleset)?;
@@ -61,7 +61,7 @@ fn install_const_fold_rule(eg: &mut EGraph) -> Result<(), Error> {
             };
             let a = ctx.value_to_base::<i64>(*a);
             let b = ctx.value_to_base::<i64>(*b);
-            let folded = ctx.add_node("Num", a + b).ok()?;
+            let folded = ctx.add("Num", a + b).ok()?;
             ctx.union(*sum, folded).ok()?;
             Some(())
         },
@@ -74,11 +74,11 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     // Build  (Add (Num 2) (Add (Num 3) (Num 4)))  programmatically.
     let mut eg = make_egraph();
     let root = eg.update(|mut fs| -> Result<Value, Error> {
-        let n2 = fs.add_node("Num", 2_i64)?;
-        let n3 = fs.add_node("Num", 3_i64)?;
-        let n4 = fs.add_node("Num", 4_i64)?;
-        let inner = fs.add_node("Add", RawValues(vec![n3, n4]))?;
-        fs.add_node("Add", RawValues(vec![n2, inner]))
+        let n2 = fs.add("Num", 2_i64)?;
+        let n3 = fs.add("Num", 3_i64)?;
+        let n4 = fs.add("Num", 4_i64)?;
+        let inner = fs.add("Add", RawValues(vec![n3, n4]))?;
+        fs.add("Add", RawValues(vec![n2, inner]))
     })?;
 
     install_const_fold_rule(&mut eg)?;
@@ -124,7 +124,7 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
 fn const_fold_is_a_no_op_when_no_pair_of_nums() -> Result<(), Error> {
     // Single number; nothing to fold.
     let mut eg = make_egraph();
-    let root = eg.update(|mut fs| fs.add_node("Num", 7_i64))?;
+    let root = eg.update(|mut fs| fs.add("Num", 7_i64))?;
     install_const_fold_rule(&mut eg)?;
 
     let sizes_before = eg.update(|fs| -> Result<_, Error> {

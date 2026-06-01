@@ -65,7 +65,7 @@ fn test_relation_add_node_and_contains() -> Result<(), Error> {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(relation R (i64 i64))")?;
     eg.update(|mut fs| -> Result<_, Error> {
-        fs.add_node("R", (1_i64, 2_i64))?;
+        fs.add("R", (1_i64, 2_i64))?;
         Ok(())
     })?;
     let (a, b, c) = eg.update(|fs| -> Result<_, Error> {
@@ -86,8 +86,8 @@ fn test_relation_remove() -> Result<(), Error> {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(relation R (i64 i64))")?;
     eg.update(|mut fs| -> Result<_, Error> {
-        fs.add_node("R", (1_i64, 2_i64))?;
-        fs.add_node("R", (3_i64, 4_i64))?;
+        fs.add("R", (1_i64, 2_i64))?;
+        fs.add("R", (3_i64, 4_i64))?;
         Ok(())
     })?;
     let (a, b) = eg.update(|fs| -> Result<_, Error> {
@@ -112,16 +112,16 @@ fn test_relation_remove() -> Result<(), Error> {
 }
 
 #[test]
-fn test_constructor_add_node_returns_id() -> Result<(), Error> {
+fn test_constructor_add_returns_id() -> Result<(), Error> {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
 
     // Zero-arg constructor uses RawValues(vec![]) — `()` would be a Unit column.
-    // Calling add_node again with the same inputs returns the same id.
+    // Calling add again with the same inputs returns the same id.
     let (cons, cons2, nil) = eg.update(|mut fs| -> Result<_, Error> {
-        let nil = fs.add_node("Nil", RawValues(vec![]))?;
-        let cons = fs.add_node("Cons", (1_i64, nil.clone()))?;
-        let cons2 = fs.add_node("Cons", (1_i64, nil.clone()))?;
+        let nil = fs.add("Nil", RawValues(vec![]))?;
+        let cons = fs.add("Cons", (1_i64, nil.clone()))?;
+        let cons2 = fs.add("Cons", (1_i64, nil.clone()))?;
         Ok((cons, cons2, nil))
     })?;
     assert_eq!(cons, cons2);
@@ -142,8 +142,8 @@ fn test_eclass_of_constructor() -> Result<(), Error> {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
     let (cons, nil) = eg.update(|mut fs| -> Result<_, Error> {
-        let nil = fs.add_node("Nil", RawValues(vec![]))?;
-        let cons = fs.add_node("Cons", (1_i64, nil.clone()))?;
+        let nil = fs.add("Nil", RawValues(vec![]))?;
+        let cons = fs.add("Cons", (1_i64, nil.clone()))?;
         Ok((cons, nil))
     })?;
     let (existing, absent) = eg.update(|fs| -> Result<_, Error> {
@@ -188,7 +188,7 @@ fn test_set_constructor_errors() {
 #[test]
 fn test_add_node_function_errors() {
     let mut eg = make_eg_with_function();
-    let result = eg.update(|mut fs| fs.add_node("f", 1_i64));
+    let result = eg.update(|mut fs| fs.add("f", 1_i64));
     let err = result.unwrap_err().to_string();
     assert!(err.contains("`f`") && err.contains("function"), "got: {err}");
 }

@@ -16,9 +16,9 @@
 - **`:naive` rule option.** Individual rules can opt out of seminaive evaluation with `:naive` (e.g. `(rule (...) (...) :ruleset r :naive)`). The query and actions then typecheck under the permissive `Read` / `Full` contexts so primitives that read or write the database — including HOFs that wrap custom-function lookups — can run inside the rule. The rule is matched against the entire database every iteration. Use this when correctness depends on reading e-graph state from inside a query and the seminaive trade-offs (untracked dependencies, missed re-firings) are unacceptable.
 - **Name-indexed read/write API on the `Read` / `Write` traits (#745, #751).** Methods that mirror the egglog DSL one-to-one. Same surface inside and outside a rule:
   - Inside a rule: `add_rust_rule` / `add_rust_rule_full` callbacks already receive a `WriteState` / `FullState` with these methods.
-  - Outside a rule: call `EGraph::with_full_state(|fs| ...)` to drive the same methods. Pending writes flush once, **after** the closure returns — a read-after-write in the same closure is not visible. Split write and read into separate `with_full_state` calls; batching many writes in one closure is the fast path (one flush + rebuild).
+  - Outside a rule: call `EGraph::update(|fs| ...)` to drive the same methods. Pending writes flush once, **after** the closure returns — a read-after-write in the same closure is not visible. Split write and read into separate `update` calls; batching many writes in one closure is the fast path (one flush + rebuild).
   - `Write::set(table, key, value) -> Result<(), Error>` — `(set (f k) v)`.
-  - `Write::add_node(table, inputs) -> Result<Value, Error>` — mint or look up a constructor / relation eclass.
+  - `Write::add(table, inputs) -> Result<Value, Error>` — mint or look up a constructor / relation eclass.
   - `Write::remove(table, key) -> Result<(), Error>` — remove a row from any subtype.
   - `Write::union(x: Value, y: Value) -> Result<(), Error>` — union two eclasses. Caller is responsible for ensuring both belong to the same eq-sort.
   - `Read::lookup::<_, V: BaseValue>(table, key) -> Result<Option<V>, Error>` — read a function's output value.
@@ -26,16 +26,16 @@
   - `Read::contains(table, key) -> Result<bool, Error>` — row presence, any subtype.
   - `Read::lookup_raw(name, &[Value]) -> Result<Option<Value>, Error>` — untyped escape hatch when the caller already has a `&[Value]`. Skips sort checks.
 - **Runtime input checks.** Every trait method validates inputs and reports failures as `Error::ApiError` instead of panicking:
-  - `WrongSubtype` — `set` on a constructor, `add_node` on a function, `lookup` on a constructor, `eclass_of` on a function.
+  - `WrongSubtype` — `set` on a constructor, `add` on a function, `lookup` on a constructor, `eclass_of` on a function.
   - `WrongArity` — wrong number of input columns for the table.
   - `WrongColumnSort` — a column value's sort doesn't match the declared input sort (e.g., passing a `String` where the table wants `i64`).
   - `WrongOutputSort` — `set`'s value column has the wrong sort.
   - `MissingTable` — table name not registered.
-- `Read::table_rows::<R: FromRow>(name) -> Result<Vec<R>, Error>` iterates all rows of a named table — row shape depends on subtype: functions expose `(input..., output)`, constructors and relations expose `(input..., eclass)`. `EGraph::table_rows` stays as a thin top-level convenience wrapper that delegates to `with_full_state`. `EGraph::query::<R: FromRow>(vars, facts) -> Result<Vec<R>, Error>` runs a pattern query (stays on `EGraph` — compiles a fresh query plan).
+- `Read::table_rows::<R: FromRow>(name) -> Result<Vec<R>, Error>` iterates all rows of a named table — row shape depends on subtype: functions expose `(input..., output)`, constructors and relations expose `(input..., eclass)`. `EGraph::table_rows` stays as a thin top-level convenience wrapper that delegates to `update`. `EGraph::query::<R: FromRow>(vars, facts) -> Result<Vec<R>, Error>` runs a pattern query (stays on `EGraph` — compiles a fresh query plan).
 - Row trait surface in `crate::api`: `IntoRow`, `IntoColumn` (with `column_sort()` for runtime tag), `FromRow`, `FromColumn`, plus `RawValues` escape hatch.
 - Primitive trait `apply` signatures (`PurePrim` / `WritePrim` / `ReadPrim` / `FullPrim`) keep `args: &[Value] -> Option<Value>`. Eclass identifiers flow through the API as bare `Value`s — callers track their eclass-vs-base provenance themselves.
-- **Proof-mode compatibility errors.** `rust_rule` / `rust_rule_full` and `EGraph::with_full_state` now return `Error::ProofsIncompatibleApi` upfront when called on an `EGraph::new_with_proofs()` — the rule body is a Rust closure with no proof-encoding validator, and `with_full_state` writes bypass the proof pipeline. `with_full_state`'s signature tightened from `FnOnce(FullState) -> R) -> R` to `FnOnce(FullState) -> Result<R, Error>) -> Result<R, Error>` so the proofs-check error and the closure's own error collapse into one `?`.
-- Constant-folding case study in `tests/api_const_fold.rs` — builds an arithmetic expression with `add_node`, installs a `rust_rule` that folds `(Add (Num a) (Num b))` to `(Num (a+b))`, runs to saturation, and verifies the root collapses by both `eclass_of` and `table_rows` walks.
+- **Proof-mode compatibility errors.** `rust_rule` / `rust_rule_full` and `EGraph::update` now return `Error::ProofsIncompatibleApi` upfront when called on an `EGraph::new_with_proofs()` — the rule body is a Rust closure with no proof-encoding validator, and `update` writes bypass the proof pipeline. `update`'s signature tightened from `FnOnce(FullState) -> R) -> R` to `FnOnce(FullState) -> Result<R, Error>) -> Result<R, Error>` so the proofs-check error and the closure's own error collapse into one `?`.
+- Constant-folding case study in `tests/api_const_fold.rs` — builds an arithmetic expression with `add`, installs a `rust_rule` that folds `(Add (Num a) (Num b))` to `(Num (a+b))`, runs to saturation, and verifies the root collapses by both `eclass_of` and `table_rows` walks.
 
 ## [2.0.0] - 2026-02-11
 

@@ -16,7 +16,7 @@
 //! [`crate::Write`]. From there:
 //!
 //! - [`crate::Write::set`] writes a function-table cell `(set (f k) v)`.
-//! - [`crate::Write::add_node`] mints / looks up a constructor eclass.
+//! - [`crate::Write::add`] mints / looks up a constructor eclass.
 //! - [`crate::Write::remove`] removes a row from any subtype.
 //! - [`crate::Read::lookup`] reads a function's output value.
 //! - [`crate::Read::eclass_of`] reads a constructor's eclass without

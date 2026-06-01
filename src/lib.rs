@@ -2078,7 +2078,7 @@ impl EGraph {
     /// Run `f` with a [`FullState`] handle on this EGraph's database
     /// — the same handle a `:naive` rule's `add_rust_rule_full`
     /// callback receives. Use to drive name-indexed reads / writes
-    /// (`fs.set`, `fs.add_node`, `fs.lookup`, `fs.eclass_of`,
+    /// (`fs.set`, `fs.add`, `fs.lookup`, `fs.eclass_of`,
     /// `fs.contains`, `fs.remove`, …) from outside a rule.
     ///
     /// # Flush semantics
@@ -2086,7 +2086,7 @@ impl EGraph {
     /// Pending writes flush once, **after** `f` returns. Two
     /// consequences:
     ///
-    /// 1. A `set` / `add_node` / `remove` inside the closure is *not*
+    /// 1. A `set` / `add` / `remove` inside the closure is *not*
     ///    visible to a subsequent `lookup` / `contains` / `eclass_of`
     ///    in the **same** closure. Split write-then-read into separate
     ///    `update` calls.

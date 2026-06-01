@@ -17,7 +17,7 @@
 //!   sugar. Implemented for all four wrappers.
 //! - [`Read`] — name-indexed table lookup (`state.lookup("name", &[…])`).
 //!   Implemented for [`ReadState`] and [`FullState`].
-//! - [`Write`] — name-indexed writes (`set`/`add_node`/`remove`/
+//! - [`Write`] — name-indexed writes (`set`/`add`/`remove`/
 //!   `subsume`/`union`/`panic`). Implemented for [`WriteState`] and
 //!   [`FullState`].
 //!
@@ -321,7 +321,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// egglog `(set (f k) v)` action.
     ///
     /// **Only valid for `function` tables.** Constructors error;
-    /// use [`Write::add_node`] for those.
+    /// use [`Write::add`] for those.
     fn set<K: IntoRow, V: IntoColumn>(
         &mut self,
         name: &str,
@@ -347,7 +347,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Write::set`] for those.
-    fn add_node<R: IntoRow>(
+    fn add<R: IntoRow>(
         &mut self,
         name: &str,
         inputs: R,
