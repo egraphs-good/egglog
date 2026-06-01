@@ -400,8 +400,9 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         // TODO: math-microbenchmark is too slow right now (the
         //   `_proofs_duckdb` variant alone takes ~14 min), and its
         //   proof_testing variant can OOM.
-        // TODO: eggcc-2mm uses the `bool-<` primitive, which the
-        //   duckdb backend does not yet implement.
+        // TODO: eggcc-2mm declares a custom container sort
+        //   `(sort ExprSetPrim (Set Expr))`, which the proof term
+        //   encoding cannot represent.
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",

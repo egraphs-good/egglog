@@ -1300,6 +1300,14 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
         "<<" | ">>" => binop(op),
         "<" | "<=" | ">" | ">=" => binop(op),
         "=" => binop("="),
+        // i64/bigint comparisons that return a native bool (see
+        // `src/sort/i64.rs` and `src/sort/bigint.rs`). They map to the
+        // same SQL comparison operators as the bare forms above.
+        "bool-<" => binop("<"),
+        "bool-<=" => binop("<="),
+        "bool->" => binop(">"),
+        "bool->=" => binop(">="),
+        "bool-=" => binop("="),
         "!=" | "<>" | "bool-!=" => binop("<>"),
         "and" => binop("AND"),
         "or" => variadic_join("OR", "FALSE"),
