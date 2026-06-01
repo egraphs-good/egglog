@@ -291,7 +291,7 @@ pub struct EGraph {
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
-    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
+    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error>;
 }
 
 /// A function in the e-graph.
@@ -1103,6 +1103,30 @@ impl EGraph {
         Ok(())
     }
 
+    /// Remove every row from the named function in bulk.
+    ///
+    /// This is intended as a faster alternative to issuing a `(delete …)` for
+    /// every row of the function: it drops the backing row storage in
+    /// O(1)-in-row-count time, rather than O(n) per-row teardown. Any pending
+    /// staged inserts/removes for this function are dropped as part of the
+    /// clear, so callers that have staged updates they want to land first
+    /// should arrange for those to be flushed beforehand.
+    ///
+    /// Cached indexes and subsets that reference this table are invalidated by
+    /// a generation bump and are lazily rebuilt against the now-empty table on
+    /// next access.
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn clear_function(&mut self, func_name: &str) -> Result<(), Error> {
+        let backend_id = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?
+            .backend_id;
+        self.backend.clear_table(backend_id);
+        Ok(())
+    }
+
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
@@ -1259,7 +1283,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Vec<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort {
@@ -1303,14 +1327,14 @@ impl EGraph {
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
-                return Ok(Some(CommandOutput::RunSchedule(report)));
+                return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
                 None => {
                     log::info!("Printed overall statistics");
-                    return Ok(Some(CommandOutput::OverallStatistics(
+                    return Ok(vec![CommandOutput::OverallStatistics(
                         self.overall_run_report.clone(),
-                    )));
+                    )]);
                 }
                 Some(path) => {
                     let mut file = std::fs::File::create(&path)
@@ -1353,7 +1377,7 @@ impl EGraph {
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                         }
-                        Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
+                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                     } else {
                         Err(Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
@@ -1373,7 +1397,7 @@ impl EGraph {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(Some(CommandOutput::ExtractVariants(termdag, terms)))
+                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1399,13 +1423,16 @@ impl EGraph {
                             .map_err(|e| Error::IoError(file.into(), e, span.clone()))
                     })
                     .transpose()?;
-                return self.print_function(&f, n, file, mode).map_err(|e| match e {
-                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
-                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
-                    }
-                    // This case is currently impossible
-                    _ => e,
-                });
+                return self
+                    .print_function(&f, n, file, mode)
+                    .map_err(|e| match e {
+                        Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                            Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                        }
+                        // This case is currently impossible
+                        _ => e,
+                    })
+                    .map(|opt| opt.into_iter().collect());
             }
             ResolvedNCommand::PrintSize(span, f) => {
                 let res = self.print_size(f.as_deref()).map_err(|e| match e {
@@ -1415,7 +1442,7 @@ impl EGraph {
                     // This case is currently impossible
                     _ => e,
                 })?;
-                return Ok(Some(res));
+                return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
@@ -1465,13 +1492,16 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
-                let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
-                    panic!("Unrecognized user-defined command: {name}");
-                });
-                let res = command.update(self, &exprs);
-                self.commands.insert(name, command);
-                return res;
+                let command = self
+                    .commands
+                    .get(&name)
+                    .ok_or_else(|| {
+                        NotFoundError(format!("Unrecognized user-defined command: {name}"))
+                    })?
+                    .clone();
+                return command.update(self, &exprs);
             }
+
             ResolvedNCommand::ProveExists(span, resolved_call) => {
                 let mut instrument = ProofInstrumentor { egraph: self };
                 let (proof_store, proof_id) =
@@ -1481,14 +1511,14 @@ impl EGraph {
                             span: span.clone(),
                             error,
                         })?;
-                return Ok(Some(CommandOutput::ProveExists {
+                return Ok(vec![CommandOutput::ProveExists {
                     proof_store,
                     proof_id,
-                }));
+                }]);
             }
         };
 
-        Ok(None)
+        Ok(vec![])
     }
 
     fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
@@ -1749,9 +1779,7 @@ impl EGraph {
                             )
                         {
                             let result = self.run_command(processed)?;
-                            if let Some(output) = result {
-                                outputs.push(output);
-                            }
+                            outputs.extend(result);
                         }
                     }
                 }
@@ -1919,6 +1947,51 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// Returns `true` if a user-defined command with the given name is
+    /// registered in this e-graph.
+    pub fn has_command(&self, name: &str) -> bool {
+        self.commands.contains_key(name)
+    }
+
+    /// Invoke a registered user-defined command by name, passing the given
+    /// unresolved expression arguments.
+    ///
+    /// This is equivalent to writing `(name args...)` at the top level, but
+    /// callable directly from Rust.  Returns an error if no command with the given
+    /// name is registered.
+    pub fn run_user_defined_command(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Vec<CommandOutput>, Error> {
+        self.run_command(ResolvedNCommand::UserDefined(
+            span!(),
+            name.to_string(),
+            args.to_vec(),
+        ))
+    }
+
+    /// Run a closure with full read-write access to the database, then flush
+    /// pending writes.
+    ///
+    /// This is the top-level equivalent of [`FullPrim::apply`], and the closure receives a
+    ///  [`FullState`].
+    ///
+    /// Pending writes staged inside the closure are flushed (and the
+    /// union-find rebuilt if necessary) before this method returns.
+    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
+        // Clone the Arc so the guard is not lifetime-tied to &self.backend,
+        // allowing flush_updates(&mut self.backend) after the closure.
+        let registry_arc = self.backend.action_registry().clone();
+        let registry_guard = registry_arc.read().unwrap();
+        let result = self
+            .backend
+            .with_execution_state(|es| f(FullState::wrap(es, &registry_guard, Context::Full)));
+        drop(registry_guard);
+        self.backend.flush_updates();
+        result
     }
 
     pub fn set_report_level(&mut self, level: ReportLevel) {
