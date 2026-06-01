@@ -2104,7 +2104,17 @@ impl EGraph {
     /// assert_eq!(got, Some(42));
     /// # Ok::<(), egglog::Error>(())
     /// ```
-    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
+    pub fn with_full_state<R>(
+        &mut self,
+        f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        if self.are_proofs_enabled() {
+            return Err(Error::ProofsIncompatibleApi {
+                api: "EGraph::with_full_state",
+                reason: "writes inside the closure bypass the proof-encoding pipeline,\n\
+                         so any rule derivations resting on them would be unverifiable.",
+            });
+        }
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
         let result = self
@@ -2457,6 +2467,14 @@ pub enum Error {
     UnsupportedProofCommand {
         command: String,
         reason: ProofEncodingUnsupportedReason,
+    },
+    #[error(
+        "`{api}` is incompatible with proof mode: {reason} \
+         Disable proofs or move the operation into a (parse-and-run) egglog program."
+    )]
+    ProofsIncompatibleApi {
+        api: &'static str,
+        reason: &'static str,
     },
 }
 

@@ -518,6 +518,13 @@ pub fn rust_rule(
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
+    if egraph.are_proofs_enabled() {
+        return Err(Error::ProofsIncompatibleApi {
+            api: "rust_rule",
+            reason: "the rule's RHS is a Rust closure with no proof-encoding validator,\n\
+                     so the proof checker cannot verify what it does.",
+        });
+    }
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     egraph.add_write_primitive(
         RustRuleRhs {
@@ -619,6 +626,13 @@ pub fn rust_rule_full(
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
+    if egraph.are_proofs_enabled() {
+        return Err(Error::ProofsIncompatibleApi {
+            api: "rust_rule_full",
+            reason: "the rule's RHS is a Rust closure with no proof-encoding validator,\n\
+                     so the proof checker cannot verify what it does.",
+        });
+    }
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_full_prim");
     egraph.add_full_primitive(
         RustRuleFullRhs {
