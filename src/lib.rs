@@ -2132,17 +2132,8 @@ impl EGraph {
     ///
     /// Use `Vec<Value>` to inspect arbitrary shapes, or
     /// [`EGraph::query`] to bind only the columns you name.
-    pub fn table_rows<R: FromRow>(&self, table: &str) -> Result<Vec<R>, Error> {
-        let func = self.functions.get(table).ok_or_else(|| {
-            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
-        })?;
-        let backend_id = func.backend_id;
-        let bv = self.backend.base_values();
-        let mut out = Vec::new();
-        self.backend.for_each(backend_id, |row| {
-            out.push(R::from_values(row.vals, bv));
-        });
-        Ok(out)
+    pub fn table_rows<R: FromRow>(&mut self, table: &str) -> Result<Vec<R>, Error> {
+        self.with_full_state(|fs| fs.table_rows::<R>(table))
     }
 
     /// Run a pattern query: bind the variables in `vars` against

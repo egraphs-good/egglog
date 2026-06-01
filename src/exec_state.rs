@@ -283,6 +283,30 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     fn table_sizes(&self) -> Vec<(&str, usize)> {
         self.registry().table_sizes(self.es())
     }
+
+    /// Iterate all rows of a named table, returning each one as the
+    /// caller-chosen `R: FromRow`.
+    ///
+    /// Row shape depends on subtype:
+    /// - **Function tables** (`(function f (i64) i64 :no-merge)`) —
+    ///   rows are `(input..., output)`; `table_rows::<(i64, i64)>("f")`
+    ///   yields `(key, value)`.
+    /// - **Constructor / relation tables** — rows are
+    ///   `(input..., eclass)` where `eclass` is the minted eclass
+    ///   [`Value`]. Relations desugar to constructors with a synthetic
+    ///   non-unionable eq-sort output column.
+    ///
+    /// Pass `Vec<Value>` to inspect arbitrary shapes, or use
+    /// [`crate::EGraph::query`] to bind only the columns you name.
+    fn table_rows<R: crate::api::FromRow>(&self, name: &str) -> Result<Vec<R>, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        let bv = self.base_values();
+        let mut out = Vec::new();
+        action.for_each(self.es(), |row| {
+            out.push(R::from_values(row.vals, bv));
+        });
+        Ok(out)
+    }
 }
 
 /// Action-side write methods — name-indexed inserts/removes/subsumes

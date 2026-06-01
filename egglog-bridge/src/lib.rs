@@ -1356,6 +1356,51 @@ impl TableAction {
         state.get_table(self.table).len()
     }
 
+    /// Iterate this table's rows, calling `f` on each function row.
+    /// Mirrors [`EGraph::for_each`] but reaches the table through an
+    /// [`ExecutionState`] — so it's callable from primitive bodies via
+    /// the typed [`Read`](crate::Read)-style API.
+    pub fn for_each(&self, state: &ExecutionState, mut f: impl FnMut(FunctionRow<'_>)) {
+        self.for_each_while(state, |row| {
+            f(row);
+            true
+        });
+    }
+
+    /// Like [`TableAction::for_each`], but stops as soon as `f`
+    /// returns `false`.
+    pub fn for_each_while(
+        &self,
+        state: &ExecutionState,
+        mut f: impl FnMut(FunctionRow<'_>) -> bool,
+    ) {
+        let schema_math = self.table_math;
+        let imp = state.get_table(self.table);
+        let all = imp.all();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new(imp.spec().arity());
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    let subsumed =
+                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                    if !f(FunctionRow {
+                        vals: &row[0..schema_math.func_cols],
+                        subsumed,
+                    }) {
+                        return;
+                    }
+                }
+                $buf.clear();
+            };
+        }
+        while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 32, &mut buf) {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
+    }
+
     /// Look up a row, inserting the configured default value if absent.
     /// For constructor tables this mints a fresh eclass ID; for custom
     /// functions (no default) this behaves identically to
