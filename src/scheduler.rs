@@ -317,6 +317,18 @@ pub(crate) struct SchedulerRecord {
 /// (rule (worklist vars false) query (validated vars false)),
 /// (rule (validated vars false) (action ...)), and
 /// (rule (worklist vars false) (delete ...)).
+///
+/// Scheduler keys are the variables used by the rule actions. Body-only
+/// variables are only witnesses that the key is currently valid. For example,
+/// `(rule ((A x y)) ((Hit x)))` can have `A(1, 10)` and `A(1, 20)`, but the
+/// scheduler key is only `x = 1`. Validation therefore writes one keyed
+/// `validated(x)` row before the action rule runs, instead of letting every
+/// body-only `y` witness run the same `Hit(1)` action.
+///
+/// Validation also protects held matches. If a scheduler delays a key and a
+/// later rebuild, subsumption, or deletion makes the original body false, the
+/// validation rule will not produce a `validated` row. The cleanup rule still
+/// removes the stale worklist key so the scheduler does not keep carrying it.
 #[derive(Clone)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
@@ -385,7 +397,8 @@ impl SchedulerRuleInfo {
             can_subsume: false,
         });
 
-        // Step 1: build the query rule
+        // Step 1: build the query rule. Subsumed rows should not be offered as
+        // fresh scheduler matches; they are no longer valid body witnesses.
         let mut qrule_builder = BackendRule::new(
             egraph.backend.new_rule(name, true),
             &egraph.functions,
@@ -408,6 +421,7 @@ impl SchedulerRuleInfo {
         // Step 2: build the validation rule. This rechecks that the original
         // body still has some witness for the chosen scheduler key, but writes
         // only one keyed row even if body-only variables have multiple matches.
+        // For `A(1, 10)` and `A(1, 20)`, a chosen `x = 1` key validates once.
         let mut validation_rule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
@@ -427,7 +441,8 @@ impl SchedulerRuleInfo {
         validation_rule_builder.rb.set(validated, &entries);
         let validation_rule = validation_rule_builder.build();
 
-        // Step 3: build the action rule
+        // Step 3: build the action rule. It reads only validated scheduler keys,
+        // so user actions run once per chosen key and never for stale keys.
         let mut arule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
@@ -612,6 +627,12 @@ mod test {
         assert_eq!(iter, 12);
     }
 
+    /// Subsumed rows should not be offered to the scheduler as fresh matches.
+    ///
+    /// The analysis rules reduce the original affine expression before the
+    /// scheduled ruleset runs. The scheduled rule body would have matched the
+    /// pre-subsumption shape, but the scheduler should see zero valid matches
+    /// and should not report progress from internal scheduler bookkeeping.
     #[test]
     fn test_scheduler_does_not_match_subsumed_rows() {
         let mut egraph = EGraph::default();
@@ -647,6 +668,14 @@ mod test {
         );
     }
 
+    /// Rechecking a chosen scheduler key should not duplicate user actions for
+    /// multiple body-only witnesses.
+    ///
+    /// In `(rule ((A x y)) ((Hit x)))`, `y` proves that the body matches but
+    /// does not appear in the action key. With `A(1, 10)` and `A(1, 20)`, a
+    /// scheduler can choose one `x = 1` key. Validation may rediscover both
+    /// `y` witnesses, but they must collapse into one validated key so `Hit(1)`
+    /// runs once and the report counts one action match.
     #[test]
     fn test_scheduler_recheck_does_not_duplicate_body_only_witnesses() {
         let mut egraph = EGraph::default();
@@ -674,6 +703,14 @@ mod test {
         assert_eq!(report.iterations.len(), 4);
     }
 
+    /// Held scheduler matches that become stale should be cleaned without
+    /// running user actions.
+    ///
+    /// The scheduler first holds the match instead of choosing it. After the
+    /// analysis rules subsume the matched expression, the held key is still in
+    /// scheduler state but the original body is no longer true. The validation
+    /// rule rejects that key, and the cleanup rule removes it so no stale
+    /// worklist tuple remains.
     #[test]
     fn test_scheduler_drops_held_matches_that_become_subsumed() {
         let mut egraph = EGraph::default();
