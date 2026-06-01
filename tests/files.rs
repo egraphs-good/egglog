@@ -397,11 +397,14 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
-        // TODO: math-microbenchmark is too slow right now
+        // TODO: math-microbenchmark is too slow right now (the
+        //   `_proofs_duckdb` variant alone takes ~14 min), and its
+        //   proof_testing variant can OOM.
+        // TODO: eggcc-2mm uses the `bool-<` primitive, which the
+        //   duckdb backend does not yet implement.
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",
-            "rectangle.egg",
             "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
@@ -441,7 +444,6 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         // output so both modes still match.
         let duckdb_static_skip = [
             "math-microbenchmark.egg",
-            "rectangle.egg",
             "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
