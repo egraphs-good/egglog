@@ -291,6 +291,35 @@ fn dedupe_body_atoms(rule: &Rule, functions: &HashMap<String, FunctionInfo>) -> 
         }
     }
 
+    // Pre-scan: variable pairs that a disequality filter constrains to
+    // be unequal (`!=` / `<>` / `bool-!=`, possibly nested inside
+    // `and`/`or`/`guard`). Two function atoms over the same table whose
+    // outputs are such a pair are a deliberate self-join — the
+    // congruence rule (`(View c0 new) (View c0 old) (!= old new)`) and
+    // the `:merge` reconciliation rule both rely on it. Deduping them
+    // would rename `old → new`, collapsing `(!= old new)` into the
+    // always-false `(!= new new)`, so the rule could never fire (this
+    // silently disabled congruence on duckdb). Never dedup such a pair.
+    fn collect_disequal(t: &Term, out: &mut std::collections::HashSet<(String, String)>) {
+        if let Term::Prim(op, args) = t {
+            if matches!(op.as_str(), "!=" | "<>" | "bool-!=") && args.len() == 2 {
+                if let (Term::Var(a), Term::Var(b)) = (&args[0], &args[1]) {
+                    out.insert((a.clone(), b.clone()));
+                    out.insert((b.clone(), a.clone()));
+                }
+            }
+            for a in args {
+                collect_disequal(a, out);
+            }
+        }
+    }
+    let mut disequal: std::collections::HashSet<(String, String)> = Default::default();
+    for atom in &rule.body {
+        if let Atom::Filter(t) = atom {
+            collect_disequal(t, &mut disequal);
+        }
+    }
+
     // Key by (name, canonicalized inputs). Inputs are all args
     // except the trailing output for functions with output.
     type Key = (String, Vec<Term>);
@@ -370,14 +399,24 @@ fn dedupe_body_atoms(rule: &Rule, functions: &HashMap<String, FunctionInfo>) -> 
                     continue;
                 }
                 let key = (name.clone(), inputs);
-                if let Some(prev_out) = seen.get(&key) {
+                if let Some(prev_out) = seen.get(&key).cloned() {
                     // Duplicate. If both have an output var, rename
                     // the current atom's output → the previous one.
-                    if let (Some(prev), Some(cur)) = (prev_out, &output)
-                        && let (Term::Var(prev_v), Term::Var(cur_v)) = (prev, cur)
+                    if let (Some(Term::Var(prev_v)), Some(Term::Var(cur_v))) =
+                        (&prev_out, &output)
                     {
                         // Only meaningful when cur_v isn't already the same.
                         if prev_v != cur_v {
+                            // A disequality between the two outputs marks a
+                            // deliberate self-join (congruence / merge); keep
+                            // both atoms instead of collapsing them.
+                            if disequal.contains(&(prev_v.clone(), cur_v.clone())) {
+                                new_body.push(Atom::Func {
+                                    name: name.clone(),
+                                    args: canon_args,
+                                });
+                                continue;
+                            }
                             rename.insert(cur_v.clone(), prev_v.clone());
                         }
                     }
