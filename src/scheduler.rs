@@ -8,7 +8,13 @@ use egglog_bridge::{
 use egglog_reports::RunReport;
 use numeric_id::define_id;
 
-use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
+use crate::{
+    ast::ResolvedVar,
+    core::GenericAtomTerm,
+    core::ResolvedCoreRule,
+    util::{IndexMap, IndexSet},
+    *,
+};
 
 /// A scheduler decides which matches to be applied for a rule.
 ///
@@ -111,35 +117,43 @@ impl Matches {
         let unit = state.base_values().get(());
 
         if self.all_chosen {
+            let mut inserted = IndexSet::default();
             for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                if inserted.insert(row.to_vec()) {
+                    table_action.insert(state, row.iter().copied().chain(std::iter::once(unit)));
+                }
             }
             vec![]
         } else {
-            for idx in self.chosen.iter() {
-                let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
-            }
-
-            // swap remove the chosen matches
             self.chosen.sort_unstable();
             self.chosen.dedup();
-            let mut p = self.match_size();
-            for c in self.chosen.into_iter().rev() {
-                // It's important to decrement `p` first, because otherwise it might underflow when
-                // matches are exhausted.
-                p -= 1;
-                if c != p {
-                    let idx_c = c * tuple_len;
-                    let idx_p = p * tuple_len;
-                    for i in 0..tuple_len {
-                        self.matches.swap(idx_c + i, idx_p + i);
-                    }
+
+            let mut chosen_keys = IndexSet::default();
+            for idx in self.chosen.iter().copied() {
+                let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
+                if chosen_keys.insert(row.to_vec()) {
+                    table_action.insert(state, row.iter().copied().chain(std::iter::once(unit)));
                 }
             }
-            self.matches.truncate(p * tuple_len);
 
-            self.matches
+            // A chosen key consumes all indistinguishable body-only witnesses for
+            // that key; otherwise a duplicate witness can be revalidated later.
+            let mut residual = Vec::new();
+            let mut residual_keys = IndexSet::default();
+            for (idx, row) in self.matches.chunks(tuple_len).enumerate() {
+                if self.chosen.binary_search(&idx).is_ok() {
+                    continue;
+                }
+                let key = row.to_vec();
+                if chosen_keys.contains(&key) {
+                    continue;
+                }
+                if residual_keys.insert(key) {
+                    residual.extend_from_slice(row);
+                }
+            }
+
+            residual
         }
     }
 }
@@ -704,6 +718,50 @@ mod test {
         assert_eq!(egraph.get_size("Hit"), 1);
         assert_eq!(report.num_matches_per_rule["hit"], 1);
         assert_eq!(report.iterations.len(), 4);
+    }
+
+    /// Duplicate body-only witnesses should not leave duplicate scheduler keys
+    /// in the residual backlog.
+    ///
+    /// The first step chooses `x = 1` from two indistinguishable body witnesses.
+    /// The duplicate residual key must be discarded; otherwise a second scheduler
+    /// step would validate the same key again and count another `Hit(1)` action
+    /// attempt even though the user-visible row already exists.
+    #[test]
+    fn test_scheduler_deduplicates_residual_body_only_witnesses() {
+        let mut egraph = EGraph::default();
+        let match_sizes = Arc::new(Mutex::new(Vec::new()));
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseFirstScheduler {
+            match_sizes: match_sizes.clone(),
+        }));
+        let input = r#"
+        (ruleset test)
+        (relation A (i64 i64))
+        (relation Hit (i64))
+        (A 1 10)
+        (A 1 20)
+        (rule ((A x y)) ((Hit x)) :ruleset test :name "hit")
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let first = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        let second = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(*match_sizes.lock().unwrap(), vec![2, 0]);
+        assert_eq!(egraph.get_size("Hit"), 1);
+        assert_eq!(first.num_matches_per_rule["hit"], 1);
+        assert_eq!(
+            second
+                .num_matches_per_rule
+                .get("hit")
+                .copied()
+                .unwrap_or_default(),
+            0
+        );
     }
 
     /// Held scheduler matches that become stale should be cleaned without
