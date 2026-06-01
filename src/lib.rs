@@ -20,7 +20,7 @@
 //! The typical workflow is: declare your program (rules, datatypes,
 //! functions) once — usually via a static egglog block passed to
 //! [`EGraph::parse_and_run_program`] — then drive the e-graph from
-//! Rust via [`EGraph::with_full_state`] and stepping rulesets with
+//! Rust via [`EGraph::update`] and stepping rulesets with
 //! [`prelude::run_ruleset`].
 pub mod api;
 pub mod ast;
@@ -1992,7 +1992,7 @@ impl EGraph {
     /// `panics` if the function does not exist.
     ///
     /// Internal: external callers should use
-    /// [`EGraph::with_full_state`] + [`crate::Read::lookup`] (sort-checked) or
+    /// [`EGraph::update`] + [`crate::Read::lookup`] (sort-checked) or
     /// [`crate::Read::lookup_raw`] (untyped).
     pub(crate) fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
         let func = self
@@ -2070,7 +2070,7 @@ impl EGraph {
     ///
     /// Internal: used by container sorts (`vec`, `multiset`) to build
     /// their own union machinery. User code should call
-    /// [`crate::Write::union`] via [`EGraph::with_full_state`] instead.
+    /// [`crate::Write::union`] via [`EGraph::update`] instead.
     pub(crate) fn new_union_action(&self) -> egglog_bridge::UnionAction {
         UnionAction::new(&self.backend)
     }
@@ -2089,7 +2089,7 @@ impl EGraph {
     /// 1. A `set` / `add_node` / `remove` inside the closure is *not*
     ///    visible to a subsequent `lookup` / `contains` / `eclass_of`
     ///    in the **same** closure. Split write-then-read into separate
-    ///    `with_full_state` calls.
+    ///    `update` calls.
     /// 2. Conversely, batching multiple writes in one closure is the
     ///    fast path — only one flush + rebuild happens, regardless of
     ///    how many writes occurred.
@@ -2099,18 +2099,18 @@ impl EGraph {
     /// use egglog::prelude::*;
     /// let mut eg = EGraph::default();
     /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
-    /// eg.with_full_state(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
-    /// let got: Option<i64> = eg.with_full_state(|fs| fs.lookup::<_, i64>("f", 1_i64))?;
+    /// eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
+    /// let got: Option<i64> = eg.update(|fs| fs.lookup::<_, i64>("f", 1_i64))?;
     /// assert_eq!(got, Some(42));
     /// # Ok::<(), egglog::Error>(())
     /// ```
-    pub fn with_full_state<R>(
+    pub fn update<R>(
         &mut self,
         f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
     ) -> Result<R, Error> {
         if self.are_proofs_enabled() {
             return Err(Error::ProofsIncompatibleApi {
-                api: "EGraph::with_full_state",
+                api: "EGraph::update",
                 reason: "writes inside the closure bypass the proof-encoding pipeline,\n\
                          so any rule derivations resting on them would be unverifiable.",
             });
@@ -2143,7 +2143,7 @@ impl EGraph {
     /// Use `Vec<Value>` to inspect arbitrary shapes, or
     /// [`EGraph::query`] to bind only the columns you name.
     pub fn table_rows<R: FromRow>(&mut self, table: &str) -> Result<Vec<R>, Error> {
-        self.with_full_state(|fs| fs.table_rows::<R>(table))
+        self.update(|fs| fs.table_rows::<R>(table))
     }
 
     /// Run a pattern query: bind the variables in `vars` against

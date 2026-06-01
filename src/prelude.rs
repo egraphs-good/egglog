@@ -11,7 +11,7 @@
 //!
 //! ## Adding and reading facts
 //!
-//! [`crate::EGraph::with_full_state`] hands the closure a
+//! [`crate::EGraph::update`] hands the closure a
 //! [`crate::FullState`] that implements [`crate::Read`] and
 //! [`crate::Write`]. From there:
 //!

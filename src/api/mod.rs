@@ -22,7 +22,7 @@ use thiserror::Error;
 
 // ---------------------------------------------------------------------
 // ApiError — runtime check failures from the `Read` / `Write` trait
-// methods and from [`crate::EGraph::with_full_state`] callers.
+// methods and from [`crate::EGraph::update`] callers.
 // ---------------------------------------------------------------------
 
 /// Runtime errors from the Rust API surface.

@@ -3,7 +3,7 @@
 //! folds `(Add (Num a) (Num b))` to `(Num (a+b))`, run to saturation,
 //! and read back the canonical eclass.
 //!
-//! Exercises: `with_full_state`, `Write::add_node` (constructor minting),
+//! Exercises: `update`, `Write::add_node` (constructor minting),
 //! `Read::eclass_of` (constructor lookup without minting),
 //! `Read::contains`, `rust_rule_full` (rule body needs both
 //! `Read::lookup_raw` and `Write::union`), `add_ruleset`,
@@ -73,7 +73,7 @@ fn install_const_fold_rule(eg: &mut EGraph) -> Result<(), Error> {
 fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     // Build  (Add (Num 2) (Add (Num 3) (Num 4)))  programmatically.
     let mut eg = make_egraph();
-    let root = eg.with_full_state(|mut fs| -> Result<Value, Error> {
+    let root = eg.update(|mut fs| -> Result<Value, Error> {
         let n2 = fs.add_node("Num", 2_i64)?;
         let n3 = fs.add_node("Num", 3_i64)?;
         let n4 = fs.add_node("Num", 4_i64)?;
@@ -94,7 +94,7 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     //   (b) enumerate the constructor rows whose output equals
     //       `root` — one of them should be a `Num` row carrying `9`.
 
-    let nine = eg.with_full_state(|fs| fs.eclass_of("Num", 9_i64))?;
+    let nine = eg.update(|fs| fs.eclass_of("Num", 9_i64))?;
     assert_eq!(nine, Some(root), "(Num 9) should be unioned with root");
 
     // (b) — walk every constructor table looking for rows whose
@@ -124,10 +124,10 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
 fn const_fold_is_a_no_op_when_no_pair_of_nums() -> Result<(), Error> {
     // Single number; nothing to fold.
     let mut eg = make_egraph();
-    let root = eg.with_full_state(|mut fs| fs.add_node("Num", 7_i64))?;
+    let root = eg.update(|mut fs| fs.add_node("Num", 7_i64))?;
     install_const_fold_rule(&mut eg)?;
 
-    let sizes_before = eg.with_full_state(|fs| -> Result<_, Error> {
+    let sizes_before = eg.update(|fs| -> Result<_, Error> {
         Ok(fs.table_sizes()
             .into_iter()
             .map(|(n, s)| (n.to_owned(), s))
@@ -138,7 +138,7 @@ fn const_fold_is_a_no_op_when_no_pair_of_nums() -> Result<(), Error> {
         run_ruleset(&mut eg, "const_fold")?;
     }
 
-    let sizes_after = eg.with_full_state(|fs| -> Result<_, Error> {
+    let sizes_after = eg.update(|fs| -> Result<_, Error> {
         Ok(fs.table_sizes()
             .into_iter()
             .map(|(n, s)| (n.to_owned(), s))
@@ -148,7 +148,7 @@ fn const_fold_is_a_no_op_when_no_pair_of_nums() -> Result<(), Error> {
     assert_eq!(sizes_before, sizes_after, "no rules should have fired");
 
     // And `(Num 7)` is still the canonical eclass.
-    let seven = eg.with_full_state(|fs| fs.eclass_of("Num", 7_i64))?;
+    let seven = eg.update(|fs| fs.eclass_of("Num", 7_i64))?;
     assert_eq!(seven, Some(root));
     Ok(())
 }

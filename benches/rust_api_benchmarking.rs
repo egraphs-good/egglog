@@ -210,10 +210,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     // `rust_rule_full` so the closure receives a `FullState` with read
     // capability; the rule auto-demotes to naive evaluation as a
     // result, which is the cost we want to measure for action-side
-    // reads. (Drops the no-op `union(out, y)` from earlier revisions —
-    // union now requires same-sort `Id`s, and the old call was
-    // semantically dubious anyway: both `out` and `y` were i64 base
-    // values, not eq-sort eclasses.)
+    // reads.
     rust_rule_full(
         &mut egraph,
         "rust_rule_tableaction_hot_path_read",
