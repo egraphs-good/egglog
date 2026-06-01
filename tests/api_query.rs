@@ -1,4 +1,4 @@
-//! Tests for the typed `EGraph::table_rows` and `EGraph::query` API.
+//! Tests for the `EGraph::table_rows` and `EGraph::query` API.
 //! See `src/lib.rs` for `FromRow` and these methods.
 
 use egglog::prelude::*;

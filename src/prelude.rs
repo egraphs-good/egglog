@@ -29,9 +29,11 @@
 //!
 //! ## Iterating and querying
 //!
-//! - [`crate::EGraph::table_rows`] iterates a named table; the row
+//! - [`crate::Read::table_rows`] iterates a named table; the row
 //!   shape depends on the table's subtype (`(input..., output)` for
 //!   functions, `(input..., eclass)` for constructors and relations).
+//!   Also available as the top-level convenience method
+//!   [`crate::EGraph::table_rows`].
 //! - [`crate::EGraph::query`] runs a pattern query and binds the
 //!   named variables. Compiles against the rule registry, so it stays
 //!   on `EGraph`.

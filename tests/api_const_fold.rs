@@ -1,4 +1,4 @@
-//! Constant folding case study — uses the typed Rust API end-to-end
+//! Constant folding case study — uses the Rust API end-to-end
 //! to build a small arithmetic e-graph, install a `rust_rule` that
 //! folds `(Add (Num a) (Num b))` to `(Num (a+b))`, run to saturation,
 //! and read back the canonical eclass.

@@ -201,9 +201,9 @@ pub struct FunctionConfig {
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
     /// Egglog sort names per column (same length and order as `schema`),
-    /// used by the typed user API to validate inputs at runtime. Pass an
-    /// empty Vec to skip — the typed API will then treat every column as
-    /// [`ColumnSort::Unchecked`].
+    /// used by the egglog crate's user-facing `Read` / `Write` methods
+    /// to validate inputs at runtime. Pass an empty Vec to skip —
+    /// every column will then be treated as `ColumnSort::Unchecked`.
     pub sort_names: Vec<Arc<str>>,
 }
 
@@ -1003,8 +1003,8 @@ struct FunctionInfo {
     can_subsume: bool,
     name: Arc<str>,
     /// Per-column egglog sort names. Same length and order as `schema`.
-    /// Empty if the registering caller didn't supply names — the typed
-    /// user API treats that as no-runtime-check.
+    /// Empty if the registering caller didn't supply names — the user
+    /// API treats that as no-runtime-check.
     sort_names: Arc<[Arc<str>]>,
 }
 

@@ -1992,7 +1992,7 @@ impl EGraph {
     /// `panics` if the function does not exist.
     ///
     /// Internal: external callers should use
-    /// [`EGraph::with_full_state`] + [`crate::Read::lookup`] (typed) or
+    /// [`EGraph::with_full_state`] + [`crate::Read::lookup`] (sort-checked) or
     /// [`crate::Read::lookup_raw`] (untyped).
     pub(crate) fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
         let func = self
@@ -2077,7 +2077,7 @@ impl EGraph {
 
     /// Run `f` with a [`FullState`] handle on this EGraph's database
     /// — the same handle a `:naive` rule's `add_rust_rule_full`
-    /// callback receives. Use to drive typed reads / writes
+    /// callback receives. Use to drive name-indexed reads / writes
     /// (`fs.set`, `fs.add_node`, `fs.lookup`, `fs.eclass_of`,
     /// `fs.contains`, `fs.remove`, …) from outside a rule.
     ///
@@ -2171,10 +2171,6 @@ impl EGraph {
 }
 
 pub use crate::api::{ApiError, ColumnSort, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};
-// Note: previously `BaseSortName` was a re-export here. It's been
-// removed — `EGraph::intern::<T>` now looks the sort name up by
-// `TypeId` from the registered sorts, so user-added base sorts work
-// without any extra trait impls.
 
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,

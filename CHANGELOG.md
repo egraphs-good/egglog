@@ -31,9 +31,11 @@
   - `WrongColumnSort` — a column value's sort doesn't match the declared input sort (e.g., passing a `String` where the table wants `i64`).
   - `WrongOutputSort` — `set`'s value column has the wrong sort.
   - `MissingTable` — table name not registered.
-- `EGraph::table_rows::<R: FromRow>(table) -> Result<Vec<R>, Error>` iterates all rows of a named table — row shape depends on subtype: functions expose `(input..., output)`, constructors and relations expose `(input..., eclass)`. `EGraph::query::<R: FromRow>(vars, facts) -> Result<Vec<R>, Error>` runs a pattern query. Both stay on `EGraph` (they compile a fresh query plan, can't run inside a rule callback).
+- `Read::table_rows::<R: FromRow>(name) -> Result<Vec<R>, Error>` iterates all rows of a named table — row shape depends on subtype: functions expose `(input..., output)`, constructors and relations expose `(input..., eclass)`. `EGraph::table_rows` stays as a thin top-level convenience wrapper that delegates to `with_full_state`. `EGraph::query::<R: FromRow>(vars, facts) -> Result<Vec<R>, Error>` runs a pattern query (stays on `EGraph` — compiles a fresh query plan).
 - Row trait surface in `crate::api`: `IntoRow`, `IntoColumn` (with `column_sort()` for runtime tag), `FromRow`, `FromColumn`, plus `RawValues` escape hatch.
 - Primitive trait `apply` signatures (`PurePrim` / `WritePrim` / `ReadPrim` / `FullPrim`) keep `args: &[Value] -> Option<Value>`. Eclass identifiers flow through the API as bare `Value`s — callers track their eclass-vs-base provenance themselves.
+- **Proof-mode compatibility errors.** `rust_rule` / `rust_rule_full` and `EGraph::with_full_state` now return `Error::ProofsIncompatibleApi` upfront when called on an `EGraph::new_with_proofs()` — the rule body is a Rust closure with no proof-encoding validator, and `with_full_state` writes bypass the proof pipeline. `with_full_state`'s signature tightened from `FnOnce(FullState) -> R) -> R` to `FnOnce(FullState) -> Result<R, Error>) -> Result<R, Error>` so the proofs-check error and the closure's own error collapse into one `?`.
+- Constant-folding case study in `tests/api_const_fold.rs` — builds an arithmetic expression with `add_node`, installs a `rust_rule` that folds `(Add (Num a) (Num b))` to `(Num (a+b))`, runs to saturation, and verifies the root collapses by both `eclass_of` and `table_rows` walks.
 
 ## [2.0.0] - 2026-02-11
 

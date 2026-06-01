@@ -21,10 +21,9 @@
 //!   `subsume`/`union`/`panic`). Implemented for [`WriteState`] and
 //!   [`FullState`].
 //!
-//! Privileged seams (`call_external_func`, `table_lookup`, raw
-//! `&mut ExecutionState`) used by the `FunctionContainer` higher-order
-//! dispatch live on the crate-private [`Internal`] trait. User code
-//! cannot reach them.
+//! Privileged seams (`call_external_func`, raw `&mut ExecutionState`)
+//! used by the `FunctionContainer` higher-order dispatch live on the
+//! crate-private [`Internal`] trait. User code cannot reach them.
 //!
 //! [`PurePrim`]: crate::PurePrim
 //! [`WritePrim`]: crate::WritePrim
@@ -455,7 +454,7 @@ fn check_input_sorts(
     let expected = action.input_sort_names();
     if expected.is_empty() {
         // Table registered without sort names — skip the check
-        // entirely (the typed API can't validate; raw is fine).
+        // entirely (the API can't validate; raw is fine).
         return Ok(());
     }
     if provided.len() != expected.len() {

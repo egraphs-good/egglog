@@ -1,4 +1,4 @@
-//! Typed row encoding for the [`crate::EGraph`] surface API.
+//! Row encoding for the [`crate::EGraph`] surface API.
 //!
 //! [`IntoRow`] / [`IntoColumn`] convert Rust values into egglog row data on
 //! the way *in* (insert, lookup keys, query patterns).  [`FromRow`] /
@@ -21,16 +21,16 @@ use crate::sort;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------
-// ApiError — runtime check failures from the typed `Read` / `Write`
-// trait methods and from [`crate::EGraph::with_full_state`] callers.
+// ApiError — runtime check failures from the `Read` / `Write` trait
+// methods and from [`crate::EGraph::with_full_state`] callers.
 // ---------------------------------------------------------------------
 
-/// Runtime errors from the typed Rust API surface.
+/// Runtime errors from the Rust API surface.
 ///
-/// These signal a misuse of the typed methods that the API can detect
-/// dynamically — wrong table subtype, wrong arity, mismatched column
-/// sorts, etc. They are *not* egglog typecheck errors and *not*
-/// backend / e-graph failures; for those, see [`enum@crate::Error`].
+/// These signal a misuse the API can detect at runtime — wrong table
+/// subtype, wrong arity, mismatched column sorts, etc. They are *not*
+/// egglog typecheck errors and *not* backend / e-graph failures; for
+/// those, see [`enum@crate::Error`].
 #[derive(Debug, Error)]
 pub enum ApiError {
     #[error("no table named `{name}` is registered")]
@@ -80,8 +80,9 @@ mod sealed {
 // Input side: IntoRow + IntoColumn
 // ---------------------------------------------------------------------
 
-/// Runtime sort tag for a column on the input side. Used by the typed
-/// API to validate inputs against a table's declared schema.
+/// Runtime sort tag for a column on the input side. Used by the
+/// `Read` / `Write` trait methods to validate inputs against a
+/// table's declared schema.
 #[derive(Clone, Debug)]
 pub enum ColumnSort {
     /// The column has a known sort name. Compared exactly against the
@@ -97,8 +98,8 @@ pub enum ColumnSort {
 /// tag per column.
 ///
 /// Implemented for:
-/// - A bare [`IntoColumn`] value (e.g. `1_i64` or an [`Id`]) — produces
-///   a single-column row.
+/// - A bare [`IntoColumn`] value (e.g. `1_i64` or a [`Value`]) —
+///   produces a single-column row.
 /// - Tuples up to arity 8 of [`IntoColumn`] values.
 /// - [`RawValues`] as an escape hatch for already-converted multi-column
 ///   rows (sort checks are skipped for every column).
@@ -114,8 +115,8 @@ pub trait IntoRow {
 /// This is a sealed trait — additional impls live in the egglog crate.
 pub trait IntoColumn: sealed::Sealed {
     fn into_value(self, bv: &BaseValues) -> Value;
-    /// Runtime sort tag for this column. Consulted by the typed API
-    /// to validate against the table's declared schema.
+    /// Runtime sort tag for this column. Consulted by the `Read` /
+    /// `Write` methods to validate against the table's declared schema.
     fn column_sort(&self) -> ColumnSort;
 }
 

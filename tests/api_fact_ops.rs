@@ -1,4 +1,4 @@
-//! Tests for the typed fact-ops API on the [`Read`] / [`Write`]
+//! Tests for the fact-ops API on the [`Read`] / [`Write`]
 //! traits, accessed outside a rule via [`EGraph::with_full_state`].
 //!
 //! `with_full_state` flushes pending writes only when the closure
