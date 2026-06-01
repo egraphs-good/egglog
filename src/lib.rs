@@ -1661,14 +1661,14 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.with_execution_state(|es| {
+            self.backend.update(|es| {
                 for row in parsed_contents.iter() {
                     table_action.insert(es, row.iter().copied());
                 }
                 Some(unit_val)
             });
         } else {
-            self.backend.with_execution_state(|es| {
+            self.backend.update(|es| {
                 for row in parsed_contents.iter() {
                     // Constructor semantics: mint a fresh eclass id for
                     // each missing key.
@@ -1962,7 +1962,7 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.with_execution_state(|state| {
+        self.backend.update(|state| {
             self.backend.container_values().register_val::<T>(x, state)
         })
     }
@@ -2119,7 +2119,7 @@ impl EGraph {
         let guard = registry.read().unwrap();
         let result = self
             .backend
-            .with_execution_state(|es| f(FullState::wrap(es, &guard, Context::Full)));
+            .update(|es| f(FullState::wrap(es, &guard, Context::Full)));
         drop(guard);
         self.backend.flush_updates();
         result

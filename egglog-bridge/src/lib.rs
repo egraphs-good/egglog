@@ -237,7 +237,7 @@ impl EGraph {
     pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
         self.db
-            .with_execution_state(|state| state.clone().container_values().register_val(val, state))
+            .update(|state| state.clone().container_values().register_val(val, state))
     }
 
     /// Register the given [`ContainerValue`] type with this EGraph.
@@ -282,7 +282,7 @@ impl EGraph {
     ///
     /// # Seminaive-safety trust boundary
     ///
-    /// Like [`EGraph::with_execution_state`], this is a raw escape —
+    /// Like [`EGraph::update`], this is a raw escape —
     /// the registered function has unrestricted access and is not
     /// tracked by the per-context validity system. Prefer building
     /// primitives via the higher-level `egglog::Primitive` /
@@ -953,8 +953,8 @@ impl EGraph {
     /// seminaive-safety model. Treat it as top-level / global-action
     /// context: appropriate for one-shot database manipulation from
     /// outside any rule, not for use inside primitive implementations.
-    pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
-        self.db.with_execution_state(f)
+    pub fn update<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
+        self.db.update(f)
     }
 
     /// Flush the pending update buffers to the EGraph.

@@ -222,7 +222,7 @@ impl EGraph {
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 3: let the scheduler decide which matches need to be kept
-        self.backend.with_execution_state(|state| {
+        self.backend.update(|state| {
             for (rule_id, _rule) in rules.iter() {
                 let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
