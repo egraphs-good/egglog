@@ -21,12 +21,31 @@ pub fn run_example(filename: &str, program: &str, proof_testing: bool) {
     std::mem::forget(egraph);
 }
 
+/// Run a program on the DuckDB backend (term-encoding only, no proofs).
+/// Mirrors how `tests/files.rs` builds the `--duckdb` egraph.
+pub fn run_example_duckdb(filename: &str, program: &str) {
+    let config = egglog::DuckBackendConfig {
+        proofs: false,
+        native_uf: false,
+    };
+    let mut egraph =
+        EGraph::with_duckdb_backend(config).expect("EGraph::with_duckdb_backend init failed");
+    egraph.ensure_no_reserved_symbols(false);
+    egraph
+        .parse_and_run_program(Some(filename.to_owned()), program)
+        .unwrap();
+    // The duckdb backend doesn't implement `serialize`, so unlike
+    // `run_example` we don't measure serialization here.
+    std::mem::forget(egraph);
+}
+
 #[derive(Clone)]
 pub struct BenchCase {
     pub name: String,
     pub filename: String,
     pub program: String,
     pub proof_testing: bool,
+    pub duckdb: bool,
 }
 
 impl fmt::Display for BenchCase {
@@ -56,6 +75,7 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
                 filename,
                 program,
                 proof_testing: false,
+                duckdb: false,
             }
         });
     cases.extend(regular_cases);
@@ -66,9 +86,52 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
     cases
 }
 
+/// Bench cases for the DuckDB backend. Mirrors the `--duckdb` test
+/// gating: only proof-encodable files (`file_supports_proofs`), minus
+/// the static skip list and anything using `(push)`/`(pop)` (no
+/// savepoint support).
+pub fn bench_cases_duckdb(glob: &str) -> Vec<BenchCase> {
+    configure_rayon_once();
+
+    glob::glob(glob)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|path| !path.to_string_lossy().contains("fail-typecheck"))
+        .filter(|path| egglog::file_supports_proofs(path))
+        .filter(|path| !DUCKDB_STATIC_SKIP.iter().any(|f| path.ends_with(f)))
+        .filter_map(|path| {
+            let filename = path.to_string_lossy().to_string();
+            let program = std::fs::read_to_string(&filename).ok()?;
+            if program.contains("(push") || program.contains("(pop") {
+                return None;
+            }
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            Some(BenchCase {
+                name: format!("duckdb_{stem}"),
+                filename,
+                program,
+                proof_testing: false,
+                duckdb: true,
+            })
+        })
+        .collect()
+}
+
 const PROOF_UNSUPPORTED_FILES: &[&str] = &[
     "math-microbenchmark.egg",
-    "rectangle.egg",
+    "subsume.egg",
+    "subsume-relation.egg",
+];
+
+// Files the duckdb backend can't run, mirroring `tests/files.rs`'s
+// `duckdb_static_skip`: math-microbenchmark is too slow, eggcc-2mm
+// declares a `(Set Expr)` container sort the proof encoding can't
+// represent, and the subsume files rely on `check`ing a subsumed term.
+// Everything else is gated by `file_supports_proofs` plus a push/pop
+// check, exactly like the duckdb test variants.
+const DUCKDB_STATIC_SKIP: &[&str] = &[
+    "math-microbenchmark.egg",
+    "eggcc-2mm.egg",
     "subsume.egg",
     "subsume-relation.egg",
 ];
@@ -93,6 +156,7 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
                 filename,
                 program,
                 proof_testing: true,
+                duckdb: false,
             }
         })
         .collect()
@@ -101,7 +165,11 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
 pub fn bench_case(case: &BenchCase) {
     configure_rayon_once();
 
-    run_example(&case.filename, &case.program, case.proof_testing);
+    if case.duckdb {
+        run_example_duckdb(&case.filename, &case.program);
+    } else {
+        run_example(&case.filename, &case.program, case.proof_testing);
+    }
 }
 
 pub fn configure_rayon_once() {
