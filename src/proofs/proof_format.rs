@@ -311,6 +311,11 @@ impl RawProofStore {
 }
 
 impl ProofStore {
+    /// Get the term DAG used by this proof store.
+    pub fn term_dag(&self) -> &TermDag {
+        &self.term_dag
+    }
+
     /// Get the [`Proof`] with the given id.
     /// Panics if the id is invalid (if it came from another proof store, for example).
     pub fn get(&self, proof_id: ProofId) -> &Proof {
