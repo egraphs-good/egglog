@@ -2143,7 +2143,13 @@ impl EGraph {
     /// Use `Vec<Value>` to inspect arbitrary shapes, or
     /// [`EGraph::query`] to bind only the columns you name.
     pub fn table_rows<R: FromRow>(&mut self, table: &str) -> Result<Vec<R>, Error> {
-        self.update(|fs| fs.table_rows::<R>(table))
+        // Read-only path; safe even when proofs are enabled, so we
+        // don't go through `update` (which refuses under proofs because
+        // its closure could stage writes).
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        self.backend
+            .update(|es| FullState::wrap(es, &guard, Context::Full).table_rows::<R>(table))
     }
 
     /// Run a pattern query: bind the variables in `vars` against
@@ -2157,6 +2163,16 @@ impl EGraph {
         vars: &[(&str, ArcSort)],
         facts: ast::Facts<String, String>,
     ) -> Result<Vec<std::collections::HashMap<String, Value>>, Error> {
+        // Fail fast under proofs — otherwise the failure would
+        // surface through `rust_rule`'s check below with a misleading
+        // api: "rust_rule" in the error message.
+        if self.are_proofs_enabled() {
+            return Err(Error::ProofsIncompatibleApi {
+                api: "EGraph::query",
+                reason: "the underlying rust_rule callback has no proof-encoding validator,\n\
+                         so query matches cannot be verified.",
+            });
+        }
         use std::sync::{Arc, Mutex};
         let names: Arc<[String]> =
             vars.iter().map(|(n, _)| (*n).to_owned()).collect();
@@ -2167,28 +2183,35 @@ impl EGraph {
 
         let ruleset = self.parser.symbol_gen.fresh("query_ruleset");
         prelude::add_ruleset(self, &ruleset)?;
-        prelude::rust_rule(self, "query", &ruleset, vars, facts, move |_, values| {
-            let arc = results_weak.upgrade().unwrap();
-            let mut results = arc.lock().unwrap();
-            let map: std::collections::HashMap<String, Value> = names_for_cb
-                .iter()
-                .zip(values.iter().copied())
-                .map(|(n, v)| (n.clone(), v))
-                .collect();
-            results.push(map);
-            Some(())
-        })?;
-        prelude::run_ruleset(self, &ruleset)?;
+        // From here on, we OWN the ruleset and the rule and have to
+        // clean them up on every exit path. Run the rest in a closure
+        // and tear down before propagating.
+        let outcome = (|| -> Result<_, Error> {
+            prelude::rust_rule(self, "query", &ruleset, vars, facts, move |_, values| {
+                let arc = results_weak.upgrade().unwrap();
+                let mut results = arc.lock().unwrap();
+                let map: std::collections::HashMap<String, Value> = names_for_cb
+                    .iter()
+                    .zip(values.iter().copied())
+                    .map(|(n, v)| (n.clone(), v))
+                    .collect();
+                results.push(map);
+                Some(())
+            })?;
+            prelude::run_ruleset(self, &ruleset)?;
+            Ok(())
+        })();
 
-        // Tear the temporary rule + ruleset down again so successive
-        // `query` calls don't accumulate them.
-        let ruleset_obj = self.rulesets.swap_remove(&ruleset).unwrap();
-        let Ruleset::Rules(rules) = ruleset_obj else {
-            unreachable!()
-        };
-        assert_eq!(rules.len(), 1);
-        let rule = rules.into_iter().next().unwrap().1;
-        self.backend.free_rule(rule.1);
+        // Tear the temporary rule + ruleset down whether the body
+        // succeeded or not.
+        if let Some(ruleset_obj) = self.rulesets.swap_remove(&ruleset) {
+            if let Ruleset::Rules(rules) = ruleset_obj {
+                for (_, rule) in rules {
+                    self.backend.free_rule(rule.1);
+                }
+            }
+        }
+        outcome?;
 
         let Some(mutex) = Arc::into_inner(results) else {
             panic!("`results_weak` outlived the callback");

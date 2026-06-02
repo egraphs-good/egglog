@@ -1320,6 +1320,13 @@ impl TableAction {
         self.kind
     }
 
+    /// Number of input columns (schema minus the trailing output
+    /// column). Always known from the function's schema, independent
+    /// of whether sort names were supplied at registration.
+    pub fn input_arity(&self) -> usize {
+        self.table_math.func_cols - 1
+    }
+
     /// Egglog sort names for this table's input columns (everything
     /// except the trailing output column). Empty if the registering
     /// caller didn't supply names.

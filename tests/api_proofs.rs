@@ -61,3 +61,40 @@ fn update_with_proofs_enabled_errors() {
     assert!(matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "EGraph::update"),
         "expected ProofsIncompatibleApi(EGraph::update), got: {err}");
 }
+
+#[test]
+fn query_with_proofs_enabled_errors_with_query_api_name() {
+    // Regression: previously the failure surfaced through the
+    // rust_rule check inside query, so the error pointed at
+    // "rust_rule" instead of "EGraph::query".
+    let mut eg = EGraph::new_with_proofs();
+    eg.parse_and_run_program(None, "(function f (i64) i64 :merge new)")
+        .unwrap();
+
+    let result = eg.query(vars![x: i64], facts![(= y (f x))]);
+
+    let err = result.expect_err("EGraph::query should fail under proofs");
+    assert!(matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "EGraph::query"),
+        "expected ProofsIncompatibleApi(EGraph::query), got: {err}");
+}
+
+#[test]
+fn table_rows_works_under_proofs() {
+    // table_rows is read-only — it should not trip the proofs check
+    // that `update` does for writes. (We read as `Vec<Value>` because
+    // proof mode adds an extra synthetic column to the schema.)
+    use egglog::Value;
+    let mut eg = EGraph::new_with_proofs();
+    eg.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :merge new) (set (f 1) 42)",
+    )
+    .unwrap();
+
+    let rows: Vec<Vec<Value>> = eg
+        .table_rows::<Vec<Value>>("f")
+        .expect("table_rows should succeed under proofs");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(eg.value_to_base::<i64>(rows[0][0]), 1);
+    assert_eq!(eg.value_to_base::<i64>(rows[0][1]), 42);
+}

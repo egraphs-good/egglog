@@ -262,9 +262,10 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// Raw-`Value` lookup, for code that already has a `&[Value]` and
     /// doesn't want to round-trip through [`Read::lookup`]'s
-    /// base-value conversion.
+    /// base-value conversion. Still arity-checked.
     fn lookup_raw(&self, name: &str, key: &[Value]) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
+        check_arity(name, &action, key.len())?;
         Ok(action.lookup(self.es(), key))
     }
 
@@ -441,16 +442,11 @@ fn check_subtype(
 }
 
 fn check_arity(table: &str, action: &TableAction, got: usize) -> Result<(), Error> {
-    let expected = action.input_sort_names();
-    if expected.is_empty() {
-        // Table registered without per-column metadata — nothing
-        // to compare against.
-        return Ok(());
-    }
-    if got != expected.len() {
+    let expected = action.input_arity();
+    if got != expected {
         return Err(ApiError::WrongArity {
             table: table.to_string(),
-            expected: expected.len(),
+            expected,
             got,
         }
         .into());
