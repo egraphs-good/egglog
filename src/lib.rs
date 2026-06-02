@@ -24,6 +24,12 @@
 //! `EGraph::add_*_primitive` — the [`add_primitive!`] macro covers
 //! the common "pure native function" case.
 //!
+//! To pull an extracted term back out of the e-graph, use
+//! [`EGraph::extract_value`] (default cost model) or
+//! [`EGraph::extract_value_with_cost_model`] / a custom
+//! [`extract::CostModel`] when you want non-default costs. The
+//! [`extract`] module has the full extractor API.
+//!
 //!
 //! # Tutorial
 //! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.

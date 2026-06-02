@@ -78,6 +78,23 @@
 //!   variable name. Useful for extracting bindings without compiling
 //!   a persistent rule.
 //!
+//! ## Extracting terms
+//!
+//! Pulling a Rust-side term out of an eclass:
+//!
+//! - [`crate::EGraph::extract_value`] — picks the lowest-cost
+//!   representative under the default tree-additive cost model and
+//!   returns it as a [`crate::TermId`] in a [`crate::TermDag`].
+//! - [`crate::EGraph::extract_value_with_cost_model`] — same but with
+//!   a user-supplied cost model, an impl of
+//!   [`crate::extract::CostModel`].
+//! - [`crate::EGraph::extract_value_to_string`] — convenience: prints
+//!   the extracted term back as egglog-syntax text.
+//!
+//! See the [`crate::extract`] module for the full API
+//! ([`crate::extract::Extractor`], variant extraction,
+//! sort-restricted extraction, custom cost types).
+//!
 //! ## Rules
 //!
 //! - [`rule`] — add a rule whose RHS is egglog code.
