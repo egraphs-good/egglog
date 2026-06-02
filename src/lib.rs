@@ -6,11 +6,14 @@
 //!
 //! # Documentation
 //! Documentation for the egglog language can be found here: [`Command`].
-//! 
+//!
 //! # Using egglog from Rust
-//! We encourage using the egglog language as much as possible, even from Rust. 
-//! In some cases, custom primitives or custom rules are necessary. 
-//! For this reason, we 
+//!
+//! Start with `use egglog::prelude::*;`. The [`prelude`] module docs
+//! cover the main entry points: driving the database with
+//! [`EGraph::update`], adding [`prelude::rust_rule`] callbacks,
+//! defining custom [`Primitive`]s, and the `Read` / `Write` method
+//! surface they all share.
 //!
 //! # Tutorial
 //! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.

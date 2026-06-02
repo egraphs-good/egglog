@@ -4,59 +4,116 @@
 //! use egglog::prelude::*;
 //! ```
 //!
-//! The typical Rust workflow is: declare your program once (rules,
-//! datatypes, functions) via [`crate::EGraph::parse_and_run_program`],
-//! then drive the e-graph from Rust — adding/reading facts and
-//! stepping rulesets.
+//! Most workflows are best expressed as an egglog program parsed and
+//! run via [`crate::EGraph::parse_and_run_program`]: declare your
+//! sorts, functions, and rules once in egglog text, then call into
+//! the database from Rust around it.
+//!
+//! ```
+//! use egglog::prelude::*;
+//! let mut eg = EGraph::default();
+//! eg.parse_and_run_program(
+//!     None,
+//!     "(datatype Math (Num i64) (Add Math Math))
+//!      (Add (Num 1) (Num 2))",
+//! )?;
+//! # Ok::<(), egglog::Error>(())
+//! ```
+//!
+//! Two cases need a Rust escape from the language:
+//!
+//! 1. **Driving the e-graph database directly** — building rows,
+//!    looking them up, iterating tables, running ad-hoc queries from
+//!    Rust between (or instead of) running egglog rules.
+//! 2. **Custom rules whose right-hand side runs Rust** — a
+//!    [`rust_rule`] / [`rust_rule_full`] callback fires on every
+//!    match and gets a state handle to read/write the database.
+//!    Useful when the rule body needs arithmetic, control flow, or
+//!    data conversion that's awkward in egglog itself.
+//!
+//! Both flows share the same surface: the [`crate::Read`] and
+//! [`crate::Write`] capability traits, implemented on the
+//! [`crate::PureState`] / [`crate::ReadState`] / [`crate::WriteState`]
+//! / [`crate::FullState`] wrappers. Inside a rule callback you
+//! receive one of those wrappers directly; outside a rule you get a
+//! [`crate::FullState`] from [`crate::EGraph::update`]:
+//!
+//! ```
+//! use egglog::prelude::*;
+//! let mut eg = EGraph::default();
+//! eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
+//!
+//! // Stage writes; flush once when the closure returns.
+//! eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
+//!
+//! // Read in a separate `update` call — writes inside a closure
+//! // aren't visible to reads in the same closure.
+//! let v = eg.update(|fs| fs.lookup("f", 1_i64))?;
+//! assert_eq!(v.map(|v| eg.value_to_base::<i64>(v)), Some(42));
+//! # Ok::<(), egglog::Error>(())
+//! ```
 //!
 //! ## Adding and reading facts
 //!
-//! [`crate::EGraph::update`] hands the closure a
-//! [`crate::FullState`] that implements [`crate::Read`] and
-//! [`crate::Write`]. From there:
+//! Methods on [`crate::Read`] and [`crate::Write`], available via the
+//! state wrappers:
 //!
-//! - [`crate::Write::set`] writes a function-table cell `(set (f k) v)`.
-//! - [`crate::Write::add`] mints / looks up a constructor eclass.
-//! - [`crate::Write::remove`] removes a row from any subtype.
-//! - [`crate::Read::lookup`] reads a function's output value.
-//! - [`crate::Read::eclass_of`] reads a constructor's eclass without
-//!   minting.
-//! - [`crate::Read::contains`] checks row presence on any subtype.
-//!
-//! The same trait methods are available on [`crate::WriteState`] and
-//! [`crate::FullState`] inside a [`rust_rule`] / [`rust_rule_full`]
-//! callback — same surface inside and outside a rule.
+//! - [`crate::Write::set`] — write a function-table cell `(set (f k) v)`.
+//! - [`crate::Write::add`] — mint or look up a constructor / relation eclass.
+//! - [`crate::Write::remove`] — remove a row from any subtype.
+//! - [`crate::Write::union`] — union two eclass `Value`s in the union-find.
+//! - [`crate::Read::lookup`] — read a function's output value.
+//! - [`crate::Read::eclass_of`] — read a constructor's eclass without minting.
+//! - [`crate::Read::contains`] — row presence on any subtype.
 //!
 //! ## Iterating and querying
 //!
 //! - [`crate::Read::function_entries`] iterates a function table.
-//!   Each entry is `(inputs, output)` of raw `Value`s.
+//!   Each entry is `(inputs, output)` as raw `Value`s.
 //! - [`crate::Read::constructor_enodes`] iterates a constructor /
 //!   relation table. Each enode is `(inputs, eclass_id)`.
 //!   Top-level convenience versions live on [`crate::EGraph`].
-//! - [`crate::EGraph::query`] runs a pattern query and returns one
-//!   `HashMap<String, Value>` per match, keyed by variable name.
+//! - [`crate::EGraph::query`] runs a one-shot pattern query and
+//!   returns one `HashMap<String, Value>` per match, keyed by
+//!   variable name. Useful for extracting bindings without compiling
+//!   a persistent rule.
 //!
 //! ## Rules
 //!
 //! - [`rule`] — add a rule whose RHS is egglog code.
-//! - [`rust_rule`] / [`rust_rule_full`] — add a rule whose RHS is a Rust
-//!   closure `Fn(&mut WriteState, &[Value]) -> Option<()>` (or
-//!   `FullState` for action-side reads).
+//! - [`rust_rule`] — add a rule whose RHS is a Rust closure
+//!   `Fn(WriteState, &[Value]) -> Option<()>`. Seminaive-safe.
+//! - [`rust_rule_full`] — same but the closure receives a
+//!   [`crate::FullState`] (can read the database in the callback).
+//!   Runs `:naive` since the body sees live state.
 //! - [`run_ruleset`] / [`add_ruleset`] step rules forward.
 //!
 //! ## Extending egglog
 //!
 //! - **Custom sort types:** [`BaseSort`] / [`ContainerSort`].
-//! - **Custom primitives:** implement [`crate::Primitive`] plus one of
-//!   [`crate::PurePrim`] / [`crate::ReadPrim`] / [`crate::WritePrim`] /
-//!   [`crate::FullPrim`] and register via the matching
-//!   `EGraph::add_*_primitive`. The state wrapper the body sees
-//!   enforces what the body can do. See the trait docs and issue #772
-//!   for the seminaive-safety reasoning.
+//! - **Custom primitives:** implement [`crate::Primitive`] plus one
+//!   of [`crate::PurePrim`] / [`crate::ReadPrim`] /
+//!   [`crate::WritePrim`] / [`crate::FullPrim`] (pick by what the
+//!   body needs to do — pure, read-only, write-only, full). Register
+//!   via the matching `EGraph::add_*_primitive`. The state wrapper
+//!   the body sees enforces what the body can do; see issue #772 for
+//!   the seminaive-safety reasoning.
 //! - **Simple pure primitives:** the [`add_primitive!`] /
 //!   [`add_primitive_with_validator!`] / [`add_literal_prim!`] macros
-//!   handle the common "pure native function" case.
+//!   cover the "pure native function" case without writing out the
+//!   full trait impl.
+//!
+//! ## Caveat: type unsafety at the column level
+//!
+//! Eclass identifiers flow through the API as bare [`Value`]s. A
+//! `Value` returned from a `Math` constructor and a `Value` returned
+//! from a `List` constructor are indistinguishable at compile time
+//! *and* at runtime — callers track sort identity themselves.
+//! [`crate::Write::union`] does not check that its arguments are the
+//! same eq-sort; [`crate::Write::set`] and [`crate::Write::add`] do
+//! not check that their column values match the table's declared
+//! column sorts. Arity (column count) and subtype (function vs.
+//! constructor) *are* checked at runtime via [`crate::ApiError`].
 
 use crate::*;
 use std::any::{Any, TypeId};
