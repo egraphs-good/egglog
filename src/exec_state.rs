@@ -260,9 +260,9 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
-    /// Untyped raw-`Value` lookup, escape hatch for code that already
-    /// has `&[Value]` and doesn't want to round-trip through
-    /// [`Read::lookup`]'s base-value conversion. Skips sort checking.
+    /// Raw-`Value` lookup, for code that already has a `&[Value]` and
+    /// doesn't want to round-trip through [`Read::lookup`]'s
+    /// base-value conversion.
     fn lookup_raw(&self, name: &str, key: &[Value]) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
         Ok(action.lookup(self.es(), key))

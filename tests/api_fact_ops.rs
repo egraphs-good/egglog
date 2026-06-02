@@ -61,7 +61,7 @@ fn test_remove_function() -> Result<(), Error> {
 }
 
 #[test]
-fn test_relation_add_node_and_contains() -> Result<(), Error> {
+fn test_relation_add_and_contains() -> Result<(), Error> {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(relation R (i64 i64))")?;
     eg.update(|mut fs| -> Result<_, Error> {
@@ -186,7 +186,7 @@ fn test_set_constructor_errors() {
 }
 
 #[test]
-fn test_add_node_function_errors() {
+fn test_add_function_errors() {
     let mut eg = make_eg_with_function();
     let result = eg.update(|mut fs| fs.add("f", 1_i64));
     let err = result.unwrap_err().to_string();
