@@ -226,8 +226,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
+        check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
     }
 
@@ -248,8 +248,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
             TableKind::Constructor,
             "constructor",
         )?;
-        check_arity(name, &action, inputs.arity())?;
         let key_values = inputs.into_values(self.base_values());
+        check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
     }
 
@@ -261,8 +261,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
     ) -> Result<bool, Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
+        check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
@@ -336,9 +336,9 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        check_arity(name, &action, key.arity())?;
         let bv = self.base_values();
         let mut row = key.into_values(bv);
+        check_arity(name, &action, row.len())?;
         row.push(value.into_value(bv));
         action.insert(self.es_mut(), row.into_iter());
         Ok(())
@@ -363,9 +363,8 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
             TableKind::Constructor,
             "constructor",
         )?;
-        check_arity(name, &action, inputs.arity())?;
-        let bv = self.base_values();
-        let key = inputs.into_values(bv);
+        let key = inputs.into_values(self.base_values());
+        check_arity(name, &action, key.len())?;
         let value = action
             .lookup_or_insert(self.es_mut(), &key)
             .expect("constructor lookup_or_insert returned None");
@@ -379,8 +378,8 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
+        check_arity(name, &action, key_values.len())?;
         action.remove(self.es_mut(), &key_values);
         Ok(())
     }
@@ -392,8 +391,8 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
+        check_arity(name, &action, key_values.len())?;
         action.subsume(self.es_mut(), key_values.into_iter());
         Ok(())
     }

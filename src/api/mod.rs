@@ -67,10 +67,6 @@ mod sealed {
 /// - [`RawValues`] for variadic / pre-converted rows.
 pub trait IntoRow {
     fn into_values(self, bv: &BaseValues) -> Vec<Value>;
-    /// Number of columns this row will produce. Consulted by the
-    /// `Read` / `Write` methods to catch arity mismatches against the
-    /// table schema.
-    fn arity(&self) -> usize;
 }
 
 /// A single column of an egglog row, on the input side.
@@ -115,9 +111,6 @@ pub struct RawValues(pub Vec<Value>);
 impl IntoRow for RawValues {
     fn into_values(self, _bv: &BaseValues) -> Vec<Value> {
         self.0
-    }
-    fn arity(&self) -> usize {
-        self.0.len()
     }
 }
 
@@ -211,9 +204,6 @@ impl<A: IntoColumn> IntoRow for A {
     fn into_values(self, bv: &BaseValues) -> Vec<Value> {
         vec![self.into_value(bv)]
     }
-    fn arity(&self) -> usize {
-        1
-    }
 }
 
 // Note: no blanket `impl<A: FromColumn> FromRow for A` — would conflict
@@ -231,9 +221,6 @@ macro_rules! impl_row_for_tuple {
                 fn into_values(self, bv: &BaseValues) -> Vec<Value> {
                     let ($($name,)+) = self;
                     vec![ $( $name.into_value(bv) ),+ ]
-                }
-                fn arity(&self) -> usize {
-                    [$(stringify!($name)),+].len()
                 }
             }
 
