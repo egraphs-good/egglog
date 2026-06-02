@@ -48,7 +48,6 @@ pub enum ApiError {
         expected: usize,
         got: usize,
     },
-
 }
 
 mod sealed {

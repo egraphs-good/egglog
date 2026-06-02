@@ -304,7 +304,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     fn table_rows<R: crate::api::FromRow>(&self, name: &str) -> Result<Vec<R>, Error> {
         let action = lookup_action(self.registry(), name)?;
         let bv = self.base_values();
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(action.row_count(self.es()));
         action.for_each(self.es(), |row| {
             out.push(R::from_values(row.vals, bv));
         });

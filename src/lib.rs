@@ -2219,7 +2219,6 @@ impl EGraph {
         Ok(mutex.into_inner().unwrap())
     }
 
-
 }
 
 pub use crate::api::{ApiError, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};

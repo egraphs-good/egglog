@@ -222,9 +222,9 @@ fn query_empty_table() -> Result<(), Error> {
     Ok(())
 }
 
-/// Querying a missing function returns an `UnboundFunction` error.
+/// `table_rows` on a missing function returns a MissingTable error.
 #[test]
-fn query_missing_table_errors() {
+fn table_rows_missing_table_errors() {
     let mut egraph = EGraph::default();
     let err = egraph.table_rows::<(i64, i64)>("nonexistent").unwrap_err();
     let msg = format!("{err}");

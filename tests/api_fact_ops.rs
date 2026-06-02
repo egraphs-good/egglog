@@ -203,6 +203,57 @@ fn test_wrong_arity_errors() {
 }
 
 #[test]
+fn test_wrong_arity_on_add_errors() {
+    // `add` should arity-check just like `set`.
+    let mut eg = EGraph::default();
+    eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")
+        .unwrap();
+    let result = eg.update(|mut fs| {
+        // Cons expects (i64, List), so 1 arg is wrong arity.
+        fs.add("Cons", 1_i64)
+    });
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("expected 2 input"), "got: {err}");
+}
+
+#[test]
+fn test_wrong_arity_on_lookup_raw_errors() {
+    // `lookup_raw` skips base-value conversion but still
+    // arity-checks — passing 2 raw values to a 1-input function is
+    // a programmer error.
+    let mut eg = make_eg_with_function();
+    let result = eg.update(|fs| {
+        let one = fs.base_to_value::<i64>(1);
+        let two = fs.base_to_value::<i64>(2);
+        fs.lookup_raw("f", &[one, two])
+    });
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("expected 1 input"), "got: {err}");
+}
+
+#[test]
+fn test_union_same_value_is_noop() -> Result<(), Error> {
+    // Unioning a value with itself should be a no-op, not an error.
+    let mut eg = EGraph::default();
+    eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
+    let nil = eg.update(|mut fs| fs.add("Nil", RawValues(vec![])))?;
+    eg.update(|mut fs| fs.union(nil, nil))?;
+    Ok(())
+}
+
+#[test]
+fn test_table_rows_on_empty_constructor() -> Result<(), Error> {
+    // Iterating an empty constructor table should return an empty Vec,
+    // not error.
+    let mut eg = EGraph::default();
+    eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
+    let rows: Vec<Vec<egglog::Value>> =
+        eg.table_rows::<Vec<egglog::Value>>("Cons")?;
+    assert!(rows.is_empty());
+    Ok(())
+}
+
+#[test]
 fn test_set_replaces_function_value() -> Result<(), Error> {
     let mut eg = make_eg_with_function();
     eg.update(|mut fs| fs.set("f", (5_i64,), 50_i64))?;
