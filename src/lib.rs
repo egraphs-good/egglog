@@ -24,7 +24,9 @@
 //! `EGraph::add_*_primitive` — the [`add_primitive!`] macro covers
 //! the common "pure native function" case.
 //!
-//! To pull an extracted term back out of the e-graph, use
+//! To pull an extracted term back out of the e-graph, let-bind a
+//! global name to it (`(let $root ...)`), resolve the global with
+//! [`EGraph::eval_expr`] to get its `(sort, Value)`, then call
 //! [`EGraph::extract_value`] (default cost model) or
 //! [`EGraph::extract_value_with_cost_model`] / a custom
 //! [`extract::CostModel`] when you want non-default costs. The

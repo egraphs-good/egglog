@@ -95,6 +95,23 @@
 //! ([`crate::extract::Extractor`], variant extraction,
 //! sort-restricted extraction, custom cost types).
 //!
+//! To get the `(sort, Value)` pair an `extract_value` call needs in
+//! the first place, the easiest path is to let-bind a global name in
+//! egglog and then resolve it with [`crate::EGraph::eval_expr`]:
+//!
+//! ```
+//! use egglog::prelude::*;
+//! let mut eg = EGraph::default();
+//! eg.parse_and_run_program(
+//!     None,
+//!     "(datatype Math (Num i64) (Add Math Math))
+//!      (let $root (Add (Num 1) (Num 2)))",
+//! )?;
+//! let (sort, value) = eg.eval_expr(&exprs::var("$root"))?;
+//! let (_dag, _term, _cost) = eg.extract_value(&sort, value)?;
+//! # Ok::<(), egglog::Error>(())
+//! ```
+//!
 //! ## Rules
 //!
 //! - [`rule`] — add a rule whose RHS is egglog code.
