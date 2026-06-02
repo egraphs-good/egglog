@@ -65,7 +65,6 @@ use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::any::{Any, TypeId};
-use std::collections::HashMap as StdHashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -283,7 +282,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
-    extension_state: StdHashMap<TypeId, Box<dyn ExtensionStateValue>>,
+    extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
     strict_mode: bool,
     warned_about_global_prefix: bool,
     /// Registry for command-level macros
