@@ -291,7 +291,7 @@ pub struct EGraph {
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
-    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
+    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error>;
 }
 
 /// A function in the e-graph.
@@ -712,10 +712,31 @@ impl EGraph {
                 ))
             }
             GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
-                let translated_args = args
+                let mut translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
+                if p.name() == "unstable-fn" {
+                    let Some(GenericExpr::Lit(_, Literal::String(name))) = args.first() else {
+                        return Err(Error::BackendError(
+                            "expected string literal after `unstable-fn`".into(),
+                        ));
+                    };
+                    let resolved = resolve_function_container_target_with_context(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        name,
+                        p,
+                        self.backend
+                            .action_registry()
+                            .read()
+                            .unwrap()
+                            .default_panic_id(),
+                    );
+                    translated_args[0] =
+                        egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
+                }
                 Ok(egglog_bridge::MergeFn::Primitive(
                     p.external_id(crate::Context::Write),
                     translated_args,
@@ -1103,6 +1124,30 @@ impl EGraph {
         Ok(())
     }
 
+    /// Remove every row from the named function in bulk.
+    ///
+    /// This is intended as a faster alternative to issuing a `(delete …)` for
+    /// every row of the function: it drops the backing row storage in
+    /// O(1)-in-row-count time, rather than O(n) per-row teardown. Any pending
+    /// staged inserts/removes for this function are dropped as part of the
+    /// clear, so callers that have staged updates they want to land first
+    /// should arrange for those to be flushed beforehand.
+    ///
+    /// Cached indexes and subsets that reference this table are invalidated by
+    /// a generation bump and are lazily rebuilt against the now-empty table on
+    /// next access.
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn clear_function(&mut self, func_name: &str) -> Result<(), Error> {
+        let backend_id = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?
+            .backend_id;
+        self.backend.clear_table(backend_id);
+        Ok(())
+    }
+
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
@@ -1204,15 +1249,18 @@ impl EGraph {
                                 .unwrap_or_else(|| Span::Panic)
                         )));
                     };
-                    let panic_id = self.backend.new_panic(unstable_fn_panic_message(name));
-                    let resolved_function = resolved_function_for_unstable_fn(
+                    let panic_id = self.backend.new_panic(format!(
+                        "unstable-fn over `{name}` was applied in a context where its wrapped \
+                         function is not valid for this call site, if in a rule, add :naive."
+                    ));
+                    let resolved_function = resolve_function_container_target_with_context(
                         &self.backend,
                         &self.functions,
                         &self.type_info,
-                        prim,
                         name,
+                        prim,
                         panic_id,
-                    )?;
+                    );
                     let fn_value = self.backend.base_values().get(resolved_function);
                     let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
                     bindings.push((binding_name.clone(), fn_value));
@@ -1384,7 +1432,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Vec<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort {
@@ -1428,14 +1476,14 @@ impl EGraph {
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
-                return Ok(Some(CommandOutput::RunSchedule(report)));
+                return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
                 None => {
                     log::info!("Printed overall statistics");
-                    return Ok(Some(CommandOutput::OverallStatistics(
+                    return Ok(vec![CommandOutput::OverallStatistics(
                         self.overall_run_report.clone(),
-                    )));
+                    )]);
                 }
                 Some(path) => {
                     let mut file = std::fs::File::create(&path)
@@ -1478,7 +1526,7 @@ impl EGraph {
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                         }
-                        Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
+                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                     } else {
                         Err(Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
@@ -1498,7 +1546,7 @@ impl EGraph {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(Some(CommandOutput::ExtractVariants(termdag, terms)))
+                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1524,13 +1572,16 @@ impl EGraph {
                             .map_err(|e| Error::IoError(file.into(), e, span.clone()))
                     })
                     .transpose()?;
-                return self.print_function(&f, n, file, mode).map_err(|e| match e {
-                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
-                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
-                    }
-                    // This case is currently impossible
-                    _ => e,
-                });
+                return self
+                    .print_function(&f, n, file, mode)
+                    .map_err(|e| match e {
+                        Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                            Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                        }
+                        // This case is currently impossible
+                        _ => e,
+                    })
+                    .map(|opt| opt.into_iter().collect());
             }
             ResolvedNCommand::PrintSize(span, f) => {
                 let res = self.print_size(f.as_deref()).map_err(|e| match e {
@@ -1540,7 +1591,7 @@ impl EGraph {
                     // This case is currently impossible
                     _ => e,
                 })?;
-                return Ok(Some(res));
+                return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
@@ -1590,13 +1641,16 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
-                let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
-                    panic!("Unrecognized user-defined command: {name}");
-                });
-                let res = command.update(self, &exprs);
-                self.commands.insert(name, command);
-                return res;
+                let command = self
+                    .commands
+                    .get(&name)
+                    .ok_or_else(|| {
+                        NotFoundError(format!("Unrecognized user-defined command: {name}"))
+                    })?
+                    .clone();
+                return command.update(self, &exprs);
             }
+
             ResolvedNCommand::ProveExists(span, resolved_call) => {
                 let mut instrument = ProofInstrumentor { egraph: self };
                 let (proof_store, proof_id) =
@@ -1606,14 +1660,14 @@ impl EGraph {
                             span: span.clone(),
                             error,
                         })?;
-                return Ok(Some(CommandOutput::ProveExists {
+                return Ok(vec![CommandOutput::ProveExists {
                     proof_store,
                     proof_id,
-                }));
+                }]);
             }
         };
 
-        Ok(None)
+        Ok(vec![])
     }
 
     fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
@@ -1874,9 +1928,7 @@ impl EGraph {
                             )
                         {
                             let result = self.run_command(processed)?;
-                            if let Some(output) = result {
-                                outputs.push(output);
-                            }
+                            outputs.extend(result);
                         }
                     }
                 }
@@ -2046,6 +2098,51 @@ impl EGraph {
         self.functions.get(name)
     }
 
+    /// Returns `true` if a user-defined command with the given name is
+    /// registered in this e-graph.
+    pub fn has_command(&self, name: &str) -> bool {
+        self.commands.contains_key(name)
+    }
+
+    /// Invoke a registered user-defined command by name, passing the given
+    /// unresolved expression arguments.
+    ///
+    /// This is equivalent to writing `(name args...)` at the top level, but
+    /// callable directly from Rust.  Returns an error if no command with the given
+    /// name is registered.
+    pub fn run_user_defined_command(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Vec<CommandOutput>, Error> {
+        self.run_command(ResolvedNCommand::UserDefined(
+            span!(),
+            name.to_string(),
+            args.to_vec(),
+        ))
+    }
+
+    /// Run a closure with full read-write access to the database, then flush
+    /// pending writes.
+    ///
+    /// This is the top-level equivalent of [`FullPrim::apply`], and the closure receives a
+    ///  [`FullState`].
+    ///
+    /// Pending writes staged inside the closure are flushed (and the
+    /// union-find rebuilt if necessary) before this method returns.
+    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
+        // Clone the Arc so the guard is not lifetime-tied to &self.backend,
+        // allowing flush_updates(&mut self.backend) after the closure.
+        let registry_arc = self.backend.action_registry().clone();
+        let registry_guard = registry_arc.read().unwrap();
+        let result = self
+            .backend
+            .with_execution_state(|es| f(FullState::wrap(es, &registry_guard, Context::Full)));
+        drop(registry_guard);
+        self.backend.flush_updates();
+        result
+    }
+
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.backend.set_report_level(level);
     }
@@ -2075,84 +2172,121 @@ impl EGraph {
 /// `unstable-app` will call later. For primitive targets, this bakes one
 /// dispatch id per runtime context so application can choose the entrypoint
 /// matching the primitive body's current call-site context.
-fn resolved_function_for_unstable_fn(
+fn resolve_function_container_target_with_context(
     backend: &egglog_bridge::EGraph,
     functions: &IndexMap<String, Function>,
     type_info: &TypeInfo,
-    prim: &SpecializedPrimitive,
     name: &str,
+    primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
-) -> Result<ResolvedFunction, Error> {
-    let id = if let Some(f) = type_info.get_func_type(name) {
-        // Distinguish constructor-table lookups (write-on-miss via
-        // `lookup_or_insert`) from custom-function lookups (pure read via
-        // `lookup`). `FunctionContainer::apply` uses this distinction to
-        // allow `unstable-app` over a custom function in any DB-read-capable
-        // context while refusing constructors anywhere they can't mint.
-        let function = functions.get(&f.name).ok_or_else(|| {
-            Error::BackendError(format!("missing function definition for {name:?}"))
-        })?;
-        let action = egglog_bridge::TableAction::new(backend, function.backend_id);
-        match f.subtype {
+) -> ResolvedFunction {
+    let Some(target_function) = type_info
+        .get_sorts::<FunctionSort>()
+        .into_iter()
+        .find(|function| function.name() == primitive.output().name())
+    else {
+        panic!(
+            "`unstable-fn` output sort `{}` is not a function sort",
+            primitive.output().name()
+        );
+    };
+
+    let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
+    let remaining_inputs = target_function.inputs();
+    let output = target_function.output();
+
+    let id = if let Some(func) = functions.get(name) {
+        let func_type = type_info
+            .get_func_type(name)
+            .unwrap_or_else(|| panic!("No resolution for {name:?}"));
+        let expected_inputs = partial_arcsorts
+            .iter()
+            .chain(remaining_inputs)
+            .collect::<Vec<_>>();
+        let inputs_match = func_type.input.len() == expected_inputs.len()
+            && func_type
+                .input
+                .iter()
+                .zip(&expected_inputs)
+                .all(|(actual, expected)| actual.name() == expected.name());
+        if !inputs_match || func_type.output.name() != output.name() {
+            let expected_input_names = expected_inputs
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let actual_input_names = func_type
+                .input
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
+                "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
+                expected_input_names,
+                output.name(),
+                actual_input_names,
+                func_type.output.name(),
+            );
+        }
+
+        let action = egglog_bridge::TableAction::new(backend, func.backend_id);
+        match func_type.subtype {
             ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
             ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
         }
-    } else {
-        let fn_sort =
-            Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any()).map_err(|_| {
-                Error::BackendError("expected `unstable-fn` to return a function sort".to_owned())
-            })?;
-        let types: Vec<_> = prim
-            .input()
+    } else if let Some(primitives) = type_info.get_prims(name) {
+        let signature: Vec<_> = partial_arcsorts
             .iter()
-            .skip(1)
+            .chain(remaining_inputs)
+            .chain(once(&output))
             .cloned()
-            .chain(fn_sort.inputs().iter().cloned())
-            .chain(std::iter::once(fn_sort.output()))
             .collect();
-        // Bake every exact-signature registration. The build-site context is
-        // intentionally ignored: the application-time context selects which
-        // candidate dispatches at runtime.
-        let ps: Vec<_> = type_info
-            .get_prims(name)
-            .into_iter()
-            .flatten()
-            .filter(|p| p.accept(&types, type_info))
+        let candidates: Vec<_> = primitives
+            .iter()
+            .filter(|primitive| primitive.accept(&signature, type_info))
             .collect();
-        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
-        for runtime_ctx in Context::ALL {
-            let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
+        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+            let mut ids = candidates
+                .iter()
+                .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
             // The first `next` finds the candidate for this runtime context;
             // the second detects whether there is more than one such candidate.
             match (ids.next(), ids.next()) {
-                (None, _) => {}
-                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
-                (Some(_), Some(_)) => {
-                    return Err(Error::BackendError(format!(
-                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                    )));
-                }
+                (None, _) => None,
+                (Some(id), None) => Some(id),
+                (Some(_), Some(_)) => panic!(
+                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                ),
             }
-        }
+        });
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
-            return Err(Error::BackendError(format!("no callable for {name}")));
+            let (output_sort, input_sorts) = signature
+                .split_last()
+                .expect("primitive signature should include an output sort");
+            let input_names = input_sorts
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
+                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
+                 context ids: {context_ids:?}",
+                input_names,
+                output_sort.name(),
+            );
         }
         ResolvedFunctionId::Primitive { context_ids }
+    } else {
+        panic!("No resolution for {name:?}");
     };
 
-    Ok(ResolvedFunction {
+    ResolvedFunction {
         id,
-        partial_arcsorts: prim.input().iter().skip(1).cloned().collect(),
+        partial_arcsorts,
         name: name.to_owned(),
         panic_id,
-    })
-}
-
-fn unstable_fn_panic_message(name: &str) -> String {
-    format!(
-        "unstable-fn over `{name}` was applied in a context where its wrapped \
-         function is not valid for this call site, if in a rule, add :naive."
-    )
+    }
 }
 
 struct BackendRule<'a> {
@@ -2254,18 +2388,20 @@ impl<'a> BackendRule<'a> {
             // doesn't admit it. Triggered at runtime via the egglog
             // panic side channel so misuse surfaces as an `Err` from
             // `run_rules` rather than a thread unwind.
-            let panic_id = self.rb.new_panic(unstable_fn_panic_message(name));
-            let resolved_function = resolved_function_for_unstable_fn(
+            let panic_id = self.rb.new_panic(format!(
+                "unstable-fn over `{name}` was applied in a context where its wrapped \
+                 function is not valid for this call site, if in a rule, add :naive."
+            ));
+            let resolved = resolve_function_container_target_with_context(
                 self.rb.egraph(),
                 self.functions,
                 self.type_info,
-                prim,
                 name,
+                prim,
                 panic_id,
-            )
-            .unwrap_or_else(|err| panic!("{err}"));
+            );
 
-            qe_args[0] = self.rb.egraph().base_value_constant(resolved_function);
+            qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
 
         (

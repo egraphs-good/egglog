@@ -74,14 +74,7 @@ impl Display for Span {
                     .file
                     .get_location((span.j.saturating_sub(1)).max(span.i));
                 let quote = self.string();
-                // Use just the file name, not the full path, for cross-platform consistency in snapshots
-                let display_name = span.file.name.as_ref().map(|path| {
-                    std::path::Path::new(path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(path)
-                });
-                match (&display_name, start_line == end_line) {
+                match (&span.file.name, start_line == end_line) {
                     (Some(filename), true) => write!(
                         f,
                         "In {start_line}:{start_col}-{end_col} of {filename}: {quote}"
@@ -100,5 +93,25 @@ impl Display for Span {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn egglog_span_display_preserves_full_path() {
+        let path = "/tmp/egglog/full/path/example.egg".to_string();
+        let span = Span::Egglog(Arc::new(EgglogSpan {
+            file: Arc::new(SrcFile {
+                name: Some(path.clone()),
+                contents: "(bad)".to_string(),
+            }),
+            i: 0,
+            j: 5,
+        }));
+
+        assert_eq!(span.to_string(), format!("In 1:1-5 of {path}: (bad)"));
     }
 }
