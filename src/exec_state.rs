@@ -197,10 +197,15 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     }
 }
 
-/// Read-side methods — name-indexed table lookup. Implemented for
-/// [`ReadState`] and [`FullState`]; *not* for [`PureState`] or
-/// [`WriteState`] (a `Write` context body must not depend on live DB
-/// state). Returns `None` if the row is absent — never inserts.
+/// Read-side methods — name-indexed table lookup and iteration.
+/// Implemented for [`ReadState`] and [`FullState`]; *not* for
+/// [`PureState`] or [`WriteState`] (a `Write` context body must not
+/// depend on live DB state).
+///
+/// The single-row methods (`lookup`, `eclass_of`, `lookup_raw`,
+/// `contains`) return `None` if the row is absent — never insert.
+/// The iteration / introspection methods (`table_rows`, `table_size`,
+/// `table_sizes`) walk the current contents of the database.
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort

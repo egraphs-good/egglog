@@ -46,8 +46,9 @@ fn query_table_raw_values() -> Result<(), Error> {
     Ok(())
 }
 
-/// Test 2: `query::<(i64,)>(vars![x: i64], facts![(R x)])`
-/// matches and binds `x` for every row in the relation.
+/// Test 2: `egraph.query(vars![x: i64], facts![(R x)])` matches and
+/// binds `x` for every row in the relation. Each match is a
+/// `HashMap<String, Value>` keyed by variable name.
 #[test]
 fn query_pattern_relation_one_var() -> Result<(), Error> {
     let mut egraph = EGraph::default();
@@ -71,16 +72,11 @@ fn query_pattern_relation_one_var() -> Result<(), Error> {
     Ok(())
 }
 
-/// Test 3: `query::<()>(vars![], facts![(R 1 2)])`.
+/// Test 3: `egraph.query(vars![], facts![(R 1 2)])` — zero-var case.
 ///
-/// Decision: with zero `vars`, we return one empty tuple per match.
-/// That is, `Vec<()>` has length equal to the number of times the
-/// fact pattern is satisfied. This mirrors the behaviour of an
-/// egglog rule with no captured variables firing once per unique
-/// match (or zero times if there is no match).
-///
-/// In practice for ground (no variables / no joins) facts, that's
-/// either 0 or 1 matches.
+/// With zero `vars`, every match still produces a `HashMap` (which
+/// will be empty since there are no variables to bind), so
+/// `.len()` reports the match count. For ground facts that's 0 or 1.
 #[test]
 fn query_pattern_zero_vars_match() -> Result<(), Error> {
     let mut egraph = EGraph::default();
@@ -134,8 +130,8 @@ fn query_constructor_table_eclass_values() -> Result<(), Error> {
         assert_eq!(row.len(), 3);
         let _x = egraph.value_to_base::<i64>(row[0]);
         let _y = egraph.value_to_base::<i64>(row[1]);
-        // row[2] is an eq-sort id; we just verify we get back a Value.
-        let _: Value = row[2];
+        // row[2] is the eq-sort eclass id — already a Value, nothing
+        // to verify beyond the column count above.
     }
 
     let mut input_pairs: Vec<(i64, i64)> = rows

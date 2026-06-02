@@ -3,12 +3,11 @@
 //! folds `(Add (Num a) (Num b))` to `(Num (a+b))`, run to saturation,
 //! and read back the canonical eclass.
 //!
-//! Exercises: `update`, `Write::add` (constructor minting),
-//! `Read::eclass_of` (constructor lookup without minting),
-//! `Read::contains`, `rust_rule_full` (rule body needs both
-//! `Read::lookup_raw` and `Write::union`), `add_ruleset`,
-//! `run_ruleset`, `Vec<Value>` rows from `Read::table_rows` for
-//! enumeration of an eclass's nodes.
+//! Exercises: `EGraph::update`, `Write::add` (constructor minting
+//! both from outside a rule and from inside a `rust_rule` callback),
+//! `Write::union` (inside the rule), `Read::eclass_of`,
+//! `Read::table_sizes`, `EGraph::table_rows`, `add_ruleset`,
+//! `run_ruleset`.
 
 use egglog::prelude::*;
 use egglog::{Error, RawValues, Value};
@@ -20,9 +19,6 @@ use egglog::{Error, RawValues, Value};
 ///   (Num i64)
 ///   (Add Expr Expr))
 /// ```
-///
-/// Plus a `:cost` table that records best-known integer values for
-/// eclasses — populated by the folding rule.
 fn make_egraph() -> EGraph {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(
@@ -37,9 +33,9 @@ fn make_egraph() -> EGraph {
 /// holds and `n1 = (Num a)` and `n2 = (Num b)`, mint `(Num (a+b))`
 /// and union it with `e`.
 ///
-/// The rule body uses `Read::lookup_raw` to look up the integer
-/// payload of each `Num` row directly (the row is a single i64
-/// column), then `Write::add` + `Write::union` on the WriteState.
+/// The rule body uses `value_to_base` to extract the two i64
+/// payloads bound by the matcher, then `Write::add` + `Write::union`
+/// on the WriteState.
 fn install_const_fold_rule(eg: &mut EGraph) -> Result<(), Error> {
     let ruleset = "const_fold";
     add_ruleset(eg, ruleset)?;

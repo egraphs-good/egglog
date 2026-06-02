@@ -947,11 +947,12 @@ impl EGraph {
     /// # Seminaive-safety trust boundary
     ///
     /// This method hands out a raw `&mut ExecutionState`, which bypasses
-    /// the typed state wrappers (`PureState`, `WriteState`, `ReadState`,
-    /// `FullState`) that the egglog crate uses to enforce #772's
-    /// seminaive-safety model. Treat it as top-level / global-action
-    /// context: appropriate for one-shot database manipulation from
-    /// outside any rule, not for use inside primitive implementations.
+    /// the egglog crate's `Read` / `Write` capability wrappers
+    /// (`PureState`, `WriteState`, `ReadState`, `FullState`) that
+    /// enforce #772's seminaive-safety model. Treat it as top-level
+    /// / global-action context: appropriate for one-shot database
+    /// manipulation from outside any rule, not for use inside
+    /// primitive implementations.
     pub fn update<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.update(f)
     }
