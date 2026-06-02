@@ -969,6 +969,10 @@ impl EGraph {
 
         let GenericRunConfig { ruleset, until } = config;
 
+        if !self.rulesets.contains_key(ruleset) {
+            return Err(Error::NoSuchRuleset(ruleset.clone(), span.clone()));
+        }
+
         if let Some(facts) = until
             && self.check_facts(span, facts).is_ok()
         {
@@ -2649,5 +2653,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res[0].to_string(), "(expensive)\n");
+    }
+
+    #[test]
+    fn test_run_undefined_ruleset_errors() {
+        let mut egraph = EGraph::default();
+        let err = egraph
+            .parse_and_run_program(None, "(ruleset test)\n(run test2 1)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "test2"));
     }
 }
