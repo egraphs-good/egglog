@@ -42,6 +42,7 @@ impl Macro<Vec<Command>> for For {
             body: query,
             name: rulename,
             ruleset: ruleset.clone(),
+            allow_action_lookups: false,
         };
 
         Ok(vec![
