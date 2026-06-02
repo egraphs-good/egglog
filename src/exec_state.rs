@@ -30,7 +30,7 @@
 //! [`ReadPrim`]: crate::ReadPrim
 //! [`FullPrim`]: crate::FullPrim
 
-use std::{fmt, ops::Deref};
+use std::ops::Deref;
 
 use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
@@ -261,56 +261,33 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         expr: &ResolvedExpr,
         bindings: &[(&str, Value)],
     ) -> Option<Value> {
-        eval_resolved_expr_result(self, expr, bindings).ok()
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum EvalError {
-    UnboundVariable(String),
-    FunctionFailed(String),
-    PrimitiveFailed(String),
-}
-
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EvalError::UnboundVariable(name) => write!(f, "unbound variable {name}"),
-            EvalError::FunctionFailed(name) => write!(f, "lookup of function {name} failed"),
-            EvalError::PrimitiveFailed(name) => write!(f, "call of primitive {name} failed"),
-        }
-    }
-}
-
-pub(crate) fn eval_resolved_expr_result<'a, 'db: 'a>(
-    state: &mut (impl Core<'a, 'db> + ?Sized),
-    expr: &ResolvedExpr,
-    bindings: &[(&str, Value)],
-) -> Result<Value, EvalError> {
-    match expr {
-        ResolvedExpr::Lit(_, literal) => Ok(match literal {
-            Literal::Int(x) => state.base_to_value(*x),
-            Literal::Float(x) => state.base_to_value(F::from(*x)),
-            Literal::String(x) => state.base_to_value(S::new(x.clone())),
-            Literal::Bool(x) => state.base_to_value(*x),
-            Literal::Unit => state.base_to_value(()),
-        }),
-        ResolvedExpr::Var(_, resolved_var) => bindings
-            .iter()
-            .find_map(|(name, value)| (*name == resolved_var.name).then_some(*value))
-            .ok_or_else(|| EvalError::UnboundVariable(resolved_var.name.clone())),
-        ResolvedExpr::Call(_, resolved_call, children) => {
-            let mut values = Vec::with_capacity(children.len());
-            for child in children {
-                values.push(eval_resolved_expr_result(state, child, bindings)?);
+        match expr {
+            ResolvedExpr::Lit(_, literal) => Some(match literal {
+                Literal::Int(x) => self.base_to_value(*x),
+                Literal::Float(x) => self.base_to_value(F::from(*x)),
+                Literal::String(x) => self.base_to_value(S::new(x.clone())),
+                Literal::Bool(x) => self.base_to_value(*x),
+                Literal::Unit => self.base_to_value(()),
+            }),
+            ResolvedExpr::Var(_, resolved_var) => {
+                assert!(
+                    !resolved_var.is_global_ref,
+                    "global variable {:?} reached direct expression evaluation before remove_globals",
+                    resolved_var.name
+                );
+                bindings
+                    .iter()
+                    .find_map(|(name, value)| (*name == resolved_var.name).then_some(*value))
             }
-            match resolved_call {
-                ResolvedCall::Primitive(primitive) => state
-                    .apply_primitive(primitive, &values)
-                    .ok_or_else(|| EvalError::PrimitiveFailed(primitive.name().to_owned())),
-                ResolvedCall::Func(func) => state
-                    .apply_resolved_function(func, &values)
-                    .ok_or_else(|| EvalError::FunctionFailed(func.name.clone())),
+            ResolvedExpr::Call(_, resolved_call, children) => {
+                let mut values = Vec::with_capacity(children.len());
+                for child in children {
+                    values.push(self.eval_resolved_expr(child, bindings)?);
+                }
+                match resolved_call {
+                    ResolvedCall::Primitive(primitive) => self.apply_primitive(primitive, &values),
+                    ResolvedCall::Func(func) => self.apply_resolved_function(func, &values),
+                }
             }
         }
     }

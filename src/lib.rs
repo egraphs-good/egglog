@@ -1131,8 +1131,8 @@ impl EGraph {
     /// `bindings` contains the local variables in scope while resolving `expr`.
     /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
     /// tied to that binding. `output_sort` constrains overload resolution and
-    /// output-type inference for the expression. Global references are not
-    /// supported; callers should pass captured values explicitly in `bindings`.
+    /// output-type inference for the expression. Global references are rewritten
+    /// into the same zero-argument function calls used during command execution.
     /// `context` should match the runtime context where the resolved expression
     /// will be evaluated.
     pub fn typecheck_expr_with_bindings_and_output(
@@ -1152,16 +1152,6 @@ impl EGraph {
                 return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
             }
         }
-        fn global_ref(expr: &ResolvedExpr) -> Option<(String, Span)> {
-            match expr {
-                ResolvedExpr::Var(span, resolved_var) if resolved_var.is_global_ref => {
-                    Some((resolved_var.name.clone(), span.clone()))
-                }
-                ResolvedExpr::Call(_, _, children) => children.iter().find_map(global_ref),
-                _ => None,
-            }
-        }
-
         let resolved = self.type_info.typecheck_expr_with_output(
             &mut self.parser.symbol_gen,
             expr,
@@ -1169,10 +1159,7 @@ impl EGraph {
             output_sort,
             context,
         )?;
-        if let Some((name, span)) = global_ref(&resolved) {
-            return Err(TypeError::GlobalInExprWithBindings { name, span });
-        }
-        Ok(resolved)
+        Ok(remove_globals::remove_globals_expr(resolved))
     }
 
     /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
@@ -1181,6 +1168,11 @@ impl EGraph {
     /// scope before any caller-supplied local bindings. This lets direct
     /// execution-state evaluation use the same hidden `ResolvedFunction` value
     /// that backend rule lowering injects for `unstable-fn`.
+    ///
+    /// For example, a resolved body like `(unstable-app (unstable-fn "f") _0)`
+    /// cannot evaluate the string literal `"f"` directly. This helper replaces
+    /// the `(unstable-fn "f")` sub-expression with a fresh hidden variable and
+    /// returns a binding from that variable to the prepared function value.
     pub fn prepare_unstable_fn_targets_for_eval(
         &mut self,
         expr: &ResolvedExpr,
@@ -2077,6 +2069,12 @@ impl EGraph {
     }
 }
 
+/// Build the runtime value backing a resolved `(unstable-fn name)` target.
+///
+/// For table-backed functions, this captures the table action that
+/// `unstable-app` will call later. For primitive targets, this bakes one
+/// dispatch id per runtime context so application can choose the entrypoint
+/// matching the primitive body's current call-site context.
 fn resolved_function_for_unstable_fn(
     backend: &egglog_bridge::EGraph,
     functions: &IndexMap<String, Function>,
@@ -2124,6 +2122,8 @@ fn resolved_function_for_unstable_fn(
         let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
         for runtime_ctx in Context::ALL {
             let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
+            // The first `next` finds the candidate for this runtime context;
+            // the second detects whether there is more than one such candidate.
             match (ids.next(), ids.next()) {
                 (None, _) => {}
                 (Some(id), None) => context_ids[runtime_ctx] = Some(id),
@@ -2678,24 +2678,28 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_expr_with_bindings_and_output_rejects_globals() {
+    fn test_typecheck_expr_with_bindings_and_output_rewrites_globals() {
         let mut egraph = EGraph::default();
         egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
         let mut parser = crate::ast::Parser::default();
         let expr = parser.get_expr_from_string(None, "$x").unwrap();
 
-        let err = egraph
+        let resolved = egraph
             .typecheck_expr_with_bindings_and_output(
                 &expr,
                 &[],
                 I64Sort.to_arcsort(),
                 Context::Read,
             )
-            .unwrap_err();
+            .unwrap();
 
-        match err {
-            TypeError::GlobalInExprWithBindings { name, .. } => assert_eq!(name, "$x"),
-            other => panic!("expected global rejection, got {other:?}"),
+        match resolved {
+            ResolvedExpr::Call(_, ResolvedCall::Func(func), children) => {
+                assert_eq!(func.name, "$x");
+                assert!(children.is_empty());
+                assert_eq!(func.output.name(), I64Sort.name());
+            }
+            other => panic!("expected global function call rewrite, got {other:?}"),
         }
     }
 
