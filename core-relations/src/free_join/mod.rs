@@ -886,8 +886,6 @@ impl ColumnCardEst<'_> {
     }
 
     pub fn col_uniqueness(&self, table: TableId, col: ColumnId) -> ColUniqueness {
-        // dbg!(self.db.tables.iter().map(|(id, info)| (id, info.name.as_deref())).collect::<Vec<_>>());
-        // dbg!(table, col);
         let col_idx = get_column_index_from_tableinfo(&self.db.tables[table], col);
         let table = &self.db.tables[table].table;
         ColUniqueness {
@@ -903,6 +901,17 @@ impl std::fmt::Debug for ColumnCardEst<'_> {
     }
 }
 
+/// A coarse cardinality estimate for a column of a table, used by the query
+/// planner to decide which variable to eliminate next during tree
+/// decomposition.
+///
+/// `table_size` is the number of rows in the (sub)table and `col_size` is the
+/// number of distinct values in the column. Their ratio
+/// (`table_size / col_size`) approximates the average number of rows that share
+/// a given value of the column: a smaller ratio means the column is closer to
+/// being unique and therefore cheaper to join on. [`ColUniqueness`] is ordered
+/// by this ratio (see the [`Ord`] impl), so the planner prefers variables with
+/// the most selective (most unique) columns.
 #[derive(Copy, Clone, Debug)]
 pub struct ColUniqueness {
     table_size: usize,
@@ -919,6 +928,7 @@ impl Default for ColUniqueness {
 }
 
 impl ColUniqueness {
+    #[allow(dead_code)] // not yet wired up into the planner
     fn scale(&self, subset_size: usize) -> ColUniqueness {
         if self.table_size == 0 || subset_size == 0 {
             return ColUniqueness {
@@ -928,16 +938,17 @@ impl ColUniqueness {
         }
         ColUniqueness {
             table_size: subset_size,
-            col_size: self.col_size * subset_size / self.table_size,
+            col_size: self.col_size.saturating_mul(subset_size) / self.table_size,
         }
     }
     fn join(&self, other: &ColUniqueness) -> ColUniqueness {
         ColUniqueness {
-            table_size: self.table_size * other.table_size,
+            table_size: self.table_size.saturating_mul(other.table_size),
             col_size: self.col_size.max(other.col_size),
         }
     }
 
+    #[allow(dead_code)] // not yet wired up into the planner
     fn col_size(&self) -> usize {
         self.col_size
     }

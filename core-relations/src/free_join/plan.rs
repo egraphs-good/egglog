@@ -1247,7 +1247,7 @@ impl<'a> PlanningContext<'a> {
     }
 
     fn common_vars_with<'b>(
-        &'a self,
+        &'b self,
         other: &'b PlanningContext<'a>,
     ) -> impl Iterator<Item = Variable> + 'b {
         self.vars
