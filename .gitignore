@@ -24,3 +24,6 @@ scripts/compiled
 tests/*.json
 
 lcov.info
+
+# eval: extracted benchmark corpora (e.g. Herbie dumps)
+*.extracted/

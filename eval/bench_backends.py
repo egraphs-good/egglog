@@ -47,7 +47,16 @@ def conditions():
     """The cross product backends x modes, as (name, flags) pairs."""
     for backend, bflags in BACKENDS:
         for mode, mflags in MODES:
-            yield (f"{backend}-{mode}", backend, mode, bflags + mflags)
+            # duckdb is term-encoding-only: `--duckdb` already implies term
+            # encoding, and passing `--term-encoding` on top of it panics the
+            # backend. So for duckdb the "term-encoding" cell adds no extra
+            # flag (it equals duckdb-normal); the grid stays a true cross
+            # product without the broken/redundant combination.
+            if backend == "duckdb" and mode == "term-encoding":
+                flags = list(bflags)
+            else:
+                flags = bflags + mflags
+            yield (f"{backend}-{mode}", backend, mode, flags)
 
 
 class BenchDB:
@@ -84,21 +93,33 @@ class BenchDB:
 
 
 def build_egglog(release: bool) -> Path:
-    """Build the egglog CLI (needs the `bin` feature) and return its path."""
+    """Build the egglog-experimental CLI and return its path. We use the
+    experimental binary (a strict CLI superset of plain egglog) so the
+    Herbie dumps' scheduler / multi-extract forms parse, while mainline
+    benchmarks still run unchanged."""
     profile = ["--release"] if release else []
-    print(f"Building egglog ({'release' if release else 'debug'})...", flush=True)
+    print(f"Building egglog-experimental ({'release' if release else 'debug'})...", flush=True)
     subprocess.run(
-        ["cargo", "build", *profile, "--features", "bin", "--bin", "egglog"],
+        ["cargo", "build", *profile, "-p", "egglog-experimental", "--bin", "egglog-experimental"],
         cwd=WORKSPACE, check=True,
     )
     target = "release" if release else "debug"
-    binary = WORKSPACE / "target" / target / "egglog"
+    binary = WORKSPACE / "target" / target / "egglog-experimental"
     if not binary.exists():
-        sys.exit(f"egglog binary not found at {binary}")
+        sys.exit(f"egglog-experimental binary not found at {binary}")
     return binary
 
 
 def find_benchmarks(path: Path) -> list[Path]:
+    # A `.tar.zst` (e.g. the Herbie dumps) is extracted once to a sibling
+    # `<name>.extracted/` dir and benchmarked from there.
+    if path.is_file() and path.name.endswith(".tar.zst"):
+        dest = path.with_name(path.name.replace(".tar.zst", "") + ".extracted")
+        if not dest.exists():
+            print(f"Extracting {path.name} -> {dest} ...", flush=True)
+            dest.mkdir(parents=True)
+            subprocess.run(["tar", "-xf", str(path), "-C", str(dest)], check=True)
+        return sorted(dest.rglob("*.egg"))
     if path.is_file():
         return [path]
     return sorted(path.rglob("*.egg"))
@@ -203,6 +224,8 @@ def main():
     parser.add_argument("--warmup", type=int, default=1, help="discarded warm-up runs (default 1)")
     parser.add_argument("--timeout", type=float, default=300.0,
                         help="per-run timeout in seconds (default 300)")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="benchmark at most N files (sample large corpora like the Herbie dumps)")
     parser.add_argument("--output", default=str(WORKSPACE / "eval" / "results.json"),
                         help="results JSON path")
     parser.add_argument("--debug", action="store_true",
@@ -224,6 +247,8 @@ def main():
     benchmarks = find_benchmarks(bench_path)
     if not benchmarks:
         sys.exit(f"no .egg benchmarks found under {bench_path}")
+    if args.limit is not None:
+        benchmarks = benchmarks[:args.limit]
 
     conds = list(conditions())
     print(f"\n{len(benchmarks)} benchmark(s) x {len(conds)} condition(s), "

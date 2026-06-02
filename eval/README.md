@@ -9,8 +9,22 @@ renders the results interactively with [eval-live](https://github.com/oflatt/eva
 | **duckdb**   | `--duckdb`        | `--duckdb --term-encoding` | `--duckdb --proofs` |
 
 DuckDB is term-encoding-only, so `duckdb-normal` and `duckdb-term-encoding`
-drive the same engine and report ~the same numbers; both are kept so the grid
-is a true cross product.
+both run plain `--duckdb` (passing `--term-encoding` on top of `--duckdb`
+panics the backend) and report ~the same numbers; both cells are kept so the
+grid is a true cross product.
+
+The benchmark binary is **`egglog-experimental`** (a CLI superset of plain
+egglog), so the Herbie dumps' scheduler / `multi-extract` / `get-size!` forms
+parse while mainline benchmarks run unchanged.
+
+## The paper benchmark corpus
+
+- **math-microbenchmark/math_full.egg** — runs (slow under duckdb/proofs).
+- **herbie dumps** (`herbie/dump-egglog/dumps.tar.zst`, 1260 files) — run via
+  egglog-experimental. Point `--path` at the tarball; it's auto-extracted to a
+  sibling `.extracted/` dir (gitignored). Use `--limit N` to sample.
+- **pointer-analysis/main.egg** — *excluded*: it `(input …)`s cclyzer++ CSV
+  facts that aren't redistributed in this repo, so it can't run standalone.
 
 ## Run
 
@@ -19,6 +33,9 @@ pip install git+https://github.com/oflatt/eval-live.git   # once, for --serve
 
 # benchmark every .egg under paper-benchmarks/ (release build), then view:
 python3 eval/bench_backends.py --serve
+
+# the Herbie dumps (auto-extracted from the tarball), sampling 20:
+python3 eval/bench_backends.py paper-benchmarks/herbie/dump-egglog/dumps.tar.zst --limit 20
 
 # point it at any file or directory:
 python3 eval/bench_backends.py tests/web-demo --runs 3 --warmup 1
