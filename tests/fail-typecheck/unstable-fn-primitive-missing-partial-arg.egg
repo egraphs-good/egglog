@@ -1,0 +1,18 @@
+;; A primitive target must be partially applied enough to match the inferred
+;; function sort. The first two checks resolve binary `+` without partial args.
+;; The next two partial applications turn binary `+` into unary functions for
+;; i64 and f64. The final check still calls the inferred unary function with the
+;; right number of arguments, but no partial argument was supplied to make
+;; binary `+` unary.
+
+(sort I64Add (UnstableFn (i64 i64) i64))
+(sort F64Add (UnstableFn (f64 f64) f64))
+(sort I64ToI64 (UnstableFn (i64) i64))
+(sort F64ToF64 (UnstableFn (f64) f64))
+
+(check (= (unstable-app (unstable-fn "+") 1 2) 3))
+(check (= (unstable-app (unstable-fn "+") 1.0 2.0) 3.0))
+(check (= (unstable-app (unstable-fn "+" 1) 2) 3))
+(check (= (unstable-app (unstable-fn "+" 1.0) 2.0) 3.0))
+
+(check (= (unstable-app (unstable-fn "+") 2) 3))

@@ -6,7 +6,7 @@ use super::*;
 /// - Rounding: `floor`, `ceil`, `round`
 /// - Con/Destruction: `bigrat`, `numer`, `denom`
 /// - Comparisons: `<`, `>`, `<=`, `>=`
-/// - Other: `min`, `max`, `to-f64`
+/// - Other: `min`, `max`, `to-f64`, `to-i64`
 #[derive(Debug)]
 pub struct BigRatSort;
 
@@ -36,6 +36,7 @@ impl BaseSort for BigRatSort {
         add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new(a.numer().clone()) });
         add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new(a.denom().clone()) });
         add_primitive!(eg, "to-f64" = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
+        add_primitive!(eg, "to-i64" = |a: Q| -?> i64 { a.is_integer().then(|| a.to_integer()).and_then(|a| a.to_i64()) });
 
         add_primitive!(eg, "pow" = |a: Q, b: Q| -?> Q {
             if !b.is_integer() {

@@ -22,6 +22,19 @@ impl Run {
         self.path.parent().unwrap().ends_with("proofs")
     }
 
+    fn filename_for_test_run(&self) -> Option<String> {
+        if self.should_fail() {
+            // Fail-typecheck errors are snapshot-tested. Pass a stable display
+            // name so Span can render the caller-provided path verbatim without
+            // making snapshots depend on the local checkout path.
+            self.path
+                .file_name()
+                .map(|name| name.to_string_lossy().into())
+        } else {
+            self.path.to_str().map(String::from)
+        }
+    }
+
     /// Extraction results may differ slightly due to the proof encoding when multiple
     /// solutions have the same cost. Snapshot only the extracted cost so shared
     /// snapshots still verify that normal and proof modes find equally good solutions.
@@ -51,7 +64,7 @@ impl Run {
 
         let result = if !self.desugar {
             self.test_program(
-                self.path.to_str().map(String::from),
+                self.filename_for_test_run(),
                 &program,
                 "",
                 "Top level error",

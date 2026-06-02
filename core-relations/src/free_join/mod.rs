@@ -774,6 +774,47 @@ impl Database {
             .table
     }
 
+    /// Remove every row from the given table.
+    ///
+    /// This is intended as a faster alternative to staging a per-row
+    /// `stage_remove` for every key in the table. The underlying [`Table::clear`]
+    /// implementation drops the row storage in bulk and bumps the table's major
+    /// generation, so any cached indexes/subsets observed by future readers will
+    /// be lazily rebuilt against the now-empty table. Any pending staged
+    /// inserts or removes for this table are dropped (they pre-dated the clear,
+    /// so they no longer make sense once the table is empty).
+    ///
+    /// This method also resets the cached column- and key-indexes for the
+    /// table so subsequent merges can take the `Arc::get_mut`-based reset path,
+    /// matching the invariant maintained by [`Database::merge_all`].
+    ///
+    /// This does **not** flush pending changes for *other* tables; it is the
+    /// caller's responsibility to call [`Database::merge_all`] beforehand if
+    /// they need staged updates from a previous step to land before the clear.
+    pub fn clear_table(&mut self, table: TableId) {
+        let info = self
+            .tables
+            .get_mut(table)
+            .expect("must access a table that has been declared in this database");
+        let prev_len = info.table.len();
+        info.table.clear();
+        // The version bump from `clear` is enough on its own to make the
+        // indexes self-refresh on next access (see `Index::refresh`). We still
+        // reset them eagerly here so that the next `merge_all` sees the same
+        // "indexes are resettable" state it expects after a successful merge.
+        info.column_indexes.update(|_, ti| {
+            if let Some(arc) = Arc::get_mut(ti) {
+                arc.reset();
+            }
+        });
+        info.indexes.update(|_, ti| {
+            if let Some(arc) = Arc::get_mut(ti) {
+                arc.reset();
+            }
+        });
+        self.total_size_estimate = self.total_size_estimate.wrapping_sub(prev_len);
+    }
+
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
         plan::plan_query(query)
     }

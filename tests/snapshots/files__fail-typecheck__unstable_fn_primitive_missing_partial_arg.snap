@@ -1,0 +1,24 @@
+---
+source: tests/files.rs
+assertion_line: 106
+expression: err_msg
+---
+All alternative definitions considered failed
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+ Expect expression @unstable-fn8 to have type I64Add, but get type I64ToI64
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+ Expect expression @unstable-fn8 to have type F64Add, but get type I64ToI64
+  All alternative definitions considered failed
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+ Expect expression __unstable_fn_target_+_I64ToI64_arg_1 to have type String, but get type i64
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+Arity mismatch, expected 2 args: (+ __unstable_fn_target_+_I64ToI64_arg_0)
+
+  In 18:25-41 of unstable-fn-primitive-missing-partial-arg.egg: (unstable-fn "+")
+ Expect expression @unstable-fn8 to have type F64ToF64, but get type I64ToI64

@@ -3,7 +3,6 @@ use egglog::{
     extract::DefaultCost,
     *,
 };
-use egglog_ast::span::{RustSpan, Span};
 
 #[test]
 fn globals_missing_prefix_errors_when_opted_in() {
@@ -477,10 +476,10 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math :cost 100)
+            (constructor expensive () Math :cost 100)
             (constructor cheap () Math :cost 1)
-            (union (exp) (cheap))
-            (extract (exp))
+            (union (expensive) (cheap))
+            (extract (expensive))
             "#,
         )
         .unwrap();
@@ -501,13 +500,13 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (subsume (cheap))
-            (extract (exp))
+            (extract (expensive))
             "#,
         )
         .unwrap();
     assert!(match &outputs[0] {
         CommandOutput::ExtractBest(termdag, _, term_id) => {
-            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "exp")
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "expensive")
         }
         _ => false,
     });
@@ -525,21 +524,21 @@ fn test_subsume_unextractable_insert_and_merge() {
             (datatype Expr
                 (f Expr)
                 (Num i64))
-            (constructor exp () Expr :cost 100)
+            (constructor expensive () Expr :cost 100)
 
               (f (Num 1))
               (subsume (f (Num 1)))
               (f (Num 2))
 
               (union (Num 2) (Num 1))
-              (union (f (Num 2)) (exp))
+              (union (f (Num 2)) (expensive))
               (extract (f (Num 2)))
             "#,
         )
         .unwrap();
     assert!(match &outputs[0] {
         CommandOutput::ExtractBest(termdag, _, term_id) => {
-            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "exp")
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "expensive")
         }
         _ => false,
     });
@@ -594,9 +593,9 @@ fn test_rewrite_subsumed_unextractable() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math :cost 100)
+            (constructor expensive () Math :cost 100)
             (constructor cheap () Math :cost 1)
-            (rewrite (cheap) (exp) :subsume)
+            (rewrite (cheap) (expensive) :subsume)
             (cheap)
             (run 1)
             (extract (cheap))
@@ -604,7 +603,7 @@ fn test_rewrite_subsumed_unextractable() {
         )
         .unwrap();
     // Should give back expenive term, because cheap is unextractable
-    assert_eq!(outputs[1].to_string(), "(exp)\n");
+    assert_eq!(outputs[1].to_string(), "(expensive)\n");
 }
 
 #[test]
@@ -619,9 +618,9 @@ fn test_rewrite_subsumed() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math :cost 100)
+            (constructor expensive () Math :cost 100)
             (constructor most-exp () Math :cost 1000)
-            (rewrite (most-exp) (exp) :subsume)
+            (rewrite (most-exp) (expensive) :subsume)
             (most-exp)
             (run 1)
             (constructor cheap () Math :cost 1)
@@ -631,7 +630,7 @@ fn test_rewrite_subsumed() {
             "#,
         )
         .unwrap();
-    assert_eq!(outputs[2].to_string(), "(exp)\n");
+    assert_eq!(outputs[2].to_string(), "(expensive)\n");
 }
 
 #[test]
@@ -766,9 +765,9 @@ fn test_value_to_classid() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math )
-            (exp)
-            (extract (exp))
+            (constructor expensive () Math )
+            (expensive)
+            (extract (expensive))
             "#,
         )
         .unwrap();
@@ -1097,4 +1096,187 @@ fn rewrite_name_with_ruleset() {
             ",
         )
         .unwrap();
+}
+
+// =====================================================================
+// `clear_function` tests.
+//
+// The clear path bumps the table's major generation, which is the
+// source of most subtle bugs: cached subsets, hash indexes, seminaive
+// watermarks, and `RowId` values from the old generation must all be
+// invalidated lazily before the next read/write touches them. Each
+// test below threads several such failure modes together so the same
+// e-graph exercises a realistic sequence rather than one assertion at
+// a time.
+// =====================================================================
+
+/// Single-function lifecycle: declare → no-op clear of empty table →
+/// populate → assert the three different read paths agree on the
+/// contents (`get_size`, `lookup_function`, `function_for_each`) →
+/// clear → assert all three read paths report empty → re-insert with
+/// completely new keys → assert the old keys are gone and the new
+/// ones are present. Run the populate/clear/re-insert pass repeatedly
+/// to make sure the generation counter and the index-reset path keep
+/// working past the first cycle.
+#[test]
+fn clear_function_lifecycle() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(datatype Math (Num i64))")
+        .unwrap();
+
+    // Clearing an empty function is a no-op (and does it twice to
+    // exercise the `data.len() == 0` early-return inside
+    // `SortedWritesTable::clear`).
+    assert_eq!(egraph.get_size("Num"), 0);
+    egraph.clear_function("Num").unwrap();
+    egraph.clear_function("Num").unwrap();
+    assert_eq!(egraph.get_size("Num"), 0);
+
+    for round in 0..3i64 {
+        let a = round * 10;
+        let b = round * 10 + 1;
+        let c = round * 10 + 2;
+
+        // Populate, then read through all three paths to warm caches
+        // (and any per-table indexes) before we clear.
+        egraph
+            .parse_and_run_program(None, &format!("(Num {a}) (Num {b}) (Num {c})"))
+            .unwrap();
+        assert_eq!(egraph.get_size("Num"), 3);
+
+        let key_a = egraph.base_to_value::<i64>(a);
+        assert!(egraph.lookup_function("Num", &[key_a]).is_some());
+
+        let mut seen = 0;
+        egraph.function_for_each("Num", |_row| seen += 1).unwrap();
+        assert_eq!(seen, 3);
+
+        // Now clear and re-read through every access path: each must
+        // observe the new (empty) generation, not phantom rows from
+        // before the generation bump.
+        egraph.clear_function("Num").unwrap();
+        assert_eq!(egraph.get_size("Num"), 0);
+        assert!(egraph.lookup_function("Num", &[key_a]).is_none());
+        let mut seen_after = 0;
+        egraph
+            .function_for_each("Num", |_row| seen_after += 1)
+            .unwrap();
+        assert_eq!(seen_after, 0);
+        let check_old = egraph.parse_and_run_program(None, &format!("(check (Num {a}))"));
+        assert!(
+            check_old.is_err(),
+            "round {round}: (Num {a}) should be absent after clear, got {check_old:?}"
+        );
+    }
+}
+
+/// Cross-cutting scenario: a rule that derives from one function,
+/// a sibling function we expect not to touch, a `:merge` function
+/// whose accumulator state must be reset, and an index over the
+/// cleared function that was warmed by an earlier rule run.
+///
+/// The scenario verifies, in order:
+///   1. `clear_function` only clears the named function, not the
+///      sibling `Sym` and not the derived `Saw` populated by a rule.
+///   2. The `:merge` accumulator on `score` resets — a write after
+///      the clear does not silently re-merge with the old value.
+///   3. The cleared `Num` does not yield phantom rows via the rule's
+///      cached index over the old generation.
+///   4. After re-insert, the rule re-fires on the new `Num` rows,
+///      which catches seminaive-watermark-not-invalidated bugs.
+#[test]
+fn clear_function_with_rules_siblings_and_merge() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math (Num i64) (Sym i64))
+            (relation Saw (i64))
+            (rule ((Num x)) ((Saw x)))
+            (function score (i64) i64 :merge (max old new))
+
+            (Num 1) (Num 2) (Num 3)
+            (Sym 10) (Sym 20)
+            (set (score 7) 5)
+            (set (score 7) 10)
+            (set (score 7) 8)
+            (run 1)
+            (check (Saw 1)) (check (Saw 2)) (check (Saw 3))
+            (check (= (score 7) 10))
+            ",
+        )
+        .unwrap();
+    assert_eq!(egraph.get_size("Num"), 3);
+    assert_eq!(egraph.get_size("Sym"), 2);
+    assert_eq!(egraph.get_size("Saw"), 3);
+    assert_eq!(egraph.get_size("score"), 1);
+
+    // (1) Clear Num and score. Sym is a sibling datatype constructor;
+    // Saw is derived data populated by the rule. Neither should be
+    // affected.
+    egraph.clear_function("Num").unwrap();
+    egraph.clear_function("score").unwrap();
+    assert_eq!(egraph.get_size("Num"), 0);
+    assert_eq!(egraph.get_size("score"), 0);
+    assert_eq!(egraph.get_size("Sym"), 2);
+    assert_eq!(egraph.get_size("Saw"), 3);
+    egraph
+        .parse_and_run_program(None, "(check (Sym 10))")
+        .unwrap();
+
+    // (3) The cleared Num must not yield phantom rows via a cached
+    // index — the major-generation bump on clear should force the
+    // index to rebuild before the check runs.
+    let phantom = egraph.parse_and_run_program(None, "(check (Num 1))");
+    assert!(
+        phantom.is_err(),
+        "old (Num 1) should not be findable after clear, got: {phantom:?}"
+    );
+
+    // (2) Repopulate `score` with a smaller value than the cleared
+    // accumulator. If the merge state survived the clear, the next
+    // line's `check` would see 10 instead of 3.
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (set (score 7) 3)
+            (check (= (score 7) 3))
+            ",
+        )
+        .unwrap();
+
+    // (4) Re-insert into Num and re-run the rule. The rule must fire
+    // on the new rows, which exercises the seminaive watermark and
+    // the rule's table index after a generation bump.
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (Num 100) (Num 200)
+            (run 1)
+            (check (Saw 100)) (check (Saw 200))
+            ",
+        )
+        .unwrap();
+    // 3 original Saw rows + 2 from the new run = 5.
+    assert_eq!(egraph.get_size("Saw"), 5);
+}
+
+/// `clear_function` on a name that was never declared returns an
+/// `UnboundFunction` error rather than panicking. Kept standalone
+/// because there's nothing to thread through — the e-graph never
+/// transitions out of its empty starting state.
+#[test]
+fn clear_function_unknown_function_errors() {
+    let mut egraph = EGraph::default();
+    let err = egraph.clear_function("DoesNotExist").unwrap_err();
+    match err {
+        Error::TypeError(TypeError::UnboundFunction(name, _)) => {
+            assert_eq!(name, "DoesNotExist");
+        }
+        other => panic!("expected UnboundFunction, got {other:?}"),
+    }
 }

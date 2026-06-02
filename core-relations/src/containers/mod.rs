@@ -81,6 +81,8 @@ pub struct ContainerValues {
 /// `dirty_ids` is narrower: it records container ids whose semantics changed
 /// while their stored outer id stayed stable. Ordinary table rebuild already
 /// handles changed-id cases; these ids need a follow-up parent-row refresh.
+/// This includes containers that changed directly and containers whose
+/// contained containers changed in place.
 ///
 /// For example, `l(vec-of(w(k(b))))` can rebuild to `l(vec-of(k(b)))` without
 /// changing the `Vec` id. The row is now newly matchable, but seminaive will
@@ -174,7 +176,7 @@ impl ContainerValues {
             // We may attempt an incremental rebuild.
             self.subset_tracker.recent_updates(table_id, table)
         });
-        if parallelize_inter_container_op(self.data.next_id().index()) {
+        let mut summary = if parallelize_inter_container_op(self.data.next_id().index()) {
             self.data
                 .iter_mut()
                 .zip(std::iter::repeat_with(|| exec_state.clone()))
@@ -202,6 +204,38 @@ impl ContainerValues {
                 ));
             }
             summary
+        };
+        self.expand_dirty_id_closure(&mut summary);
+        summary
+    }
+
+    /// Add ancestor containers to the dirty-id set until it is transitively closed.
+    ///
+    /// A rebuild can change a container's semantics in place without changing
+    /// its id. If that container is itself stored inside another container,
+    /// the parent container has also changed semantically even though no direct
+    /// rebuild touched its contents. For example, with
+    /// `(p (vec-of (vec-of (w (b)))))` and `(rewrite (w x) x)`, the inner
+    /// `Vec` rebuilds in place to `vec-of (b)`. Without this closure, only the
+    /// inner `Vec` id is dirty; the outer `Vec` row is not retimestamped, so a
+    /// later rule like `(rewrite (p (vec-of (vec-of (b)))) (b))` can miss the
+    /// newly matchable parent row.
+    fn expand_dirty_id_closure(&self, summary: &mut ContainerRebuildSummary) {
+        let mut frontier = summary.dirty_ids.clone();
+        let mut seen = frontier.iter().copied().collect::<IndexSet<_>>();
+
+        while !frontier.is_empty() {
+            let mut next = IndexSet::default();
+            for (_, env) in self.data.iter() {
+                env.extend_containers_containing(&frontier, &mut next);
+            }
+            frontier.clear();
+            for value in next {
+                if seen.insert(value) {
+                    summary.note_dirty_id(value);
+                    frontier.insert(value);
+                }
+            }
         }
     }
 
@@ -252,6 +286,12 @@ pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary;
+    /// Add ids for containers in this environment that contain any `values`.
+    ///
+    /// This uses the container content index populated from
+    /// [`ContainerValue::iter`] and lets callers climb from dirty child ids to
+    /// all directly containing parent container ids.
+    fn extend_containers_containing(&self, values: &IndexSet<Value>, out: &mut IndexSet<Value>);
 }
 
 // Implements `Clone` for `Box<dyn DynamicContainerEnv>`.
@@ -301,6 +341,14 @@ impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
             );
         }
         self.apply_rebuild_nonincremental(rebuilder, exec_state)
+    }
+
+    fn extend_containers_containing(&self, values: &IndexSet<Value>, out: &mut IndexSet<Value>) {
+        for value in values {
+            if let Some(containers) = self.val_index.get(value) {
+                out.extend(containers.iter().copied());
+            }
+        }
     }
 }
 

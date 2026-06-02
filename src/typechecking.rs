@@ -655,8 +655,19 @@ impl TypeInfo {
         assert_eq!(
             results.len(),
             1,
-            "Expected exactly one sort for type {}",
-            std::any::type_name::<S>()
+            "Expected exactly one sort matching the given predicate"
+        );
+        results.into_iter().next().unwrap()
+    }
+
+    /// Returns the unique sort whose runtime values have Rust type `T`.
+    pub fn get_arcsort_for_value_type<T: 'static>(&self) -> ArcSort {
+        let results = self.get_arcsorts_by(|s| s.value_type() == Some(std::any::TypeId::of::<T>()));
+        assert_eq!(
+            results.len(),
+            1,
+            "Expected exactly one sort for type `{}`",
+            std::any::type_name::<T>()
         );
         results.into_iter().next().unwrap()
     }
@@ -819,6 +830,7 @@ impl TypeInfo {
             name,
             ruleset,
             naive,
+            no_decomp,
         } = rule;
         let mut constraints = vec![];
 
@@ -874,6 +886,7 @@ impl TypeInfo {
             name: name.clone(),
             ruleset: ruleset.clone(),
             naive: *naive,
+            no_decomp: *no_decomp,
         })
     }
 
@@ -1068,7 +1081,9 @@ pub enum TypeError {
     },
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
-    #[error("{1}\nVariable {0} is ungrounded")]
+    #[error(
+        "{1}\nVariable {0} is ungrounded. A variable is grounded when it appears as an argument to a constructor or function in the query, not just under primitives or equalities."
+    )]
     Ungrounded(String, Span),
     #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(String, Span),
