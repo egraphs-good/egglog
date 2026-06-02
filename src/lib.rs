@@ -2401,6 +2401,9 @@ mod tests {
     #[test]
     fn test_extension_state_clones_and_restores_with_egraph() {
         let mut egraph = EGraph::default();
+        assert_eq!(egraph.extension_state::<usize>(), None);
+        assert_eq!(egraph.clone().extension_state::<usize>(), None);
+
         *egraph.extension_state_or_default::<usize>() = 1;
 
         let mut cloned = egraph.clone();
