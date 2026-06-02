@@ -61,6 +61,11 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
+
+/// Read-only proof reconstruction API.
+pub mod proof {
+    pub use crate::proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition};
+}
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
