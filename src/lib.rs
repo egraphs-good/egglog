@@ -2170,7 +2170,7 @@ impl EGraph {
 
 }
 
-pub use crate::api::{ApiError, ColumnSort, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};
+pub use crate::api::{ApiError, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};
 
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,

@@ -5,16 +5,13 @@
 //! [`FromColumn`] convert row data back into Rust values on the way *out*
 //! (lookup return values, query iteration).
 //!
-//! Every input column carries a runtime [`ColumnSort`] tag. The trait
-//! methods that consume rows ([`crate::Read::lookup`],
-//! [`crate::Write::set`], etc.) validate each column's tag against the
-//! table's declared schema and return [`crate::ApiError::WrongColumnSort`]
-//! on mismatch. Base values (`i64`, `String`, `f64`, …) tag with the
-//! corresponding egglog sort name automatically; eclass ids flow through
-//! as bare [`Value`]s, which carry no sort tag — callers track their
-//! eclass-vs-base provenance themselves.
-
-use std::sync::Arc;
+//! The API is **type-unsafe at the column level**: every column flows
+//! as a bare [`Value`]. The Rust trait machinery here only enforces
+//! arity (you can't pass a 3-tuple to a 2-column table) and subtype
+//! (you can't `set` on a constructor or `add` on a function). Per-
+//! column sort matching (e.g., "this column wants an `i64`, you
+//! passed a `String`") is the caller's responsibility — see the
+//! parked dynamic-typing work for what real safety would cost.
 
 use crate::core_relations::{BaseValues, Value};
 use crate::sort;
@@ -52,24 +49,6 @@ pub enum ApiError {
         got: usize,
     },
 
-    #[error(
-        "table `{table}`, column {column}: expected sort `{expected}`, got value of sort `{actual}`"
-    )]
-    WrongColumnSort {
-        table: String,
-        column: usize,
-        expected: String,
-        actual: String,
-    },
-
-    #[error(
-        "table `{table}` output: expected sort `{expected}`, got value of sort `{actual}`"
-    )]
-    WrongOutputSort {
-        table: String,
-        expected: String,
-        actual: String,
-    },
 }
 
 mod sealed {
@@ -80,34 +59,19 @@ mod sealed {
 // Input side: IntoRow + IntoColumn
 // ---------------------------------------------------------------------
 
-/// Runtime sort tag for a column on the input side. Used by the
-/// `Read` / `Write` trait methods to validate inputs against a
-/// table's declared schema.
-#[derive(Clone, Debug)]
-pub enum ColumnSort {
-    /// The column has a known sort name. Compared exactly against the
-    /// table's expected sort for that column position.
-    Named(Arc<str>),
-    /// No sort information attached. Skip the runtime check — the
-    /// caller is responsible for getting the column right. Used by
-    /// the bare [`Value`] [`IntoColumn`] impl.
-    Unchecked,
-}
-
-/// Convert a Rust value into a row of egglog [`Value`]s, with a sort
-/// tag per column.
+/// Convert a Rust value into a row of egglog [`Value`]s.
 ///
 /// Implemented for:
 /// - A bare [`IntoColumn`] value (e.g. `1_i64` or a [`Value`]) —
 ///   produces a single-column row.
 /// - Tuples up to arity 8 of [`IntoColumn`] values.
-/// - [`RawValues`] as an escape hatch for already-converted multi-column
-///   rows (sort checks are skipped for every column).
+/// - [`RawValues`] for variadic / pre-converted rows.
 pub trait IntoRow {
     fn into_values(self, bv: &BaseValues) -> Vec<Value>;
-    /// Sort tags for each column, in order. Length must equal the
-    /// `into_values` result length.
-    fn column_sorts(&self) -> Vec<ColumnSort>;
+    /// Number of columns this row will produce. Consulted by the
+    /// `Read` / `Write` methods to catch arity mismatches against the
+    /// table schema.
+    fn arity(&self) -> usize;
 }
 
 /// A single column of an egglog row, on the input side.
@@ -115,9 +79,6 @@ pub trait IntoRow {
 /// This is a sealed trait — additional impls live in the egglog crate.
 pub trait IntoColumn: sealed::Sealed {
     fn into_value(self, bv: &BaseValues) -> Value;
-    /// Runtime sort tag for this column. Consulted by the `Read` /
-    /// `Write` methods to validate against the table's declared schema.
-    fn column_sort(&self) -> ColumnSort;
 }
 
 // ---------------------------------------------------------------------
@@ -143,11 +104,12 @@ pub trait FromColumn: sealed::Sealed {
 }
 
 // ---------------------------------------------------------------------
-// Escape hatch: RawValues
+// Variadic / pre-converted rows: RawValues
 // ---------------------------------------------------------------------
 
-/// Escape hatch wrapper — pass already-converted [`Value`] columns when
-/// the caller wants to bypass per-column sort checking entirely.
+/// Wrap a `Vec<Value>` as an [`IntoRow`]. Useful for zero-arg
+/// constructors (`RawValues(vec![])`) and for rows whose column count
+/// isn't known until runtime.
 #[derive(Clone, Debug)]
 pub struct RawValues(pub Vec<Value>);
 
@@ -155,8 +117,8 @@ impl IntoRow for RawValues {
     fn into_values(self, _bv: &BaseValues) -> Vec<Value> {
         self.0
     }
-    fn column_sorts(&self) -> Vec<ColumnSort> {
-        vec![ColumnSort::Unchecked; self.0.len()]
+    fn arity(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -175,15 +137,12 @@ impl FromRow for () {
 // ---------------------------------------------------------------------
 
 macro_rules! impl_column_for_base {
-    ( $( ($ty:ty, $sort_name:literal) ),+ $(,)? ) => {
+    ( $( $ty:ty ),+ $(,)? ) => {
         $(
             impl sealed::Sealed for $ty {}
             impl IntoColumn for $ty {
                 fn into_value(self, bv: &BaseValues) -> Value {
                     bv.get::<$ty>(self)
-                }
-                fn column_sort(&self) -> ColumnSort {
-                    ColumnSort::Named(Arc::from($sort_name))
                 }
             }
             impl FromColumn for $ty {
@@ -195,24 +154,13 @@ macro_rules! impl_column_for_base {
     };
 }
 
-impl_column_for_base!(
-    (i64, "i64"),
-    (bool, "bool"),
-    ((), "Unit"),
-    (sort::F, "f64"),
-    (sort::S, "String"),
-    (sort::Z, "BigInt"),
-    (sort::Q, "BigRat"),
-);
+impl_column_for_base!(i64, bool, (), sort::F, sort::S, sort::Z, sort::Q);
 
 // `String` is sugar — egglog's String sort uses `sort::S` (`Boxed<String>`).
 impl sealed::Sealed for String {}
 impl IntoColumn for String {
     fn into_value(self, bv: &BaseValues) -> Value {
         bv.get::<sort::S>(self.into())
-    }
-    fn column_sort(&self) -> ColumnSort {
-        ColumnSort::Named(Arc::from("String"))
     }
 }
 impl FromColumn for String {
@@ -227,9 +175,6 @@ impl IntoColumn for &str {
     fn into_value(self, bv: &BaseValues) -> Value {
         bv.get::<sort::S>(self.to_string().into())
     }
-    fn column_sort(&self) -> ColumnSort {
-        ColumnSort::Named(Arc::from("String"))
-    }
 }
 
 // `f64` is sugar for `sort::F`.
@@ -239,9 +184,6 @@ impl IntoColumn for f64 {
         use ordered_float::OrderedFloat;
         bv.get::<sort::F>(OrderedFloat(self).into())
     }
-    fn column_sort(&self) -> ColumnSort {
-        ColumnSort::Named(Arc::from("f64"))
-    }
 }
 impl FromColumn for f64 {
     fn from_value(value: Value, bv: &BaseValues) -> Self {
@@ -249,14 +191,11 @@ impl FromColumn for f64 {
     }
 }
 
-// Bare `Value` is the unchecked escape hatch.
+// Bare `Value` passes through unchanged.
 impl sealed::Sealed for Value {}
 impl IntoColumn for Value {
     fn into_value(self, _bv: &BaseValues) -> Value {
         self
-    }
-    fn column_sort(&self) -> ColumnSort {
-        ColumnSort::Unchecked
     }
 }
 impl FromColumn for Value {
@@ -273,8 +212,8 @@ impl<A: IntoColumn> IntoRow for A {
     fn into_values(self, bv: &BaseValues) -> Vec<Value> {
         vec![self.into_value(bv)]
     }
-    fn column_sorts(&self) -> Vec<ColumnSort> {
-        vec![self.column_sort()]
+    fn arity(&self) -> usize {
+        1
     }
 }
 
@@ -294,9 +233,8 @@ macro_rules! impl_row_for_tuple {
                     let ($($name,)+) = self;
                     vec![ $( $name.into_value(bv) ),+ ]
                 }
-                fn column_sorts(&self) -> Vec<ColumnSort> {
-                    let ($($name,)+) = self;
-                    vec![ $( $name.column_sort() ),+ ]
+                fn arity(&self) -> usize {
+                    [$(stringify!($name)),+].len()
                 }
             }
 

@@ -32,7 +32,7 @@
 
 use std::ops::Deref;
 
-use crate::api::{ApiError, ColumnSort, IntoColumn, IntoRow};
+use crate::api::{ApiError, IntoColumn, IntoRow};
 use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
     Value,
@@ -202,8 +202,9 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// [`WriteState`] (a `Write` context body must not depend on live DB
 /// state). Returns `None` if the row is absent — never inserts.
 ///
-/// Misuse (wrong table subtype, wrong arity, mismatched column sort)
-/// is reported as [`crate::ApiError`] via the method's `Result`.
+/// Detectable misuse (wrong table subtype, wrong arity) is reported
+/// as [`crate::ApiError`] via the method's `Result`. Per-column sort
+/// matching is **not** checked at this layer.
 #[allow(private_bounds)]
 pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Look up a function's output value at the given key. Returns
@@ -218,8 +219,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ) -> Result<Option<V>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        let sorts = key.column_sorts();
-        check_input_sorts(name, &action, &sorts)?;
+        check_arity(name, &action, key.arity())?;
         let bv = self.base_values();
         let key_values = key.into_values(bv);
         Ok(action.lookup(self.es(), &key_values).map(|v| bv.unwrap::<V>(v)))
@@ -242,8 +242,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
             TableKind::Constructor,
             "constructor",
         )?;
-        let sorts = inputs.column_sorts();
-        check_input_sorts(name, &action, &sorts)?;
+        check_arity(name, &action, inputs.arity())?;
         let key_values = inputs.into_values(self.base_values());
         Ok(action.lookup(self.es(), &key_values))
     }
@@ -256,8 +255,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
     ) -> Result<bool, Error> {
         let action = lookup_action(self.registry(), name)?;
-        let sorts = key.column_sorts();
-        check_input_sorts(name, &action, &sorts)?;
+        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
@@ -312,9 +310,10 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 /// plus union and panic. Implemented for [`WriteState`] and
 /// [`FullState`]; *not* for [`PureState`] or [`ReadState`].
 ///
-/// Misuse (wrong table subtype, wrong arity, mismatched column or
-/// output sort, cross-sort union) is reported as [`crate::ApiError`]
-/// via the method's `Result`.
+/// Detectable misuse (wrong table subtype, wrong arity) is reported
+/// as [`crate::ApiError`] via the method's `Result`. Per-column sort
+/// matching is **not** checked at this layer — the API is type-unsafe
+/// at the column level.
 #[allow(private_bounds)]
 pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Set a function table's value at the given key — mirrors the
@@ -330,9 +329,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        let key_sorts = key.column_sorts();
-        check_input_sorts(name, &action, &key_sorts)?;
-        check_output_sort(name, &action, &value.column_sort())?;
+        check_arity(name, &action, key.arity())?;
         let bv = self.base_values();
         let mut row = key.into_values(bv);
         row.push(value.into_value(bv));
@@ -359,8 +356,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
             TableKind::Constructor,
             "constructor",
         )?;
-        let sorts = inputs.column_sorts();
-        check_input_sorts(name, &action, &sorts)?;
+        check_arity(name, &action, inputs.arity())?;
         let bv = self.base_values();
         let key = inputs.into_values(bv);
         let value = action
@@ -376,8 +372,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        let sorts = key.column_sorts();
-        check_input_sorts(name, &action, &sorts)?;
+        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
         action.remove(self.es_mut(), &key_values);
         Ok(())
@@ -390,8 +385,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        let sorts = key.column_sorts();
-        check_input_sorts(name, &action, &sorts)?;
+        check_arity(name, &action, key.arity())?;
         let key_values = key.into_values(self.base_values());
         action.subsume(self.es_mut(), key_values.into_iter());
         Ok(())
@@ -446,60 +440,20 @@ fn check_subtype(
     .into())
 }
 
-fn check_input_sorts(
-    table: &str,
-    action: &TableAction,
-    provided: &[ColumnSort],
-) -> Result<(), Error> {
+fn check_arity(table: &str, action: &TableAction, got: usize) -> Result<(), Error> {
     let expected = action.input_sort_names();
     if expected.is_empty() {
-        // Table registered without sort names — skip the check
-        // entirely (the API can't validate; raw is fine).
+        // Table registered without per-column metadata — nothing
+        // to compare against.
         return Ok(());
     }
-    if provided.len() != expected.len() {
+    if got != expected.len() {
         return Err(ApiError::WrongArity {
             table: table.to_string(),
             expected: expected.len(),
-            got: provided.len(),
+            got,
         }
         .into());
-    }
-    for (i, (got, want)) in provided.iter().zip(expected.iter()).enumerate() {
-        if let ColumnSort::Named(got) = got {
-            if got.as_ref() != want.as_ref() {
-                return Err(ApiError::WrongColumnSort {
-                    table: table.to_string(),
-                    column: i,
-                    expected: want.to_string(),
-                    actual: got.to_string(),
-                }
-                .into());
-            }
-        }
-        // Unchecked columns (e.g. bare `Value`) skip.
-    }
-    Ok(())
-}
-
-fn check_output_sort(
-    table: &str,
-    action: &TableAction,
-    provided: &ColumnSort,
-) -> Result<(), Error> {
-    let Some(expected) = action.output_sort_name() else {
-        // No sort name registered — skip.
-        return Ok(());
-    };
-    if let ColumnSort::Named(got) = provided {
-        if got.as_ref() != expected.as_ref() {
-            return Err(ApiError::WrongOutputSort {
-                table: table.to_string(),
-                expected: expected.to_string(),
-                actual: got.to_string(),
-            }
-            .into());
-        }
     }
     Ok(())
 }

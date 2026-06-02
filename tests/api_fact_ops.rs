@@ -194,30 +194,6 @@ fn test_add_node_function_errors() {
 }
 
 #[test]
-fn test_wrong_column_sort_errors() {
-    // Sending a `String` where the table expects an `i64`.
-    let mut eg = make_eg_with_function();
-    let result = eg.update(|mut fs| fs.set("f", ("hello".to_string(),), 42_i64));
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("expected sort `i64`") && err.contains("got value of sort `String`"),
-        "got: {err}"
-    );
-}
-
-#[test]
-fn test_wrong_output_sort_errors() {
-    // Sending a String value where the table's output is i64.
-    let mut eg = make_eg_with_function();
-    let result = eg.update(|mut fs| fs.set("f", (1_i64,), "wrong".to_string()));
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("output") && err.contains("expected sort `i64`"),
-        "got: {err}"
-    );
-}
-
-#[test]
 fn test_wrong_arity_errors() {
     // Sending 2 args where the table expects 1.
     let mut eg = make_eg_with_function();
