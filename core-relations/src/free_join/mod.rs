@@ -357,7 +357,8 @@ impl Database {
     pub fn rebuild_containers(&mut self, table_id: TableId) -> ContainerRebuildSummary {
         let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
-        let res = self.update(|state| containers.rebuild_all(table_id, table, state));
+        let res =
+            self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
         self.container_values = containers;
         res
     }
@@ -444,7 +445,10 @@ impl Database {
     }
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.
-    pub fn update<R>(&self, f: impl FnOnce(&mut ExecutionState) -> R) -> R {
+    pub fn with_execution_state<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState) -> R,
+    ) -> R {
         let mut state = ExecutionState::new(self.read_only_view(), Default::default());
         f(&mut state)
     }

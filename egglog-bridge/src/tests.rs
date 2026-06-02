@@ -1483,7 +1483,7 @@ fn panic_functions_trigger_early_stop() {
 
     let channel: crate::SideChannel<String> = Default::default();
     let panic_fn = super::Panic("panic".to_string(), channel.clone());
-    let stopped = db.update(|state| {
+    let stopped = db.with_execution_state(|state| {
         assert!(!state.should_stop());
         let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
         assert!(res.is_none());
@@ -1495,7 +1495,7 @@ fn panic_functions_trigger_early_stop() {
     let channel: crate::SideChannel<String> = Default::default();
     let lazy = Lazy::new(|| "lazy panic".to_string());
     let panic_fn = super::LazyPanic(Arc::new(lazy), channel.clone());
-    let stopped = db.update(|state| {
+    let stopped = db.with_execution_state(|state| {
         assert!(!state.should_stop());
         let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
         assert!(res.is_none());

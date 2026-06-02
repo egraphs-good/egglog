@@ -1,27 +1,21 @@
 //! # egglog
 //!
-//! egglog is a language for writing equality saturation applications.
-//! It is the successor to the Rust library [egg](https://github.com/egraphs-good/egg) —
-//! faster and more general.
+//! Egglog is a language for writing equality saturation applications.
+//! It is the successor to the Rust library [egg](https://github.com/egraphs-good/egg).
+//! Egglog is faster and more general than egg.
 //!
-//! - **Tutorial:** [text](https://egraphs-good.github.io/egglog-tutorial/01-basics.html),
-//!   [video (slightly outdated)](https://www.youtube.com/watch?v=N2RDQGRBrSY).
-//! - **Egglog language reference:** [`Command`].
-//! - **Using egglog from Rust:** see [`prelude`] — it's the entry point
-//!   for everything below.
+//! # Documentation
+//! Documentation for the egglog language can be found here: [`Command`].
+//! 
+//! # Using egglog from Rust
+//! We encourage using the egglog language as much as possible, even from Rust. 
+//! In some cases, custom primitives or custom rules are necessary. 
+//! For this reason, we 
 //!
-//! ## Using egglog from Rust
+//! # Tutorial
+//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
+//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
 //!
-//! Start with `use egglog::prelude::*;`. The [`prelude`] module docs
-//! list the common entry points (declaring rules and tables, adding
-//! and reading facts, writing custom primitives, etc.) and link to
-//! the underlying types and methods.
-//!
-//! The typical workflow is: declare your program (rules, datatypes,
-//! functions) once — usually via a static egglog block passed to
-//! [`EGraph::parse_and_run_program`] — then drive the e-graph from
-//! Rust via [`EGraph::update`] and stepping rulesets with
-//! [`prelude::run_ruleset`].
 pub mod api;
 pub mod ast;
 #[cfg(feature = "bin")]
@@ -787,11 +781,6 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
-        let sort_names: Vec<std::sync::Arc<str>> = input
-            .iter()
-            .chain([&output])
-            .map(|sort| std::sync::Arc::<str>::from(sort.name()))
-            .collect();
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             schema: input
                 .iter()
@@ -811,7 +800,6 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
-            sort_names,
         });
 
         let function = Function {
@@ -1661,14 +1649,14 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.update(|es| {
+            self.backend.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
                     table_action.insert(es, row.iter().copied());
                 }
                 Some(unit_val)
             });
         } else {
-            self.backend.update(|es| {
+            self.backend.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
                     // Constructor semantics: mint a fresh eclass id for
                     // each missing key.
@@ -1962,11 +1950,10 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.update(|state| {
+        self.backend.with_execution_state(|state| {
             self.backend.container_values().register_val::<T>(x, state)
         })
     }
-
 
     /// Convert a Rust container value into an interned egglog [`Value`].
     ///
@@ -2102,7 +2089,7 @@ impl EGraph {
         let guard = registry.read().unwrap();
         let result = self
             .backend
-            .update(|es| f(FullState::wrap(es, &guard, Context::Full)));
+            .with_execution_state(|es| f(FullState::wrap(es, &guard, Context::Full)));
         drop(guard);
         self.backend.flush_updates();
         result
@@ -2112,26 +2099,20 @@ impl EGraph {
     /// [`Read::constructor_enodes`] for details; this is a top-level
     /// convenience that delegates through a read-only path (works
     /// under proofs).
-    pub fn constructor_enodes(
-        &mut self,
-        table: &str,
-    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+    pub fn constructor_enodes(&mut self, table: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        self.backend.update(|es| {
+        self.backend.with_execution_state(|es| {
             FullState::wrap(es, &guard, Context::Full).constructor_enodes(table)
         })
     }
 
     /// Iterate every `(inputs, output)` entry of a function table.
     /// See [`Read::function_entries`].
-    pub fn function_entries(
-        &mut self,
-        table: &str,
-    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+    pub fn function_entries(&mut self, table: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        self.backend.update(|es| {
+        self.backend.with_execution_state(|es| {
             FullState::wrap(es, &guard, Context::Full).function_entries(table)
         })
     }
@@ -2158,8 +2139,7 @@ impl EGraph {
             });
         }
         use std::sync::{Arc, Mutex};
-        let names: Arc<[String]> =
-            vars.iter().map(|(n, _)| (*n).to_owned()).collect();
+        let names: Arc<[String]> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
         let results: Arc<Mutex<Vec<std::collections::HashMap<String, Value>>>> =
             Arc::new(Mutex::new(Vec::new()));
         let results_weak = Arc::downgrade(&results);
@@ -2202,7 +2182,6 @@ impl EGraph {
         };
         Ok(mutex.into_inner().unwrap())
     }
-
 }
 
 pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, RawValues};

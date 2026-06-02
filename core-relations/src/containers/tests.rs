@@ -107,7 +107,7 @@ fn racing_inserts() {
             let env = env.clone();
             let db = db.clone();
             std::thread::spawn(move || {
-                db.update(|es| {
+                db.with_execution_state(|es| {
                     start.wait();
                     env.get_or_insert(&cont([1, 2, 3]), es)
                 })
@@ -144,7 +144,7 @@ fn incremental_reinsert_canonicalizes_displaced_outer_id() {
     );
     let container = cont([1, 2, 3]);
 
-    db.update(|es| {
+    db.with_execution_state(|es| {
         let old_id = env.get_or_insert(&container, es);
         let new_id = Value::from_usize(old_id.index() + 1000);
         let hc = hash_container(&container);
@@ -179,7 +179,7 @@ fn nonincremental_dirty_ids_only_include_stable_ids() {
             }),
             counter,
         );
-        db.update(|es| {
+        db.with_execution_state(|es| {
             let old_id = env.get_or_insert(&VecContainer(vec![old_inner]), es);
             let new_id = if outer_id_changes {
                 Value::from_usize(old_id.index() + 1000)

@@ -200,10 +200,6 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
-    /// Egglog sort names per column (same length and order as `schema`).
-    /// Currently unused at runtime; kept as a hook for future dynamic
-    /// type-checking work. Pass an empty Vec if you don't have them.
-    pub sort_names: Vec<Arc<str>>,
 }
 
 impl EGraph {
@@ -236,7 +232,7 @@ impl EGraph {
     pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
         self.db
-            .update(|state| state.clone().container_values().register_val(val, state))
+            .with_execution_state(|state| state.clone().container_values().register_val(val, state))
     }
 
     /// Register the given [`ContainerValue`] type with this EGraph.
@@ -515,18 +511,10 @@ impl EGraph {
             merge,
             name,
             can_subsume,
-            sort_names,
         } = config;
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
-        );
-        assert!(
-            sort_names.is_empty() || sort_names.len() == schema.len(),
-            "FunctionConfig.sort_names must be empty or match schema length \
-             (got {} sort names for {} columns)",
-            sort_names.len(),
-            schema.len()
         );
         let to_rebuild: Vec<ColumnId> = schema
             .iter()
@@ -568,7 +556,6 @@ impl EGraph {
             default_val: default,
             can_subsume,
             name,
-            sort_names: sort_names.into(),
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -953,8 +940,11 @@ impl EGraph {
     /// / global-action context: appropriate for one-shot database
     /// manipulation from outside any rule, not for use inside
     /// primitive implementations.
-    pub fn update<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
-        self.db.update(f)
+    pub fn with_execution_state<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> R {
+        self.db.with_execution_state(f)
     }
 
     /// Flush the pending update buffers to the EGraph.
@@ -1002,10 +992,6 @@ struct FunctionInfo {
     default_val: DefaultVal,
     can_subsume: bool,
     name: Arc<str>,
-    /// Per-column egglog sort names. Same length and order as `schema`.
-    /// Empty if the registering caller didn't supply names — the user
-    /// API treats that as no-runtime-check.
-    sort_names: Arc<[Arc<str>]>,
 }
 
 impl FunctionInfo {
@@ -1283,10 +1269,6 @@ pub struct TableAction {
     default: Option<MergeVal>,
     timestamp: CounterId,
     kind: TableKind,
-    /// Per-column egglog sort names. Same order as the function's
-    /// schema: input columns first, then the output column. Empty if
-    /// the registering caller didn't supply names.
-    sort_names: Arc<[Arc<str>]>,
 }
 
 impl TableAction {
@@ -1311,7 +1293,6 @@ impl TableAction {
             },
             timestamp: egraph.timestamp_counter,
             kind,
-            sort_names: func_info.sort_names.clone(),
         }
     }
 
@@ -1322,27 +1303,9 @@ impl TableAction {
     }
 
     /// Number of input columns (schema minus the trailing output
-    /// column). Always known from the function's schema, independent
-    /// of whether sort names were supplied at registration.
+    /// column).
     pub fn input_arity(&self) -> usize {
         self.table_math.func_cols - 1
-    }
-
-    /// Egglog sort names for this table's input columns (everything
-    /// except the trailing output column). Empty if the registering
-    /// caller didn't supply names.
-    pub fn input_sort_names(&self) -> &[Arc<str>] {
-        if self.sort_names.is_empty() {
-            &[]
-        } else {
-            &self.sort_names[..self.sort_names.len() - 1]
-        }
-    }
-
-    /// Egglog sort name for this table's output column, or `None` if
-    /// the registering caller didn't supply names.
-    pub fn output_sort_name(&self) -> Option<&Arc<str>> {
-        self.sort_names.last()
     }
 
     /// Look up a row and return its return-value column, or `None` if the
