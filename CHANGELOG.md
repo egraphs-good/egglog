@@ -25,14 +25,12 @@
   - `Read::eclass_of(table, inputs) -> Result<Option<Value>, Error>` — read a constructor's eclass without minting.
   - `Read::contains(table, key) -> Result<bool, Error>` — row presence, any subtype.
   - `Read::lookup_raw(name, &[Value]) -> Result<Option<Value>, Error>` — untyped escape hatch when the caller already has a `&[Value]`. Skips sort checks.
-- **Runtime input checks.** Every trait method validates inputs and reports failures as `Error::ApiError` instead of panicking:
+- **Runtime input checks.** Every trait method validates the shape of its inputs and reports failures as `Error::ApiError` instead of panicking. Per-column sort matching is *not* checked — the API is type-unsafe at the column level (`Value`s for eclasses and base values are indistinguishable). What is checked:
   - `WrongSubtype` — `set` on a constructor, `add` on a function, `lookup` on a constructor, `eclass_of` on a function.
   - `WrongArity` — wrong number of input columns for the table.
-  - `WrongColumnSort` — a column value's sort doesn't match the declared input sort (e.g., passing a `String` where the table wants `i64`).
-  - `WrongOutputSort` — `set`'s value column has the wrong sort.
   - `MissingTable` — table name not registered.
 - `Read::table_rows::<R: FromRow>(name) -> Result<Vec<R>, Error>` iterates all rows of a named table — row shape depends on subtype: functions expose `(input..., output)`, constructors and relations expose `(input..., eclass)`. `EGraph::table_rows` stays as a thin top-level convenience wrapper that delegates to `update`. `EGraph::query::<R: FromRow>(vars, facts) -> Result<Vec<R>, Error>` runs a pattern query (stays on `EGraph` — compiles a fresh query plan).
-- Row trait surface in `crate::api`: `IntoRow`, `IntoColumn` (with `column_sort()` for runtime tag), `FromRow`, `FromColumn`, plus `RawValues` escape hatch.
+- Row trait surface in `crate::api`: `IntoRow` (with `arity()`), `IntoColumn`, `FromRow`, `FromColumn`, plus `RawValues` for variadic / pre-converted rows.
 - Primitive trait `apply` signatures (`PurePrim` / `WritePrim` / `ReadPrim` / `FullPrim`) keep `args: &[Value] -> Option<Value>`. Eclass identifiers flow through the API as bare `Value`s — callers track their eclass-vs-base provenance themselves.
 - **Proof-mode compatibility errors.** `rust_rule` / `rust_rule_full` and `EGraph::update` now return `Error::ProofsIncompatibleApi` upfront when called on an `EGraph::new_with_proofs()` — the rule body is a Rust closure with no proof-encoding validator, and `update` writes bypass the proof pipeline. `update`'s signature tightened from `FnOnce(FullState) -> R) -> R` to `FnOnce(FullState) -> Result<R, Error>) -> Result<R, Error>` so the proofs-check error and the closure's own error collapse into one `?`.
 - Constant-folding case study in `tests/api_const_fold.rs` — builds an arithmetic expression with `add`, installs a `rust_rule` that folds `(Add (Num a) (Num b))` to `(Num (a+b))`, runs to saturation, and verifies the root collapses by both `eclass_of` and `table_rows` walks.
