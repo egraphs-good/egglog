@@ -1146,7 +1146,12 @@ fn clear_function_lifecycle() {
         assert_eq!(egraph.get_size("Num"), 3);
 
         let key_a = egraph.base_to_value::<i64>(a);
-        assert!(egraph.lookup_function("Num", &[key_a]).is_some());
+        assert!(
+            egraph
+                .update(|fs| fs.lookup_raw("Num", &[key_a]))
+                .unwrap()
+                .is_some()
+        );
 
         let mut seen = 0;
         egraph.function_for_each("Num", |_row| seen += 1).unwrap();
@@ -1157,7 +1162,12 @@ fn clear_function_lifecycle() {
         // before the generation bump.
         egraph.clear_function("Num").unwrap();
         assert_eq!(egraph.get_size("Num"), 0);
-        assert!(egraph.lookup_function("Num", &[key_a]).is_none());
+        assert!(
+            egraph
+                .update(|fs| fs.lookup_raw("Num", &[key_a]))
+                .unwrap()
+                .is_none()
+        );
         let mut seen_after = 0;
         egraph
             .function_for_each("Num", |_row| seen_after += 1)
