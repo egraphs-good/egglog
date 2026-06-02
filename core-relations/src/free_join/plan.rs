@@ -436,7 +436,7 @@ fn next_var_to_eliminate(
             // Optimization: use functional dependencies to find all variables inferred by the
             // current neightborhood.
             // let subquery_vars = fun_deps.closure(subquery_vars);
-            let subquery_vars:DenseIdMap<_, ()> = subquery_vars.map(|v| (v, ())).collect();
+            let subquery_vars: DenseIdMap<_, ()> = subquery_vars.map(|v| (v, ())).collect();
 
             let occ = atoms
                 .iter()
@@ -463,7 +463,10 @@ fn next_var_to_eliminate(
         .min_by_key(|a| a.0)
         .map(|a| (a.1, a.2))?;
     Some(IndexSet::from_iter(
-        fun_deps.closure(subquery_vars.iter().map(|(var, _)| var)).into_iter().map(|(var, _)| var),
+        fun_deps
+            .closure(subquery_vars.iter().map(|(var, _)| var))
+            .into_iter()
+            .map(|(var, _)| var),
     ))
 }
 
