@@ -1389,6 +1389,7 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
+            allow_action_lookups: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1919,6 +1920,7 @@ impl EGraph {
             body: facts,
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
+            allow_action_lookups: false,
         };
         let cmd = ast::Command::Rule { rule };
         let resolved = self.resolve_command(cmd)?;
@@ -1944,6 +1946,7 @@ impl EGraph {
             body: resolved_body,
             name: fresh_name,
             ruleset: fresh_ruleset,
+            allow_action_lookups: false,
         }
         .to_canonicalized_core_rule(
             &self.type_info,

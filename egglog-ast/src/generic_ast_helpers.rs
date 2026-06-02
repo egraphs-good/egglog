@@ -70,7 +70,16 @@ where
         } else {
             "".into()
         };
-        write!(f, ")\n{indent} {ruleset} {name})")
+        // Round-trip the action-lookup opt-out. `(unsafe-lookup ...)`
+        // forms are stripped during desugaring and only survive as this
+        // rule-level flag, so Display must re-emit it for parse →
+        // to_string → parse to be faithful.
+        let unsafe_lookups = if self.allow_action_lookups {
+            " :allow-unsafe-lookups"
+        } else {
+            ""
+        };
+        write!(f, ")\n{indent} {ruleset} {name}{unsafe_lookups})")
     }
 }
 
@@ -182,6 +191,7 @@ where
                 .collect(),
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
+            allow_action_lookups: self.allow_action_lookups,
         }
     }
 
@@ -196,6 +206,7 @@ where
             body: self.body,
             name: self.name,
             ruleset: self.ruleset,
+            allow_action_lookups: self.allow_action_lookups,
         }
     }
 
@@ -219,6 +230,7 @@ where
                 .collect(),
             name: self.name,
             ruleset: self.ruleset,
+            allow_action_lookups: self.allow_action_lookups,
         }
     }
 

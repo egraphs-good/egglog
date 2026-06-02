@@ -93,6 +93,13 @@ where
     pub name: String,
     /// The ruleset this rule belongs to. Defaults to `""`.
     pub ruleset: String,
+    /// When true, the typechecker skips its "no function lookups in
+    /// actions" check for this rule's head. Set by desugaring when the
+    /// rule uses the `(unsafe-lookup ...)` form, which opts into looking
+    /// up a (custom, non-constructor) function's output in an action —
+    /// returning the function's `:default` on a miss, or panicking if it
+    /// has none. Defaults to `false`.
+    pub allow_action_lookups: bool,
 }
 
 /// Change a function entry.

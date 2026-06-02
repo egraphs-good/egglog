@@ -312,6 +312,7 @@ pub fn rule(
         body: facts.0,
         name: "".into(),
         ruleset: ruleset.into(),
+        allow_action_lookups: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -572,6 +573,7 @@ pub fn rust_rule(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
+        allow_action_lookups: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])

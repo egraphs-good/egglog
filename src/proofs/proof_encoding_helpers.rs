@@ -456,6 +456,10 @@ pub enum ProofEncodingUnsupportedReason {
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
     LetBindingWithNonEqSort,
+    #[error(
+        "rule uses `(unsafe-lookup ...)`. Action-side function lookups are a direct-backend feature and are not representable by the term/proof encoding."
+    )]
+    UnsafeActionLookup,
 }
 
 /// Checks whether a desugared program supports proof encoding.
@@ -519,6 +523,16 @@ pub(crate) fn command_supports_proof_encoding(
     type_info: &TypeInfo,
     proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
+    // `(unsafe-lookup ...)` rules opt out of the action-lookup
+    // typecheck and lower to a direct backend lookup. The term/proof
+    // encoding can't represent that, so reject such rules in *both*
+    // plain term-encoding and proof modes (ungated by `proofs_enabled`).
+    if let GenericCommand::Rule { rule } = command {
+        if rule.allow_action_lookups {
+            return Err(ProofEncodingUnsupportedReason::UnsafeActionLookup);
+        }
+    }
+
     // Check all expressions for primitives without validators —
     // proof-mode only. Validators are how a primitive certifies its
     // own result inside a generated proof; absent proofs, missing

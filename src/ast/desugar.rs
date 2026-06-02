@@ -3,6 +3,25 @@ use crate::ast::{Action, Actions, Expr, Fact};
 use crate::*;
 use egglog_ast::span::Span;
 
+/// The reserved head symbol marking an action-side lookup that opts out
+/// of the "no function lookups in actions" typecheck. `(unsafe-lookup
+/// (f a b))` looks up `f`'s output for `(a b)` in an action, returning
+/// `f`'s `:default` on a miss (or panicking if it has none).
+pub(crate) const UNSAFE_LOOKUP: &str = "unsafe-lookup";
+
+/// Replace a `(unsafe-lookup (f a b))` node with its inner `(f a b)`
+/// call, setting `found` if any wrapper was unwrapped. Used bottom-up
+/// via [`visit_exprs`], so children are already unwrapped.
+fn strip_unsafe_lookup(expr: Expr, found: &mut bool) -> Expr {
+    if let Expr::Call(_, op, children) = &expr {
+        if op == UNSAFE_LOOKUP && children.len() == 1 {
+            *found = true;
+            return children[0].clone();
+        }
+    }
+    expr
+}
+
 /// Desugars a single command, removing syntactic sugar.
 pub(crate) fn desugar_command(
     command: Command,
@@ -131,6 +150,14 @@ pub(crate) fn desugar_command(
                 // format rule and use it as the name
                 rule.name = rule_name;
             }
+            // Strip `(unsafe-lookup ...)` wrappers from the rule head,
+            // flagging the rule so the typechecker permits the
+            // action-side lookups they wrap.
+            let mut found = false;
+            rule.head = rule
+                .head
+                .visit_exprs(&mut |e| strip_unsafe_lookup(e, &mut found));
+            rule.allow_action_lookups = rule.allow_action_lookups || found;
             vec![NCommand::NormRule { rule }]
         }
         Command::Sort {
@@ -254,6 +281,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
                 )),
                 ruleset: ruleset.clone(),
                 name,
+                allow_action_lookups: false,
             },
         },
         // run the rule
@@ -341,6 +369,7 @@ fn desugar_rewrite(
             head,
             ruleset,
             name,
+            allow_action_lookups: false,
         },
     }]
 }

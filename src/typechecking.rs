@@ -651,6 +651,7 @@ impl TypeInfo {
             body,
             name,
             ruleset,
+            allow_action_lookups,
         } = rule;
         let mut constraints = vec![];
 
@@ -681,7 +682,12 @@ impl TypeInfo {
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
-        self.check_lookup_actions(&actions)?;
+        // `unsafe-lookup` rules opt out of the "no function lookups in
+        // actions" check — that's the whole point of the form. Every
+        // other rule is still checked.
+        if !allow_action_lookups {
+            self.check_lookup_actions(&actions)?;
+        }
 
         Ok(ResolvedRule {
             span: span.clone(),
@@ -689,6 +695,7 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
+            allow_action_lookups: *allow_action_lookups,
         })
     }
 

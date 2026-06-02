@@ -475,10 +475,12 @@ impl Parser {
 
                     let mut ruleset = String::new();
                     let mut name = String::new();
+                    let mut allow_action_lookups = false;
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":name", [s]) => name = s.expect_string("rule name")?,
+                            (":allow-unsafe-lookups", []) => allow_action_lookups = true,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -490,6 +492,7 @@ impl Parser {
                             body,
                             name,
                             ruleset,
+                            allow_action_lookups,
                         },
                     }]
                 }

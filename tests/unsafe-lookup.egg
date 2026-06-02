@@ -1,0 +1,26 @@
+; `(unsafe-lookup (f args))` opts a rule action out of the "no function
+; lookups in actions" typecheck: it looks up `f`'s output for `args`
+; directly, panicking on a miss (custom functions have no default).
+;
+; This is a direct-backend feature; the term/proof encoding rejects it,
+; so this file only runs on the default backend (it is not proof- or
+; term-encoding-supported).
+
+(function f (i64) i64 :merge (max old new))
+(set (f 1) 100)
+(set (f 2) 200)
+
+(function result (i64) i64 :merge (max old new))
+(relation trigger (i64))
+
+; Without `unsafe-lookup`, `(f ?x)` in this action would be rejected as a
+; disallowed function lookup. With it, the rule reads f's stored output.
+(rule ((trigger ?x))
+      ((set (result ?x) (unsafe-lookup (f ?x)))))
+
+(trigger 1)
+(trigger 2)
+(run 1)
+
+(check (= (result 1) 100))
+(check (= (result 2) 200))
