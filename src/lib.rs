@@ -69,6 +69,7 @@ pub mod proof {
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
+use std::any::{Any, TypeId};
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -262,6 +263,12 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
+trait ExtensionStateValue: Any + dyn_clone::DynClone + Send + Sync {}
+
+impl<T> ExtensionStateValue for T where T: Any + Clone + Send + Sync {}
+
+dyn_clone::clone_trait_object!(ExtensionStateValue);
+
 #[derive(Clone)]
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
@@ -280,6 +287,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
     strict_mode: bool,
     warned_about_global_prefix: bool,
     /// Registry for command-level macros
@@ -390,6 +398,7 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            extension_state: Default::default(),
             strict_mode: false,
             warned_about_global_prefix: false,
             command_macros: Default::default(),
@@ -553,6 +562,33 @@ impl EGraph {
     /// Return the number of threads in the rayon thread pool.
     pub fn num_threads(&self) -> usize {
         rayon::current_num_threads()
+    }
+
+    /// Return extension-owned state stored on this e-graph.
+    ///
+    /// Extension state is keyed by Rust type and follows the same lifecycle as
+    /// the rest of the e-graph: cloning an [`EGraph`] clones the state, and
+    /// `push`/`pop` snapshots and restores it.
+    pub fn extension_state<T>(&self) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        let value = self.extension_state.get(&TypeId::of::<T>())?;
+        (value.as_ref() as &dyn Any).downcast_ref()
+    }
+
+    /// Return mutable extension-owned state, inserting `T::default()` when absent.
+    pub fn extension_state_or_default<T>(&mut self) -> &mut T
+    where
+        T: Default + Clone + Send + Sync + 'static,
+    {
+        let value = self
+            .extension_state
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()));
+        (value.as_mut() as &mut dyn Any)
+            .downcast_mut()
+            .expect("extension state entry must have the requested type")
     }
 
     /// Add a user-defined command to the e-graph
@@ -2539,6 +2575,26 @@ mod tests {
         }
         let egraph = EGraph::default();
         assert!(is_send(&egraph) && is_sync(&egraph));
+    }
+
+    #[test]
+    fn test_extension_state_clones_and_restores_with_egraph() {
+        let mut egraph = EGraph::default();
+        assert_eq!(egraph.extension_state::<usize>(), None);
+        assert_eq!(egraph.clone().extension_state::<usize>(), None);
+
+        *egraph.extension_state_or_default::<usize>() = 1;
+
+        let mut cloned = egraph.clone();
+        assert_eq!(cloned.extension_state::<usize>(), Some(&1));
+        *cloned.extension_state_or_default::<usize>() = 2;
+        assert_eq!(egraph.extension_state::<usize>(), Some(&1));
+
+        egraph.push();
+        *egraph.extension_state_or_default::<usize>() = 3;
+        egraph.pop().unwrap();
+
+        assert_eq!(egraph.extension_state::<usize>(), Some(&1));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
