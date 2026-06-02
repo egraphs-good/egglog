@@ -18,7 +18,11 @@
 //! [`EGraph::update`] only when you really need to do reads and writes
 //! from Rust (e.g. building rows from non-egglog data, integrating with
 //! a Rust-side data structure). For rules whose RHS needs Rust logic,
-//! use  [`prelude::rust_rule`] / [`prelude::rust_rule_full`].
+//! use  [`prelude::rust_rule`] / [`prelude::rust_rule_full`]. For new
+//! functions callable from egglog expressions, define a custom
+//! [`Primitive`] and register it with the matching
+//! `EGraph::add_*_primitive` — the [`add_primitive!`] macro covers
+//! the common "pure native function" case.
 //!
 //!
 //! # Tutorial
