@@ -14,22 +14,7 @@
 - **Typed primitive surface for seminaive safety (#772).** Custom primitives now pick one of `PurePrim` / `ReadPrim` / `WritePrim` / `FullPrim` based on what the body needs, and register via the matching `add_*_primitive`. Rust enforces capability bounds via the state wrapper passed to the body; the egglog typechecker enforces context bounds. See the `egglog::exec_state` module docs and the `*Prim` trait docs for the full picture. Migration: `rust_rule` callbacks now take `&mut WriteState` (replacing `RustRuleContext`); a new `rust_rule_full` gives action callbacks read access. Higher-order primitives over `unstable-fn` values dispatch via `state.apply_function(&fc, args)`.
 - Expose `Read::table_size(name)` and `Read::table_sizes()` so read-capable primitives can inspect row counts without raw execution-state access, while avoiding an all-table scan when only one table is needed.
 - **`:naive` rule option.** Individual rules can opt out of seminaive evaluation with `:naive` (e.g. `(rule (...) (...) :ruleset r :naive)`). The query and actions then typecheck under the permissive `Read` / `Full` contexts so primitives that read or write the database — including HOFs that wrap custom-function lookups — can run inside the rule. The rule is matched against the entire database every iteration. Use this when correctness depends on reading e-graph state from inside a query and the seminaive trade-offs (untracked dependencies, missed re-firings) are unacceptable.
-- **Name-indexed read/write API on the `Read` / `Write` traits (#745, #751).** Methods that mirror the egglog DSL one-to-one. Same surface inside and outside a rule:
-  - Inside a rule: `add_rust_rule` / `add_rust_rule_full` callbacks already receive a `WriteState` / `FullState` with these methods.
-  - Outside a rule: call `EGraph::update(|fs| ...)` to drive the same methods. Pending writes flush once, **after** the closure returns — a read-after-write in the same closure is not visible. Split write and read into separate `update` calls; batching many writes in one closure is the fast path (one flush + rebuild).
-  - `Write::set(table, key, value) -> Result<(), Error>` — `(set (f k) v)`.
-  - `Write::add(table, inputs) -> Result<Value, Error>` — mint or look up a constructor / relation eclass.
-  - `Write::remove(table, key) -> Result<(), Error>` — remove a row from any subtype.
-  - `Write::union(x: Value, y: Value) -> Result<(), Error>` — union two eclasses. Caller is responsible for ensuring both belong to the same eq-sort.
-  - `Read::lookup::<_, V: BaseValue>(table, key) -> Result<Option<V>, Error>` — read a function's output value.
-  - `Read::eclass_of(table, inputs) -> Result<Option<Value>, Error>` — read a constructor's eclass without minting.
-  - `Read::contains(table, key) -> Result<bool, Error>` — row presence, any subtype.
-  - `Read::lookup_raw(name, &[Value]) -> Result<Option<Value>, Error>` — pass-through for callers that already have a `&[Value]`.
-  - `Read::table_rows::<R: FromRow>(name) -> Result<Vec<R>, Error>` iterates all rows of a named table. `EGraph::table_rows` stays as a thin top-level convenience wrapper.
-  - `EGraph::query::<R: FromRow>(vars, facts) -> Result<Vec<R>, Error>` runs a pattern query.
-  - Misuse (`WrongSubtype` / `WrongArity` / `MissingTable`) surfaces as `Error::ApiError`. Per-column sort matching is **not** checked — the API is type-unsafe at the column level (`Value`s for eclasses and base values are indistinguishable).
-- Row trait surface in `crate::api`: `IntoRow` (with `arity()`), `IntoColumn`, `FromRow`, `FromColumn`, plus `RawValues` for variadic / pre-converted rows.
-- Primitive trait `apply` signatures (`PurePrim` / `WritePrim` / `ReadPrim` / `FullPrim`) keep `args: &[Value] -> Option<Value>`. Eclass identifiers flow through the API as bare `Value`s — callers track their eclass-vs-base provenance themselves.
+- **Name-indexed e-graph access from primitives and `rust_rule` callbacks (#745, #751).** New `Read` / `Write` capability traits on the state wrappers let primitive bodies and rule callbacks read/write tables by name (`fs.lookup("f", k)`, `fs.set("g", k, v)`, `fs.add("Cons", inputs)`, `fs.union(x, y)`, `fs.eclass_of(...)`, `fs.table_rows(...)`, etc.) instead of going through raw `FunctionId` + `&[Value]`. `EGraph::update(|fs| ...)` gives the same surface outside a rule (flushes once after the closure). Misuse (wrong subtype, wrong arity, unknown table) surfaces as `Error::ApiError`; per-column sort matching is not checked.
 
 ## [2.0.0] - 2026-02-11
 
