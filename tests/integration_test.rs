@@ -1148,7 +1148,7 @@ fn clear_function_lifecycle() {
         let key_a = egraph.base_to_value::<i64>(a);
         assert!(
             egraph
-                .update(|fs| fs.lookup_raw("Num", &[key_a]))
+                .update(|fs| fs.eclass_of("Num", key_a))
                 .unwrap()
                 .is_some()
         );
@@ -1164,7 +1164,7 @@ fn clear_function_lifecycle() {
         assert_eq!(egraph.get_size("Num"), 0);
         assert!(
             egraph
-                .update(|fs| fs.lookup_raw("Num", &[key_a]))
+                .update(|fs| fs.eclass_of("Num", key_a))
                 .unwrap()
                 .is_none()
         );

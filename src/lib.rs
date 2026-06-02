@@ -1992,8 +1992,8 @@ impl EGraph {
     /// `panics` if the function does not exist.
     ///
     /// Internal: external callers should use
-    /// [`EGraph::update`] + [`crate::Read::lookup`] (sort-checked) or
-    /// [`crate::Read::lookup_raw`] (untyped).
+    /// [`EGraph::update`] + [`crate::Read::lookup`] (for functions)
+    /// or [`crate::Read::eclass_of`] (for constructors).
     pub(crate) fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
         let func = self
             .functions

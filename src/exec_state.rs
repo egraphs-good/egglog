@@ -202,11 +202,11 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// [`PureState`] or [`WriteState`] (a `Write` context body must not
 /// depend on live DB state).
 ///
-/// The single-entry methods (`lookup`, `eclass_of`, `lookup_raw`,
-/// `contains`) return `None` if absent — never insert. The
-/// iteration / introspection methods (`function_entries`,
-/// `constructor_enodes`, `table_size`, `table_sizes`) walk the
-/// current contents of the database.
+/// The single-entry methods (`lookup`, `eclass_of`, `contains`)
+/// return `None` if absent — never insert. The iteration /
+/// introspection methods (`function_entries`, `constructor_enodes`,
+/// `table_size`, `table_sizes`) walk the current contents of the
+/// database.
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort
@@ -267,16 +267,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
-    /// Raw-`Value` lookup, for code that already has a `&[Value]` and
-    /// doesn't want to round-trip through [`Read::lookup`]'s
-    /// base-value conversion. Still arity-checked.
-    fn lookup_raw(&self, name: &str, key: &[Value]) -> Result<Option<Value>, Error> {
-        let action = lookup_action(self.registry(), name)?;
-        check_arity(name, &action, key.len())?;
-        Ok(action.lookup(self.es(), key))
-    }
-
-    /// Return the current row count for the named table, or `None` if no table
+/// Return the current row count for the named table, or `None` if no table
     /// with that name is registered.
     fn table_size(&self, name: &str) -> Option<usize> {
         self.registry()

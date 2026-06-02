@@ -219,21 +219,6 @@ fn test_wrong_arity_on_add_errors() {
 }
 
 #[test]
-fn test_wrong_arity_on_lookup_raw_errors() {
-    // `lookup_raw` skips base-value conversion but still
-    // arity-checks — passing 2 raw values to a 1-input function is
-    // a programmer error.
-    let mut eg = make_eg_with_function();
-    let result = eg.update(|fs| {
-        let one = fs.base_to_value::<i64>(1);
-        let two = fs.base_to_value::<i64>(2);
-        fs.lookup_raw("f", &[one, two])
-    });
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("expected 1 input"), "got: {err}");
-}
-
-#[test]
 fn test_union_same_value_is_noop() -> Result<(), Error> {
     // Unioning a value with itself should be a no-op, not an error.
     let mut eg = EGraph::default();

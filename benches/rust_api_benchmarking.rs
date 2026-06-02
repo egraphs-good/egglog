@@ -242,7 +242,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     args = [
         // Sweep n_dummy_funcs to gauge how the per-call ActionRegistry
         // HashMap lookup scales with table count. Both `fs.set` (fill)
-        // and `fs.lookup_raw` (read) hit the registry per match.
+        // and `fs.lookup` (read) hit the registry per match.
         RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 0 },
         RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 200 },
         RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 2_000 },
