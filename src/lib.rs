@@ -2147,23 +2147,32 @@ impl EGraph {
     }
 
     /// Run a pattern query: bind the variables in `vars` against
-    /// `facts` and return one typed row per match.
+    /// `facts` and return one [`HashMap`] per match, keyed by variable
+    /// name. Values stay raw — convert via [`EGraph::value_to_base`].
     ///
-    /// With zero vars, returns one empty `R` per match (so `Vec<()>`
-    /// has length = number of matches).
-    pub fn query<R: FromRow>(
+    /// With zero vars, returns at most one empty map (so `.len()` is 1
+    /// if the body matched, 0 if it didn't).
+    pub fn query(
         &mut self,
         vars: &[(&str, ArcSort)],
         facts: ast::Facts<String, String>,
-    ) -> Result<Vec<R>, Error> {
+    ) -> Result<Vec<std::collections::HashMap<String, Value>>, Error> {
         let raw = prelude::query(self, vars, facts)?;
-        let bv = self.backend.base_values();
+        let names: Vec<String> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
         if vars.is_empty() {
-            // QueryResult::iter() panics on cols == 0; use rows count.
             let n = if raw.any_matches() { 1 } else { 0 };
-            Ok((0..n).map(|_| R::from_values(&[], bv)).collect())
+            Ok((0..n).map(|_| std::collections::HashMap::new()).collect())
         } else {
-            Ok(raw.iter().map(|row| R::from_values(row, bv)).collect())
+            Ok(raw
+                .iter()
+                .map(|row| {
+                    names
+                        .iter()
+                        .zip(row.iter().copied())
+                        .map(|(n, v)| (n.clone(), v))
+                        .collect()
+                })
+                .collect())
         }
     }
 

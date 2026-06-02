@@ -61,9 +61,13 @@ fn query_pattern_relation_one_var() -> Result<(), Error> {
 ",
     )?;
 
-    let mut results: Vec<(i64,)> = egraph.query::<(i64,)>(vars![x: i64], facts![(R x)])?;
+    let mut results: Vec<i64> = egraph
+        .query(vars![x: i64], facts![(R x)])?
+        .into_iter()
+        .map(|m| egraph.value_to_base::<i64>(m["x"]))
+        .collect();
     results.sort();
-    assert_eq!(results, vec![(1,), (2,), (7,)]);
+    assert_eq!(results, vec![1, 2, 7]);
     Ok(())
 }
 
@@ -88,12 +92,12 @@ fn query_pattern_zero_vars_match() -> Result<(), Error> {
 ",
     )?;
 
-    // Fact present -> one empty tuple.
-    let hits: Vec<()> = egraph.query::<()>(vars![], facts![(R 1 2)])?;
+    // Fact present -> one empty map.
+    let hits = egraph.query(vars![], facts![(R 1 2)])?;
     assert_eq!(hits.len(), 1);
 
     // Fact absent -> empty Vec.
-    let misses: Vec<()> = egraph.query::<()>(vars![], facts![(R 5 5)])?;
+    let misses = egraph.query(vars![], facts![(R 5 5)])?;
     assert_eq!(misses.len(), 0);
 
     Ok(())
@@ -172,11 +176,14 @@ fn query_relation_exposes_synthetic_output() -> Result<(), Error> {
         assert_eq!(row.len(), 2, "relation row exposes (input, eclass)");
     }
 
-    // To get just the inputs as typed tuples, use the pattern-query form.
-    let mut inputs: Vec<(i64,)> =
-        egraph.query::<(i64,)>(vars![x: i64], facts![(R x)])?;
+    // To get just the inputs, use the pattern-query form.
+    let mut inputs: Vec<i64> = egraph
+        .query(vars![x: i64], facts![(R x)])?
+        .into_iter()
+        .map(|m| egraph.value_to_base::<i64>(m["x"]))
+        .collect();
     inputs.sort();
-    assert_eq!(inputs, vec![(1,), (2,)]);
+    assert_eq!(inputs, vec![1, 2]);
     Ok(())
 }
 
@@ -194,8 +201,16 @@ fn query_pattern_two_vars() -> Result<(), Error> {
 ",
     )?;
 
-    let mut rows: Vec<(i64, i64)> =
-        egraph.query::<(i64, i64)>(vars![x: i64, y: i64], facts![(= (f x) y)])?;
+    let mut rows: Vec<(i64, i64)> = egraph
+        .query(vars![x: i64, y: i64], facts![(= (f x) y)])?
+        .into_iter()
+        .map(|m| {
+            (
+                egraph.value_to_base::<i64>(m["x"]),
+                egraph.value_to_base::<i64>(m["y"]),
+            )
+        })
+        .collect();
     rows.sort();
     assert_eq!(rows, vec![(1, 10), (2, 20), (3, 30)]);
     Ok(())
