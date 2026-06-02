@@ -2082,7 +2082,8 @@ impl EGraph {
     /// let mut eg = EGraph::default();
     /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
     /// eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
-    /// let got: Option<i64> = eg.update(|fs| fs.lookup::<_, i64>("f", 1_i64))?;
+    /// let got = eg.update(|fs| fs.lookup("f", 1_i64))?;
+    /// let got: Option<i64> = got.map(|v| eg.value_to_base::<i64>(v));
     /// assert_eq!(got, Some(42));
     /// # Ok::<(), egglog::Error>(())
     /// ```

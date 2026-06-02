@@ -219,7 +219,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
         facts![(R x)],
         move |ctx, values| {
             let [x] = values else { unreachable!() };
-            let _ = ctx.lookup::<_, i64>("f", *x).ok().flatten()?;
+            let _ = ctx.lookup("f", *x).ok().flatten()?;
             Some(())
         },
     )

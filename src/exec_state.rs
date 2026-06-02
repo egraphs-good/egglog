@@ -213,21 +213,22 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 #[allow(private_bounds)]
 pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Look up a function's output value at the given key. Returns
-    /// `Ok(None)` if the row is absent.
+    /// `Ok(None)` if the row is absent. The returned `Value` is raw —
+    /// extract a Rust type via [`Core::value_to_base`] for base sorts
+    /// or [`Core::value_to_container`] for containers.
     ///
     /// **Only valid for `function` tables.** Constructors error;
     /// use [`Read::eclass_of`] for those.
-    fn lookup<K: IntoRow, V: BaseValue>(
+    fn lookup<K: IntoRow>(
         &self,
         name: &str,
         key: K,
-    ) -> Result<Option<V>, Error> {
+    ) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
         check_arity(name, &action, key.arity())?;
-        let bv = self.base_values();
-        let key_values = key.into_values(bv);
-        Ok(action.lookup(self.es(), &key_values).map(|v| bv.unwrap::<V>(v)))
+        let key_values = key.into_values(self.base_values());
+        Ok(action.lookup(self.es(), &key_values))
     }
 
     /// Look up a constructor's eclass at the given inputs, without
