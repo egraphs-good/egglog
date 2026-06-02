@@ -1,13 +1,13 @@
-//! Tests for the `EGraph::table_rows` and `EGraph::query` API.
-//! See `src/lib.rs` for `FromRow` and these methods.
+//! Tests for `EGraph::function_entries`, `EGraph::constructor_enodes`,
+//! and `EGraph::query`.
 
 use egglog::prelude::*;
 use egglog::{Error, Value};
 
-/// Test 1: `eg.table_rows::<(i64, i64)>("f")` returns all rows of a
-/// function table as typed tuples. Order is `(input..., output)`.
+/// `function_entries` returns one `(inputs, output)` pair per entry
+/// of a function table.
 #[test]
-fn query_table_i64_to_i64() -> Result<(), Error> {
+fn function_entries_i64_to_i64() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -19,35 +19,39 @@ fn query_table_i64_to_i64() -> Result<(), Error> {
 ",
     )?;
 
-    let mut rows: Vec<(i64, i64)> = egraph.table_rows::<(i64, i64)>("f")?;
+    let mut rows: Vec<(i64, i64)> = egraph
+        .function_entries("f")?
+        .into_iter()
+        .map(|(inputs, output)| {
+            (
+                egraph.value_to_base::<i64>(inputs[0]),
+                egraph.value_to_base::<i64>(output),
+            )
+        })
+        .collect();
     rows.sort();
     assert_eq!(rows, vec![(1, 42), (2, 43), (7, 100)]);
     Ok(())
 }
 
-/// `table_rows::<Vec<Value>>` is the escape hatch — useful when the
-/// schema contains eq-sort or container columns and you want raw `Value`s.
+/// `function_entries` errors when called on a constructor.
 #[test]
-fn query_table_raw_values() -> Result<(), Error> {
+fn function_entries_on_constructor_errors() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
-        "
-(function g (i64) i64 :no-merge)
-(set (g 5) 50)
-",
+        "(datatype List (Cons i64 List) (Nil))",
     )?;
-
-    let rows: Vec<Vec<Value>> = egraph.table_rows::<Vec<Value>>("g")?;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].len(), 2);
-    assert_eq!(egraph.value_to_base::<i64>(rows[0][0]), 5);
-    assert_eq!(egraph.value_to_base::<i64>(rows[0][1]), 50);
+    let err = egraph.function_entries("Cons").unwrap_err().to_string();
+    assert!(
+        err.contains("Cons") && err.contains("constructor"),
+        "got: {err}"
+    );
     Ok(())
 }
 
-/// Test 2: `egraph.query(vars![x: i64], facts![(R x)])` matches and
-/// binds `x` for every row in the relation. Each match is a
+/// `egraph.query(vars![x: i64], facts![(R x)])` matches and binds `x`
+/// for every row in the relation. Each match is a
 /// `HashMap<String, Value>` keyed by variable name.
 #[test]
 fn query_pattern_relation_one_var() -> Result<(), Error> {
@@ -72,11 +76,11 @@ fn query_pattern_relation_one_var() -> Result<(), Error> {
     Ok(())
 }
 
-/// Test 3: `egraph.query(vars![], facts![(R 1 2)])` — zero-var case.
+/// `egraph.query(vars![], facts![(R 1 2)])` — zero-var case.
 ///
 /// With zero `vars`, every match still produces a `HashMap` (which
-/// will be empty since there are no variables to bind), so
-/// `.len()` reports the match count. For ground facts that's 0 or 1.
+/// will be empty since there are no variables to bind), so `.len()`
+/// reports the match count. For ground facts that's 0 or 1.
 #[test]
 fn query_pattern_zero_vars_match() -> Result<(), Error> {
     let mut egraph = EGraph::default();
@@ -88,30 +92,19 @@ fn query_pattern_zero_vars_match() -> Result<(), Error> {
 ",
     )?;
 
-    // Fact present -> one empty map.
     let hits = egraph.query(vars![], facts![(R 1 2)])?;
     assert_eq!(hits.len(), 1);
 
-    // Fact absent -> empty Vec.
     let misses = egraph.query(vars![], facts![(R 5 5)])?;
     assert_eq!(misses.len(), 0);
 
     Ok(())
 }
 
-/// Test 4: Iterating a constructor table.
-///
-/// What comes back: each row is `[input_0, ..., input_n, output_eclass]`
-/// with raw `Value`s for any eq-sort columns. Eq-sort outputs are
-/// e-class ids, NOT extracted terms — extraction is up to the caller
-/// (use `EGraph::extract_value` or similar). Base-sort columns can be
-/// converted via `value_to_base`.
-///
-/// For a constructor `(constructor Add (i64 i64) Math)`:
-/// - The two `i64` inputs come back as base values.
-/// - The `Math` output comes back as an eq-sort `Value` (e-class id).
+/// `constructor_enodes` on a constructor returns one
+/// `(inputs, eclass)` per enode.
 #[test]
-fn query_constructor_table_eclass_values() -> Result<(), Error> {
+fn constructor_enodes_basic() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -123,23 +116,21 @@ fn query_constructor_table_eclass_values() -> Result<(), Error> {
 ",
     )?;
 
-    let rows: Vec<Vec<Value>> = egraph.table_rows::<Vec<Value>>("Add")?;
-    assert_eq!(rows.len(), 2);
-    for row in &rows {
-        // Two i64 inputs and one eq-sort output.
-        assert_eq!(row.len(), 3);
-        let _x = egraph.value_to_base::<i64>(row[0]);
-        let _y = egraph.value_to_base::<i64>(row[1]);
-        // row[2] is the eq-sort eclass id — already a Value, nothing
-        // to verify beyond the column count above.
+    let enodes = egraph.constructor_enodes("Add")?;
+    assert_eq!(enodes.len(), 2);
+    for (inputs, _eclass) in &enodes {
+        // Two i64 inputs.
+        assert_eq!(inputs.len(), 2);
+        let _x = egraph.value_to_base::<i64>(inputs[0]);
+        let _y = egraph.value_to_base::<i64>(inputs[1]);
     }
 
-    let mut input_pairs: Vec<(i64, i64)> = rows
+    let mut input_pairs: Vec<(i64, i64)> = enodes
         .iter()
-        .map(|r| {
+        .map(|(inputs, _)| {
             (
-                egraph.value_to_base::<i64>(r[0]),
-                egraph.value_to_base::<i64>(r[1]),
+                egraph.value_to_base::<i64>(inputs[0]),
+                egraph.value_to_base::<i64>(inputs[1]),
             )
         })
         .collect();
@@ -148,13 +139,11 @@ fn query_constructor_table_eclass_values() -> Result<(), Error> {
     Ok(())
 }
 
-/// A relation table is sugar for a constructor with a synthetic
-/// non-unionable eq-sort output. `EGraph::table_rows` does not
-/// special-case relations — it returns whatever the backend stores,
-/// which is `(input..., eclass)`. Use `Vec<Value>` (or `query` which
-/// binds only the inputs you name) to inspect such rows.
+/// A relation desugars to a constructor with a synthetic non-unionable
+/// eq-sort output. `constructor_enodes` returns those rows the same
+/// way as any other constructor.
 #[test]
-fn query_relation_exposes_synthetic_output() -> Result<(), Error> {
+fn constructor_enodes_relation() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -165,11 +154,10 @@ fn query_relation_exposes_synthetic_output() -> Result<(), Error> {
 ",
     )?;
 
-    // The backend stores the synthetic eclass column, so the row has
-    // 2 columns: the i64 input + the eclass Value.
-    let raw: Vec<Vec<Value>> = egraph.table_rows::<Vec<Value>>("R")?;
-    for row in &raw {
-        assert_eq!(row.len(), 2, "relation row exposes (input, eclass)");
+    let enodes = egraph.constructor_enodes("R")?;
+    assert_eq!(enodes.len(), 2);
+    for (inputs, _eclass) in &enodes {
+        assert_eq!(inputs.len(), 1, "relation enode: one input");
     }
 
     // To get just the inputs, use the pattern-query form.
@@ -212,21 +200,21 @@ fn query_pattern_two_vars() -> Result<(), Error> {
     Ok(())
 }
 
-/// Querying an empty function returns an empty Vec.
+/// Iterating an empty function returns an empty Vec.
 #[test]
-fn query_empty_table() -> Result<(), Error> {
+fn function_entries_empty() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, "(function h (i64) i64 :no-merge)")?;
-    let rows: Vec<(i64, i64)> = egraph.table_rows::<(i64, i64)>("h")?;
-    assert!(rows.is_empty());
+    let entries = egraph.function_entries("h")?;
+    assert!(entries.is_empty());
     Ok(())
 }
 
-/// `table_rows` on a missing function returns a MissingTable error.
+/// `function_entries` on a missing table returns a MissingTable error.
 #[test]
-fn table_rows_missing_table_errors() {
+fn function_entries_missing_table_errors() {
     let mut egraph = EGraph::default();
-    let err = egraph.table_rows::<(i64, i64)>("nonexistent").unwrap_err();
+    let err = egraph.function_entries("nonexistent").unwrap_err();
     let msg = format!("{err}");
     assert!(
         msg.contains("nonexistent") || msg.contains("Unbound"),
@@ -234,3 +222,6 @@ fn table_rows_missing_table_errors() {
     );
 }
 
+// Suppress unused-import warning when no test uses Value directly.
+#[allow(dead_code)]
+fn _value_import_check(_: Value) {}

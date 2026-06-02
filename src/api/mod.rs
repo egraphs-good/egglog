@@ -1,9 +1,15 @@
 //! Row encoding for the [`crate::EGraph`] surface API.
 //!
-//! [`IntoRow`] / [`IntoColumn`] convert Rust values into egglog row data on
-//! the way *in* (insert, lookup keys, query patterns).  [`FromRow`] /
-//! [`FromColumn`] convert row data back into Rust values on the way *out*
-//! (lookup return values, query iteration).
+//! Four traits map Rust values to and from egglog row data:
+//!
+//! - [`IntoValue`] / [`FromValue`] — one Rust value ↔ one egglog
+//!   [`Value`]. These are **open** traits: users implementing custom
+//!   sorts (or just custom Rust wrapper types) can implement them to
+//!   make their types flow through the row-encoding APIs.
+//! - [`IntoValues`] / [`FromValues`] — a whole row of Rust values
+//!   ↔ a `&[Value]`. These are **sealed**: row shape is fixed to
+//!   tuples up to arity 8, plus the [`RawValues`] / `Vec<Value>` /
+//!   `()` escape hatches.
 //!
 //! The API is **type-unsafe at the column level**: every column flows
 //! as a bare [`Value`]. The Rust trait machinery here only enforces
@@ -55,89 +61,57 @@ mod sealed {
 }
 
 // ---------------------------------------------------------------------
-// Input side: IntoRow + IntoColumn
+// Per-column conversion: IntoValue + FromValue (open)
 // ---------------------------------------------------------------------
 
-/// Convert a Rust value into a row of egglog [`Value`]s.
-///
-/// Implemented for:
-/// - A bare [`IntoColumn`] value (e.g. `1_i64` or a [`Value`]) —
-///   produces a single-column row.
-/// - Tuples up to arity 8 of [`IntoColumn`] values.
-/// - [`RawValues`] for variadic / pre-converted rows.
-pub trait IntoRow {
-    fn into_values(self, bv: &BaseValues) -> Vec<Value>;
-}
-
-/// A single column of an egglog row, on the input side.
-///
-/// This is a sealed trait — additional impls live in the egglog crate.
-pub trait IntoColumn: sealed::Sealed {
+/// Convert a Rust value into an egglog [`Value`]. Open trait: impl
+/// for your own types if you want them to flow through `set` / `add`
+/// / `lookup` keys as column inputs.
+pub trait IntoValue {
     fn into_value(self, bv: &BaseValues) -> Value;
 }
 
-// ---------------------------------------------------------------------
-// Output side: FromRow + FromColumn
-// ---------------------------------------------------------------------
-
-/// Convert a row of egglog [`Value`]s back into a Rust value.
-///
-/// Implemented for:
-/// - `()` — discards the row, useful for "did this match" queries.
-/// - A bare [`FromColumn`] type — extracts a single column.
-/// - Tuples up to arity 8 of [`FromColumn`] types.
-/// - `Vec<Value>` as an escape hatch for rows with non-base columns.
-pub trait FromRow: Sized {
-    fn from_values(values: &[Value], bv: &BaseValues) -> Self;
-}
-
-/// A single column of an egglog row, on the output side.
-///
-/// This is a sealed trait — additional impls live in the egglog crate.
-pub trait FromColumn: sealed::Sealed {
+/// Convert an egglog [`Value`] back into a Rust value. Open trait:
+/// impl for your own types if you want them to flow out of
+/// `function_entries` / `query` rows.
+pub trait FromValue: Sized {
     fn from_value(value: Value, bv: &BaseValues) -> Self;
 }
 
 // ---------------------------------------------------------------------
-// Variadic / pre-converted rows: RawValues
+// Row conversion: IntoValues + FromValues (sealed)
 // ---------------------------------------------------------------------
 
-/// Wrap a `Vec<Value>` as an [`IntoRow`]. Useful for zero-arg
-/// constructors (`RawValues(vec![])`) and for rows whose column count
-/// isn't known until runtime.
-#[derive(Clone, Debug)]
-pub struct RawValues(pub Vec<Value>);
-
-impl IntoRow for RawValues {
-    fn into_values(self, _bv: &BaseValues) -> Vec<Value> {
-        self.0
-    }
+/// Convert a Rust value into a row of egglog [`Value`]s.
+///
+/// Sealed; impls cover bare [`IntoValue`] (single-column row),
+/// tuples up to arity 8 of [`IntoValue`] values, and [`RawValues`]
+/// for variadic / pre-converted rows.
+pub trait IntoValues: sealed::Sealed {
+    fn into_values(self, bv: &BaseValues) -> Vec<Value>;
 }
 
-impl FromRow for Vec<Value> {
-    fn from_values(values: &[Value], _bv: &BaseValues) -> Self {
-        values.to_vec()
-    }
-}
-
-impl FromRow for () {
-    fn from_values(_values: &[Value], _bv: &BaseValues) -> Self {}
+/// Convert a row of egglog [`Value`]s back into a Rust value.
+///
+/// Sealed; impls cover `()` (discard), `Vec<Value>` (raw escape
+/// hatch), and tuples up to arity 8 of [`FromValue`] types.
+pub trait FromValues: Sized + sealed::Sealed {
+    fn from_values(values: &[Value], bv: &BaseValues) -> Self;
 }
 
 // ---------------------------------------------------------------------
-// Base column impls — symmetric for IntoColumn / FromColumn
+// Built-in column impls — symmetric for IntoValue / FromValue
 // ---------------------------------------------------------------------
 
-macro_rules! impl_column_for_base {
+macro_rules! impl_value_for_base {
     ( $( $ty:ty ),+ $(,)? ) => {
         $(
-            impl sealed::Sealed for $ty {}
-            impl IntoColumn for $ty {
+            impl IntoValue for $ty {
                 fn into_value(self, bv: &BaseValues) -> Value {
                     bv.get::<$ty>(self)
                 }
             }
-            impl FromColumn for $ty {
+            impl FromValue for $ty {
                 fn from_value(value: Value, bv: &BaseValues) -> Self {
                     bv.unwrap::<$ty>(value)
                 }
@@ -146,78 +120,110 @@ macro_rules! impl_column_for_base {
     };
 }
 
-impl_column_for_base!(i64, bool, (), sort::F, sort::S, sort::Z, sort::Q);
+impl_value_for_base!(i64, bool, (), sort::F, sort::S, sort::Z, sort::Q);
 
 // `String` is sugar — egglog's String sort uses `sort::S` (`Boxed<String>`).
-impl sealed::Sealed for String {}
-impl IntoColumn for String {
+impl IntoValue for String {
     fn into_value(self, bv: &BaseValues) -> Value {
         bv.get::<sort::S>(self.into())
     }
 }
-impl FromColumn for String {
+impl FromValue for String {
     fn from_value(value: Value, bv: &BaseValues) -> Self {
         bv.unwrap::<sort::S>(value).0
     }
 }
 
 // `&str` is one-directional input sugar.
-impl sealed::Sealed for &str {}
-impl IntoColumn for &str {
+impl IntoValue for &str {
     fn into_value(self, bv: &BaseValues) -> Value {
         bv.get::<sort::S>(self.to_string().into())
     }
 }
 
 // `f64` is sugar for `sort::F`.
-impl sealed::Sealed for f64 {}
-impl IntoColumn for f64 {
+impl IntoValue for f64 {
     fn into_value(self, bv: &BaseValues) -> Value {
         use ordered_float::OrderedFloat;
         bv.get::<sort::F>(OrderedFloat(self).into())
     }
 }
-impl FromColumn for f64 {
+impl FromValue for f64 {
     fn from_value(value: Value, bv: &BaseValues) -> Self {
         bv.unwrap::<sort::F>(value).0.0
     }
 }
 
 // Bare `Value` passes through unchanged.
-impl sealed::Sealed for Value {}
-impl IntoColumn for Value {
+impl IntoValue for Value {
     fn into_value(self, _bv: &BaseValues) -> Value {
         self
     }
 }
-impl FromColumn for Value {
+impl FromValue for Value {
     fn from_value(value: Value, _bv: &BaseValues) -> Self {
         value
     }
 }
 
 // ---------------------------------------------------------------------
-// Single-column blanket impls
+// Variadic / pre-converted rows: RawValues
 // ---------------------------------------------------------------------
 
-impl<A: IntoColumn> IntoRow for A {
+/// Wrap a `Vec<Value>` as an [`IntoValues`]. Useful for zero-arg
+/// constructors (`RawValues(vec![])`) and for rows whose column
+/// count isn't known until runtime.
+#[derive(Clone, Debug)]
+pub struct RawValues(pub Vec<Value>);
+
+impl sealed::Sealed for RawValues {}
+impl IntoValues for RawValues {
+    fn into_values(self, _bv: &BaseValues) -> Vec<Value> {
+        self.0
+    }
+}
+
+impl sealed::Sealed for Vec<Value> {}
+impl FromValues for Vec<Value> {
+    fn from_values(values: &[Value], _bv: &BaseValues) -> Self {
+        values.to_vec()
+    }
+}
+
+// `()` as a FromValues discards whatever it was handed (useful for
+// "did this match" queries). `()` as an IntoValues is a single Unit
+// column, handled by the blanket `impl<A: IntoValue> IntoValues for A`
+// below. For a zero-arg row, use `RawValues(vec![])`.
+impl FromValues for () {
+    fn from_values(_values: &[Value], _bv: &BaseValues) -> Self {}
+}
+
+// ---------------------------------------------------------------------
+// Single-column blanket impl: any T: IntoValue is a 1-column IntoValues.
+//
+// Note: this does NOT cover FromValues — that would conflict with the
+// `Vec<Value>` impl above. Single-column outputs use the (A,) tuple form.
+// ---------------------------------------------------------------------
+
+impl<A: IntoValue> sealed::Sealed for A {}
+impl<A: IntoValue> IntoValues for A {
     fn into_values(self, bv: &BaseValues) -> Vec<Value> {
         vec![self.into_value(bv)]
     }
 }
 
-// Note: no blanket `impl<A: FromColumn> FromRow for A` — would conflict
-// with the `Vec<Value>` impl. Single-column outputs use the (A,) tuple form.
-
 // ---------------------------------------------------------------------
-// Tuple impls — symmetric for IntoRow / FromRow
+// Tuple impls — IntoValues / FromValues for tuples of arity 1..=8
 // ---------------------------------------------------------------------
 
-macro_rules! impl_row_for_tuple {
+macro_rules! impl_values_for_tuple {
     ( $( ($($name:ident),+) ),+ $(,)? ) => {
         $(
             #[allow(non_snake_case)]
-            impl<$($name: IntoColumn),+> IntoRow for ($($name,)+) {
+            impl<$($name),+> sealed::Sealed for ($($name,)+) {}
+
+            #[allow(non_snake_case)]
+            impl<$($name: IntoValue),+> IntoValues for ($($name,)+) {
                 fn into_values(self, bv: &BaseValues) -> Vec<Value> {
                     let ($($name,)+) = self;
                     vec![ $( $name.into_value(bv) ),+ ]
@@ -225,23 +231,17 @@ macro_rules! impl_row_for_tuple {
             }
 
             #[allow(non_snake_case)]
-            impl<$($name: FromColumn),+> FromRow for ($($name,)+) {
+            impl<$($name: FromValue),+> FromValues for ($($name,)+) {
                 fn from_values(values: &[Value], bv: &BaseValues) -> Self {
-                    let arity = [$(stringify!($name)),+].len();
-                    assert!(
-                        values.len() == arity,
-                        "FromRow: expected {} values for tuple of arity {}, got {} (use Vec<Value> or () to discard extras)",
-                        arity, arity, values.len(),
-                    );
                     let mut iter = values.iter().copied();
-                    ( $( $name::from_value(iter.next().unwrap(), bv), )+ )
+                    ( $( $name::from_value(iter.next().expect("FromValues: row shorter than tuple arity"), bv), )+ )
                 }
             }
         )+
     };
 }
 
-impl_row_for_tuple! {
+impl_values_for_tuple! {
     (T1),
     (T1, T2),
     (T1, T2, T3),

@@ -6,7 +6,7 @@
 //! Exercises: `EGraph::update`, `Write::add` (constructor minting
 //! both from outside a rule and from inside a `rust_rule` callback),
 //! `Write::union` (inside the rule), `Read::eclass_of`,
-//! `Read::table_sizes`, `EGraph::table_rows`, `add_ruleset`,
+//! `Read::table_sizes`, `EGraph::constructor_enodes`, `add_ruleset`,
 //! `run_ruleset`.
 
 use egglog::prelude::*;
@@ -93,17 +93,12 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     let nine = eg.update(|fs| fs.eclass_of("Num", 9_i64))?;
     assert_eq!(nine, Some(root), "(Num 9) should be unioned with root");
 
-    // (b) — walk every constructor table looking for rows whose
-    //     output column equals `root`. We expect at least one
-    //     `(Num 9)` row.
+    // (b) — walk every Num enode looking for one whose eclass equals
+    //     `root` and whose i64 input is `9`.
     let mut found_num_nine = false;
-    let num_rows: Vec<Vec<Value>> = eg.table_rows::<Vec<Value>>("Num")?;
     let nine_value = eg.base_to_value::<i64>(9);
-    for row in num_rows {
-        // Row layout for a constructor: (input..., eclass). For
-        // `(Num i64)` that's `[i64_value, eclass]`.
-        let (inputs, out) = row.split_at(row.len() - 1);
-        if out[0] == root && inputs[0] == nine_value {
+    for (inputs, eclass) in eg.constructor_enodes("Num")? {
+        if eclass == root && inputs[0] == nine_value {
             found_num_nine = true;
             break;
         }

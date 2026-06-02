@@ -2108,31 +2108,32 @@ impl EGraph {
         result
     }
 
-    /// Iterate all rows of a named table as typed tuples.
-    ///
-    /// The row shape matches what the backend stores, which differs
-    /// by subtype:
-    ///
-    /// - **Function tables** (`(function f (i64) i64 :no-merge)`) — rows
-    ///   are `(input..., output)`. `table_rows::<(i64, i64)>("f")` gets
-    ///   `(key, value)`.
-    /// - **Constructor / relation tables** (`(constructor Cons (i64 List) List)`,
-    ///   `(relation R (i64))`) — rows are `(input..., eclass)` where
-    ///   `eclass` is the minted eclass `Value`. Relations desugar to
-    ///   constructors with a synthetic non-unionable eq-sort output, so
-    ///   their rows also expose the trailing eclass column — there is
-    ///   no special-casing for relations.
-    ///
-    /// Use `Vec<Value>` to inspect arbitrary shapes, or
-    /// [`EGraph::query`] to bind only the columns you name.
-    pub fn table_rows<R: FromRow>(&mut self, table: &str) -> Result<Vec<R>, Error> {
-        // Read-only path; safe even when proofs are enabled, so we
-        // don't go through `update` (which refuses under proofs because
-        // its closure could stage writes).
+    /// Iterate every enode in a constructor / relation table. See
+    /// [`Read::constructor_enodes`] for details; this is a top-level
+    /// convenience that delegates through a read-only path (works
+    /// under proofs).
+    pub fn constructor_enodes(
+        &mut self,
+        table: &str,
+    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        self.backend
-            .update(|es| FullState::wrap(es, &guard, Context::Full).table_rows::<R>(table))
+        self.backend.update(|es| {
+            FullState::wrap(es, &guard, Context::Full).constructor_enodes(table)
+        })
+    }
+
+    /// Iterate every `(inputs, output)` entry of a function table.
+    /// See [`Read::function_entries`].
+    pub fn function_entries(
+        &mut self,
+        table: &str,
+    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        self.backend.update(|es| {
+            FullState::wrap(es, &guard, Context::Full).function_entries(table)
+        })
     }
 
     /// Run a pattern query: bind the variables in `vars` against
@@ -2204,7 +2205,7 @@ impl EGraph {
 
 }
 
-pub use crate::api::{ApiError, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};
+pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, RawValues};
 
 fn resolve_function_container_target_with_context(
     backend: &egglog_bridge::EGraph,

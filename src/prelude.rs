@@ -29,14 +29,13 @@
 //!
 //! ## Iterating and querying
 //!
-//! - [`crate::Read::table_rows`] iterates a named table; the row
-//!   shape depends on the table's subtype (`(input..., output)` for
-//!   functions, `(input..., eclass)` for constructors and relations).
-//!   Also available as the top-level convenience method
-//!   [`crate::EGraph::table_rows`].
-//! - [`crate::EGraph::query`] runs a pattern query and binds the
-//!   named variables. Compiles against the rule registry, so it stays
-//!   on `EGraph`.
+//! - [`crate::Read::function_entries`] iterates a function table.
+//!   Each entry is `(inputs, output)` of raw `Value`s.
+//! - [`crate::Read::constructor_enodes`] iterates a constructor /
+//!   relation table. Each enode is `(inputs, eclass_id)`.
+//!   Top-level convenience versions live on [`crate::EGraph`].
+//! - [`crate::EGraph::query`] runs a pattern query and returns one
+//!   `HashMap<String, Value>` per match, keyed by variable name.
 //!
 //! ## Rules
 //!

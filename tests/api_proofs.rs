@@ -79,11 +79,10 @@ fn query_with_proofs_enabled_errors_with_query_api_name() {
 }
 
 #[test]
-fn table_rows_works_under_proofs() {
-    // table_rows is read-only — it should not trip the proofs check
-    // that `update` does for writes. (We read as `Vec<Value>` because
-    // proof mode adds an extra synthetic column to the schema.)
-    use egglog::Value;
+fn read_only_iteration_works_under_proofs() {
+    // Read-only iteration should not trip the proofs check that
+    // `update` does for writes. (Proof mode rewrites `(function … :merge new)`
+    // into a constructor under the hood, so we read it as such.)
     let mut eg = EGraph::new_with_proofs();
     eg.parse_and_run_program(
         None,
@@ -91,10 +90,10 @@ fn table_rows_works_under_proofs() {
     )
     .unwrap();
 
-    let rows: Vec<Vec<Value>> = eg
-        .table_rows::<Vec<Value>>("f")
-        .expect("table_rows should succeed under proofs");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(eg.value_to_base::<i64>(rows[0][0]), 1);
-    assert_eq!(eg.value_to_base::<i64>(rows[0][1]), 42);
+    let enodes = eg
+        .constructor_enodes("f")
+        .expect("constructor_enodes should succeed under proofs");
+    assert_eq!(enodes.len(), 1);
+    let (inputs, _eclass) = &enodes[0];
+    assert_eq!(eg.value_to_base::<i64>(inputs[0]), 1);
 }

@@ -32,7 +32,7 @@
 
 use std::ops::Deref;
 
-use crate::api::{ApiError, IntoColumn, IntoRow};
+use crate::api::{ApiError, IntoValue, IntoValues};
 use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
     Value,
@@ -202,10 +202,11 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// [`PureState`] or [`WriteState`] (a `Write` context body must not
 /// depend on live DB state).
 ///
-/// The single-row methods (`lookup`, `eclass_of`, `lookup_raw`,
-/// `contains`) return `None` if the row is absent — never insert.
-/// The iteration / introspection methods (`table_rows`, `table_size`,
-/// `table_sizes`) walk the current contents of the database.
+/// The single-entry methods (`lookup`, `eclass_of`, `lookup_raw`,
+/// `contains`) return `None` if absent — never insert. The
+/// iteration / introspection methods (`function_entries`,
+/// `constructor_enodes`, `table_size`, `table_sizes`) walk the
+/// current contents of the database.
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort
@@ -219,7 +220,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for `function` tables.** Constructors error;
     /// use [`Read::eclass_of`] for those.
-    fn lookup<K: IntoRow>(
+    fn lookup<K: IntoValues>(
         &self,
         name: &str,
         key: K,
@@ -236,7 +237,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Read::lookup`] for those.
-    fn eclass_of<K: IntoRow>(
+    fn eclass_of<K: IntoValues>(
         &self,
         name: &str,
         inputs: K,
@@ -255,7 +256,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// True iff a row with the given key exists in the table. Works
     /// for any subtype — never mints.
-    fn contains<K: IntoRow>(
+    fn contains<K: IntoValues>(
         &self,
         name: &str,
         key: K,
@@ -288,29 +289,52 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         self.registry().table_sizes(self.es())
     }
 
-    /// Iterate all rows of a named table, returning each one as the
-    /// caller-chosen `R: FromRow`.
+    /// Iterate every enode in a constructor / relation table. Each
+    /// returned row is `(inputs, eclass)` where `inputs` is the
+    /// constructor's input columns as raw `Value`s and `eclass` is
+    /// the eclass id the constructor minted for that row.
     ///
-    /// Row shape depends on subtype:
-    /// - **Function tables** (`(function f (i64) i64 :no-merge)`) —
-    ///   rows are `(input..., output)`; `table_rows::<(i64, i64)>("f")`
-    ///   yields `(key, value)`.
-    /// - **Constructor / relation tables** — rows are
-    ///   `(input..., eclass)` where `eclass` is the minted eclass
-    ///   [`Value`]. Relations desugar to constructors with a synthetic
-    ///   non-unionable eq-sort output column.
-    ///
-    /// Pass `Vec<Value>` to inspect arbitrary shapes, or use
-    /// [`crate::EGraph::query`] to bind only the columns you name.
-    fn table_rows<R: crate::api::FromRow>(&self, name: &str) -> Result<Vec<R>, Error> {
+    /// Errors with `WrongSubtype` if `name` is a function table —
+    /// use [`Read::function_entries`] for those. Convert individual
+    /// input columns to typed Rust values with [`Core::value_to_base`]
+    /// or [`Core::value_to_container`].
+    fn constructor_enodes(
+        &self,
+        name: &str,
+    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
         let action = lookup_action(self.registry(), name)?;
-        let bv = self.base_values();
-        let mut out = Vec::with_capacity(action.row_count(self.es()));
-        action.for_each(self.es(), |row| {
-            out.push(R::from_values(row.vals, bv));
-        });
-        Ok(out)
+        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        Ok(collect_rows(&action, self.es()))
     }
+
+    /// Iterate every `(inputs, output)` entry of a function table.
+    /// `inputs` is the key columns; `output` is the value the
+    /// function maps to for that key. Both are raw `Value`s.
+    ///
+    /// Errors with `WrongSubtype` if `name` is a constructor — use
+    /// [`Read::constructor_enodes`] for those.
+    fn function_entries(
+        &self,
+        name: &str,
+    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(name, &action, TableKind::Function, "function")?;
+        Ok(collect_rows(&action, self.es()))
+    }
+}
+
+/// Split each row into `(inputs, output)`, where output is the last
+/// column. Shared by `constructor_enodes` and `function_entries`.
+fn collect_rows(
+    action: &TableAction,
+    state: &ExecutionState<'_>,
+) -> Vec<(Vec<Value>, Value)> {
+    let mut out = Vec::with_capacity(action.row_count(state));
+    action.for_each(state, |row| {
+        let (output, inputs) = row.vals.split_last().expect("function row has at least an output column");
+        out.push((inputs.to_vec(), *output));
+    });
+    out
 }
 
 /// Action-side write methods — name-indexed inserts/removes/subsumes
@@ -328,7 +352,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for `function` tables.** Constructors error;
     /// use [`Write::add`] for those.
-    fn set<K: IntoRow, V: IntoColumn>(
+    fn set<K: IntoValues, V: IntoValue>(
         &mut self,
         name: &str,
         key: K,
@@ -351,7 +375,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Write::set`] for those.
-    fn add<R: IntoRow>(
+    fn add<R: IntoValues>(
         &mut self,
         name: &str,
         inputs: R,
@@ -372,7 +396,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// Remove a row from the named table. Works for any subtype.
-    fn remove<K: IntoRow>(
+    fn remove<K: IntoValues>(
         &mut self,
         name: &str,
         key: K,
@@ -385,7 +409,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// Subsume a row in the named table.
-    fn subsume<K: IntoRow>(
+    fn subsume<K: IntoValues>(
         &mut self,
         name: &str,
         key: K,

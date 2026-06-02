@@ -244,14 +244,13 @@ fn test_union_same_value_is_noop() -> Result<(), Error> {
 }
 
 #[test]
-fn test_table_rows_on_empty_constructor() -> Result<(), Error> {
+fn test_constructor_enodes_on_empty_table() -> Result<(), Error> {
     // Iterating an empty constructor table should return an empty Vec,
     // not error.
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
-    let rows: Vec<Vec<egglog::Value>> =
-        eg.table_rows::<Vec<egglog::Value>>("Cons")?;
-    assert!(rows.is_empty());
+    let enodes = eg.constructor_enodes("Cons")?;
+    assert!(enodes.is_empty());
     Ok(())
 }
 
