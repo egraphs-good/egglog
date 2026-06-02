@@ -238,26 +238,3 @@ fn query_missing_table_errors() {
     );
 }
 
-/// Test: the legacy free `query()` helper still works (it just goes
-/// through `EGraph::query::<Vec<Value>>` internally now).
-#[test]
-#[allow(deprecated)]
-fn legacy_query_still_works() -> Result<(), Error> {
-    let mut egraph = EGraph::default();
-    egraph.parse_and_run_program(
-        None,
-        "
-(function f (i64) i64 :no-merge)
-(set (f 1) 42)
-",
-    )?;
-
-    let results = query(&mut egraph, vars![x: i64, y: i64], facts![(= (f x) y)])?;
-    assert!(results.any_matches());
-    let rows: Vec<&[Value]> = results.iter().collect();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].len(), 2);
-    assert_eq!(egraph.value_to_base::<i64>(rows[0][0]), 1);
-    assert_eq!(egraph.value_to_base::<i64>(rows[0][1]), 42);
-    Ok(())
-}

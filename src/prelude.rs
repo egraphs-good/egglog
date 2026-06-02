@@ -58,12 +58,6 @@
 //! - **Simple pure primitives:** the [`add_primitive!`] /
 //!   [`add_primitive_with_validator!`] / [`add_literal_prim!`] macros
 //!   handle the common "pure native function" case.
-//!
-//! ## Legacy
-//!
-//! [`query`] is the older free-function pattern query — returns
-//! untyped `Vec<Value>` rows. New code should use
-//! [`crate::EGraph::query`].
 
 use crate::*;
 use std::any::{Any, TypeId};
@@ -318,13 +312,12 @@ macro_rules! actions {
 /// let big_number = 20;
 ///
 /// // check that `(fib 20)` is not in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// assert!(results.iter().next().is_none());
+/// assert!(results.is_empty());
 ///
 /// let ruleset = "custom_ruleset";
 /// add_ruleset(&mut egraph, ruleset)?;
@@ -348,15 +341,13 @@ macro_rules! actions {
 /// }
 ///
 /// // check that `(fib 20)` is now in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// let y = egraph.base_to_value::<i64>(6765);
-/// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, [[y]]);
+/// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
+/// assert_eq!(f, [6765]);
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
@@ -455,13 +446,12 @@ where
 /// let big_number = 20;
 ///
 /// // check that `(fib 20)` is not in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// assert!(results.iter().next().is_none());
+/// assert!(results.is_empty());
 ///
 /// let ruleset = "custom_ruleset";
 /// add_ruleset(&mut egraph, ruleset)?;
@@ -496,15 +486,13 @@ where
 /// }
 ///
 /// // check that `(fib 20)` is now in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// let y = egraph.base_to_value::<i64>(6765);
-/// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, [[y]]);
+/// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
+/// assert_eq!(f, [6765]);
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
@@ -664,108 +652,6 @@ pub fn rust_rule_full(
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
-}
-
-/// The result of a query.
-pub struct QueryResult {
-    rows: usize,
-    cols: usize,
-    data: Vec<Value>,
-}
-
-impl QueryResult {
-    /// Get an iterator over the query results,
-    /// where each match is a `&[Value]` in the same order
-    /// as the `vars` that were passed to `query`.
-    pub fn iter(&self) -> impl Iterator<Item = &[Value]> {
-        assert!(self.cols > 0, "no vars; use `any_matches` instead");
-        assert!(self.data.len().is_multiple_of(self.cols));
-        self.data.chunks_exact(self.cols)
-    }
-
-    /// Check if any matches were returned at all.
-    pub fn any_matches(&self) -> bool {
-        self.rows > 0
-    }
-}
-
-/// Run a query over the database.
-/// ```
-/// use egglog::prelude::*;
-///
-/// let mut egraph = EGraph::default();
-/// egraph.parse_and_run_program(
-///     None,
-///     "
-/// (function fib (i64) i64 :no-merge)
-/// (set (fib 0) 0)
-/// (set (fib 1) 1)
-/// (rule (
-///     (= f0 (fib x))
-///     (= f1 (fib (+ x 1)))
-/// ) (
-///     (set (fib (+ x 2)) (+ f0 f1))
-/// ))
-/// (run 10)
-///     ",
-/// )?;
-///
-/// let results = query(
-///     &mut egraph,
-///     vars![x: i64, y: i64],
-///     facts![
-///         (= (fib x) y)
-///         (= y 13)
-///     ],
-/// )?;
-///
-/// let x = egraph.base_to_value::<i64>(7);
-/// let y = egraph.base_to_value::<i64>(13);
-/// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, [[x, y]]);
-///
-/// # Ok::<(), egglog::Error>(())
-/// ```
-pub fn query(
-    egraph: &mut EGraph,
-    vars: &[(&str, ArcSort)],
-    facts: Facts<String, String>,
-) -> Result<QueryResult, Error> {
-    use std::sync::{Arc, Mutex};
-
-    let results = Arc::new(Mutex::new(QueryResult {
-        rows: 0,
-        cols: vars.len(),
-        data: Vec::new(),
-    }));
-    let results_weak = Arc::downgrade(&results);
-
-    let ruleset = egraph.parser.symbol_gen.fresh("query_ruleset");
-    add_ruleset(egraph, &ruleset)?;
-
-    rust_rule(egraph, "query", &ruleset, vars, facts, move |_, values| {
-        let arc = results_weak.upgrade().unwrap();
-        let mut results = arc.lock().unwrap();
-        results.rows += 1;
-        results.data.extend(values);
-        Some(())
-    })?;
-
-    run_ruleset(egraph, &ruleset)?;
-
-    let ruleset = egraph.rulesets.swap_remove(&ruleset).unwrap();
-
-    let Ruleset::Rules(rules) = ruleset else {
-        unreachable!()
-    };
-    assert_eq!(rules.len(), 1);
-    let rule = rules.into_iter().next().unwrap().1;
-    egraph.backend.free_rule(rule.1);
-
-    let Some(mutex) = Arc::into_inner(results) else {
-        panic!("results_weak.upgrade() was not dropped");
-    };
-    Ok(mutex.into_inner().unwrap())
 }
 
 /// Declare a new sort.
@@ -1048,8 +934,7 @@ mod tests {
     fn rust_api_query() -> Result<(), Error> {
         let mut egraph = build_test_database()?;
 
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![x: i64, y: i64],
             facts![
                 (= (fib x) y)
@@ -1057,9 +942,9 @@ mod tests {
             ],
         )?;
 
-        let x = egraph.backend.base_values().get::<i64>(7);
-        let y = egraph.backend.base_values().get::<i64>(13);
-        assert_eq!(results.data, [x, y]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["x"]), 7);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["y"]), 13);
 
         Ok(())
     }
@@ -1071,13 +956,12 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        assert!(results.data.is_empty());
+        assert!(results.is_empty());
 
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
@@ -1101,14 +985,13 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
-        assert_eq!(results.data, [y]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
 
         Ok(())
     }
@@ -1152,13 +1035,12 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        assert!(results.data.is_empty());
+        assert!(results.is_empty());
 
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
@@ -1191,14 +1073,13 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
-        assert_eq!(results.data, [y]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
 
         Ok(())
     }

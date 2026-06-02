@@ -2157,23 +2157,43 @@ impl EGraph {
         vars: &[(&str, ArcSort)],
         facts: ast::Facts<String, String>,
     ) -> Result<Vec<std::collections::HashMap<String, Value>>, Error> {
-        let raw = prelude::query(self, vars, facts)?;
-        let names: Vec<String> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
-        if vars.is_empty() {
-            let n = if raw.any_matches() { 1 } else { 0 };
-            Ok((0..n).map(|_| std::collections::HashMap::new()).collect())
-        } else {
-            Ok(raw
+        use std::sync::{Arc, Mutex};
+        let names: Arc<[String]> =
+            vars.iter().map(|(n, _)| (*n).to_owned()).collect();
+        let results: Arc<Mutex<Vec<std::collections::HashMap<String, Value>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let results_weak = Arc::downgrade(&results);
+        let names_for_cb = names.clone();
+
+        let ruleset = self.parser.symbol_gen.fresh("query_ruleset");
+        prelude::add_ruleset(self, &ruleset)?;
+        prelude::rust_rule(self, "query", &ruleset, vars, facts, move |_, values| {
+            let arc = results_weak.upgrade().unwrap();
+            let mut results = arc.lock().unwrap();
+            let map: std::collections::HashMap<String, Value> = names_for_cb
                 .iter()
-                .map(|row| {
-                    names
-                        .iter()
-                        .zip(row.iter().copied())
-                        .map(|(n, v)| (n.clone(), v))
-                        .collect()
-                })
-                .collect())
-        }
+                .zip(values.iter().copied())
+                .map(|(n, v)| (n.clone(), v))
+                .collect();
+            results.push(map);
+            Some(())
+        })?;
+        prelude::run_ruleset(self, &ruleset)?;
+
+        // Tear the temporary rule + ruleset down again so successive
+        // `query` calls don't accumulate them.
+        let ruleset_obj = self.rulesets.swap_remove(&ruleset).unwrap();
+        let Ruleset::Rules(rules) = ruleset_obj else {
+            unreachable!()
+        };
+        assert_eq!(rules.len(), 1);
+        let rule = rules.into_iter().next().unwrap().1;
+        self.backend.free_rule(rule.1);
+
+        let Some(mutex) = Arc::into_inner(results) else {
+            panic!("`results_weak` outlived the callback");
+        };
+        Ok(mutex.into_inner().unwrap())
     }
 
 
