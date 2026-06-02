@@ -733,7 +733,7 @@ impl EGraph {
                             .read()
                             .unwrap()
                             .default_panic_id(),
-                    );
+                    )?;
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
                 }
@@ -1260,7 +1260,7 @@ impl EGraph {
                         name,
                         prim,
                         panic_id,
-                    );
+                    )?;
                     let fn_value = self.backend.base_values().get(resolved_function);
                     let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
                     bindings.push((binding_name.clone(), fn_value));
@@ -2179,17 +2179,17 @@ fn resolve_function_container_target_with_context(
     name: &str,
     primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
-) -> ResolvedFunction {
-    let Some(target_function) = type_info
+) -> Result<ResolvedFunction, Error> {
+    let target_function = type_info
         .get_sorts::<FunctionSort>()
         .into_iter()
         .find(|function| function.name() == primitive.output().name())
-    else {
-        panic!(
-            "`unstable-fn` output sort `{}` is not a function sort",
-            primitive.output().name()
-        );
-    };
+        .ok_or_else(|| {
+            Error::BackendError(format!(
+                "`unstable-fn` output sort `{}` is not a function sort",
+                primitive.output().name()
+            ))
+        })?;
 
     let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
     let remaining_inputs = target_function.inputs();
@@ -2198,7 +2198,7 @@ fn resolve_function_container_target_with_context(
     let id = if let Some(func) = functions.get(name) {
         let func_type = type_info
             .get_func_type(name)
-            .unwrap_or_else(|| panic!("No resolution for {name:?}"));
+            .ok_or_else(|| Error::BackendError(format!("No resolution for {name:?}")))?;
         let expected_inputs = partial_arcsorts
             .iter()
             .chain(remaining_inputs)
@@ -2221,13 +2221,13 @@ fn resolve_function_container_target_with_context(
                 .map(|sort| sort.name())
                 .collect::<Vec<_>>()
                 .join(", ");
-            panic!(
+            return Err(Error::BackendError(format!(
                 "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
                 expected_input_names,
                 output.name(),
                 actual_input_names,
                 func_type.output.name(),
-            );
+            )));
         }
 
         let action = egglog_bridge::TableAction::new(backend, func.backend_id);
@@ -2246,20 +2246,23 @@ fn resolve_function_container_target_with_context(
             .iter()
             .filter(|primitive| primitive.accept(&signature, type_info))
             .collect();
-        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
+        for runtime_ctx in Context::ALL {
             let mut ids = candidates
                 .iter()
                 .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
             // The first `next` finds the candidate for this runtime context;
             // the second detects whether there is more than one such candidate.
             match (ids.next(), ids.next()) {
-                (None, _) => None,
-                (Some(id), None) => Some(id),
-                (Some(_), Some(_)) => panic!(
-                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                ),
+                (None, _) => {}
+                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
+                (Some(_), Some(_)) => {
+                    return Err(Error::BackendError(format!(
+                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                    )));
+                }
             }
-        });
+        }
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
             let (output_sort, input_sorts) = signature
                 .split_last()
@@ -2269,24 +2272,24 @@ fn resolve_function_container_target_with_context(
                 .map(|sort| sort.name())
                 .collect::<Vec<_>>()
                 .join(", ");
-            panic!(
+            return Err(Error::BackendError(format!(
                 "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
                  context ids: {context_ids:?}",
                 input_names,
                 output_sort.name(),
-            );
+            )));
         }
         ResolvedFunctionId::Primitive { context_ids }
     } else {
-        panic!("No resolution for {name:?}");
+        return Err(Error::BackendError(format!("No resolution for {name:?}")));
     };
 
-    ResolvedFunction {
+    Ok(ResolvedFunction {
         id,
         partial_arcsorts,
         name: name.to_owned(),
         panic_id,
-    }
+    })
 }
 
 struct BackendRule<'a> {
@@ -2399,7 +2402,8 @@ impl<'a> BackendRule<'a> {
                 name,
                 prim,
                 panic_id,
-            );
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
