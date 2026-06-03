@@ -32,13 +32,13 @@
 (input End "./tests/cykjson_End.csv")
 
 ; small size 801
-;(input getString "./tests/cykjson_small_token.csv")
+(input getString "./tests/cykjson_small_token.csv")
 
 ; medium size 7821 but runs for 2 min.
-(input getString "./tests/cykjson_medium_token.csv")
+;(input getString "./tests/cykjson_medium_token.csv")
 
 (run 10000)
 
-; (let $test1 (B 801 1 "VAL"))
-; 
-; (check (P 801 1 "VAL"))
+(let $test1 (B 801 1 "VAL"))
+
+(check (P 801 1 "VAL"))
