@@ -614,7 +614,13 @@ impl<'a> ProofInstrumentor<'a> {
     /// canonical versions in the view.
     /// It also needs to look up references to globals.
     /// Adds the instrumented fact to `res` and returns a proof that the fact matched.
-    fn instrument_fact(&mut self, fact: &ResolvedFact, res: &mut Vec<String>) -> String {
+    fn instrument_fact(
+        &mut self,
+        fact: &ResolvedFact,
+        res: &mut Vec<String>,
+        action_lookups: &mut Vec<String>,
+        lookups_to_action: bool,
+    ) -> String {
         match fact {
             // In proof normal form, this is the only way that function calls apppear.
             ResolvedFact::Eq(
@@ -633,7 +639,8 @@ impl<'a> ProofInstrumentor<'a> {
                 let mut new_args = vec![];
                 let mut arg_proofs = vec![];
                 for arg in args {
-                    let (var, proof) = self.instrument_fact_expr(arg, res);
+                    let (var, proof) =
+                        self.instrument_fact_expr(arg, res, action_lookups, lookups_to_action);
                     new_args.push(var);
                     arg_proofs.push(proof);
                 }
@@ -662,8 +669,10 @@ impl<'a> ProofInstrumentor<'a> {
                 }
             }
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
-                let (v1, p1) = self.instrument_fact_expr(left_expr, res);
-                let (v2, p2) = self.instrument_fact_expr(right_expr, res);
+                let (v1, p1) =
+                    self.instrument_fact_expr(left_expr, res, action_lookups, lookups_to_action);
+                let (v2, p2) =
+                    self.instrument_fact_expr(right_expr, res, action_lookups, lookups_to_action);
                 res.push(format!("(= {v1} {v2})"));
                 let sym = &self.proof_names().eq_sym_constructor;
                 let trans = &self.proof_names().eq_trans_constructor;
@@ -671,7 +680,8 @@ impl<'a> ProofInstrumentor<'a> {
                 format!("({trans} ({sym} {p1}) {p2})",)
             }
             ResolvedFact::Fact(generic_expr) => {
-                let (_, proof) = self.instrument_fact_expr(generic_expr, res);
+                let (_, proof) =
+                    self.instrument_fact_expr(generic_expr, res, action_lookups, lookups_to_action);
                 proof
             }
         }
@@ -685,6 +695,8 @@ impl<'a> ProofInstrumentor<'a> {
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
+        action_lookups: &mut Vec<String>,
+        lookups_to_action: bool,
     ) -> (String, String) {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
@@ -712,7 +724,19 @@ impl<'a> ProofInstrumentor<'a> {
                     } else if resolved_var.sort.is_eq_sort() {
                         let term_proof_name = self.term_proof_name(resolved_var.sort.name());
                         let fresh_proof = self.fresh_var();
-                        res.push(format!("(= {fresh_proof} ({term_proof_name} {var}))"));
+                        // Every eq-sort term has its term_proof set at
+                        // constructor-creation time, so this proof is guaranteed
+                        // present when the rule fires. Fetch it directly in the
+                        // action instead of as a body join — one fewer join per
+                        // eq-sort body variable. The generated rule is tagged
+                        // `:unsafe-seminaive` (see instrument_rule). Query-only
+                        // callers (run :until, check) keep the body form.
+                        if lookups_to_action {
+                            action_lookups
+                                .push(format!("(let {fresh_proof} ({term_proof_name} {var}))"));
+                        } else {
+                            res.push(format!("(= {fresh_proof} ({term_proof_name} {var}))"));
+                        }
                         fresh_proof
                     } else {
                         let fiat_constructor = &self.proof_names().fiat_constructor;
@@ -735,7 +759,8 @@ impl<'a> ProofInstrumentor<'a> {
                         new_args.push(arg.to_string());
                         arg_proofs.push(None);
                     } else {
-                        let (arg_str, proof) = self.instrument_fact_expr(arg, res);
+                        let (arg_str, proof) =
+                            self.instrument_fact_expr(arg, res, action_lookups, lookups_to_action);
                         new_args.push(arg_str);
                         arg_proofs.push(Some(proof));
                     }
@@ -809,16 +834,27 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Return a new query and a proof that the query matched.
-    fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, String) {
+    /// Returns `(body_facts, action_lookups, proof)`. When
+    /// `lookups_to_action` is set, eq-sort variables' `term_proof`
+    /// fetches are emitted into `action_lookups` as `(let p (term_proof
+    /// v))` lines (the rule must then be `:unsafe-seminaive`) instead of
+    /// body joins.
+    fn instrument_facts(
+        &mut self,
+        facts: &[ResolvedFact],
+        lookups_to_action: bool,
+    ) -> (Vec<String>, Vec<String>, String) {
         let mut res = vec![];
+        let mut action_lookups = vec![];
         let mut proof = vec![];
 
         for fact in facts.iter() {
-            let f_proof = self.instrument_fact(fact, &mut res);
+            let f_proof =
+                self.instrument_fact(fact, &mut res, &mut action_lookups, lookups_to_action);
             proof.push(f_proof);
         }
 
-        (res, self.format_prooflist(&proof))
+        (res, action_lookups, self.format_prooflist(&proof))
     }
 
     // Actions need to be instrumented to add to the view
@@ -1056,12 +1092,20 @@ impl<'a> ProofInstrumentor<'a> {
     /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
     /// Finally, each view update also updates the proof tables.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
-        let (facts, proof_str) = self.instrument_facts(&rule.body);
+        // Fetch eq-sort variables' term_proofs as action-side lookups
+        // rather than body joins (see instrument_facts). Those are
+        // function lookups in a RHS, so the generated rule opts into
+        // `:unsafe-seminaive` (keeps delta evaluation, permits the reads).
+        let (facts, action_lookups, proof_str) = self.instrument_facts(&rule.body, true);
         let proof_var = self.fresh_var();
         let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
+        let needs_unsafe_seminaive = !action_lookups.is_empty();
+        // The looked-up proofs feed `proof_str`, so bind them first.
+        let action_lookups_str = ListDisplay(&action_lookups, "\n                    ");
         let proof_var_binding = if self.egraph.proof_state.proofs_enabled {
             format!(
-                "(let {proof_var}
+                "{action_lookups_str}
+                 (let {proof_var}
                           {proof_str})"
             )
         } else {
@@ -1070,19 +1114,24 @@ impl<'a> ProofInstrumentor<'a> {
 
         let actions = self.instrument_actions(&rule.head.0, &proof);
         let name = &rule.name;
+        let ruleset_opt = if rule.ruleset.is_empty() {
+            "".to_string()
+        } else {
+            format!(":ruleset {}", rule.ruleset)
+        };
+        let unsafe_opt = if needs_unsafe_seminaive {
+            ":unsafe-seminaive"
+        } else {
+            ""
+        };
         let instrumented = format!(
             "(rule ({})
                    ({proof_var_binding}
                     {})
-                    {}
+                    {ruleset_opt} {unsafe_opt}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),
-            if rule.ruleset.is_empty() {
-                "".to_string()
-            } else {
-                format!(":ruleset {}", rule.ruleset)
-            }
         );
         self.parse_program(&instrumented)
     }
@@ -1112,7 +1161,7 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
-                        let (instrumented, _proof) = self.instrument_facts(facts);
+                        let (instrumented, _lookups, _proof) = self.instrument_facts(facts, false);
                         let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
@@ -1190,7 +1239,7 @@ impl<'a> ProofInstrumentor<'a> {
                 res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
-                let (instrumented, _proof) = self.instrument_facts(facts);
+                let (instrumented, _lookups, _proof) = self.instrument_facts(facts, false);
                 res.push(Command::Check(
                     span.clone(),
                     self.parse_facts(&instrumented),

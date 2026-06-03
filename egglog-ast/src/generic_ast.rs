@@ -112,8 +112,8 @@ where
     /// paying for `:naive`'s whole-database matching.
     ///
     /// It is **unsafe**: a read on a seminaive rule's RHS observes the
-    /// database mid-iteration (non-monotonic), so results can depend on
-    /// evaluation order. Defaults to `false`.
+    /// database mid-iteration, so it won't be re-evaluated if the data
+    /// changes. Defaults to `false`.
     pub unsafe_seminaive: bool,
 }
 
