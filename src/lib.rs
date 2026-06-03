@@ -40,7 +40,7 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
+use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -1991,16 +1991,7 @@ impl EGraph {
         self.backend.dump_debug_info();
     }
 
-    /// Create a new union action that can be used to union two values.
-    ///
-    /// Internal: used by container sorts (`vec`, `multiset`) to build
-    /// their own union machinery. User code should call
-    /// [`crate::Write::union`] via [`EGraph::update`] instead.
-    pub(crate) fn new_union_action(&self) -> egglog_bridge::UnionAction {
-        UnionAction::new(&self.backend)
-    }
-
-    /// Run `f` with a [`FullState`] handle on this EGraph's database
+/// Run `f` with a [`FullState`] handle on this EGraph's database
     /// — the same handle a `:naive` rule's `add_rust_rule_full`
     /// callback receives. Use to drive name-indexed reads / writes
     /// (`fs.set`, `fs.add`, `fs.lookup`, `fs.eclass_of`,
