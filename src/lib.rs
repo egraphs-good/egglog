@@ -1946,24 +1946,7 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
-    /// Lookup a tuple in a function in the e-graph.
-    ///
-    /// Returns `None` if the tuple does not exist.
-    /// `panics` if the function does not exist.
-    ///
-    /// Internal: external callers should use
-    /// [`EGraph::update`] + [`crate::Read::lookup`] (for functions)
-    /// or [`crate::Read::eclass_of`] (for constructors).
-    pub(crate) fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
-        let func = self
-            .functions
-            .get(name)
-            .unwrap_or_else(|| panic!("Could not find function {name}"))
-            .backend_id;
-        self.backend.lookup_id(func, key)
-    }
-
-    /// Get a function by name.
+/// Get a function by name.
     ///
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
@@ -2058,6 +2041,20 @@ impl EGraph {
                          so any rule derivations resting on them would be unverifiable.",
             });
         }
+        self.update_unchecked(f)
+    }
+
+    /// Internal version of [`EGraph::update`] without the proofs
+    /// check. Used by:
+    /// - The top-level read helpers ([`EGraph::constructor_enodes`],
+    ///   [`EGraph::function_entries`]) which are read-only and so
+    ///   safe under proofs.
+    /// - Proof-system internals that need to read the e-graph while
+    ///   the proof system is enabled.
+    pub(crate) fn update_unchecked<R>(
+        &mut self,
+        f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
         let result = self
@@ -2073,21 +2070,13 @@ impl EGraph {
     /// convenience that delegates through a read-only path (works
     /// under proofs).
     pub fn constructor_enodes(&mut self, table: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
-        let registry = self.backend.action_registry().clone();
-        let guard = registry.read().unwrap();
-        self.backend.with_execution_state(|es| {
-            FullState::wrap(es, &guard, Context::Full).constructor_enodes(table)
-        })
+        self.update_unchecked(|fs| fs.constructor_enodes(table))
     }
 
     /// Iterate every `(inputs, output)` entry of a function table.
     /// See [`Read::function_entries`].
     pub fn function_entries(&mut self, table: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
-        let registry = self.backend.action_registry().clone();
-        let guard = registry.read().unwrap();
-        self.backend.with_execution_state(|es| {
-            FullState::wrap(es, &guard, Context::Full).function_entries(table)
-        })
+        self.update_unchecked(|fs| fs.function_entries(table))
     }
 
     /// Run a pattern query: bind the variables in `vars` against
