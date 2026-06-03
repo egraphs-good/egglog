@@ -194,17 +194,22 @@ impl EGraph {
     /// Passing `0` uses the host's available parallelism.
     pub fn new(threads: usize) -> Self {
         let threads = normalize_thread_count(threads);
-        let mut db = Database::new();
-        let uf_table = db.add_table_named(
-            DisplacedTable::default(),
-            "$uf".into(),
-            iter::empty(),
-            iter::empty(),
-        );
-        let id_counter = db.add_counter();
-        let ts_counter = db.add_counter();
-        // Start the timestamp counter at 1.
-        db.inc_counter(ts_counter);
+        let thread_pool = (threads > 1).then(|| Arc::new(ThreadPool::new(threads)));
+        let (mut db, uf_table, id_counter, ts_counter) =
+            install_thread_pool(thread_pool.clone(), || {
+                let mut db = Database::new();
+                let uf_table = db.add_table_named(
+                    DisplacedTable::default(),
+                    "$uf".into(),
+                    iter::empty(),
+                    iter::empty(),
+                );
+                let id_counter = db.add_counter();
+                let ts_counter = db.add_counter();
+                // Start the timestamp counter at 1.
+                db.inc_counter(ts_counter);
+                (db, uf_table, id_counter, ts_counter)
+            });
 
         // Register a default panic external function so the typed
         // state wrappers' `panic()` method has an id to call. This
@@ -240,7 +245,7 @@ impl EGraph {
             report_level: Default::default(),
             action_registry,
             threads,
-            thread_pool: (threads > 1).then(|| Arc::new(ThreadPool::new(threads))),
+            thread_pool,
         }
     }
 
@@ -598,13 +603,15 @@ impl EGraph {
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
         let merge_fn = merge.to_callback(schema_math, &name, self);
-        let table = SortedWritesTable::new(
-            n_args,
-            n_cols,
-            Some(ColumnId::from_usize(schema.len())),
-            to_rebuild,
-            merge_fn,
-        );
+        let table = install_thread_pool(self.thread_pool(), || {
+            SortedWritesTable::new(
+                n_args,
+                n_cols,
+                Some(ColumnId::from_usize(schema.len())),
+                to_rebuild,
+                merge_fn,
+            )
+        });
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
             table,
