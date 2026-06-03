@@ -1045,11 +1045,16 @@ impl EGraph {
         // flag) skips tree-decomposition in query planning, forcing
         // the single-bag fast path.
         let no_decomp = self.no_decomp || rule.no_decomp;
+        // `:unsafe-seminaive` keeps delta evaluation (`new_rule(seminaive)`)
+        // but compiles the query/action with Read/Full contexts so the RHS
+        // can read the database. See `GenericRule::unsafe_seminaive`.
+        let context_seminaive = seminaive && !rule.unsafe_seminaive;
 
         let rule_id = {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
-            let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
+            let mut translator =
+                BackendRule::new(rb, &self.functions, &self.type_info, context_seminaive);
             translator.query(query, false);
             translator.actions(actions)?;
             translator.build()
@@ -1261,6 +1266,7 @@ impl EGraph {
             ruleset: fresh_ruleset.clone(),
             naive: false,
             no_decomp: false,
+            unsafe_seminaive: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,

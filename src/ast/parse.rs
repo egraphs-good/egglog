@@ -477,12 +477,14 @@ impl Parser {
                     let mut name = String::new();
                     let mut naive = false;
                     let mut no_decomp = false;
+                    let mut unsafe_seminaive = false;
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":name", [s]) => name = s.expect_string("rule name")?,
                             (":naive", []) => naive = true,
                             (":no-decomp", []) => no_decomp = true,
+                            (":unsafe-seminaive", []) => unsafe_seminaive = true,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -496,6 +498,7 @@ impl Parser {
                             ruleset,
                             naive,
                             no_decomp,
+                            unsafe_seminaive,
                         },
                     }]
                 }

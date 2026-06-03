@@ -103,6 +103,18 @@ where
     /// planning and evaluate rules as a single-bag (without decomposing
     /// it into smaller queries). Set via the `:no-decomp` rule option.
     pub no_decomp: bool,
+    /// If `true` (the `:unsafe-seminaive` rule option), the rule keeps
+    /// seminaive (delta) evaluation but its query/action are compiled
+    /// with the permissive `Read`/`Full` primitive contexts (like
+    /// `:naive`), and the typechecker's "no function lookups in actions"
+    /// check is skipped. This lets the RHS perform arbitrary database
+    /// reads — read-primitives and function-table lookups — without
+    /// paying for `:naive`'s whole-database matching.
+    ///
+    /// It is **unsafe**: a read on a seminaive rule's RHS observes the
+    /// database mid-iteration (non-monotonic), so results can depend on
+    /// evaluation order. Defaults to `false`.
+    pub unsafe_seminaive: bool,
 }
 
 /// Change a function entry.

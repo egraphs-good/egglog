@@ -72,7 +72,15 @@ where
         };
         let naive = if self.naive { " :naive" } else { "" };
         let no_decomp = if self.no_decomp { " :no-decomp" } else { "" };
-        write!(f, ")\n{indent} {ruleset} {name}{naive}{no_decomp})")
+        let unsafe_seminaive = if self.unsafe_seminaive {
+            " :unsafe-seminaive"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            ")\n{indent} {ruleset} {name}{naive}{no_decomp}{unsafe_seminaive})"
+        )
     }
 }
 
@@ -222,6 +230,7 @@ where
             ruleset: self.ruleset.clone(),
             naive: self.naive,
             no_decomp: self.no_decomp,
+            unsafe_seminaive: self.unsafe_seminaive,
         }
     }
 
@@ -238,6 +247,7 @@ where
             ruleset: self.ruleset,
             naive: self.naive,
             no_decomp: self.no_decomp,
+            unsafe_seminaive: self.unsafe_seminaive,
         }
     }
 
@@ -263,6 +273,7 @@ where
             ruleset: self.ruleset,
             naive: self.naive,
             no_decomp: self.no_decomp,
+            unsafe_seminaive: self.unsafe_seminaive,
         }
     }
 

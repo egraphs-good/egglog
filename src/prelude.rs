@@ -326,6 +326,7 @@ pub fn rule(
         ruleset: ruleset.into(),
         naive: false,
         no_decomp: false,
+        unsafe_seminaive: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -496,6 +497,7 @@ pub fn rust_rule(
         ruleset: ruleset.into(),
         naive: false,
         no_decomp: false,
+        unsafe_seminaive: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -599,6 +601,7 @@ pub fn rust_rule_full(
         // available in `:naive` rules.
         naive: true,
         no_decomp: false,
+        unsafe_seminaive: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])

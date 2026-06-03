@@ -831,6 +831,7 @@ impl TypeInfo {
             ruleset,
             naive,
             no_decomp,
+            unsafe_seminaive,
         } = rule;
         let mut constraints = vec![];
 
@@ -841,7 +842,11 @@ impl TypeInfo {
         // run; mirrors the backend's `self.seminaive && !rule.naive`
         // check at rule-build time.
         let seminaive = global_seminaive && !*naive;
-        let (query_ctx, action_ctx) = if seminaive {
+        // `:unsafe-seminaive` keeps seminaive evaluation but widens the
+        // typecheck (and backend) primitive contexts to Read/Full, so the
+        // RHS may read the database. See `GenericRule::unsafe_seminaive`.
+        let context_seminaive = seminaive && !*unsafe_seminaive;
+        let (query_ctx, action_ctx) = if context_seminaive {
             (Context::Pure, Context::Write)
         } else {
             (Context::Read, Context::Full)
@@ -877,7 +882,11 @@ impl TypeInfo {
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
-        self.check_lookup_actions(&actions)?;
+        // `:unsafe-seminaive` opts out of the "no function lookups in
+        // actions" check (that's the point of the flag).
+        if !*unsafe_seminaive {
+            self.check_lookup_actions(&actions)?;
+        }
 
         Ok(ResolvedRule {
             span: span.clone(),
@@ -887,6 +896,7 @@ impl TypeInfo {
             ruleset: ruleset.clone(),
             naive: *naive,
             no_decomp: *no_decomp,
+            unsafe_seminaive: *unsafe_seminaive,
         })
     }
 
