@@ -166,7 +166,10 @@ fn test_lookup_on_constructor_errors() {
         .unwrap();
     let result = eg.update(|fs| fs.lookup("Cons", (1_i64, 0_i64)));
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Cons") && err.contains("constructor"), "got: {err}");
+    assert!(
+        err.contains("Cons") && err.contains("constructor"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -174,7 +177,10 @@ fn test_eclass_of_on_function_errors() {
     let mut eg = make_eg_with_function();
     let result = eg.update(|fs| fs.eclass_of("f", 1_i64));
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("`f`") && err.contains("function"), "got: {err}");
+    assert!(
+        err.contains("`f`") && err.contains("function"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -184,7 +190,10 @@ fn test_set_constructor_errors() {
         .unwrap();
     let result = eg.update(|mut fs| fs.set("Nil", RawValues(vec![]), 0_i64));
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Nil") && err.contains("constructor"), "got: {err}");
+    assert!(
+        err.contains("Nil") && err.contains("constructor"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -192,7 +201,10 @@ fn test_add_function_errors() {
     let mut eg = make_eg_with_function();
     let result = eg.update(|mut fs| fs.add("f", 1_i64));
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("`f`") && err.contains("function"), "got: {err}");
+    assert!(
+        err.contains("`f`") && err.contains("function"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -270,7 +282,8 @@ fn test_higher_arity_function() -> Result<(), Error> {
     eg.parse_and_run_program(None, "(function g (i64 i64 i64) i64 :no-merge)")?;
     eg.update(|mut fs| fs.set("g", (1_i64, 2_i64, 3_i64), 7_i64))?;
     let (v, has) = eg.update(|fs| -> Result<_, Error> {
-        let v = fs.lookup("g", (1_i64, 2_i64, 3_i64))?
+        let v = fs
+            .lookup("g", (1_i64, 2_i64, 3_i64))?
             .map(|val| fs.value_to_base::<i64>(val));
         let has = fs.contains("g", (1_i64, 2_i64, 3_i64))?;
         Ok((v, has))

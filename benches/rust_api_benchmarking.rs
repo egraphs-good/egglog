@@ -285,7 +285,6 @@ fn rust_rule_insert_loop(bencher: divan::Bencher, case: RustRuleInsertLoopBenchC
         });
 }
 
-
 fn main() {
     divan::main();
 }
@@ -343,14 +342,12 @@ fn fib_setup() -> RustRuleBenchInput {
 fn rust_rule_fib(bencher: divan::Bencher, case: RustRuleBenchCase) {
     use egglog::prelude::run_ruleset;
 
-    bencher
-        .with_inputs(fib_setup)
-        .bench_local_refs(|input| {
-            for _ in 0..case.n_rule_run_estimated.unwrap() {
-                run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
-            }
-            input.egraph.serialize(egglog::SerializeConfig::default());
-            // let mut f = std::fs::File::create("./fib.dot").unwrap();
-            // f.write_all(output.egraph.to_dot().as_bytes()).unwrap();
-        });
+    bencher.with_inputs(fib_setup).bench_local_refs(|input| {
+        for _ in 0..case.n_rule_run_estimated.unwrap() {
+            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+        }
+        input.egraph.serialize(egglog::SerializeConfig::default());
+        // let mut f = std::fs::File::create("./fib.dot").unwrap();
+        // f.write_all(output.egraph.to_dot().as_bytes()).unwrap();
+    });
 }

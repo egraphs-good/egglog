@@ -93,9 +93,7 @@ impl ProofInstrumentor<'_> {
             .clone();
         let proof_value = self
             .egraph
-            .update_unchecked(|fs| {
-                fs.lookup(&proof_function_name, RawValues(vec![witness_value]))
-            })
+            .update_unchecked(|fs| fs.lookup(&proof_function_name, RawValues(vec![witness_value])))
             .unwrap()
             .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 

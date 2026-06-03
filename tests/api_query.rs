@@ -38,10 +38,7 @@ fn function_entries_i64_to_i64() -> Result<(), Error> {
 #[test]
 fn function_entries_on_constructor_errors() -> Result<(), Error> {
     let mut egraph = EGraph::default();
-    egraph.parse_and_run_program(
-        None,
-        "(datatype List (Cons i64 List) (Nil))",
-    )?;
+    egraph.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
     let err = egraph
         .update(|fs| fs.function_entries("Cons"))
         .unwrap_err()

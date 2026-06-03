@@ -1921,7 +1921,7 @@ impl EGraph {
         })
     }
 
-/// Get the size of a function in the e-graph.
+    /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
     pub fn get_size(&self, func: &str) -> usize {
@@ -1929,7 +1929,7 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
-/// Get a function by name.
+    /// Get a function by name.
     ///
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
@@ -1974,7 +1974,7 @@ impl EGraph {
         self.backend.dump_debug_info();
     }
 
-/// Run `f` with a [`FullState`] handle on this EGraph's database
+    /// Run `f` with a [`FullState`] handle on this EGraph's database
     /// — the same handle a `:naive` rule's `add_rust_rule_full`
     /// callback receives. Use to drive name-indexed reads / writes
     /// (`fs.set`, `fs.add`, `fs.lookup`, `fs.eclass_of`,
@@ -2058,8 +2058,7 @@ impl EGraph {
         }
         use std::sync::{Arc, Mutex};
         let names: Arc<[String]> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
-        let results: Arc<Mutex<Vec<HashMap<String, Value>>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let results: Arc<Mutex<Vec<HashMap<String, Value>>>> = Arc::new(Mutex::new(Vec::new()));
         let results_weak = Arc::downgrade(&results);
         let names_for_cb = names.clone();
 

@@ -21,11 +21,8 @@ use egglog::{Error, RawValues, Value};
 /// ```
 fn make_egraph() -> EGraph {
     let mut eg = EGraph::default();
-    eg.parse_and_run_program(
-        None,
-        "(datatype Expr (Num i64) (Add Expr Expr))",
-    )
-    .unwrap();
+    eg.parse_and_run_program(None, "(datatype Expr (Num i64) (Add Expr Expr))")
+        .unwrap();
     eg
 }
 
@@ -119,7 +116,8 @@ fn const_fold_is_a_no_op_when_no_pair_of_nums() -> Result<(), Error> {
     install_const_fold_rule(&mut eg)?;
 
     let sizes_before = eg.update(|fs| -> Result<_, Error> {
-        Ok(fs.table_sizes()
+        Ok(fs
+            .table_sizes()
             .into_iter()
             .map(|(n, s)| (n.to_owned(), s))
             .collect::<Vec<_>>())
@@ -130,7 +128,8 @@ fn const_fold_is_a_no_op_when_no_pair_of_nums() -> Result<(), Error> {
     }
 
     let sizes_after = eg.update(|fs| -> Result<_, Error> {
-        Ok(fs.table_sizes()
+        Ok(fs
+            .table_sizes()
             .into_iter()
             .map(|(n, s)| (n.to_owned(), s))
             .collect::<Vec<_>>())

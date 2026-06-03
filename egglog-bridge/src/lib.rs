@@ -940,10 +940,7 @@ impl EGraph {
     /// / global-action context: appropriate for one-shot database
     /// manipulation from outside any rule, not for use inside
     /// primitive implementations.
-    pub fn with_execution_state<R>(
-        &self,
-        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
-    ) -> R {
+    pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.with_execution_state(f)
     }
 

@@ -32,12 +32,12 @@
 
 use std::ops::Deref;
 
+use crate::Error;
 use crate::api::{ApiError, IntoValue, IntoValues};
 use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
     Value,
 };
-use crate::Error;
 use egglog_bridge::{ActionRegistry, TableAction, TableKind};
 
 /// The four contexts a primitive may run in, named after the
@@ -220,11 +220,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for `function` tables.** Constructors error;
     /// use [`Read::eclass_of`] for those.
-    fn lookup<K: IntoValues>(
-        &self,
-        name: &str,
-        key: K,
-    ) -> Result<Option<Value>, Error> {
+    fn lookup<K: IntoValues>(&self, name: &str, key: K) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
         let key_values = key.into_values(self.base_values());
@@ -237,18 +233,9 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Read::lookup`] for those.
-    fn eclass_of<K: IntoValues>(
-        &self,
-        name: &str,
-        inputs: K,
-    ) -> Result<Option<Value>, Error> {
+    fn eclass_of<K: IntoValues>(&self, name: &str, inputs: K) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(
-            name,
-            &action,
-            TableKind::Constructor,
-            "constructor",
-        )?;
+        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
         let key_values = inputs.into_values(self.base_values());
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
@@ -256,18 +243,14 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// True iff a row with the given key exists in the table. Works
     /// for any subtype — never mints.
-    fn contains<K: IntoValues>(
-        &self,
-        name: &str,
-        key: K,
-    ) -> Result<bool, Error> {
+    fn contains<K: IntoValues>(&self, name: &str, key: K) -> Result<bool, Error> {
         let action = lookup_action(self.registry(), name)?;
         let key_values = key.into_values(self.base_values());
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
-/// Return the current row count for the named table, or `None` if no table
+    /// Return the current row count for the named table, or `None` if no table
     /// with that name is registered.
     fn table_size(&self, name: &str) -> Option<usize> {
         self.registry()
@@ -289,10 +272,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// use [`Read::function_entries`] for those. Convert individual
     /// input columns to typed Rust values with [`Core::value_to_base`]
     /// or [`Core::value_to_container`].
-    fn constructor_enodes(
-        &self,
-        name: &str,
-    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+    fn constructor_enodes(&self, name: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
         Ok(collect_rows(&action, self.es()))
@@ -304,10 +284,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// Errors with `WrongSubtype` if `name` is a constructor — use
     /// [`Read::constructor_enodes`] for those.
-    fn function_entries(
-        &self,
-        name: &str,
-    ) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+    fn function_entries(&self, name: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
         Ok(collect_rows(&action, self.es()))
@@ -316,13 +293,13 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
 /// Split each row into `(inputs, output)`, where output is the last
 /// column. Shared by `constructor_enodes` and `function_entries`.
-fn collect_rows(
-    action: &TableAction,
-    state: &ExecutionState<'_>,
-) -> Vec<(Vec<Value>, Value)> {
+fn collect_rows(action: &TableAction, state: &ExecutionState<'_>) -> Vec<(Vec<Value>, Value)> {
     let mut out = Vec::with_capacity(action.row_count(state));
     action.for_each(state, |row| {
-        let (output, inputs) = row.vals.split_last().expect("function row has at least an output column");
+        let (output, inputs) = row
+            .vals
+            .split_last()
+            .expect("function row has at least an output column");
         out.push((inputs.to_vec(), *output));
     });
     out
@@ -366,18 +343,9 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Write::set`] for those.
-    fn add<R: IntoValues>(
-        &mut self,
-        name: &str,
-        inputs: R,
-    ) -> Result<Value, Error> {
+    fn add<R: IntoValues>(&mut self, name: &str, inputs: R) -> Result<Value, Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(
-            name,
-            &action,
-            TableKind::Constructor,
-            "constructor",
-        )?;
+        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
         let key = inputs.into_values(self.base_values());
         check_arity(name, &action, key.len())?;
         let value = action
@@ -387,11 +355,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// Remove a row from the named table. Works for any subtype.
-    fn remove<K: IntoValues>(
-        &mut self,
-        name: &str,
-        key: K,
-    ) -> Result<(), Error> {
+    fn remove<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         let key_values = key.into_values(self.base_values());
         check_arity(name, &action, key_values.len())?;
@@ -400,11 +364,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// Subsume a row in the named table.
-    fn subsume<K: IntoValues>(
-        &mut self,
-        name: &str,
-        key: K,
-    ) -> Result<(), Error> {
+    fn subsume<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         let key_values = key.into_values(self.base_values());
         check_arity(name, &action, key_values.len())?;
@@ -430,14 +390,13 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 }
 
-fn lookup_action(
-    registry: &ActionRegistry,
-    name: &str,
-) -> Result<TableAction, Error> {
-    registry
-        .lookup_table(name)
-        .cloned()
-        .ok_or_else(|| ApiError::MissingTable { name: name.to_string() }.into())
+fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
+    registry.lookup_table(name).cloned().ok_or_else(|| {
+        ApiError::MissingTable {
+            name: name.to_string(),
+        }
+        .into()
+    })
 }
 
 fn check_subtype(

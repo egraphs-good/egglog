@@ -4,8 +4,8 @@
 //! pipeline and must surface a helpful error rather than silently
 //! producing unverifiable proofs.
 
-use egglog::prelude::*;
 use egglog::Error;
+use egglog::prelude::*;
 
 #[test]
 fn rust_rule_with_proofs_enabled_errors() {
@@ -24,8 +24,10 @@ fn rust_rule_with_proofs_enabled_errors() {
     );
 
     let err = result.expect_err("rust_rule should fail under proofs");
-    assert!(matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "rust_rule"),
-        "expected ProofsIncompatibleApi(rust_rule), got: {err}");
+    assert!(
+        matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "rust_rule"),
+        "expected ProofsIncompatibleApi(rust_rule), got: {err}"
+    );
 }
 
 #[test]
@@ -45,8 +47,10 @@ fn rust_rule_full_with_proofs_enabled_errors() {
     );
 
     let err = result.expect_err("rust_rule_full should fail under proofs");
-    assert!(matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "rust_rule_full"),
-        "expected ProofsIncompatibleApi(rust_rule_full), got: {err}");
+    assert!(
+        matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "rust_rule_full"),
+        "expected ProofsIncompatibleApi(rust_rule_full), got: {err}"
+    );
 }
 
 #[test]
@@ -58,8 +62,10 @@ fn update_with_proofs_enabled_errors() {
     let result = eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64));
 
     let err = result.expect_err("update should fail under proofs");
-    assert!(matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "EGraph::update"),
-        "expected ProofsIncompatibleApi(EGraph::update), got: {err}");
+    assert!(
+        matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "EGraph::update"),
+        "expected ProofsIncompatibleApi(EGraph::update), got: {err}"
+    );
 }
 
 #[test]
@@ -74,7 +80,8 @@ fn query_with_proofs_enabled_errors_with_query_api_name() {
     let result = eg.query(vars![x: i64], facts![(= y (f x))]);
 
     let err = result.expect_err("EGraph::query should fail under proofs");
-    assert!(matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "EGraph::query"),
-        "expected ProofsIncompatibleApi(EGraph::query), got: {err}");
+    assert!(
+        matches!(err, Error::ProofsIncompatibleApi { api, .. } if api == "EGraph::query"),
+        "expected ProofsIncompatibleApi(EGraph::query), got: {err}"
+    );
 }
-

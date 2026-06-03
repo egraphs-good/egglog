@@ -39,9 +39,7 @@ pub enum ApiError {
     #[error("no table named `{name}` is registered")]
     MissingTable { name: String },
 
-    #[error(
-        "table `{name}` is a {actual}; this method is only valid for {expected} tables"
-    )]
+    #[error("table `{name}` is a {actual}; this method is only valid for {expected} tables")]
     WrongSubtype {
         name: String,
         expected: &'static str,
