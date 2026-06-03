@@ -1938,17 +1938,7 @@ impl EGraph {
         })
     }
 
-    /// Convert a Rust container value into an interned egglog [`Value`].
-    ///
-    /// This is currently an alias for [`EGraph::container_to_value`] and
-    /// requires `&mut self`. A future change will relax this to `&self`
-    /// once the underlying container store's interior mutability is
-    /// surfaced.
-    pub fn intern_container<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.container_to_value::<T>(x)
-    }
-
-    /// Get the size of a function in the e-graph.
+/// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
     pub fn get_size(&self, func: &str) -> usize {

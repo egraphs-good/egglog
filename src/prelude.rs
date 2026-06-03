@@ -20,7 +20,7 @@
 //! # Ok::<(), egglog::Error>(())
 //! ```
 //!
-//! Two cases need a Rust escape from the language:
+//! Three cases need a Rust escape from the language:
 //!
 //! 1. **Driving the e-graph database directly** — building rows,
 //!    looking them up, iterating tables, running ad-hoc queries from
@@ -30,8 +30,12 @@
 //!    match and gets a state handle to read/write the database.
 //!    Useful when the rule body needs arithmetic, control flow, or
 //!    data conversion that's awkward in egglog itself.
+//! 3. **Custom primitives callable from egglog expressions** — new
+//!    functions (e.g. arithmetic on a custom Rust type, an FFI call,
+//!    a cost computation) that you want to invoke from egglog code as
+//!    if they were built-ins. See "Extending egglog" below.
 //!
-//! Both flows share the same surface: the [`crate::Read`] and
+//! Cases 1 and 2 share the same surface: the [`crate::Read`] and
 //! [`crate::Write`] capability traits, implemented on the
 //! [`crate::PureState`] / [`crate::ReadState`] / [`crate::WriteState`]
 //! / [`crate::FullState`] wrappers. Inside a rule callback you

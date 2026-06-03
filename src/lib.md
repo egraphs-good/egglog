@@ -4,8 +4,17 @@ Egglog is a language for writing equality saturation applications.
 It is the successor to the Rust library [egg](https://github.com/egraphs-good/egg).
 Egglog is faster and more general than egg.
 
-# Documentation
-Documentation for the egglog language can be found here: [`Command`].
+# Tutorial
+We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
+We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
+
+# Language reference
+The egglog language itself is documented through the [`Command`] enum
+(a type alias for [`ast::GenericCommand`]): one variant per top-level
+egglog command (`Datatype`, `Function`, `Rule`, `RunSchedule`, …),
+each with its own doc comment describing the syntax and semantics.
+Whatever you can write between parentheses at the top of an egglog
+program shows up as a variant there.
 
 # Using egglog from Rust
 We encourage using the egglog language as much as possible, even from Rust.
@@ -31,7 +40,3 @@ global name to it (`(let $root ...)`), resolve the global with
 [`EGraph::extract_value_with_cost_model`] / a custom
 [`extract::CostModel`] when you want non-default costs. The
 [`extract`] module has the full extractor API.
-
-# Tutorial
-We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
-We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
