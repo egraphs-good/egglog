@@ -20,7 +20,7 @@ fn function_entries_i64_to_i64() -> Result<(), Error> {
     )?;
 
     let mut rows: Vec<(i64, i64)> = egraph
-        .function_entries("f")?
+        .update(|fs| fs.function_entries("f"))?
         .into_iter()
         .map(|(inputs, output)| {
             (
@@ -42,7 +42,10 @@ fn function_entries_on_constructor_errors() -> Result<(), Error> {
         None,
         "(datatype List (Cons i64 List) (Nil))",
     )?;
-    let err = egraph.function_entries("Cons").unwrap_err().to_string();
+    let err = egraph
+        .update(|fs| fs.function_entries("Cons"))
+        .unwrap_err()
+        .to_string();
     assert!(
         err.contains("Cons") && err.contains("constructor"),
         "got: {err}"
@@ -116,7 +119,7 @@ fn constructor_enodes_basic() -> Result<(), Error> {
 ",
     )?;
 
-    let enodes = egraph.constructor_enodes("Add")?;
+    let enodes = egraph.update(|fs| fs.constructor_enodes("Add"))?;
     assert_eq!(enodes.len(), 2);
     for (inputs, _eclass) in &enodes {
         // Two i64 inputs.
@@ -154,7 +157,7 @@ fn constructor_enodes_relation() -> Result<(), Error> {
 ",
     )?;
 
-    let enodes = egraph.constructor_enodes("R")?;
+    let enodes = egraph.update(|fs| fs.constructor_enodes("R"))?;
     assert_eq!(enodes.len(), 2);
     for (inputs, _eclass) in &enodes {
         assert_eq!(inputs.len(), 1, "relation enode: one input");
@@ -205,7 +208,7 @@ fn query_pattern_two_vars() -> Result<(), Error> {
 fn function_entries_empty() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, "(function h (i64) i64 :no-merge)")?;
-    let entries = egraph.function_entries("h")?;
+    let entries = egraph.update(|fs| fs.function_entries("h"))?;
     assert!(entries.is_empty());
     Ok(())
 }
@@ -214,7 +217,9 @@ fn function_entries_empty() -> Result<(), Error> {
 #[test]
 fn function_entries_missing_table_errors() {
     let mut egraph = EGraph::default();
-    let err = egraph.function_entries("nonexistent").unwrap_err();
+    let err = egraph
+        .update(|fs| fs.function_entries("nonexistent"))
+        .unwrap_err();
     let msg = format!("{err}");
     assert!(
         msg.contains("nonexistent") || msg.contains("Unbound"),

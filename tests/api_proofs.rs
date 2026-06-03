@@ -78,22 +78,3 @@ fn query_with_proofs_enabled_errors_with_query_api_name() {
         "expected ProofsIncompatibleApi(EGraph::query), got: {err}");
 }
 
-#[test]
-fn read_only_iteration_works_under_proofs() {
-    // Read-only iteration should not trip the proofs check that
-    // `update` does for writes. (Proof mode rewrites `(function … :merge new)`
-    // into a constructor under the hood, so we read it as such.)
-    let mut eg = EGraph::new_with_proofs();
-    eg.parse_and_run_program(
-        None,
-        "(function f (i64) i64 :merge new) (set (f 1) 42)",
-    )
-    .unwrap();
-
-    let enodes = eg
-        .constructor_enodes("f")
-        .expect("constructor_enodes should succeed under proofs");
-    assert_eq!(enodes.len(), 1);
-    let (inputs, _eclass) = &enodes[0];
-    assert_eq!(eg.value_to_base::<i64>(inputs[0]), 1);
-}

@@ -76,7 +76,6 @@
 //!   Each entry is `(inputs, output)` as raw `Value`s.
 //! - [`crate::Read::constructor_enodes`] iterates a constructor /
 //!   relation table. Each enode is `(inputs, eclass_id)`.
-//!   Top-level convenience versions live on [`crate::EGraph`].
 //! - [`crate::EGraph::query`] runs a one-shot pattern query and
 //!   returns one `HashMap<String, Value>` per match, keyed by
 //!   variable name. Useful for extracting bindings without compiling

@@ -6,7 +6,7 @@
 //! Exercises: `EGraph::update`, `Write::add` (constructor minting
 //! both from outside a rule and from inside a `rust_rule` callback),
 //! `Write::union` (inside the rule), `Read::eclass_of`,
-//! `Read::table_sizes`, `EGraph::constructor_enodes`, `add_ruleset`,
+//! `Read::table_sizes`, `Read::constructor_enodes`, `add_ruleset`,
 //! `run_ruleset`.
 
 use egglog::prelude::*;
@@ -97,7 +97,7 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     //     `root` and whose i64 input is `9`.
     let mut found_num_nine = false;
     let nine_value = eg.base_to_value::<i64>(9);
-    for (inputs, eclass) in eg.constructor_enodes("Num")? {
+    for (inputs, eclass) in eg.update(|fs| fs.constructor_enodes("Num"))? {
         if eclass == root && inputs[0] == nine_value {
             found_num_nine = true;
             break;

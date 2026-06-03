@@ -2056,20 +2056,6 @@ impl EGraph {
         result
     }
 
-    /// Iterate every enode in a constructor / relation table. See
-    /// [`Read::constructor_enodes`] for details; this is a top-level
-    /// convenience that delegates through a read-only path (works
-    /// under proofs).
-    pub fn constructor_enodes(&mut self, table: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
-        self.update_unchecked(|fs| fs.constructor_enodes(table))
-    }
-
-    /// Iterate every `(inputs, output)` entry of a function table.
-    /// See [`Read::function_entries`].
-    pub fn function_entries(&mut self, table: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
-        self.update_unchecked(|fs| fs.function_entries(table))
-    }
-
     /// Run a pattern query: bind the variables in `vars` against
     /// `facts` and return one [`HashMap`] per match, keyed by variable
     /// name. Values stay raw — convert via [`EGraph::value_to_base`].
@@ -2080,7 +2066,7 @@ impl EGraph {
         &mut self,
         vars: &[(&str, ArcSort)],
         facts: ast::Facts<String, String>,
-    ) -> Result<Vec<std::collections::HashMap<String, Value>>, Error> {
+    ) -> Result<Vec<HashMap<String, Value>>, Error> {
         // Fail fast under proofs — otherwise the failure would
         // surface through `rust_rule`'s check below with a misleading
         // api: "rust_rule" in the error message.
@@ -2093,7 +2079,7 @@ impl EGraph {
         }
         use std::sync::{Arc, Mutex};
         let names: Arc<[String]> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
-        let results: Arc<Mutex<Vec<std::collections::HashMap<String, Value>>>> =
+        let results: Arc<Mutex<Vec<HashMap<String, Value>>>> =
             Arc::new(Mutex::new(Vec::new()));
         let results_weak = Arc::downgrade(&results);
         let names_for_cb = names.clone();
@@ -2107,7 +2093,7 @@ impl EGraph {
             prelude::rust_rule(self, "query", &ruleset, vars, facts, move |_, values| {
                 let arc = results_weak.upgrade().unwrap();
                 let mut results = arc.lock().unwrap();
-                let map: std::collections::HashMap<String, Value> = names_for_cb
+                let map: HashMap<String, Value> = names_for_cb
                     .iter()
                     .zip(values.iter().copied())
                     .map(|(n, v)| (n.clone(), v))
@@ -2121,11 +2107,9 @@ impl EGraph {
 
         // Tear the temporary rule + ruleset down whether the body
         // succeeded or not.
-        if let Some(ruleset_obj) = self.rulesets.swap_remove(&ruleset) {
-            if let Ruleset::Rules(rules) = ruleset_obj {
-                for (_, rule) in rules {
-                    self.backend.free_rule(rule.1);
-                }
+        if let Some(Ruleset::Rules(rules)) = self.rulesets.swap_remove(&ruleset) {
+            for (_, rule) in rules {
+                self.backend.free_rule(rule.1);
             }
         }
         outcome?;

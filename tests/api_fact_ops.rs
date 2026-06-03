@@ -234,7 +234,7 @@ fn test_constructor_enodes_on_empty_table() -> Result<(), Error> {
     // not error.
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
-    let enodes = eg.constructor_enodes("Cons")?;
+    let enodes = eg.update(|fs| fs.constructor_enodes("Cons"))?;
     assert!(enodes.is_empty());
     Ok(())
 }
