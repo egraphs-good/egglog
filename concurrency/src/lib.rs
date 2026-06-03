@@ -7,6 +7,7 @@ pub(crate) mod notification_list;
 pub mod parallel_writer;
 pub(crate) mod resettable_oncelock;
 mod shared_arena;
+pub mod threadpool;
 use arc_swap::{ArcSwap, Guard};
 
 pub use bitset::BitSet;
@@ -16,6 +17,7 @@ pub use notification_list::NotificationList;
 pub use parallel_writer::ParallelVecWriter;
 pub use resettable_oncelock::ResettableOnceLock;
 pub use shared_arena::{Handle, SharedArena, SharedRef};
+pub use threadpool::{Scope, ThreadPool, current_num_threads, scope};
 
 #[cfg(test)]
 mod tests;

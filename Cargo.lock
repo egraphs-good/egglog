@@ -542,6 +542,7 @@ dependencies = [
  "arc-swap",
  "bumpalo",
  "codspeed-divan-compat",
+ "crossbeam",
  "egglog-numeric-id",
  "proptest",
  "rayon",
