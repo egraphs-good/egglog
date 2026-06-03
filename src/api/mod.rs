@@ -232,7 +232,12 @@ macro_rules! impl_values_for_tuple {
             impl<$($name: FromValue),+> FromValues for ($($name,)+) {
                 fn from_values(values: &[Value], bv: &BaseValues) -> Self {
                     let mut iter = values.iter().copied();
-                    ( $( $name::from_value(iter.next().expect("FromValues: row shorter than tuple arity"), bv), )+ )
+                    let tuple = ( $( $name::from_value(iter.next().expect("FromValues: row shorter than tuple arity"), bv), )+ );
+                    assert!(
+                        iter.next().is_none(),
+                        "FromValues: row longer than tuple arity",
+                    );
+                    tuple
                 }
             }
         )+

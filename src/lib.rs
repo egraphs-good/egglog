@@ -1960,9 +1960,7 @@ impl EGraph {
         ))
     }
 
-    /// Run a closure with full read-write access to the database, then flush
-    /// pending writes.
-    ///
+    /// Set the report verbosity level for rule execution output.
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.backend.set_report_level(level);
     }
