@@ -5,7 +5,6 @@ use std::{cell::Cell, mem, ops::Deref};
 
 use crate::numeric_id::NumericId;
 use egglog_concurrency::{ParallelVecWriter, parallel_writer::write_cell_slice};
-use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 
 use crate::{
@@ -288,20 +287,6 @@ impl RowBuffer {
         self.total_rows = count;
     }
 
-    /// A parallel version of [`RowBuffer::iter`].
-    pub(crate) fn parallel_iter(&self) -> impl ParallelIterator<Item = &[Value]> {
-        use rayon::prelude::*;
-        // SAFETY: This kind of transmutation is safe so long as no one
-        // modifies any of the values behind the `Cell` while this value is
-        // borrowed.
-        //
-        // The only time we modify these values is in safe methods requiring
-        // a mutable reference (`set_stale`, `get_row_mut`), or in the
-        // unsafe `set_stale_shared` method whose safety requirements imply
-        // that no call will overlap with borrowing such a row.
-        unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(&self.data) }.par_chunks(self.n_columns)
-    }
-
     /// Mark a row as stale in the buffer with shared access to it. Returns
     /// whether the row was already stale.
     ///
@@ -400,9 +385,11 @@ impl TaggedRowBuffer {
         }
     }
 
-    /// A parallel iterator over the contents of the buffer.
-    pub fn par_iter(&self) -> impl ParallelIterator<Item = (RowId, &[Value])> {
-        self.inner.parallel_iter().map(|row| self.unwrap_row(row))
+    /// Iterate over the contents of the buffer.
+    ///
+    /// This is a compatibility alias for [`TaggedRowBuffer::iter`].
+    pub fn par_iter(&self) -> impl Iterator<Item = (RowId, &[Value])> {
+        self.iter()
     }
 }
 

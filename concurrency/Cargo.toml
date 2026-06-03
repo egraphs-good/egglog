@@ -12,7 +12,6 @@ readme = { workspace = true }
 arc-swap = { workspace = true}
 bumpalo = { workspace = true}
 crossbeam = { workspace = true}
-rayon = { workspace = true}
 egglog-numeric-id = { workspace = true }
 smallvec = { workspace = true }
 

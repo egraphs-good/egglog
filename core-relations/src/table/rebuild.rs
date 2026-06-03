@@ -3,7 +3,6 @@
 use std::{cmp, mem};
 
 use crate::numeric_id::NumericId;
-use rayon::prelude::*;
 
 use crate::{
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
@@ -11,6 +10,7 @@ use crate::{
     common::HashSet,
     hash_index::{ColumnIndex, Index},
     offsets::Offsets,
+    parallel,
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
 };
@@ -139,35 +139,28 @@ impl SortedWritesTable {
 
         if parallelize_rebuild(to_scan.size()) {
             WrappedTableRef::with_wrapper(self, |wrapped| {
-                buf.par_iter()
-                    .fold(
-                        || (self.new_buffer(), exec_state.clone(), false),
-                        |(mut mutation_buf, mut exec_state, mut changed), (_, row)| {
-                            let Some(subset) = self.rebuild_index.get_subset(&row[0]) else {
-                                return (mutation_buf, exec_state, changed);
-                            };
-                            let mut scanned = TaggedRowBuffer::new(self.n_columns);
-                            rebuilder.rebuild_subset(
-                                wrapped,
-                                subset,
-                                &mut scanned,
-                                &mut exec_state,
-                            );
-                            for (row_id, row) in scanned.non_stale_mut() {
-                                let to_remove =
-                                    self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
-                                if let Some(key) = to_remove {
-                                    mutation_buf.stage_remove(key);
-                                }
-                                changed = true;
-                                insert_row!(self, mutation_buf, row, next_ts);
-                            }
-                            (mutation_buf, exec_state, changed)
-                        },
-                    )
-                    .map(|(_, _, changed)| changed)
-                    .max()
-                    .unwrap_or(false)
+                let ids = buf.iter().map(|(_, row)| row[0]).collect::<Vec<_>>();
+                parallel::map(&ids, |_, id| {
+                    let mut mutation_buf = self.new_buffer();
+                    let mut exec_state = exec_state.clone();
+                    let mut changed = false;
+                    let Some(subset) = self.rebuild_index.get_subset(id) else {
+                        return changed;
+                    };
+                    let mut scanned = TaggedRowBuffer::new(self.n_columns);
+                    rebuilder.rebuild_subset(wrapped, subset, &mut scanned, &mut exec_state);
+                    for (row_id, row) in scanned.non_stale_mut() {
+                        let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
+                        if let Some(key) = to_remove {
+                            mutation_buf.stage_remove(key);
+                        }
+                        changed = true;
+                        insert_row!(self, mutation_buf, row, next_ts);
+                    }
+                    changed
+                })
+                .into_iter()
+                .any(|changed| changed)
             })
         } else {
             let mut scratch = TaggedRowBuffer::new(self.n_columns);
@@ -202,44 +195,33 @@ impl SortedWritesTable {
     ) -> bool {
         const STEP_SIZE: usize = 2048;
         if parallelize_rebuild(self.data.next_row().index()) {
-            (0..self.data.next_row().index())
-                .into_par_iter()
-                .step_by(STEP_SIZE)
-                .fold(
-                    || {
-                        (
-                            self.new_buffer(),
-                            TaggedRowBuffer::new(self.n_columns),
-                            exec_state.clone(),
-                            false,
-                        )
-                    },
-                    |(mut mutation_buf, mut buf, mut exec_state, mut changed), start| {
-                        rebuilder.rebuild_buf(
-                            &self.data.data,
-                            RowId::from_usize(start),
-                            RowId::from_usize(cmp::min(
-                                start + STEP_SIZE,
-                                self.data.next_row().index(),
-                            )),
-                            &mut buf,
-                            &mut exec_state,
-                        );
-                        for (row_id, row) in buf.non_stale_mut() {
-                            let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
-                            changed = true;
-                            if let Some(key) = to_remove {
-                                mutation_buf.stage_remove(key);
-                            }
-                            insert_row!(self, mutation_buf, row, next_ts);
-                        }
-                        buf.clear();
-                        (mutation_buf, buf, exec_state, changed)
-                    },
-                )
-                .map(|(_, _, _, changed)| changed)
-                .max()
-                .unwrap_or(false)
+            let max_row = self.data.next_row().index();
+            let starts = (0..max_row).step_by(STEP_SIZE).collect::<Vec<_>>();
+            parallel::map(&starts, |_, start| {
+                let mut mutation_buf = self.new_buffer();
+                let mut buf = TaggedRowBuffer::new(self.n_columns);
+                let mut exec_state = exec_state.clone();
+                let mut changed = false;
+                rebuilder.rebuild_buf(
+                    &self.data.data,
+                    RowId::from_usize(*start),
+                    RowId::from_usize(cmp::min(*start + STEP_SIZE, max_row)),
+                    &mut buf,
+                    &mut exec_state,
+                );
+                for (row_id, row) in buf.non_stale_mut() {
+                    let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
+                    changed = true;
+                    if let Some(key) = to_remove {
+                        mutation_buf.stage_remove(key);
+                    }
+                    insert_row!(self, mutation_buf, row, next_ts);
+                }
+                buf.clear();
+                changed
+            })
+            .into_iter()
+            .any(|changed| changed)
         } else {
             let mut buf = TaggedRowBuffer::new(self.n_columns);
             let mut changed = false;

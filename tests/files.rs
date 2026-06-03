@@ -101,7 +101,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proof_testing {
+        let egraph = if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.proofs {
             EGraph::new_with_proofs()
@@ -109,7 +109,8 @@ impl Run {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
-        }
+        };
+        egraph.with_num_threads(self.threads)
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs
@@ -190,20 +191,7 @@ impl Run {
     fn into_trial(self) -> Trial {
         let name = self.name().to_string();
         Trial::test(name, move || {
-            // We use a local rayon pool here because `build_global()` can only
-            // be called once per process, but libtest-mimic runs many trials
-            // (with different thread counts) in the same process.
-            // The threads == 1 case also goes through pool.install so the trial
-            // doesn't fall through to the default global rayon pool (which uses
-            // num_cpus threads and would make "single-threaded" tests
-            // nondeterministic).
-            // TODO: when we move to per-EGraph local thread pools, replace this
-            // with `egraph.with_num_threads()` and remove the explicit pool.
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(self.threads)
-                .build()
-                .expect("failed to build rayon thread pool");
-            pool.install(|| self.run());
+            self.run();
             Ok(())
         })
     }

@@ -68,7 +68,6 @@ use std::io::{Read as _, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
@@ -498,6 +497,14 @@ struct ResolvedNCommandsWithOutput {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Create a new e-graph configured with `num_threads`.
+    ///
+    /// Passing `1` keeps execution serial. Passing `0` uses available
+    /// parallelism.
+    pub fn new(num_threads: usize) -> Self {
+        EGraph::default().with_num_threads(num_threads)
+    }
+
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
@@ -522,6 +529,7 @@ impl EGraph {
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    #[cfg(feature = "bin")]
     pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self
@@ -530,6 +538,7 @@ impl EGraph {
     /// Enable proof generation on this e-graph.
     /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    #[cfg(feature = "bin")]
     pub(crate) fn with_proofs_enabled(mut self) -> Self {
         self = self.with_term_encoding_enabled();
         self.proof_state.proofs_enabled = true;
@@ -542,39 +551,26 @@ impl EGraph {
         self
     }
 
-    /// Set the number of threads used for parallel operations.
+    /// Return a copy of this e-graph configured with `num_threads`.
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.set_num_threads(num_threads);
+        self
+    }
+
+    /// Set the number of threads used by this e-graph.
     ///
-    /// This is a helper that simply configures the global rayon thread pool. It can only be called
-    /// once per process; subsequent calls will be ignored.
-    ///
-    /// # Panics
-    ///
-    /// Panics on wasm if `num_threads > 1`.
-    pub fn set_num_threads(num_threads: usize) {
-        #[cfg(target_family = "wasm")]
-        if num_threads > 1 {
-            panic!("cannot use more than 1 thread on wasm");
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // This will fail silently if the global pool has already been configured.
-            let err = rayon::ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build_global();
-            // print log if successful
-            if matches!(err, Ok(())) {
-                log::info!("Initialize global thread pool with  {num_threads} threads");
-            } else {
-                log::warn!(
-                    "Failed to initialize global thread pool with {num_threads} threads. This may be because the thread pool was already initialized with a different number of threads. Error: {err:?}"
-                );
-            }
+    /// Passing `1` keeps execution serial. Passing `0` uses available
+    /// parallelism.
+    pub fn set_num_threads(&mut self, num_threads: usize) {
+        self.backend.set_num_threads(num_threads);
+        if let Some(original) = &mut self.proof_state.original_typechecking {
+            original.set_num_threads(num_threads);
         }
     }
 
-    /// Return the number of threads in the rayon thread pool.
+    /// Return the number of threads configured for this e-graph.
     pub fn num_threads(&self) -> usize {
-        rayon::current_num_threads()
+        self.backend.num_threads()
     }
 
     /// Return extension-owned state stored on this e-graph.

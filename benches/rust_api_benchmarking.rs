@@ -23,8 +23,6 @@ struct RustRuleBenchInput {
 fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
 
-    common::configure_rayon_once();
-
     let mut program = String::new();
     program.push_str("(relation R (i64))\n");
 
@@ -120,8 +118,6 @@ fn rust_rule_match_with_serialize(bencher: divan::Bencher, case: RustRuleBenchCa
 fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
 
-    common::configure_rayon_once();
-
     let mut program = String::new();
     program.push_str("(relation R (i64))\n");
     program.push_str("(function f (i64) i64 :no-merge)\n");
@@ -161,8 +157,6 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
 
 fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
-
-    common::configure_rayon_once();
 
     let mut program = String::new();
     program.push_str("(relation R (i64))\n");
@@ -340,8 +334,6 @@ fn main() {
 
 fn fib_setup() -> RustRuleBenchInput {
     use egglog::prelude::*;
-    common::configure_rayon_once();
-
     let mut program = String::new();
     program.push_str("(function fib (i64) i64 :no-merge)");
     program.push_str("(set (fib 0) 0)\n");

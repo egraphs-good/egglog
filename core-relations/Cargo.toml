@@ -28,7 +28,6 @@ crossbeam = { workspace = true }
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true, features = ["raw-api"] }
 web-time = { workspace = true }
-rayon = { workspace = true }
 rand = { workspace = true }
 dyn-clone = { workspace = true }
 num = { workspace = true }
@@ -37,6 +36,7 @@ once_cell = { workspace = true }
 [dev-dependencies]
 divan = { workspace = true }
 mimalloc = { workspace = true }
+rayon = { workspace = true }
 
 [[bench]]
 name = "writes"
