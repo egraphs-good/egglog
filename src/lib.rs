@@ -1102,23 +1102,6 @@ impl EGraph {
         self.functions.iter()
     }
 
-    /// Read the contents of the given function.
-    /// The callback f is called with each row and its subsumption status.
-    ///
-    /// Raises an error if the function does not exist.
-    pub fn function_for_each(
-        &self,
-        func_name: &str,
-        f: impl FnMut(FunctionRow<'_>),
-    ) -> Result<(), Error> {
-        let func = self
-            .functions
-            .get(func_name)
-            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
-        self.backend.for_each(func.backend_id, f);
-        Ok(())
-    }
-
     /// Remove every row from the named function in bulk.
     ///
     /// This is intended as a faster alternative to issuing a `(delete …)` for
@@ -2036,12 +2019,8 @@ impl EGraph {
     }
 
     /// Internal version of [`EGraph::update`] without the proofs
-    /// check. Used by:
-    /// - The top-level read helpers ([`EGraph::constructor_enodes`],
-    ///   [`EGraph::function_entries`]) which are read-only and so
-    ///   safe under proofs.
-    /// - Proof-system internals that need to read the e-graph while
-    ///   the proof system is enabled.
+    /// check. Used by proof-system internals that need to read the
+    /// e-graph while the proof system itself is enabled.
     pub(crate) fn update_unchecked<R>(
         &mut self,
         f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,

@@ -122,8 +122,8 @@ fn test_constructor_add_returns_id() -> Result<(), Error> {
     // Calling add again with the same inputs returns the same id.
     let (cons, cons2, nil) = eg.update(|mut fs| -> Result<_, Error> {
         let nil = fs.add("Nil", RawValues(vec![]))?;
-        let cons = fs.add("Cons", (1_i64, nil.clone()))?;
-        let cons2 = fs.add("Cons", (1_i64, nil.clone()))?;
+        let cons = fs.add("Cons", (1_i64, nil))?;
+        let cons2 = fs.add("Cons", (1_i64, nil))?;
         Ok((cons, cons2, nil))
     })?;
     assert_eq!(cons, cons2);
@@ -145,12 +145,12 @@ fn test_eclass_of_constructor() -> Result<(), Error> {
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
     let (cons, nil) = eg.update(|mut fs| -> Result<_, Error> {
         let nil = fs.add("Nil", RawValues(vec![]))?;
-        let cons = fs.add("Cons", (1_i64, nil.clone()))?;
+        let cons = fs.add("Cons", (1_i64, nil))?;
         Ok((cons, nil))
     })?;
     let (existing, absent) = eg.update(|fs| -> Result<_, Error> {
         Ok((
-            fs.eclass_of("Cons", (1_i64, nil.clone()))?,
+            fs.eclass_of("Cons", (1_i64, nil))?,
             fs.eclass_of("Cons", (99_i64, nil))?,
         ))
     })?;

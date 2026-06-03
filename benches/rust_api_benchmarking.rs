@@ -344,7 +344,7 @@ fn rust_rule_fib(bencher: divan::Bencher, case: RustRuleBenchCase) {
     use egglog::prelude::run_ruleset;
 
     bencher
-        .with_inputs(|| fib_setup())
+        .with_inputs(fib_setup)
         .bench_local_refs(|input| {
             for _ in 0..case.n_rule_run_estimated.unwrap() {
                 run_ruleset(&mut input.egraph, &input.ruleset).unwrap();

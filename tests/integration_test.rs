@@ -1112,7 +1112,7 @@ fn rewrite_name_with_ruleset() {
 
 /// Single-function lifecycle: declare → no-op clear of empty table →
 /// populate → assert the three different read paths agree on the
-/// contents (`get_size`, `lookup_function`, `function_for_each`) →
+/// contents (`get_size`, `eclass_of`, `constructor_enodes`) →
 /// clear → assert all three read paths report empty → re-insert with
 /// completely new keys → assert the old keys are gone and the new
 /// ones are present. Run the populate/clear/re-insert pass repeatedly
@@ -1153,8 +1153,10 @@ fn clear_function_lifecycle() {
                 .is_some()
         );
 
-        let mut seen = 0;
-        egraph.function_for_each("Num", |_row| seen += 1).unwrap();
+        let seen = egraph
+            .update(|fs| fs.constructor_enodes("Num"))
+            .unwrap()
+            .len();
         assert_eq!(seen, 3);
 
         // Now clear and re-read through every access path: each must
@@ -1168,10 +1170,10 @@ fn clear_function_lifecycle() {
                 .unwrap()
                 .is_none()
         );
-        let mut seen_after = 0;
-        egraph
-            .function_for_each("Num", |_row| seen_after += 1)
-            .unwrap();
+        let seen_after = egraph
+            .update(|fs| fs.constructor_enodes("Num"))
+            .unwrap()
+            .len();
         assert_eq!(seen_after, 0);
         let check_old = egraph.parse_and_run_program(None, &format!("(check (Num {a}))"));
         assert!(
