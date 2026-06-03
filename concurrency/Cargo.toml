@@ -24,3 +24,7 @@ rayon = { workspace = true}
 [[bench]]
 name = "simple_read"
 harness = false
+
+[[bench]]
+name = "sum_vector"
+harness = false
