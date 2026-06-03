@@ -8,8 +8,5 @@ keywords = { workspace = true }
 license = { workspace = true }
 readme = { workspace = true }
 
-[dependencies]
-rayon = { workspace = true }
-
 [features]
 default = []

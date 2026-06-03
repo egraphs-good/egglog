@@ -23,6 +23,7 @@ use crate::core_relations::{
     WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
+use egglog_concurrency::ThreadPool;
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -133,12 +134,66 @@ pub struct EGraph {
     /// [`WriteState`] / [`FullState`] can resolve table actions at
     /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
+    threads: usize,
+    thread_pool: Option<Arc<ThreadPool>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
+fn normalize_thread_count(threads: usize) -> usize {
+    #[cfg(target_family = "wasm")]
+    {
+        if threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        1
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if threads == 0 {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+        } else {
+            threads
+        }
+    }
+}
+
+fn install_thread_pool<R>(thread_pool: Option<Arc<ThreadPool>>, f: impl FnOnce() -> R) -> R {
+    match thread_pool {
+        Some(thread_pool) => thread_pool.install(f),
+        None => f(),
+    }
+}
+
 impl Default for EGraph {
     fn default() -> Self {
+        Self::new(1)
+    }
+}
+
+/// Properties of a function added to an [`EGraph`].
+pub struct FunctionConfig {
+    /// The function's schema. The last column in the schema is the return type.
+    pub schema: Vec<ColumnTy>,
+    /// The behavior of the function when lookups are made on keys not currently present.
+    pub default: DefaultVal,
+    /// How to resolve FD conflicts for the function.
+    pub merge: MergeFn,
+    /// The function's name
+    pub name: String,
+    /// Whether or not subsumption is enabled for this function.
+    pub can_subsume: bool,
+}
+
+impl EGraph {
+    /// Create an e-graph configured to use `threads` worker threads.
+    ///
+    /// Passing `1` keeps execution serial and does not allocate a thread pool.
+    /// Passing `0` uses the host's available parallelism.
+    pub fn new(threads: usize) -> Self {
+        let threads = normalize_thread_count(threads);
         let mut db = Database::new();
         let uf_table = db.add_table_named(
             DisplacedTable::default(),
@@ -184,25 +239,35 @@ impl Default for EGraph {
             panic_funcs,
             report_level: Default::default(),
             action_registry,
+            threads,
+            thread_pool: (threads > 1).then(|| Arc::new(ThreadPool::new(threads))),
         }
     }
-}
 
-/// Properties of a function added to an [`EGraph`].
-pub struct FunctionConfig {
-    /// The function's schema. The last column in the schema is the return type.
-    pub schema: Vec<ColumnTy>,
-    /// The behavior of the function when lookups are made on keys not currently present.
-    pub default: DefaultVal,
-    /// How to resolve FD conflicts for the function.
-    pub merge: MergeFn,
-    /// The function's name
-    pub name: String,
-    /// Whether or not subsumption is enabled for this function.
-    pub can_subsume: bool,
-}
+    /// Return a copy of this e-graph configured with a different thread count.
+    pub fn with_num_threads(mut self, threads: usize) -> Self {
+        self.set_num_threads(threads);
+        self
+    }
 
-impl EGraph {
+    /// Set the number of worker threads used by this e-graph.
+    ///
+    /// Passing `1` disables the pool. Passing `0` uses available parallelism.
+    pub fn set_num_threads(&mut self, threads: usize) {
+        let threads = normalize_thread_count(threads);
+        self.threads = threads;
+        self.thread_pool = (threads > 1).then(|| Arc::new(ThreadPool::new(threads)));
+    }
+
+    /// Return the configured thread count.
+    pub fn num_threads(&self) -> usize {
+        self.threads
+    }
+
+    fn thread_pool(&self) -> Option<Arc<ThreadPool>> {
+        self.thread_pool.clone()
+    }
+
     fn next_ts(&self) -> Timestamp {
         Timestamp::from_usize(self.db.read_counter(self.timestamp_counter))
     }
@@ -585,7 +650,8 @@ impl EGraph {
     ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
-        self.run_rules_inner(rules)
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.run_rules_inner(rules))
     }
 
     fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
@@ -624,7 +690,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        let do_parallel = rayon::current_num_threads() > 1;
+        let do_parallel = egglog_concurrency::current_num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
@@ -941,7 +1007,8 @@ impl EGraph {
     /// manipulation from outside any rule, not for use inside
     /// primitive implementations.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
-        self.db.with_execution_state(f)
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.db.with_execution_state(f))
     }
 
     /// Like [`EGraph::with_execution_state`], but also reports whether `f`
@@ -958,6 +1025,11 @@ impl EGraph {
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.flush_updates_inner())
+    }
+
+    fn flush_updates_inner(&mut self) -> bool {
         let uf_size_before = self.db.get_table(self.uf_table).len();
         let updated = self.db.merge_all();
         self.inc_ts();

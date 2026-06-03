@@ -10,6 +10,8 @@ use std::{
 
 use crate::{Notification, Scope, ThreadPool, current_num_threads, scope as threadpool_scope};
 
+use super::is_background_worker_thread;
+
 #[test]
 fn scope_runs_spawned_work_and_waits() {
     let pool = ThreadPool::new(4);
@@ -425,4 +427,131 @@ fn free_scope_works_from_spawned_callback() {
 #[should_panic(expected = "no egglog thread pool is currently installed")]
 fn free_scope_panics_without_installed_pool() {
     threadpool_scope(|_| {});
+}
+
+#[test]
+fn primary_workers_are_marked_as_background_workers() {
+    let pool = ThreadPool::new(1);
+
+    assert!(!is_background_worker_thread());
+    pool.scope(|scope| {
+        assert!(!is_background_worker_thread());
+        scope.spawn(|_| {
+            assert!(is_background_worker_thread());
+        });
+    });
+}
+
+#[test]
+fn root_scope_wait_does_not_spawn_backup_worker() {
+    let pool = ThreadPool::new(1);
+    let entered = Arc::new(Notification::new());
+    let release = Arc::new(Notification::new());
+
+    thread::scope(|thread_scope| {
+        let entered_inner = entered.clone();
+        let release_inner = release.clone();
+        let pool = &pool;
+        thread_scope.spawn(move || {
+            pool.scope(|scope| {
+                scope.spawn(move |_| {
+                    entered_inner.notify();
+                    release_inner.wait();
+                });
+            });
+        });
+
+        entered.wait();
+        thread::sleep(Duration::from_millis(10));
+        assert_eq!(pool.state.backup_workers_spawned(), 0);
+        release.notify();
+    });
+
+    assert_eq!(pool.state.backup_workers_live(), 0);
+}
+
+#[test]
+fn backup_worker_avoids_single_worker_nested_scope_deadlock() {
+    let pool = ThreadPool::new(1);
+    let nested_completed = AtomicBool::new(false);
+
+    pool.scope(|scope| {
+        scope.spawn(|_| {
+            threadpool_scope(|nested| {
+                nested.spawn(|_| {
+                    assert!(is_background_worker_thread());
+                    assert_eq!(current_num_threads(), 1);
+                    nested_completed.store(true, Ordering::Release);
+                });
+            });
+        });
+    });
+
+    assert!(nested_completed.load(Ordering::Acquire));
+    assert!(pool.state.backup_workers_spawned() >= 1);
+    assert_eq!(pool.state.backup_workers_live(), 0);
+}
+
+#[test]
+fn backup_worker_exits_after_blocked_scope_finishes() {
+    let pool = ThreadPool::new(1);
+    let nested_started = Arc::new(Notification::new());
+    let release_nested = Arc::new(Notification::new());
+    let scope_returned = Arc::new(AtomicBool::new(false));
+
+    thread::scope(|thread_scope| {
+        let nested_started_inner = nested_started.clone();
+        let release_nested_inner = release_nested.clone();
+        let scope_returned_inner = scope_returned.clone();
+        let pool = &pool;
+        thread_scope.spawn(move || {
+            pool.scope(|scope| {
+                scope.spawn(move |_| {
+                    threadpool_scope(|nested| {
+                        nested.spawn(move |_| {
+                            nested_started_inner.notify();
+                            release_nested_inner.wait();
+                        });
+                    });
+                });
+            });
+            scope_returned_inner.store(true, Ordering::Release);
+        });
+
+        nested_started.wait();
+        while pool.state.backup_workers_live() == 0 {
+            thread::yield_now();
+        }
+        assert!(!scope_returned.load(Ordering::Acquire));
+        release_nested.notify();
+    });
+
+    assert!(scope_returned.load(Ordering::Acquire));
+    assert_eq!(pool.state.backup_workers_live(), 0);
+    assert_eq!(pool.state.backup_workers_spawned(), 1);
+}
+
+#[test]
+fn backup_workers_can_replace_backup_workers_that_block() {
+    let pool = ThreadPool::new(1);
+    let completed = AtomicUsize::new(0);
+
+    pool.scope(|scope| {
+        scope.spawn(|_| {
+            threadpool_scope(|scope| {
+                scope.spawn(|_| {
+                    threadpool_scope(|scope| {
+                        scope.spawn(|_| {
+                            assert!(is_background_worker_thread());
+                            completed.fetch_add(1, Ordering::Release);
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    assert_eq!(completed.load(Ordering::Acquire), 1);
+    assert!(pool.state.backup_workers_spawned() >= 2);
+    assert_eq!(pool.state.backup_workers_live(), 0);
 }

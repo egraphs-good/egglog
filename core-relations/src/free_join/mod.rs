@@ -13,7 +13,6 @@ use crate::{
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
 use egglog_concurrency::{NotificationList, ResettableOnceLock};
-use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
@@ -25,6 +24,7 @@ use crate::{
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
+    parallel,
     parallel_heuristics::parallelize_db_level_op,
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
@@ -314,8 +314,8 @@ pub struct Database {
 impl Database {
     /// Create an empty Database.
     ///
-    /// Queries are executed using the current rayon thread pool, which defaults to the global
-    /// thread pool.
+    /// Queries use the currently installed egglog thread pool. If no pool is
+    /// installed, queries run single-threaded.
     pub fn new() -> Database {
         Database::default()
     }
@@ -420,7 +420,7 @@ impl Database {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
             let view = self.read_only_view();
-            tables.par_iter_mut().for_each(|(id, info)| {
+            parallel::for_each_mut(&mut tables, |_, (id, info)| {
                 if run(*id, info, &view) {
                     self.notification_list.notify(*id);
                 }
@@ -560,14 +560,12 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    tables_merging
-                        .par_iter_mut()
-                        .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                        })
-                        .max()
-                        .unwrap_or(false)
+                    parallel::map_dense_id_map_mut(&mut tables_merging, |_, (info, buffers)| {
+                        let mut es = ExecutionState::new(db, mem::take(buffers));
+                        info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                    })
+                    .into_iter()
+                    .any(|changed| changed)
                 } else {
                     tables_merging
                         .iter_mut()
@@ -834,11 +832,8 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Clean up the ambient thread pool.
-        //
-        // Calling mem::forget on the egraph can result in much faster execution times.
+        // Clean up this thread's ambient memory pool.
         with_pool_set(PoolSet::clear);
-        rayon::broadcast(|_| with_pool_set(PoolSet::clear));
     }
 }
 

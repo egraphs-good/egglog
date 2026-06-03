@@ -1,10 +1,12 @@
 //! A small scoped thread pool backed by a shared crossbeam channel.
 //!
-//! [`ThreadPool`] owns a fixed set of worker threads. Each worker receives
-//! boxed `'static` jobs from a shared channel and exits when the channel is
-//! closed. [`Scope`] provides the safe scoped API on top of those `'static`
-//! jobs by erasing task lifetimes when work is sent to the channel, then
-//! waiting for all work in the scope before returning to the caller.
+//! [`ThreadPool`] owns a fixed set of primary worker threads. Each worker
+//! receives boxed `'static` jobs from a shared channel and exits when the
+//! channel is closed. A primary worker that blocks waiting for scoped work
+//! temporarily starts a backup worker so the pool can continue draining queued
+//! jobs. [`Scope`] provides the safe scoped API on top of those `'static` jobs
+//! by erasing task lifetimes when work is sent to the channel, then waiting for
+//! all work in the scope before returning to the caller.
 //!
 //! The root callback runs on the caller thread, and spawned callbacks run on
 //! worker threads. Spawned callbacks receive the same scope reference as the
@@ -104,7 +106,10 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crossbeam::channel::{Receiver, Sender, unbounded};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+
+use crossbeam::channel::{Receiver, Sender, bounded, select_biased, unbounded};
 
 use crate::Notification;
 
@@ -117,6 +122,7 @@ type PanicPayload = Box<dyn Any + Send + 'static>;
 
 thread_local! {
     static CURRENT_POOL: Cell<*const ThreadPoolState> = const { Cell::new(ptr::null()) };
+    static IS_BACKGROUND_WORKER: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Return the number of threads in the currently installed thread pool.
@@ -186,7 +192,11 @@ where
     })
 }
 
-/// A fixed-size thread pool using a single shared work queue.
+/// A thread pool using a single shared work queue.
+///
+/// The pool owns a fixed number of primary workers. It may also create
+/// short-lived backup workers while a primary worker is blocked waiting for
+/// nested scoped work.
 ///
 /// # Examples
 ///
@@ -225,10 +235,7 @@ impl ThreadPool {
         );
 
         let (sender, receiver) = unbounded();
-        let state = Box::new(ThreadPoolState {
-            sender: Some(sender),
-            thread_count,
-        });
+        let state = Box::new(ThreadPoolState::new(sender, receiver.clone(), thread_count));
         let state_ptr = ThreadPoolStatePtr::new(&state);
         let workers = (0..thread_count)
             .map(|_| spawn_worker(receiver.clone(), state_ptr))
@@ -237,7 +244,7 @@ impl ThreadPool {
         Self { state, workers }
     }
 
-    /// Return the number of worker threads owned by this pool.
+    /// Return the number of primary worker threads owned by this pool.
     ///
     /// # Examples
     ///
@@ -361,10 +368,27 @@ impl Drop for ThreadPool {
 
 struct ThreadPoolState {
     sender: Option<Sender<Job>>,
+    receiver: Receiver<Job>,
     thread_count: usize,
+    #[cfg(test)]
+    backup_workers_spawned: AtomicUsize,
+    #[cfg(test)]
+    backup_workers_live: AtomicUsize,
 }
 
 impl ThreadPoolState {
+    fn new(sender: Sender<Job>, receiver: Receiver<Job>, thread_count: usize) -> Self {
+        Self {
+            sender: Some(sender),
+            receiver,
+            thread_count,
+            #[cfg(test)]
+            backup_workers_spawned: AtomicUsize::new(0),
+            #[cfg(test)]
+            backup_workers_live: AtomicUsize::new(0),
+        }
+    }
+
     fn thread_count(&self) -> usize {
         self.thread_count
     }
@@ -388,6 +412,26 @@ impl ThreadPoolState {
             Err(payload) => panic::resume_unwind(payload),
         }
     }
+
+    fn wait_for_notification(&self, notification: &Notification) {
+        if !is_background_worker_thread() || notification.has_been_notified() {
+            notification.wait();
+            return;
+        }
+
+        let _backup = BackupWorker::spawn(self);
+        notification.wait();
+    }
+
+    #[cfg(test)]
+    fn backup_workers_spawned(&self) -> usize {
+        self.backup_workers_spawned.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    fn backup_workers_live(&self) -> usize {
+        self.backup_workers_live.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -410,6 +454,11 @@ impl ThreadPoolStatePtr {
 // `ThreadPool`. `ThreadPool::drop` closes the work channel, joins all workers
 // holding this pointer, and only then drops the boxed state.
 unsafe impl Send for ThreadPoolStatePtr {}
+
+// SAFETY: shared access through this pointer only reads immutable pool state or
+// uses internally synchronized channel and atomic operations. The pointed-to
+// boxed state remains alive until all worker threads have been joined.
+unsafe impl Sync for ThreadPoolStatePtr {}
 
 fn install_pool<F, R>(pool: &ThreadPoolState, f: F) -> R
 where
@@ -438,6 +487,32 @@ impl Drop for CurrentPoolGuard<'_> {
     fn drop(&mut self) {
         self.current.set(self.previous);
     }
+}
+
+fn install_background_worker<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    IS_BACKGROUND_WORKER.with(|current| {
+        let previous = current.replace(true);
+        let _guard = BackgroundWorkerGuard { current, previous };
+        f()
+    })
+}
+
+struct BackgroundWorkerGuard<'a> {
+    current: &'a Cell<bool>,
+    previous: bool,
+}
+
+impl Drop for BackgroundWorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.current.set(self.previous);
+    }
+}
+
+fn is_background_worker_thread() -> bool {
+    IS_BACKGROUND_WORKER.with(Cell::get)
 }
 
 fn with_current_pool<F, R>(f: F) -> R
@@ -480,6 +555,7 @@ where
 /// ```
 pub struct Scope<'scope> {
     sender: Sender<Job>,
+    pool: ThreadPoolStatePtr,
     state: ScopeState,
     _scope: PhantomData<fn(&'scope ()) -> &'scope ()>,
 }
@@ -488,6 +564,7 @@ impl<'scope> Scope<'scope> {
     fn new(pool: &ThreadPoolState) -> Self {
         Self {
             sender: pool.sender.as_ref().unwrap().clone(),
+            pool: ThreadPoolStatePtr::new(pool),
             state: ScopeState::new(),
             _scope: PhantomData,
         }
@@ -551,7 +628,12 @@ impl<'scope> Scope<'scope> {
 
     fn complete_root_and_wait(&self) {
         if !self.state.complete_one() {
-            self.state.wait();
+            // SAFETY: the scope is created from a live `ThreadPoolState`, and
+            // `ThreadPool::drop` joins all workers before dropping that boxed
+            // state. Scopes cannot outlive the `ThreadPool::scope` call that
+            // created them.
+            let pool = unsafe { self.pool.as_ref() };
+            self.state.wait(pool);
         }
     }
 }
@@ -589,8 +671,8 @@ impl ScopeState {
         }
     }
 
-    fn wait(&self) {
-        self.finished.wait();
+    fn wait(&self, pool: &ThreadPoolState) {
+        pool.wait_for_notification(&self.finished);
     }
 
     fn record_panic(&self, payload: PanicPayload) {
@@ -670,14 +752,92 @@ unsafe fn erase_job_lifetime<'scope>(job: ScopedJob<'scope>) -> Job {
     unsafe { mem::transmute::<ScopedJob<'scope>, Job>(job) }
 }
 
+struct BackupWorker {
+    shutdown: Sender<()>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl BackupWorker {
+    fn spawn(pool: &ThreadPoolState) -> Self {
+        #[cfg(test)]
+        pool.backup_workers_spawned.fetch_add(1, Ordering::AcqRel);
+
+        let (shutdown, shutdown_receiver) = bounded(1);
+        let receiver = pool.receiver.clone();
+        let pool = ThreadPoolStatePtr::new(pool);
+        let worker = thread::spawn(move || {
+            // SAFETY: backup workers are joined by the worker that spawned them
+            // before that worker resumes, and primary workers are joined before
+            // the boxed pool state is dropped.
+            let pool = unsafe { pool.as_ref() };
+            #[cfg(test)]
+            let _live = BackupWorkerLiveGuard::new(pool);
+
+            install_pool(pool, || {
+                install_background_worker(|| {
+                    loop {
+                        select_biased! {
+                            recv(shutdown_receiver) -> _ => break,
+                            recv(receiver) -> message => match message {
+                                Ok(job) => job(),
+                                Err(_) => break,
+                            },
+                        }
+                    }
+                });
+            });
+        });
+
+        Self {
+            shutdown,
+            worker: Some(worker),
+        }
+    }
+
+    fn shutdown_and_join(&mut self) {
+        let _ = self.shutdown.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for BackupWorker {
+    fn drop(&mut self) {
+        self.shutdown_and_join();
+    }
+}
+
+#[cfg(test)]
+struct BackupWorkerLiveGuard<'a> {
+    pool: &'a ThreadPoolState,
+}
+
+#[cfg(test)]
+impl<'a> BackupWorkerLiveGuard<'a> {
+    fn new(pool: &'a ThreadPoolState) -> Self {
+        pool.backup_workers_live.fetch_add(1, Ordering::AcqRel);
+        Self { pool }
+    }
+}
+
+#[cfg(test)]
+impl Drop for BackupWorkerLiveGuard<'_> {
+    fn drop(&mut self) {
+        self.pool.backup_workers_live.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 fn spawn_worker(receiver: Receiver<Job>, pool: ThreadPoolStatePtr) -> JoinHandle<()> {
     thread::spawn(move || {
         // SAFETY: each worker is joined before the boxed pool state is dropped.
         let pool = unsafe { pool.as_ref() };
         install_pool(pool, || {
-            for job in receiver {
-                job();
-            }
+            install_background_worker(|| {
+                for job in receiver {
+                    job();
+                }
+            });
         });
     })
 }
