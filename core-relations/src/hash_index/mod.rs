@@ -368,26 +368,14 @@ impl IndexBase for ColumnIndex {
             return;
         }
 
-        // Multiple columns: fold the sorted blocks with repeated two-way merges (a
-        // single-comparison inner loop, which beats a k-way min-scan for tiny column counts).
+        // Multiple columns: merge the sorted blocks with a balanced (tournament) two-way merge.
         // Each merge drops duplicate (Value, RowId) pairs -- a value appearing in several of a
-        // row's columns -- so the result is (Value, RowId)-sorted and unique without ever
-        // sorting by RowId. `cur` accumulates the running merge; `tmp` is only allocated when
-        // there are more than two columns.
-        let mut cur: Vec<(Value, RowId)> = Vec::with_capacity(pairs.len());
-        merge2_dedup(
-            &pairs[bounds[0]..bounds[1]],
-            &pairs[bounds[1]..bounds[2]],
-            &mut cur,
-        );
-        if cols.len() > 2 {
-            let mut tmp: Vec<(Value, RowId)> = Vec::with_capacity(pairs.len());
-            for b in 2..cols.len() {
-                merge2_dedup(&cur, &pairs[bounds[b]..bounds[b + 1]], &mut tmp);
-                mem::swap(&mut cur, &mut tmp);
-            }
-        }
-        self.build_subsets_from_sorted(&cur);
+        // row's columns -- and dedup composes through the tree, so the result is
+        // (Value, RowId)-sorted and unique without ever sorting by RowId. Halving the number of
+        // runs each round makes this O(n log k) rather than the O(n*k) of a left fold (whose
+        // growing accumulator is re-copied every step), which matters for wide tables.
+        let merged = merge_sorted_blocks_dedup(&pairs, &bounds);
+        self.build_subsets_from_sorted(&merged);
     }
 }
 
@@ -526,6 +514,60 @@ fn merge2_dedup(a: &[(Value, RowId)], b: &[(Value, RowId)], out: &mut Vec<(Value
             out.push(next);
         }
     }
+}
+
+/// Merge the `(Value, RowId)`-sorted column blocks of `pairs` into one sorted, de-duplicated
+/// vector, where block `b` is `pairs[bounds[b]..bounds[b + 1]]`.
+///
+/// Uses a balanced (tournament) two-way merge: adjacent runs are merged pairwise, then the
+/// results are merged pairwise, halving the run count each round. This is O(n log k) in the
+/// number of blocks `k`, versus the O(n*k) of merging a single growing accumulator against
+/// each block in turn -- the difference matters when a table has many covered columns. Each
+/// `merge2_dedup` drops duplicate pairs, and because merging two de-duplicated sorted runs
+/// leaves any shared pair adjacent, dedup composes correctly across rounds.
+fn merge_sorted_blocks_dedup(pairs: &[(Value, RowId)], bounds: &[usize]) -> Vec<(Value, RowId)> {
+    let k = bounds.len() - 1;
+    debug_assert!(k >= 1);
+
+    // Round 0: merge adjacent block pairs (reading directly from `pairs`); carry any odd
+    // trailing block forward as its own run.
+    let mut runs: Vec<Vec<(Value, RowId)>> = Vec::with_capacity(k.div_ceil(2));
+    let mut b = 0;
+    while b < k {
+        if b + 1 < k {
+            let (left, right) = (
+                &pairs[bounds[b]..bounds[b + 1]],
+                &pairs[bounds[b + 1]..bounds[b + 2]],
+            );
+            let mut run = Vec::with_capacity(left.len() + right.len());
+            merge2_dedup(left, right, &mut run);
+            runs.push(run);
+            b += 2;
+        } else {
+            runs.push(pairs[bounds[b]..bounds[b + 1]].to_vec());
+            b += 1;
+        }
+    }
+
+    // Remaining rounds: merge the runs pairwise until a single run is left.
+    while runs.len() > 1 {
+        let mut next: Vec<Vec<(Value, RowId)>> = Vec::with_capacity(runs.len().div_ceil(2));
+        let mut i = 0;
+        while i < runs.len() {
+            if i + 1 < runs.len() {
+                let mut run = Vec::with_capacity(runs[i].len() + runs[i + 1].len());
+                merge2_dedup(&runs[i], &runs[i + 1], &mut run);
+                next.push(run);
+                i += 2;
+            } else {
+                next.push(mem::take(&mut runs[i]));
+                i += 1;
+            }
+        }
+        runs = next;
+    }
+
+    runs.pop().unwrap_or_default()
 }
 
 impl ColumnIndex {
