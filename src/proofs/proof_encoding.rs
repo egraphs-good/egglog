@@ -635,7 +635,6 @@ impl<'a> ProofInstrumentor<'a> {
         let mut uf_queries = vec![];
         let mut leader_vars: Vec<String> = vec![];
         let mut bool_neq_exprs = vec![];
-        let mut uf_proof_vars: Vec<Option<String>> = vec![];
 
         for (i, ty) in input.iter().enumerate() {
             if ty.is_eq_sort() {
@@ -658,7 +657,6 @@ impl<'a> ProofInstrumentor<'a> {
                 leader_vars.push(leader_var);
             } else {
                 leader_vars.push(child(i));
-                uf_proof_vars.push(None);
             }
         }
 
