@@ -252,6 +252,10 @@ impl EGraph {
             .run_rules(&action_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
+        if crate::size_cap_active() {
+            crate::sync_size_estimate(self.num_tuples());
+        }
+
         // Step 5: combine the reports
         let mut query_report = RunReport::singleton(ruleset, query_iter_report);
         let mut action_report = RunReport::singleton(ruleset, action_iter_report);
@@ -452,12 +456,10 @@ mod test {
             );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
-            assert!(
-                report
-                    .search_and_apply_time_per_rule
-                    .keys()
-                    .all(|k| k.starts_with("test-rule"))
-            );
+            assert!(report
+                .search_and_apply_time_per_rule
+                .keys()
+                .all(|k| k.starts_with("test-rule")));
             assert_eq!(
                 report.merge_time_per_ruleset.keys().collect::<Vec<_>>(),
                 [&"test".into()]

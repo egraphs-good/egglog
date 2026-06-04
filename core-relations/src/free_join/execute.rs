@@ -2096,8 +2096,9 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
 
 /// The cap on total e-graph size. `usize::MAX` disables the cap.
 pub static SIZE_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Running estimate of the total e-graph size: seeded with the actual size when
-/// the cap is armed, then bumped by inserts during application.
+/// Running estimate of the total e-graph size: resynced to the actual size when
+/// the cap is armed and after every iteration's rebuild, and bumped by inserts
+/// (an upper bound) in between.
 pub static SIZE_ESTIMATE: AtomicUsize = AtomicUsize::new(0);
 
 /// Set the cap on total e-graph size and reset the running estimate (seed it

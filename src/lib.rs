@@ -41,7 +41,8 @@ use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{
-    BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap, sync_size_estimate,
+    BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap, size_cap_active,
+    sync_size_estimate,
 };
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
@@ -983,6 +984,10 @@ impl EGraph {
             .backend
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
+
+        if size_cap_active() {
+            sync_size_estimate(self.num_tuples());
+        }
 
         Ok(RunReport::singleton(ruleset, iteration_report))
     }
