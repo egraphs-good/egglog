@@ -2084,32 +2084,41 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
 // ---------------------------------------------------------------------------
 // Size cap
 //
-// A *mid-iteration* bound on how much an e-graph may grow. `run_rule_set`
+// A *mid-iteration* bound on the total size of the e-graph. `run_rule_set`
 // applies all matches in batches; with a cap set, it stops applying (and halts
-// the join via `ExecutionState::trigger_early_stop`) once the budget is spent.
-//
-// The budget is measured in *applied action rows* weighted by how many rows
-// each action inserts (`action_enode_bound`). True net e-node count is only
-// known at table-merge time (iteration boundary), too late to stop a single
-// exploding iteration, so we use applied rows as a per-batch proxy. Applied
-// rows over-count net nodes (duplicate terms, congruence).
+// the join via `ExecutionState::trigger_early_stop`) once the running size
+// estimate reaches the cap.
 //
 // State is process-global so the single counter is contention-free (one atomic
-// add per batch, not per row). The cap is cumulative across `run_rule_set`
-// calls (reset only by `set_action_row_cap`) so it bounds *total* growth over a
-// whole schedule, not per-iteration growth.
+// add per batch, not per row). It persists across `run_rule_set` calls until
+// the cap is cleared via `set_action_row_cap(usize::MAX)`.
 // ---------------------------------------------------------------------------
 
-/// The cumulative budget on applied action rows. `usize::MAX` disables the cap.
-pub static ACTION_ROW_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Rows applied since the cap was last set via [`set_action_row_cap`].
-pub static ACTION_ROWS_APPLIED: AtomicUsize = AtomicUsize::new(0);
+/// The cap on total e-graph size. `usize::MAX` disables the cap.
+pub static SIZE_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Running estimate of the total e-graph size: seeded with the actual size when
+/// the cap is armed, then bumped by inserts during application.
+pub static SIZE_ESTIMATE: AtomicUsize = AtomicUsize::new(0);
 
-/// Set the cumulative cap on applied action rows and reset the running total.
-/// Pass `usize::MAX` to disable.
+/// Set the cap on total e-graph size and reset the running estimate (seed it
+/// with the actual size via `sync_size_estimate`). Pass `usize::MAX` to disable.
 pub fn set_action_row_cap(cap: usize) {
-    ACTION_ROW_CAP.store(cap, std::sync::atomic::Ordering::Relaxed);
-    ACTION_ROWS_APPLIED.store(0, std::sync::atomic::Ordering::Relaxed);
+    SIZE_CAP.store(cap, std::sync::atomic::Ordering::Relaxed);
+    SIZE_ESTIMATE.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether a size cap is currently active. Used by the backend to avoid
+/// computing the actual size when uncapped.
+pub fn size_cap_active() -> bool {
+    SIZE_CAP.load(std::sync::atomic::Ordering::Relaxed) != usize::MAX
+}
+
+/// Resync the running size estimate to the actual e-graph size (e.g. to seed it
+/// when the cap is armed). No-op if uncapped.
+pub fn sync_size_estimate(actual_size: usize) {
+    if size_cap_active() {
+        SIZE_ESTIMATE.store(actual_size, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// The number of row-inserting instructions in an action -- an upper bound on
@@ -2139,7 +2148,7 @@ impl MatchCounter {
         let n_ids = rule_set.actions.n_ids();
         let mut matches = IdVec::with_capacity(n_ids);
         matches.resize_with(n_ids, || CachePadded::new(AtomicUsize::new(0)));
-        let cap = ACTION_ROW_CAP.load(std::sync::atomic::Ordering::Relaxed);
+        let cap = SIZE_CAP.load(std::sync::atomic::Ordering::Relaxed);
         let mut enode_bounds = IdVec::with_capacity(if cap == usize::MAX { 0 } else { n_ids });
         if cap != usize::MAX {
             enode_bounds.resize_with(n_ids, || 0usize);
@@ -2159,7 +2168,7 @@ impl MatchCounter {
         if self.cap != usize::MAX {
             let added = by * self.enode_bounds[action];
             if added > 0 {
-                ACTION_ROWS_APPLIED.fetch_add(added, std::sync::atomic::Ordering::Relaxed);
+                SIZE_ESTIMATE.fetch_add(added, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -2167,7 +2176,7 @@ impl MatchCounter {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)
     }
     fn over_cap(&self) -> bool {
-        ACTION_ROWS_APPLIED.load(std::sync::atomic::Ordering::Relaxed) >= self.cap
+        SIZE_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed) >= self.cap
     }
 
     /// The batch size to flush at (size cap). With no cap this is
@@ -2179,7 +2188,7 @@ impl MatchCounter {
         if self.cap == usize::MAX {
             return VAR_BATCH_SIZE;
         }
-        let total = ACTION_ROWS_APPLIED.load(std::sync::atomic::Ordering::Relaxed);
+        let total = SIZE_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed);
         let remaining = self.cap.saturating_sub(total);
         let threads = rayon::current_num_threads().max(1);
         (remaining / (threads * 2)).clamp(1, VAR_BATCH_SIZE)

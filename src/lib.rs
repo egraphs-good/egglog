@@ -40,7 +40,9 @@ use core::CoreActionContext;
 use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
-pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap};
+pub use core_relations::{
+    BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap, sync_size_estimate,
+};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
@@ -1278,6 +1280,7 @@ impl EGraph {
             ResolvedNCommand::RunSchedule(sched, size_limit) => {
                 if let Some(limit) = size_limit {
                     set_action_row_cap(limit);
+                    sync_size_estimate(self.num_tuples());
                 }
                 let result = self.run_schedule(&sched);
                 if size_limit.is_some() {
