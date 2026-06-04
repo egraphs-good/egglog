@@ -16,6 +16,7 @@ use indexmap::map::Entry;
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
+use smallvec::SmallVec;
 
 use crate::{
     OffsetRange, Subset,
@@ -335,55 +336,58 @@ impl IndexBase for ColumnIndex {
     /// then build each key's subset with a single pre-sized allocation. Compared to `merge_rows`,
     /// this eliminates the doubling memmoves from `push_vec` that occur in the row-at-a-time `add_row` path.
     ///
-    /// Supports multiple columns (e.g. rebuild_index covering all value columns): pairs from
-    /// all columns are merged into one sorted list, so each value maps to the union of rows
-    /// containing it in any of the covered columns.
+    /// Supports multiple columns (e.g. rebuild_index covering all value columns): each value
+    /// maps to the union of rows containing it in any of the covered columns.
     fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
-        let n = table.all().size() * cols.len();
-
-        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
+        // Collect each column into its own contiguous block, still in RowId-ascending scan
+        // order. `bounds[b]..bounds[b + 1]` delimits column `b`'s block; the number of columns
+        // is tiny, so it stays inline.
+        let rows = subset.size();
+        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(rows * cols.len());
+        let mut bounds: SmallVec<[usize; 8]> = SmallVec::new();
+        bounds.push(0);
         for &col in cols {
             table.for_each_col(subset, col, &mut |row_id, val| {
                 pairs.push((val, row_id));
             });
+            bounds.push(pairs.len());
         }
 
-        radix_sort_pairs_by_value(&mut pairs);
-        if cols.len() > 1 {
-            // Multi-column collection is column-major, so a stable value sort
-            // can leave each value's rows out of order across columns.
-            for group in pairs.chunk_by_mut(|a, b| a.0 == b.0) {
-                group.sort_unstable_by_key(|&(_, row)| row);
-            }
-            // Remove duplicates (same value in multiple columns of the same row).
-            pairs.dedup();
+        // Value-only sort each block. Since each block arrives RowId-ascending and the sort is
+        // stable, the block ends up ordered by (Value, RowId) without any RowId pass.
+        let mut scratch: Vec<(Value, RowId)> =
+            vec![(Value::new_const(0), RowId::new_const(0)); rows];
+        for b in 0..cols.len() {
+            radix_sort_slice_by_value(&mut pairs[bounds[b]..bounds[b + 1]], &mut scratch);
         }
 
-        let mut i = 0;
-        while i < pairs.len() {
-            let key = pairs[i].0;
-            let start = i;
-            let mut first = pairs[i].1;
-            let mut last = pairs[i].1;
-            while i < pairs.len() && pairs[i].0 == key {
-                last = cmp::max(last, pairs[i].1);
-                first = cmp::min(first, pairs[i].1);
-                i += 1;
-            }
-            let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
-            let count = i - start;
-            let buffered = if last.rep() - first.rep() == (count - 1) as u32 {
-                // If the row ids are contiguous, we can represent the subset as a dense range
-                // to avoid allocations
-                BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
-            } else {
-                let bv = shard
-                    .subsets
-                    .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
-                BufferedSubset::Sparse(bv)
-            };
-            shard.table.insert(key, buffered);
+        if cols.len() == 1 {
+            // A single column needs no merge: its block is already (Value, RowId)-sorted, and a
+            // row has one value per column so there are no duplicates.
+            self.build_subsets_from_sorted(&pairs);
+            return;
         }
+
+        // Multiple columns: fold the sorted blocks with repeated two-way merges (a
+        // single-comparison inner loop, which beats a k-way min-scan for tiny column counts).
+        // Each merge drops duplicate (Value, RowId) pairs -- a value appearing in several of a
+        // row's columns -- so the result is (Value, RowId)-sorted and unique without ever
+        // sorting by RowId. `cur` accumulates the running merge; `tmp` is only allocated when
+        // there are more than two columns.
+        let mut cur: Vec<(Value, RowId)> = Vec::with_capacity(pairs.len());
+        merge2_dedup(
+            &pairs[bounds[0]..bounds[1]],
+            &pairs[bounds[1]..bounds[2]],
+            &mut cur,
+        );
+        if cols.len() > 2 {
+            let mut tmp: Vec<(Value, RowId)> = Vec::with_capacity(pairs.len());
+            for b in 2..cols.len() {
+                merge2_dedup(&cur, &pairs[bounds[b]..bounds[b + 1]], &mut tmp);
+                mem::swap(&mut cur, &mut tmp);
+            }
+        }
+        self.build_subsets_from_sorted(&cur);
     }
 }
 
@@ -424,37 +428,37 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
     n.wait()
 }
 
-/// Adaptive LSB radix sort for (Value, RowId) pairs, sorting by the Value field.
-///
-/// Chooses 1–4 passes of 8-bit radix sort based on the observed maximum Value, so that
-/// only the actually-used bit range is processed.  Within each Value group the original
-/// order (scan order = RowId-ascending) is preserved by the LSB stability guarantee,
-/// satisfying the add_row_sorted invariant without an explicit RowId sort.
-///
-/// Falls back to `sort_unstable()` for n < 64 where radix setup overhead dominates.
-fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
-    let n = pairs.len();
-    if n < 64 {
-        pairs.sort_unstable();
-        return;
-    }
-
-    let max_val = pairs.iter().map(|&(v, _)| v.rep()).max().unwrap_or(0);
-    let n_passes: u32 = if max_val < 256 {
+/// Number of 8-bit radix passes needed to cover values up to `max`.
+fn radix_passes_for(max: u32) -> u32 {
+    if max < 256 {
         1
-    } else if max_val < 65_536 {
+    } else if max < 65_536 {
         2
-    } else if max_val < (1 << 24) {
+    } else if max < (1 << 24) {
         3
     } else {
         4
-    };
+    }
+}
 
-    let null_pair = (Value::new_const(0), RowId::new_const(0));
-    let mut buf: Vec<(Value, RowId)> = vec![null_pair; n];
+/// Adaptive value-only LSB radix sort of a single (Value, RowId) block, in place.
+///
+/// `scratch` must be at least `data.len()` long; it is used as ping-pong space. Because the
+/// sort is stable and `data` arrives in RowId-ascending order, the result is ordered by
+/// (Value, RowId). The multi-column rebuild path sorts each column's block this way before
+/// merging, so no explicit RowId sort is ever needed.
+fn radix_sort_slice_by_value(data: &mut [(Value, RowId)], scratch: &mut [(Value, RowId)]) {
+    let n = data.len();
+    if n < 64 {
+        data.sort_unstable();
+        return;
+    }
 
-    let mut src: &mut Vec<(Value, RowId)> = pairs;
-    let mut dst: &mut Vec<(Value, RowId)> = &mut buf;
+    let max_val = data.iter().map(|&(v, _)| v.rep()).max().unwrap_or(0);
+    let n_passes = radix_passes_for(max_val);
+
+    let mut src: &mut [(Value, RowId)] = data;
+    let mut dst: &mut [(Value, RowId)] = &mut scratch[..n];
 
     for pass in 0..n_passes {
         let shift = pass * 8;
@@ -484,11 +488,43 @@ fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
         core::mem::swap(&mut src, &mut dst);
     }
 
-    // After `n_passes` swaps, `src` points to the sorted data.
-    // Odd passes: src == buf.as_mut_ptr(); copy back to pairs.
-    // Even passes: src == pairs.as_mut_ptr(); already in place.
+    // After `n_passes` swaps, `src` points to the sorted data. If odd, that is `scratch`;
+    // copy it back into `data` (which is now `dst`).
     if n_passes % 2 == 1 {
         dst.copy_from_slice(src);
+    }
+}
+
+/// Merge two (Value, RowId)-sorted slices into `out` (cleared first), dropping any pair equal
+/// to the previously emitted one.
+///
+/// Inputs `a` and `b` must each be sorted by (Value, RowId). Duplicates arise when one value
+/// appears in several of a row's columns; the `last`-element check removes them, so the
+/// result is sorted and duplicate-free with no further RowId sort.
+fn merge2_dedup(a: &[(Value, RowId)], b: &[(Value, RowId)], out: &mut Vec<(Value, RowId)>) {
+    out.clear();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        let next = if a[i] <= b[j] {
+            i += 1;
+            a[i - 1]
+        } else {
+            j += 1;
+            b[j - 1]
+        };
+        if out.last() != Some(&next) {
+            out.push(next);
+        }
+    }
+    for &next in &a[i..] {
+        if out.last() != Some(&next) {
+            out.push(next);
+        }
+    }
+    for &next in &b[j..] {
+        if out.last() != Some(&next) {
+            out.push(next);
+        }
     }
 }
 
@@ -503,6 +539,37 @@ impl ColumnIndex {
             });
             ColumnIndex { shard_data, shards }
         })
+    }
+
+    /// Build each key's subset from `pairs`, which must be sorted by (Value, RowId) and
+    /// free of duplicate (Value, RowId) entries. Each contiguous run of equal values
+    /// becomes one subset, pre-sized from the run length.
+    fn build_subsets_from_sorted(&mut self, pairs: &[(Value, RowId)]) {
+        let mut i = 0;
+        while i < pairs.len() {
+            let key = pairs[i].0;
+            let start = i;
+            let mut first = pairs[i].1;
+            let mut last = pairs[i].1;
+            while i < pairs.len() && pairs[i].0 == key {
+                last = cmp::max(last, pairs[i].1);
+                first = cmp::min(first, pairs[i].1);
+                i += 1;
+            }
+            let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
+            let count = i - start;
+            let buffered = if last.rep() - first.rep() == (count - 1) as u32 {
+                // If the row ids are contiguous, we can represent the subset as a dense range
+                // to avoid allocations
+                BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
+            } else {
+                let bv = shard
+                    .subsets
+                    .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
+                BufferedSubset::Sparse(bv)
+            };
+            shard.table.insert(key, buffered);
+        }
     }
 
     /// Pre-reserve capacity in each shard's HashMap for `n` rows total.
