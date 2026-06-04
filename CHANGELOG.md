@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Pass user-defined commands through term encoding instead of panicking. Running plain term encoding (`--term-encoding`, proofs off) on a program containing a user-defined command no longer crashes; the command is forwarded to whatever registered it. Proof generation still rejects user-defined commands up front, so the pass-through only affects proofs-off term encoding.
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.

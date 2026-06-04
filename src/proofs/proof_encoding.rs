@@ -1252,7 +1252,14 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::UserDefined(..) => {
-                panic!("User defined commands unsupported in term encoding");
+                // Pass through unchanged: term encoding has nothing to
+                // instrument here — the user-defined command is dispatched
+                // later by whatever registered it (e.g. egglog-experimental's
+                // run-schedule / multi-extract). When proofs are actually being
+                // generated, `command_supports_proof_encoding` rejects this case
+                // up front (ProofEncodingUnsupportedReason::UserDefinedCommand),
+                // so this path is only hit in plain term encoding.
+                res.push(command.to_command().make_unresolved());
             }
         }
     }
