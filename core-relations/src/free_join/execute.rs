@@ -911,8 +911,8 @@ impl<'a> JoinState<'a> {
     ) where
         'a: 'buf,
     {
-        if log::log_enabled!(log::Level::Debug) {
-            log::debug!("Starting running query stages:\n{stages:#?}");
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("Starting running query stages:\n{stages:#?}");
         }
         for (_, node) in binding_info.subsets.iter() {
             if node.subset.is_empty() {

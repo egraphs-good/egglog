@@ -1226,7 +1226,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
-        log::debug!("Term encoding for {command}");
+        log::trace!("Term encoding for {command}");
         match &command {
             ResolvedNCommand::Sort {
                 span,
