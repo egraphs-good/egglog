@@ -89,7 +89,9 @@ jobs:
           - rust_rule_insert_loop
           - rust_rule_tableaction_hot_path
           - factoring-multisets
-          - math
+          # CodSpeed filters by substring; `math` would also run
+          # `math-microbenchmark` and `proof_testing_math`.
+          - math_normal
           - proof_testing_math
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
