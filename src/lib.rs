@@ -2169,14 +2169,15 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// `true` for a regular seminaive rule; `false` for any of:
-    /// (a) global one-shots (`eval`, `check`, top-level actions),
-    /// (b) rules with the `:naive` option,
-    /// (c) `EGraph::seminaive == false` (the global opt-out).
-    /// Combined with whether we're in the query or action phase, this
-    /// picks the [`crate::Context`] used to select a primitive's
-    /// context-specific runtime id at each call site.
-    seminaive: bool,
+    /// Selects the primitive [`crate::Context`] for this rule (combined
+    /// with the query/action phase). `true` picks the seminaive-safe
+    /// `Pure`/`Write` contexts; `false` widens to `Read`/`Full` so
+    /// primitives may read the database. It is named after the *context*,
+    /// not the evaluation strategy: it is `false` for global one-shots
+    /// (`eval`, `check`), `:naive` rules, `EGraph::seminaive == false`,
+    /// and `:unsafe-seminaive` rules — the last of which still evaluate
+    /// seminaive-ly but want the permissive contexts.
+    context_seminaive: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -2184,13 +2185,13 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
-        seminaive: bool,
+        context_seminaive: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
-            seminaive,
+            context_seminaive,
             entries: Default::default(),
         }
     }
@@ -2202,7 +2203,7 @@ impl<'a> BackendRule<'a> {
     /// this to [`Context::Read`] so reads from primitives are
     /// admissible.
     fn query_context(&self) -> crate::Context {
-        if self.seminaive {
+        if self.context_seminaive {
             crate::Context::Pure
         } else {
             crate::Context::Read
@@ -2215,7 +2216,7 @@ impl<'a> BackendRule<'a> {
     /// widens to [`Context::Full`] so writes and reads are both
     /// admissible.
     fn action_context(&self) -> crate::Context {
-        if self.seminaive {
+        if self.context_seminaive {
             crate::Context::Write
         } else {
             crate::Context::Full
