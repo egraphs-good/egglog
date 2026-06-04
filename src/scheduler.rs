@@ -252,8 +252,9 @@ impl EGraph {
             .run_rules(&action_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        if crate::size_cap_active() {
-            crate::sync_size_estimate(self.num_tuples());
+        if self.size_cap_active() {
+            let n = self.num_tuples();
+            self.sync_size_estimate(n);
         }
 
         // Step 5: combine the reports

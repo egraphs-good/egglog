@@ -309,6 +309,9 @@ pub struct Database {
     /// This is primarily used to determine whether or not to attempt to do some operations in
     /// parallel.
     total_size_estimate: usize,
+    /// Per-database size-cap state (see [`execute::SizeCap`]). Shared via `Arc`
+    /// into the `MatchCounter` so the parallel action buffers can bump/poll it.
+    size_cap: Arc<execute::SizeCap>,
 }
 
 impl Database {
@@ -340,6 +343,22 @@ impl Database {
 
     pub fn base_values(&self) -> &BaseValues {
         &self.base_values
+    }
+
+    pub fn set_size_cap(&self, cap: usize) {
+        self.size_cap.set(cap);
+    }
+
+    pub fn sync_size_estimate(&self, actual_size: usize) {
+        self.size_cap.sync(actual_size);
+    }
+
+    pub fn size_cap_active(&self) -> bool {
+        self.size_cap.active()
+    }
+
+    pub fn size_cap_hit(&self) -> bool {
+        self.size_cap.hit()
     }
 
     pub fn base_values_mut(&mut self) -> &mut BaseValues {

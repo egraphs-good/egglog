@@ -28,7 +28,6 @@ pub use common::Value;
 pub use containers::{ContainerRebuildSummary, ContainerValue, ContainerValueId, ContainerValues};
 pub use free_join::{
     AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, TableId, Variable,
-    execute::{set_action_row_cap, size_cap_active, size_cap_hit, sync_size_estimate},
     make_external_func, plan::PlanStrategy,
 };
 pub use hash_index::TupleIndex;

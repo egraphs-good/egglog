@@ -3,7 +3,10 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, OnceLock, RwLock, atomic::AtomicBool, atomic::AtomicUsize},
+    sync::{
+        Arc, OnceLock, RwLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use crate::{
@@ -349,7 +352,7 @@ impl Database {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
-        let match_counter = Arc::new(MatchCounter::new(rule_set));
+        let match_counter = Arc::new(MatchCounter::new(rule_set, self.size_cap.clone()));
 
         let search_and_apply_timer = Instant::now();
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
@@ -2081,56 +2084,71 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Size cap
-//
-// A *mid-iteration* bound on the total size of the e-graph. `run_rule_set`
-// applies all matches in batches; with a cap set, it stops applying (and halts
-// the join via `ExecutionState::trigger_early_stop`) once the running size
-// estimate reaches the cap.
-//
-// State is process-global so the single counter is contention-free (one atomic
-// add per batch, not per row). It persists across `run_rule_set` calls until
-// the cap is cleared via `set_action_row_cap(usize::MAX)`.
-// ---------------------------------------------------------------------------
-
-/// The cap on total e-graph size. `usize::MAX` disables the cap.
-pub static SIZE_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Running estimate of the total e-graph size: resynced to the actual size when
-/// the cap is armed and after every iteration's rebuild, and bumped by inserts
-/// (an upper bound) in between.
-pub static SIZE_ESTIMATE: AtomicUsize = AtomicUsize::new(0);
-/// Set once the estimate first crosses the cap. The schedule loops poll this
-/// (`size_cap_hit`) and terminate the whole run-schedule, rather than
-/// stopping a single iteration mid-way and continuing (which would silently
-/// drop the unapplied matches of that iteration).
-pub static SIZE_CAP_HIT: AtomicBool = AtomicBool::new(false);
-
-/// Set the cap on total e-graph size and reset the running estimate (seed it
-/// with the actual size via `sync_size_estimate`). Pass `usize::MAX` to disable.
-pub fn set_action_row_cap(cap: usize) {
-    SIZE_CAP.store(cap, std::sync::atomic::Ordering::Relaxed);
-    SIZE_ESTIMATE.store(0, std::sync::atomic::Ordering::Relaxed);
-    SIZE_CAP_HIT.store(false, std::sync::atomic::Ordering::Relaxed);
+/// Per-`Database` size-cap state, shared with the `MatchCounter` (and thus the
+/// parallel action buffers) via `Arc`.
+pub(crate) struct SizeCap {
+    /// The cap on total e-graph size. `usize::MAX` disables the cap.
+    cap: AtomicUsize,
+    /// Running estimate of total e-graph size: resynced to the actual size when
+    /// armed and after every iteration's rebuild, bumped by inserts (an upper
+    /// bound) in between.
+    estimate: AtomicUsize,
+    /// Set once the estimate first crosses the cap, so the schedule loops stop
+    /// the whole run-schedule.
+    hit: AtomicBool,
 }
 
-/// Whether the estimate has crossed the cap (so the schedule should stop). Stays
-/// set until the cap is re-armed via `set_action_row_cap`.
-pub fn size_cap_hit() -> bool {
-    SIZE_CAP_HIT.load(std::sync::atomic::Ordering::Relaxed)
+impl Default for SizeCap {
+    fn default() -> Self {
+        Self {
+            cap: AtomicUsize::new(usize::MAX),
+            estimate: AtomicUsize::new(0),
+            hit: AtomicBool::new(false),
+        }
+    }
 }
 
-/// Whether a size cap is currently active. Used by the backend to avoid
-/// computing the actual size when uncapped.
-pub fn size_cap_active() -> bool {
-    SIZE_CAP.load(std::sync::atomic::Ordering::Relaxed) != usize::MAX
-}
+impl SizeCap {
+    /// Set the cap on total e-graph size and reset the running estimate (seed it
+    /// with the actual size via [`SizeCap::sync`]). Pass `usize::MAX` to disable.
+    pub(crate) fn set(&self, cap: usize) {
+        self.cap.store(cap, Ordering::Relaxed);
+        self.estimate.store(0, Ordering::Relaxed);
+        self.hit.store(false, Ordering::Relaxed);
+    }
 
-/// Resync the running size estimate to the actual e-graph size (e.g. to seed it
-/// when the cap is armed). No-op if uncapped.
-pub fn sync_size_estimate(actual_size: usize) {
-    if size_cap_active() {
-        SIZE_ESTIMATE.store(actual_size, std::sync::atomic::Ordering::Relaxed);
+    /// Whether a size cap is currently active.
+    pub(crate) fn active(&self) -> bool {
+        self.cap.load(Ordering::Relaxed) != usize::MAX
+    }
+
+    /// Resync the running estimate to the actual e-graph size.
+    pub(crate) fn sync(&self, actual_size: usize) {
+        self.estimate.store(actual_size, Ordering::Relaxed);
+    }
+
+    /// Whether the estimate has crossed the cap (sticky until re-armed via
+    /// [`SizeCap::set`]).
+    pub(crate) fn hit(&self) -> bool {
+        self.hit.load(Ordering::Relaxed)
+    }
+
+    fn cap_val(&self) -> usize {
+        self.cap.load(Ordering::Relaxed)
+    }
+    fn estimate_val(&self) -> usize {
+        self.estimate.load(Ordering::Relaxed)
+    }
+    fn add(&self, n: usize) {
+        self.estimate.fetch_add(n, Ordering::Relaxed);
+    }
+    /// Whether the estimate is at/over the cap; records the sticky hit flag.
+    fn over(&self) -> bool {
+        let over = self.estimate_val() >= self.cap_val();
+        if over {
+            self.hit.store(true, Ordering::Relaxed);
+        }
+        over
     }
 }
 
@@ -2153,17 +2171,17 @@ fn action_enode_bound(instrs: &[Instr]) -> usize {
 struct MatchCounter {
     matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
     enode_bounds: IdVec<ActionId, usize>,
-    cap: usize,
+    size_cap: Arc<SizeCap>,
 }
 
 impl MatchCounter {
-    fn new(rule_set: &RuleSet) -> Self {
+    fn new(rule_set: &RuleSet, size_cap: Arc<SizeCap>) -> Self {
         let n_ids = rule_set.actions.n_ids();
         let mut matches = IdVec::with_capacity(n_ids);
         matches.resize_with(n_ids, || CachePadded::new(AtomicUsize::new(0)));
-        let cap = SIZE_CAP.load(std::sync::atomic::Ordering::Relaxed);
-        let mut enode_bounds = IdVec::with_capacity(if cap == usize::MAX { 0 } else { n_ids });
-        if cap != usize::MAX {
+        let capped = size_cap.active();
+        let mut enode_bounds = IdVec::with_capacity(if capped { n_ids } else { 0 });
+        if capped {
             enode_bounds.resize_with(n_ids, || 0usize);
             for (action, info) in rule_set.actions.iter() {
                 enode_bounds[action] = action_enode_bound(&info.instrs);
@@ -2172,28 +2190,24 @@ impl MatchCounter {
         Self {
             matches,
             enode_bounds,
-            cap,
+            size_cap,
         }
     }
 
     fn inc_matches(&self, action: ActionId, by: usize) {
-        self.matches[action].fetch_add(by, std::sync::atomic::Ordering::Relaxed);
-        if self.cap != usize::MAX {
+        self.matches[action].fetch_add(by, Ordering::Relaxed);
+        if self.size_cap.active() {
             let added = by * self.enode_bounds[action];
             if added > 0 {
-                SIZE_ESTIMATE.fetch_add(added, std::sync::atomic::Ordering::Relaxed);
+                self.size_cap.add(added);
             }
         }
     }
     fn read_matches(&self, action: ActionId) -> usize {
-        self.matches[action].load(std::sync::atomic::Ordering::Acquire)
+        self.matches[action].load(Ordering::Acquire)
     }
     fn over_cap(&self) -> bool {
-        let over = SIZE_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed) >= self.cap;
-        if over {
-            SIZE_CAP_HIT.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        over
+        self.size_cap.over()
     }
 
     /// The batch size to flush at (size cap). With no cap this is
@@ -2202,11 +2216,13 @@ impl MatchCounter {
     /// can't collectively overshoot by much: bound total in-flight (~threads ×
     /// batch) to the remaining budget.
     fn batch_size(&self) -> usize {
-        if self.cap == usize::MAX {
+        if !self.size_cap.active() {
             return VAR_BATCH_SIZE;
         }
-        let total = SIZE_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed);
-        let remaining = self.cap.saturating_sub(total);
+        let remaining = self
+            .size_cap
+            .cap_val()
+            .saturating_sub(self.size_cap.estimate_val());
         let threads = rayon::current_num_threads().max(1);
         (remaining / (threads * 2)).clamp(1, VAR_BATCH_SIZE)
     }

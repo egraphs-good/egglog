@@ -40,10 +40,7 @@ use core::CoreActionContext;
 use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
-pub use core_relations::{
-    BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap, size_cap_active,
-    size_cap_hit, sync_size_estimate,
-};
+pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
@@ -897,7 +894,7 @@ impl EGraph {
                     let rec = self.run_schedule(sched)?;
                     let can_stop = rec.can_stop;
                     report.union(rec);
-                    if can_stop || size_cap_hit() {
+                    if can_stop || self.size_cap_hit() {
                         break;
                     }
                 }
@@ -909,7 +906,7 @@ impl EGraph {
                     let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
-                    if !updated || size_cap_hit() {
+                    if !updated || self.size_cap_hit() {
                         break;
                     }
                 }
@@ -919,7 +916,7 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report.union(self.run_schedule(sched)?);
-                    if size_cap_hit() {
+                    if self.size_cap_hit() {
                         break;
                     }
                 }
@@ -988,8 +985,9 @@ impl EGraph {
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        if size_cap_active() {
-            sync_size_estimate(self.num_tuples());
+        if self.size_cap_active() {
+            let n = self.num_tuples();
+            self.sync_size_estimate(n);
         }
 
         Ok(RunReport::singleton(ruleset, iteration_report))
@@ -1287,12 +1285,13 @@ impl EGraph {
             }
             ResolvedNCommand::RunSchedule(sched, size_limit) => {
                 if let Some(limit) = size_limit {
-                    set_action_row_cap(limit);
-                    sync_size_estimate(self.num_tuples());
+                    self.set_size_cap(limit);
+                    let n = self.num_tuples();
+                    self.sync_size_estimate(n);
                 }
                 let result = self.run_schedule(&sched);
                 if size_limit.is_some() {
-                    set_action_row_cap(usize::MAX);
+                    self.set_size_cap(usize::MAX);
                 }
                 let report = result?;
                 log::info!("Ran schedule {sched}.");
@@ -1811,6 +1810,22 @@ impl EGraph {
             .values()
             .map(|f| self.backend.table_size(f.backend_id))
             .sum()
+    }
+
+    pub fn set_size_cap(&self, cap: usize) {
+        self.backend.set_size_cap(cap);
+    }
+
+    pub fn sync_size_estimate(&self, actual_size: usize) {
+        self.backend.sync_size_estimate(actual_size);
+    }
+
+    pub fn size_cap_active(&self) -> bool {
+        self.backend.size_cap_active()
+    }
+
+    pub fn size_cap_hit(&self) -> bool {
+        self.backend.size_cap_hit()
     }
 
     /// Returns a sort based on the type.
