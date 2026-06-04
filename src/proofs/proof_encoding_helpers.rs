@@ -511,10 +511,10 @@ pub(crate) fn command_supports_proof_encoding(
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
-    if let crate::ast::GenericCommand::Rule { rule } = command {
-        if rule.unsafe_seminaive {
-            return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
-        }
+    if let crate::ast::GenericCommand::Rule { rule } = command
+        && rule.unsafe_seminaive
+    {
+        return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
     }
 
     // Check all expressions for primitives without validators

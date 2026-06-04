@@ -62,5 +62,7 @@ type-constraints-tests.egg
 typed_primitive_unstable_app.egg
 typeinfer.egg
 uf-extraction.egg
+unsafe-seminaive-read-prim.egg
+unsafe-seminaive.egg
 unstable-fn.egg
 vec.egg
