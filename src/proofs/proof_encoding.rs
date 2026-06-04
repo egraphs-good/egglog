@@ -643,8 +643,16 @@ impl<'a> ProofInstrumentor<'a> {
                 let uf_function_name = self.uf_function_name(ty.name());
                 let ci = child(i);
 
-                uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
-                uf_proof_vars.push(None);
+                if self.egraph.proof_state.proofs_enabled {
+                    // UF function index returns a Pair(leader, proof); one lookup gives both
+                    let pair_var = self.fresh_var();
+                    uf_queries.push(format!(
+                        "(= {pair_var} ({uf_function_name} {ci}))
+                         (= {leader_var} (pair-first {pair_var}))"
+                    ));
+                } else {
+                    uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
+                }
 
                 bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
                 leader_vars.push(leader_var);
