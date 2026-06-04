@@ -1050,7 +1050,7 @@ impl EGraph {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
             let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
-            translator.query(query, false);
+            translator.query(query, rule.include_subsumed);
             translator.actions(actions)?;
             translator.build()
         };
@@ -1261,6 +1261,7 @@ impl EGraph {
             ruleset: fresh_ruleset.clone(),
             naive: false,
             no_decomp: false,
+            include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
