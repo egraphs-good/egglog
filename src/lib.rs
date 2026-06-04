@@ -42,7 +42,7 @@ pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{
     BaseValue, ContainerValue, ExecutionState, Value, set_action_row_cap, size_cap_active,
-    sync_size_estimate,
+    size_cap_hit, sync_size_estimate,
 };
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
@@ -897,7 +897,7 @@ impl EGraph {
                     let rec = self.run_schedule(sched)?;
                     let can_stop = rec.can_stop;
                     report.union(rec);
-                    if can_stop {
+                    if can_stop || size_cap_hit() {
                         break;
                     }
                 }
@@ -909,7 +909,7 @@ impl EGraph {
                     let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
-                    if !updated {
+                    if !updated || size_cap_hit() {
                         break;
                     }
                 }
@@ -919,6 +919,9 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report.union(self.run_schedule(sched)?);
+                    if size_cap_hit() {
+                        break;
+                    }
                 }
                 Ok(report)
             }

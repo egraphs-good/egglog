@@ -3,7 +3,7 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize},
+    sync::{Arc, OnceLock, RwLock, atomic::AtomicBool, atomic::AtomicUsize},
 };
 
 use crate::{
@@ -2100,12 +2100,24 @@ pub static SIZE_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// the cap is armed and after every iteration's rebuild, and bumped by inserts
 /// (an upper bound) in between.
 pub static SIZE_ESTIMATE: AtomicUsize = AtomicUsize::new(0);
+/// Set once the estimate first crosses the cap. The schedule loops poll this
+/// (`size_cap_hit`) and terminate the whole run-schedule, rather than
+/// stopping a single iteration mid-way and continuing (which would silently
+/// drop the unapplied matches of that iteration).
+pub static SIZE_CAP_HIT: AtomicBool = AtomicBool::new(false);
 
 /// Set the cap on total e-graph size and reset the running estimate (seed it
 /// with the actual size via `sync_size_estimate`). Pass `usize::MAX` to disable.
 pub fn set_action_row_cap(cap: usize) {
     SIZE_CAP.store(cap, std::sync::atomic::Ordering::Relaxed);
     SIZE_ESTIMATE.store(0, std::sync::atomic::Ordering::Relaxed);
+    SIZE_CAP_HIT.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the estimate has crossed the cap (so the schedule should stop). Stays
+/// set until the cap is re-armed via `set_action_row_cap`.
+pub fn size_cap_hit() -> bool {
+    SIZE_CAP_HIT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether a size cap is currently active. Used by the backend to avoid
@@ -2177,7 +2189,11 @@ impl MatchCounter {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)
     }
     fn over_cap(&self) -> bool {
-        SIZE_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed) >= self.cap
+        let over = SIZE_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed) >= self.cap;
+        if over {
+            SIZE_CAP_HIT.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        over
     }
 
     /// The batch size to flush at (size cap). With no cap this is
