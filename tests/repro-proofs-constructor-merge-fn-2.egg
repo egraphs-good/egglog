@@ -1,0 +1,28 @@
+;; tests that merge function with constructor saturates correctly
+(sort Math)
+
+(constructor MyGt (Math Math) Math)
+(constructor Num (i64) Math)
+
+(function Biggie (Math) Math :merge (MyGt old new))
+
+(let $smol (Num 1))
+(let $med (Num 2))
+(let $big (Num 3))
+(union $smol $med)
+(union $med $big)
+
+(rule ((Num n))
+      ((set (Biggie (Num n)) (Num n))))
+
+(run 1)
+
+(print-function Biggie)
+
+
+(rewrite (MyGt (Num a) (Num b)) (Num (max a b)))
+
+(run 1)
+
+(check (= (Biggie $smol) a)
+       (= a (Num 3)))
