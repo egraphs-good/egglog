@@ -11,10 +11,6 @@ jobs:
   git-size:
     name: Git size budget
     runs-on: ubuntu-latest
-    env:
-      # Initial suggested values. Tune after seeing real PR data.
-      SOFT_LIMIT_BYTES: 524288 # 512 KiB
-      HARD_LIMIT_BYTES: 2097152 # 2 MiB
     steps:
       - uses: actions/checkout@v4
         with:
