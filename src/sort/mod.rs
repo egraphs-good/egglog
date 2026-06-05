@@ -43,6 +43,10 @@ mod r#fn;
 pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
+mod maybe;
+pub use maybe::*;
+mod either;
+pub use either::*;
 mod pair;
 pub use pair::*;
 

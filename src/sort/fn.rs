@@ -99,7 +99,7 @@ impl Presort for FunctionSort {
     }
 
     fn reserved_primitives() -> Vec<&'static str> {
-        vec!["unstable-fn", "unstable-app"]
+        vec!["unstable-fn", "unstable-app", "unstable-if"]
     }
 
     fn make_sort(
@@ -217,6 +217,9 @@ impl Sort for FunctionSort {
 
         register_vec_primitives_for_function(eg, self.clone());
         register_multiset_primitives_for_function(eg, self.clone());
+        register_maybe_primitives_for_function(eg, self.clone());
+        register_if_primitives_for_function(eg, self.clone());
+        register_either_primitives_for_function(eg, self.clone());
     }
 
     fn value_type(&self) -> Option<TypeId> {

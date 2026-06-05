@@ -1,0 +1,12 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Num 1)
+ (late-some-float 1)
+ (merge-bad 1)
+ (merge-close 1)
+ (merge-none 1)
+ (merge-zero 1)
+ (none-float 1)
+ (none-int 1))

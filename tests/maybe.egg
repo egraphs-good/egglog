@@ -1,0 +1,57 @@
+(sort MaybeFloat (Maybe f64))
+(sort MaybeInt (Maybe i64))
+(sort MaybeMaybeInt (Maybe MaybeInt))
+(sort IntToInt (UnstableFn (i64) i64))
+(sort MaybeIntToInt (UnstableFn (MaybeInt) i64))
+
+(function none-float () MaybeFloat :no-merge)
+(set (none-float) (maybe-none))
+(function none-int () MaybeInt :no-merge)
+(set (none-int) (maybe-none))
+
+(check (= (none-float) (maybe-none)))
+(check (= (maybe-some 1.0) (maybe-some 1.0)))
+(check (= 1.0 (maybe-unwrap (maybe-some 1.0))))
+(check (= 2.0 (maybe-unwrap-or (none-float) 2.0)))
+(check (= 7 (maybe-unwrap-or (maybe-some 7) 2)))
+(fail (maybe-unwrap (none-float)))
+
+(datatype Math
+  (Num i64))
+(sort MaybeMath (Maybe Math))
+
+(let $a (Num 1))
+(let $b (Num 1))
+(union $a $b)
+(run 1)
+(check (= (maybe-some $a) (maybe-some $b)))
+
+(function merge-none () MaybeFloat :merge (maybe-f64-merge-with-tol old new 1e-6))
+(set (merge-none) (maybe-none))
+(set (merge-none) (maybe-some 1.0))
+(check (= (merge-none) (maybe-none)))
+
+(function merge-close () MaybeFloat :merge (maybe-f64-merge-with-tol old new 1e-6))
+(set (merge-close) (maybe-some 1.0))
+(set (merge-close) (maybe-some 1.0000005))
+(check (= (merge-close) (maybe-some 1.0)))
+
+(function merge-zero () MaybeFloat :merge (maybe-f64-merge-with-tol old new 1e-6))
+(set (merge-zero) (maybe-some 0.0))
+(set (merge-zero) (maybe-some -0.0))
+(check (= (merge-zero) (maybe-some 0.0)))
+
+(function merge-bad () MaybeFloat :merge (maybe-f64-merge-with-tol old new 1e-6))
+(set (merge-bad) (maybe-some 1.0))
+(fail (set (merge-bad) (maybe-some 2.0)))
+
+(check (= (unstable-maybe-match (maybe-some 2) (unstable-fn "+" 1) 0) 3))
+(check (= (unstable-maybe-match (none-int) (unstable-fn "+" 1) 7) 7))
+(fail (unstable-maybe-match (maybe-some (none-int)) (unstable-fn "maybe-unwrap") 0))
+
+(sort LateF64ToString (UnstableFn (f64) String))
+(sort LateMaybeFloat (Maybe f64))
+
+(function late-some-float () LateMaybeFloat :no-merge)
+(set (late-some-float) (maybe-some 4.0))
+(check (= (unstable-maybe-match (late-some-float) (unstable-fn "to-string") "none") "4.0"))

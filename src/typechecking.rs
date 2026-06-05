@@ -261,8 +261,13 @@ impl EGraph {
         match self.type_info.sorts.entry(name.to_owned()) {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
+                let is_function_sort =
+                    sort.value_type() == Some(std::any::TypeId::of::<FunctionContainer>());
                 e.insert(sort.clone());
-                sort.register_primitives(self);
+                sort.clone().register_primitives(self);
+                if !is_function_sort {
+                    register_if_primitives_for_output(self, sort);
+                }
                 Ok(())
             }
         }

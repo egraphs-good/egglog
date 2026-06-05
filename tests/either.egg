@@ -1,0 +1,33 @@
+(sort IntOrFloat (Either i64 f64))
+(sort I64ToString (UnstableFn (i64) String))
+(sort F64ToString (UnstableFn (f64) String))
+
+(check (= (either-left 20) (either-left 20)))
+(check (= (either-right 1.0) (either-right 1.0)))
+(check (= (either-unwrap-left (either-left 20)) 20))
+(check (= (either-unwrap-right (either-right 1.0)) 1.0))
+(fail (either-unwrap-left (either-right 1.0)))
+(fail (either-unwrap-right (either-left 20)))
+
+(check (= (either-match (either-left 20) (unstable-fn "to-string") (unstable-fn "to-string")) "20"))
+(check (= (either-match (either-right 1.0) (unstable-fn "to-string") (unstable-fn "to-string")) "1.0"))
+
+(sort MaybeInt (Maybe i64))
+(sort IntOrMaybe (Either i64 MaybeInt))
+(sort I64ToI64 (UnstableFn (i64) i64))
+(sort MaybeIntToI64 (UnstableFn (MaybeInt) i64))
+
+(check (= (either-match (either-left 1) (unstable-fn "+" 1) (unstable-fn "maybe-unwrap")) 2))
+(check (= (either-match (either-right (maybe-some 5)) (unstable-fn "+" 1) (unstable-fn "maybe-unwrap")) 5))
+
+(sort LateI64ToF64 (UnstableFn (i64) f64))
+(sort LateF64ToF64 (UnstableFn (f64) f64))
+(sort LateIntOrFloat (Either i64 f64))
+
+(function late-left () LateIntOrFloat :no-merge)
+(set (late-left) (either-left 9))
+(check (= (either-match (late-left) (unstable-fn "to-f64") (unstable-fn "+" 1.0)) 9.0))
+
+(function late-right () LateIntOrFloat :no-merge)
+(set (late-right) (either-right 4.0))
+(check (= (either-match (late-right) (unstable-fn "to-f64") (unstable-fn "+" 1.0)) 5.0))
