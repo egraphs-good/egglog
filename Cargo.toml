@@ -169,7 +169,6 @@ insta = "1.40"
 serial_test = "3"
 
 [profile.release]
-debug-assertions = true
 incremental = true
 
 # https://github.com/mstange/samply/?tab=readme-ov-file#turn-on-debug-info-for-full-stacks

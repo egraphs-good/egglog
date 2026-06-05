@@ -5,17 +5,21 @@ TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
 
 WWW=${PWD}/target/www
 
+# Keep release-mode test builds checking debug assertions without changing the
+# normal release profile used by CodSpeed benchmarks and production binaries.
+TEST_PROFILE_ENV=CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true
+
 all: test nits docs
 
 test: doctest
-	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
+	$(TEST_PROFILE_ENV) cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
 
 coverage:
-	cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
+	$(TEST_PROFILE_ENV) cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
 	# Note: doctests are not included in coverage reports
 
 doctest:
-	cargo test --doc --release --workspace
+	$(TEST_PROFILE_ENV) cargo test --doc --release --workspace
 
 
 nits:
