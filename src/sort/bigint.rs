@@ -23,8 +23,8 @@ impl BaseSort for BigIntSort {
         add_primitive!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
         add_primitive!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
         add_primitive!(eg, "^" = |a: Z, b: Z| -> Z { a ^ b });
-        add_primitive!(eg, "<<" = |a: Z, b: i64| -> Z { (&*a).shl(b).into() });
-        add_primitive!(eg, ">>" = |a: Z, b: i64| -> Z { (&*a).shr(b).into() });
+        add_primitive!(eg, "<<" = |a: Z, b: i64| -?> Z { u32::try_from(b).ok().map(|s| (&*a).shl(s as usize).into()) });
+        add_primitive!(eg, ">>" = |a: Z, b: i64| -?> Z { u32::try_from(b).ok().map(|s| (&*a).shr(s as usize).into()) });
         add_primitive!(eg, "not-Z" = |a: Z| -> Z { Z::new(!&*a) });
 
         add_primitive!(eg, "bits" = |a: Z| -> Z { Z::new(a.bits().into()) });

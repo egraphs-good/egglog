@@ -153,10 +153,11 @@ pub trait Presort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError>;
 }
 
-pub type MkSort = fn(&mut TypeInfo, String, &[Expr]) -> Result<ArcSort, TypeError>;
+pub type MkSort = fn(&mut TypeInfo, String, &[Expr], Span) -> Result<ArcSort, TypeError>;
 
 #[derive(Debug)]
 pub struct EqSort {

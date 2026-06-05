@@ -1,5 +1,6 @@
 use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
+use crate::proofs::proof_checker::ProofCheckError;
 use crate::proofs::proof_encoding::ProofInstrumentor;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
 use crate::{ResolvedCall, TermDag};
@@ -13,6 +14,18 @@ pub enum ProveExistsError {
     PrimitivesUnsupported,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
     QueryDidNotMatch { constructor: String },
+    #[error("prove/prove-exists requires proofs to be enabled (run with --proofs).")]
+    ProofsNotEnabled,
+    #[error("constructor {constructor} is not provable by rule for an existence proof.")]
+    NotProvableByRule { constructor: String },
+    #[error("constructor {constructor} is not declared.")]
+    ConstructorNotDeclared { constructor: String },
+    #[error("no proof recorded for constructor {constructor}.")]
+    NoProofRecorded { constructor: String },
+    #[error("failed to extract proof term for constructor {constructor}.")]
+    ProofTermExtractionFailed { constructor: String },
+    #[error(transparent)]
+    ProofCheck(#[from] ProofCheckError),
 }
 
 impl ProofInstrumentor<'_> {
@@ -32,11 +45,11 @@ impl ProofInstrumentor<'_> {
             }
         };
 
-        let function = self
-            .egraph
-            .functions
-            .get(&func.name)
-            .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
+        let function = self.egraph.functions.get(&func.name).ok_or_else(|| {
+            ProveExistsError::ConstructorNotDeclared {
+                constructor: func.name.clone(),
+            }
+        })?;
 
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
@@ -70,38 +83,31 @@ impl ProofInstrumentor<'_> {
             .proof_state
             .proof_func_parent
             .get(output_sort.name())
-            .unwrap_or_else(|| {
-                panic!(
-                    "no :internal-proof-func annotation recorded for sort {} (constructor {})",
-                    output_sort.name(),
-                    func.name
-                )
-            })
+            .ok_or(ProveExistsError::ProofsNotEnabled)?
             .clone();
         let proof_value = self
             .egraph
             .lookup_function(&proof_function_name, &[witness_value])
-            .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
+            .ok_or_else(|| ProveExistsError::NoProofRecorded {
+                constructor: func.name.clone(),
+            })?;
 
         let proof_sort = self
             .egraph
             .functions
             .get(&proof_function_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "proof table {proof_function_name} for constructor {} was not declared",
-                    func.name
-                )
-            })
+            .ok_or_else(|| ProveExistsError::ConstructorNotDeclared {
+                constructor: func.name.clone(),
+            })?
             .schema
             .output
             .clone();
 
         let (_, proof_term_id) = extractor
             .extract_best_with_sort(self.egraph, &mut termdag, proof_value, proof_sort)
-            .unwrap_or_else(|| {
-                panic!("failed to extract proof term for constructor {}", func.name)
-            });
+            .ok_or_else(|| ProveExistsError::ProofTermExtractionFailed {
+                constructor: func.name.clone(),
+            })?;
 
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
@@ -111,9 +117,9 @@ impl ProofInstrumentor<'_> {
         );
 
         // Remove globals from the proof
-        if let Result::Err(e) = proof_store.remove_globals(&self.egraph.proof_check_program) {
-            panic!("Failed to remove globals from proof: {e}");
-        }
+        proof_store
+            .remove_globals(&self.egraph.proof_check_program)
+            .map_err(ProveExistsError::ProofCheck)?;
 
         // if the existence proof has a single premise, extract that premise proof
         let proof = proof_store.get(proof_id);
@@ -122,15 +128,17 @@ impl ProofInstrumentor<'_> {
                 [premise_proof_id] => *premise_proof_id,
                 _ => proof_id,
             },
-            _ => panic!("expected rule justification for existence proof"),
+            _ => {
+                return Err(ProveExistsError::NotProvableByRule {
+                    constructor: func.name.clone(),
+                });
+            }
         };
 
         // Check the proof before simplification
-        if let Result::Err(e) =
-            proof_store.check_proof(extra_rule_removed, &self.egraph.proof_check_program)
-        {
-            panic!("Existence proof should be valid before simplification: {e}");
-        }
+        proof_store
+            .check_proof(extra_rule_removed, &self.egraph.proof_check_program)
+            .map_err(ProveExistsError::ProofCheck)?;
 
         // simplify the proof
         let simplified_proof = proof_store.simplify(extra_rule_removed);
@@ -138,7 +146,7 @@ impl ProofInstrumentor<'_> {
         // Check the proof after simplification
         proof_store
             .check_proof(simplified_proof, &self.egraph.proof_check_program)
-            .expect("simplified existence proof should still be valid");
+            .map_err(ProveExistsError::ProofCheck)?;
 
         Ok((proof_store, simplified_proof))
     }

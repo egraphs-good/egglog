@@ -62,6 +62,7 @@ impl Presort for PairSort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(a_span, a), Expr::Var(b_span, b)] = args {
             let a = typeinfo
@@ -78,7 +79,10 @@ impl Presort for PairSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!("Pair sort requires exactly two arguments")
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().to_owned(),
+                span,
+            ))
         }
     }
 }

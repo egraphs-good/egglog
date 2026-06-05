@@ -64,11 +64,12 @@ impl Presort for VecSort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
+        if let [Expr::Var(arg_span, e)] = args {
             let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), arg_span.clone()))?;
 
             let out = Self {
                 name,
@@ -76,7 +77,10 @@ impl Presort for VecSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!("Vec sort must have sort as argument. Got {args:?}")
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().to_owned(),
+                span,
+            ))
         }
     }
 }
@@ -135,8 +139,8 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
         add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data[idx] = x; Some(xs) } }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data.remove(idx); Some(xs) } }});
         if self.element.is_eq_sort() {
             eg.add_write_primitive(
                 Union {

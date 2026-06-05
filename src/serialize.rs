@@ -242,18 +242,17 @@ impl EGraph {
         let value = self
             .backend
             .get_canon_repr(value, sort.column_ty(&self.backend));
-        assert!(
-            !sort.name().to_string().contains('-'),
-            "Tag cannot contain '-' when serializing"
-        );
         use numeric_id::NumericId;
+        // `value.rep()` is numeric and never contains '-', so the sort tag and the
+        // value are recovered by splitting on the *last* '-' (see `class_id_to_value`).
+        // This keeps class IDs unambiguous even when the sort name contains '-'.
         format!("{}-{}", sort.name(), value.rep()).into()
     }
 
     /// Gets the value for a serialized class ID.
     pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
         let s = eclass_id.to_string();
-        let (_tag, bits) = s.split_once('-').unwrap();
+        let (_tag, bits) = s.rsplit_once('-').unwrap();
         Value::new_const(bits.parse().unwrap())
     }
 

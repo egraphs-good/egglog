@@ -511,17 +511,24 @@ fn missing_sort_panics_with_type_name() {
 /// per application context, and duplicate same-signature registrations are
 /// ambiguous for every context where more than one runtime id matches.
 #[test]
-#[should_panic(expected = "Ambiguous primitive resolution")]
-fn unstable_fn_duplicate_primitive_registration_panics_on_build() {
+fn unstable_fn_duplicate_primitive_registration_errors_on_build() {
     let mut egraph = EGraph::default();
     egraph.add_pure_primitive(PureEcho("dup-echo"), None);
     egraph.add_pure_primitive(PureEcho("dup-echo"), None);
 
-    let _ = egraph.parse_and_run_program(
-        None,
-        "(sort Fn (UnstableFn (i64) i64))\n\
-         (let $f (unstable-fn \"dup-echo\"))\n\
-         (check (= (unstable-app $f 7) 7))",
+    // Duplicate same-signature registrations are ambiguous; building the
+    // `unstable-fn` reference now surfaces a graceful error instead of panicking.
+    let err = egraph
+        .parse_and_run_program(
+            None,
+            "(sort Fn (UnstableFn (i64) i64))\n\
+             (let $f (unstable-fn \"dup-echo\"))\n\
+             (check (= (unstable-app $f 7) 7))",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Ambiguous primitive resolution"),
+        "expected ambiguous primitive resolution error, got: {err}"
     );
 }
 

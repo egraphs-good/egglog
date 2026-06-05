@@ -73,7 +73,14 @@ impl Matches {
 
     /// The number of matches in total.
     pub fn match_size(&self) -> usize {
-        self.matches.len() / self.vars.len()
+        // A rule whose actions reference no variables produces empty tuples, so
+        // `vars` is empty and `matches` carries no values. Guard the division to
+        // avoid dividing by zero in that degenerate case.
+        if self.vars.is_empty() {
+            0
+        } else {
+            self.matches.len() / self.vars.len()
+        }
     }
 
     /// The length of a tuple.
@@ -109,6 +116,14 @@ impl Matches {
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
         let unit = state.base_values().get(());
+
+        // A rule whose actions reference no variables has zero-width match tuples
+        // (`tuple_len == 0`); there is nothing to instantiate per match, and
+        // `slice::chunks(0)` would panic. `match_size` already reports 0 for this
+        // degenerate case, so there are no residual matches to return.
+        if tuple_len == 0 {
+            return Vec::new();
+        }
 
         if self.all_chosen {
             for row in self.matches.chunks(tuple_len) {
@@ -173,8 +188,11 @@ impl EGraph {
             ruleset: &str,
             rulesets: &'a IndexMap<String, Ruleset>,
             ids: &mut Vec<(String, &'a ResolvedCoreRule)>,
-        ) {
-            match &rulesets[ruleset] {
+        ) -> Result<(), Error> {
+            let Some(r) = rulesets.get(ruleset) else {
+                return Err(Error::BackendError(format!("no such ruleset: {ruleset}")));
+            };
+            match r {
                 Ruleset::Rules(rules) => {
                     for (rule_name, (core_rule, _)) in rules.iter() {
                         ids.push((rule_name.clone(), core_rule));
@@ -182,25 +200,32 @@ impl EGraph {
                 }
                 Ruleset::Combined(sub_rulesets) => {
                     for sub_ruleset in sub_rulesets {
-                        collect_rules(sub_ruleset, rulesets, ids);
+                        collect_rules(sub_ruleset, rulesets, ids)?;
                     }
                 }
             }
+            Ok(())
         }
 
         let mut rules = Vec::new();
         let rulesets = std::mem::take(&mut self.rulesets);
-        collect_rules(ruleset, &rulesets, &mut rules);
+        let collected = collect_rules(ruleset, &rulesets, &mut rules);
+        // Restore `rulesets` before propagating any error so the EGraph is not
+        // left with its rulesets taken out.
+        if let Err(e) = collected {
+            self.rulesets = rulesets;
+            return Err(e);
+        }
         let mut schedulers = std::mem::take(&mut self.schedulers);
 
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[scheduler_id];
-        rules.iter().for_each(|(id, rule)| {
-            record
-                .rule_info
-                .entry((*id).to_owned())
-                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
-        });
+        for (id, rule) in rules.iter() {
+            if !record.rule_info.contains_key(id) {
+                let info = SchedulerRuleInfo::new(self, rule, id)?;
+                record.rule_info.insert((*id).to_owned(), info);
+            }
+        }
 
         // Step 2: run all the queries for one iteration
         let query_rules = rules
@@ -321,7 +346,11 @@ impl ExternalFunction for CollectMatches {
 }
 
 impl SchedulerRuleInfo {
-    fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
+    fn new(
+        egraph: &mut EGraph,
+        rule: &ResolvedCoreRule,
+        name: &str,
+    ) -> Result<SchedulerRuleInfo, Error> {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
         let unit = egraph.backend.base_values().get(());
@@ -351,7 +380,7 @@ impl SchedulerRuleInfo {
             &egraph.type_info,
             true, // seminaive rule context
         );
-        qrule_builder.query(&rule.body, true);
+        qrule_builder.query(&rule.body, true)?;
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -380,20 +409,20 @@ impl SchedulerRuleInfo {
             .rb
             .query_table(decided, &entries, None)
             .unwrap();
-        arule_builder.actions(&rule.head).unwrap();
+        arule_builder.actions(&rule.head)?;
         // Remove the entry as it's now done
         entries.pop();
         arule_builder.rb.remove(decided, &entries);
         let arule_id = arule_builder.build();
 
-        SchedulerRuleInfo {
+        Ok(SchedulerRuleInfo {
             free_vars,
             query_rule: qrule_id,
             action_rule: arule_id,
             matches,
             decided,
             should_seek: true,
-        }
+        })
     }
 }
 
@@ -518,5 +547,45 @@ mod test {
         assert_eq!(before, after);
         assert!(!report.updated);
         assert!(!report.can_stop);
+    }
+
+    #[test]
+    fn test_step_rules_with_scheduler_unknown_ruleset() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(DelayStopScheduler::default()));
+        let err = egraph
+            .step_rules_with_scheduler(scheduler_id, "does-not-exist")
+            .unwrap_err();
+        assert!(matches!(err, Error::BackendError(_)));
+    }
+
+    /// A scheduler that only inspects `match_size` and never chooses anything.
+    #[derive(Clone)]
+    struct InspectSizeScheduler;
+
+    impl Scheduler for InspectSizeScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            // Calling `match_size` on a rule with no free variables used to panic
+            // with a divide-by-zero. Just exercise it and stop.
+            let _ = matches.match_size();
+            false
+        }
+    }
+
+    #[test]
+    fn test_match_size_with_no_free_vars() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(InspectSizeScheduler));
+        // The action `(R 1)` references no variables, so the rule has no free vars.
+        let input = r#"
+        (ruleset test)
+        (relation R (i64))
+        (rule ((R x)) ((R 1)) :ruleset test :name "no-vars")
+        (R 0)
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
     }
 }
