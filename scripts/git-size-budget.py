@@ -13,14 +13,14 @@ LARGEST_BLOBS = 20
 
 
 def usage() -> str:
-    return """Usage:
+    return f"""Usage:
   scripts/git-size-budget.py BASE_REF HEAD_REF
 
 Measures compressed Git objects reachable from HEAD_REF but not BASE_REF.
 
 Environment:
-  SOFT_LIMIT_BYTES   Warning threshold. Default: 524288.
-  HARD_LIMIT_BYTES   Failure threshold. Default: 2097152.
+  SOFT_LIMIT_BYTES   Warning threshold. Default: {DEFAULT_SOFT_LIMIT_BYTES}.
+  HARD_LIMIT_BYTES   Failure threshold. Default: {DEFAULT_HARD_LIMIT_BYTES}.
   GITHUB_STEP_SUMMARY, when set, receives the Markdown summary.
 """
 
