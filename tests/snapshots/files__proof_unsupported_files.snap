@@ -16,10 +16,12 @@ datatypes.egg
 delete.egg
 eggcc-2mm.egg
 eggcc-extraction.egg
+either.egg
 eqsat-basic-multiset.egg
 extract-vec-bench.egg
 factoring-multisets.egg
 fibonacci.egg
+fn.egg
 fusion.egg
 hardboiled_conv1d_128.egg
 hardboiled_conv1d_32.egg
@@ -35,6 +37,7 @@ looking_up_nonconstructor_in_rewrite_good.egg
 luminal-llama.egg
 map.egg
 math.egg
+maybe.egg
 merge_read.egg
 multiset.egg
 nested-container-dirty-propagation.egg
