@@ -84,8 +84,7 @@ measure:
 python3 scripts/git-size-budget.py upstream/main HEAD
 ```
 
-The default limits are a 512 KiB warning threshold and a 2 MiB failure
-threshold. To try different thresholds locally, set `SOFT_LIMIT_BYTES` and
+To try different thresholds locally, set `SOFT_LIMIT_BYTES` and
 `HARD_LIMIT_BYTES`.
 
 ## Community extensions
