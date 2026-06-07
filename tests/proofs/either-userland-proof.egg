@@ -1,0 +1,33 @@
+(sort Math)
+(constructor A () Math)
+(constructor B () Math)
+
+(datatype MathOrInt
+  (Left Math)
+  (Right i64))
+(datatype EitherBox (Box MathOrInt))
+(datatype IntOrMath
+  (LeftInt i64)
+  (RightMath Math))
+(datatype IntOrMathBox (RightBox IntOrMath))
+
+(let left-a-box (Box (Left (A))))
+(let right-int-box (Box (Right 7)))
+(let right-a-box (RightBox (RightMath (A))))
+
+(function boxed-left (EitherBox) Math :merge old)
+(function boxed-right (EitherBox) i64 :merge old)
+(rule ((= box (Box (Left left))))
+      ((set (boxed-left box) left))
+      :name "project-left")
+(rule ((= box (Box (Right right))))
+      ((set (boxed-right box) right))
+      :name "project-right")
+(run 1)
+(prove (= (boxed-left left-a-box) (A)))
+(prove (= (boxed-right right-int-box) 7))
+
+(union (A) (B))
+(prove (= left-a-box (Box (Left (B)))))
+(prove (= right-a-box (RightBox (RightMath (B)))))
+(prove (= (boxed-left left-a-box) (B)))

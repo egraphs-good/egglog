@@ -1,4 +1,5 @@
 use crate::ast::{FunctionSubtype, ResolvedNCommand};
+use crate::proofs::proof_encoding_helpers::proof_container_constructor;
 use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::GenericExpr;
@@ -117,6 +118,16 @@ fn proof_form_expr(
             resolved
         }
         ResolvedExpr::Call(span, head @ ResolvedCall::Primitive(_), args) => {
+            if let ResolvedCall::Primitive(primitive) = &head {
+                if proof_container_constructor(primitive).is_some() {
+                    let new_args = args
+                        .into_iter()
+                        .map(|expr| proof_form_expr(expr, res, fresh))
+                        .collect();
+                    return ResolvedExpr::Call(span, head, new_args);
+                }
+            }
+
             // For primitives, extract any constructor/custom function call arguments
             // into separate facts with fresh variables. Other primitives can stay inline.
             let mut new_args = vec![];

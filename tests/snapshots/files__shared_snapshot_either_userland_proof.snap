@@ -1,0 +1,68 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(let t0 (boxed-left (Box (Left (A))) (A)))
+(Rule
+  (= (@ExistsConstructor) (@ExistsConstructor))
+  (name "@prove_exists_rule")
+  (premises
+    (Rule
+      (= t0 t0)
+      (name "project-left")
+      (premises (Fiat (= (Box (Left (A))) (Box (Left (A))))))
+      (substitution (left (A)) (box (Box (Left (A))))))
+    (Fiat (= (A) (A))))
+  (substitution (@n (A))))
+(let t0 (boxed-right (Box (Right 7)) 7))
+(Rule
+  (= (@ExistsConstructor1) (@ExistsConstructor1))
+  (name "@prove_exists_rule1")
+  (premises
+    (Rule
+      (= t0 t0)
+      (name "project-right")
+      (premises (Fiat (= (Box (Right 7)) (Box (Right 7)))))
+      (substitution (right 7) (box (Box (Right 7)))))
+    (Fiat (= 7 7)))
+  (substitution (@n1 7)))
+(Congr
+  (= (Box (Left (A))) (Box (Left (B))))
+  (Fiat (= (Box (Left (A))) (Box (Left (A)))))
+  (Congr
+    (= (Left (A)) (Left (B)))
+    (Fiat (= (Left (A)) (Left (A))))
+    (Sym (= (A) (B)) (Fiat (= (B) (A))))
+    0)
+  0)
+(Congr
+  (= (RightBox (RightMath (A))) (RightBox (RightMath (B))))
+  (Fiat (= (RightBox (RightMath (A))) (RightBox (RightMath (A)))))
+  (Congr
+    (= (RightMath (A)) (RightMath (B)))
+    (Fiat (= (RightMath (A)) (RightMath (A))))
+    (Sym (= (A) (B)) (Fiat (= (B) (A))))
+    0)
+  0)
+(let t0 (boxed-left (Box (Left (A))) (A)))
+(Rule
+  (= (@ExistsConstructor4) (@ExistsConstructor4))
+  (name "@prove_exists_rule4")
+  (premises
+    (Rule
+      (= t0 t0)
+      (name "project-left")
+      (premises (Fiat (= (Box (Left (A))) (Box (Left (A))))))
+      (substitution (left (A)) (box (Box (Left (A))))))
+    (Sym (= (A) (B)) (Fiat (= (B) (A)))))
+  (substitution (@n2 (A))))
+((A 1)
+ (B 1)
+ (Box 2)
+ (Left 1)
+ (LeftInt 0)
+ (Right 1)
+ (RightBox 1)
+ (RightMath 1)
+ (boxed-left 1)
+ (boxed-right 1))

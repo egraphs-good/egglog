@@ -857,6 +857,9 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     type Container: ContainerValue;
     fn name(&self) -> &str;
     fn is_eq_container_sort(&self) -> bool;
+    fn container_proof_spec(&self) -> Option<crate::sort::ContainerProofSpec> {
+        None
+    }
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &ContainerValues, _: Value) -> Vec<(ArcSort, Value)>;
     fn register_primitives(&self, _eg: &mut EGraph) {}
@@ -919,6 +922,10 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
 
     fn is_eq_container_sort(&self) -> bool {
         self.0.is_eq_container_sort()
+    }
+
+    fn container_proof_spec(&self) -> Option<crate::sort::ContainerProofSpec> {
+        self.0.container_proof_spec()
     }
 
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {

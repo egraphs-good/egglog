@@ -1,5 +1,7 @@
 #[doc = include_str!("proof_encoding.md")]
-use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
+use crate::proofs::proof_encoding_helpers::{
+    EncodingNames, Justification, proof_container_constructor,
+};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -333,23 +335,24 @@ impl<'a> ProofInstrumentor<'a> {
         )
     }
 
-    /// Generate a rule that handles congruence for constructors.
+    /// Generate a rule that handles congruence for constructor-like proof views.
     /// When two different values are present for the same children,
     /// we union those two values together.
     fn handle_congruence(
         &mut self,
-        fdecl: &ResolvedFunctionDecl,
+        view_key: &str,
+        output_sort: &str,
         child_names: &[String],
         rebuilding_ruleset: &str,
+        fresh_prefix: &str,
     ) -> String {
-        // Congruence rule
-        let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
+        let fresh_name = self.egraph.parser.symbol_gen.fresh(fresh_prefix);
         let mut child_names_new = child_names.to_vec();
         child_names_new.push("new".to_string());
         let mut child_names_old = child_names.to_vec();
         child_names_old.push("old".to_string());
-        let (query1, prf1) = self.query_view_and_get_proof(&fdecl.name, &child_names_new);
-        let (query2, prf2) = self.query_view_and_get_proof(&fdecl.name, &child_names_old);
+        let (query1, prf1) = self.query_view_and_get_proof(view_key, &child_names_new);
+        let (query2, prf2) = self.query_view_and_get_proof(view_key, &child_names_old);
         let sym = &self.proof_names().eq_sym_constructor;
         let trans = &self.proof_names().eq_trans_constructor;
 
@@ -358,10 +361,10 @@ impl<'a> ProofInstrumentor<'a> {
         // We also have a proof that other eclass representative r_2 = f(c_1,...,c_n), the same term.
         // We want a proof that r1 = r2, which we get by transitivity.
         let union_code = self.union(
-            &fdecl.schema.output,
+            output_sort,
             "new",
             "old",
-            &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))",)),
+            &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))")),
         );
         format!(
             "(rule ({query1}
@@ -397,8 +400,234 @@ impl<'a> ProofInstrumentor<'a> {
                 &rebuilding_ruleset,
             )
         } else {
-            self.handle_congruence(fdecl, &child_names, &rebuilding_ruleset)
+            self.handle_congruence(
+                &fdecl.name,
+                &fdecl.schema.output,
+                &child_names,
+                &rebuilding_ruleset,
+                "congruence_rule",
+            )
         }
+    }
+
+    fn is_proof_canonicalizable_sort(&self, sort: &ArcSort) -> bool {
+        sort.is_eq_sort() || (sort.is_eq_container_sort() && sort.container_proof_spec().is_some())
+    }
+
+    fn rebuilding_rules_for_view(
+        &mut self,
+        types: &[ArcSort],
+        view_key: &str,
+        fresh_prefix: &str,
+        representative_column: Option<usize>,
+    ) -> Vec<Command> {
+        if !types
+            .iter()
+            .any(|sort| self.is_proof_canonicalizable_sort(sort))
+        {
+            return vec![];
+        }
+
+        let children_vec = (0..types.len())
+            .map(|i| format!("c{i}_"))
+            .collect::<Vec<_>>();
+        let children = format!("{}", ListDisplay(&children_vec, " "));
+        let mut uf_queries = vec![];
+        let mut children_updated = vec![];
+        let mut bool_neq_exprs = vec![];
+        let mut uf_proof_vars = vec![];
+
+        for (i, ty) in types.iter().enumerate() {
+            let ci = &children_vec[i];
+            if self.is_proof_canonicalizable_sort(ty) {
+                let leader_var = format!("c{i}_leader_");
+                let uf_function_name = self.uf_function_name(ty.name());
+
+                if self.egraph.proof_state.proofs_enabled {
+                    // UF function index returns a Pair(leader, proof); one lookup gives both
+                    let pair_var = self.fresh_var();
+                    let proof_var = format!("(pair-second {pair_var})");
+                    uf_queries.push(format!(
+                        "(= {pair_var} ({uf_function_name} {ci}))
+                         (= {leader_var} (pair-first {pair_var}))"
+                    ));
+                    uf_proof_vars.push(Some(proof_var));
+                } else {
+                    uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
+                    uf_proof_vars.push(None);
+                }
+
+                bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
+                children_updated.push(leader_var);
+            } else {
+                children_updated.push(ci.clone());
+                uf_proof_vars.push(None);
+            }
+        }
+
+        let uf_query_str = uf_queries.join("\n       ");
+        let filter_query = format!("(guard (or {}))", bool_neq_exprs.join("\n             "));
+
+        let view_name = self.view_name(view_key);
+        let fresh_name = self.egraph.parser.symbol_gen.fresh(fresh_prefix);
+        let (query_view, view_prf) = self.query_view_and_get_proof(view_key, &children_vec);
+        let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
+            let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
+            let congr_constructor = self.proof_names().congr_constructor.clone();
+            let sym_constructor = self.proof_names().eq_sym_constructor.clone();
+            let mut current_proof = view_prf;
+            let mut proof_code_parts = vec![];
+
+            for (i, ty) in types.iter().enumerate() {
+                if !self.is_proof_canonicalizable_sort(ty) {
+                    continue;
+                }
+
+                let uf_prf = uf_proof_vars[i].as_ref().unwrap();
+                let new_proof = self.fresh_var();
+                if Some(i) == representative_column {
+                    proof_code_parts.push(format!(
+                        "(let {new_proof}
+                       ({eq_trans_constructor}
+                          ({sym_constructor} {uf_prf})
+                          {current_proof}))",
+                    ));
+                } else {
+                    proof_code_parts.push(format!(
+                        "(let {new_proof}
+                          ({congr_constructor} {current_proof} {i}
+                                               {uf_prf}))",
+                    ));
+                }
+                current_proof = new_proof;
+            }
+
+            (proof_code_parts.join("\n"), current_proof)
+        } else {
+            ("".to_string(), "()".to_string())
+        };
+        let updated_view = self.update_view(view_key, &children_updated, &pf_var);
+
+        let rule = format!(
+            "(rule ({query_view}
+                    {uf_query_str}
+                    {filter_query}
+                    )
+                 (
+                  {pf_code}
+                  {updated_view}
+                  (delete ({view_name} {children}))
+                 )
+                  :ruleset {} :name \"{fresh_name}\")",
+            self.proof_names().rebuilding_ruleset_name
+        );
+        self.parse_program(&rule)
+    }
+
+    fn proof_for_value(&mut self, sort: &ArcSort, value: &str, res: &mut Vec<String>) -> String {
+        if !self.egraph.proof_state.proofs_enabled {
+            "()".to_string()
+        } else if sort.is_eq_sort() || sort.container_proof_spec().is_some() {
+            let term_proof_name = self.term_proof_name(sort.name());
+            let fresh_proof = self.fresh_var();
+            res.push(format!("(= {fresh_proof} ({term_proof_name} {value}))"));
+            fresh_proof
+        } else {
+            let fiat_constructor = &self.proof_names().fiat_constructor;
+            let to_ast = self
+                .proof_names()
+                .sort_to_ast_constructor
+                .get(sort.name())
+                .unwrap();
+            format!("({fiat_constructor} ({to_ast} {value}) ({to_ast} {value}))")
+        }
+    }
+
+    fn query_fact_view(
+        &mut self,
+        view_key: &str,
+        mut view_args: Vec<String>,
+        arg_proofs: Vec<Option<String>>,
+        res: &mut Vec<String>,
+    ) -> (String, String) {
+        let fv = self.fresh_var();
+        view_args.push(fv.clone());
+        let (query, view_proof_var) = self.query_view_and_get_proof(view_key, &view_args);
+        res.push(query);
+        if self.proofs_enabled() {
+            let mut proof = view_proof_var;
+            for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                if let Some(arg_proof) = arg_proof {
+                    let congr = &self.proof_names().congr_constructor;
+                    proof = format!(
+                        "
+                            ({congr} {proof} {i} {arg_proof})
+                            "
+                    );
+                }
+            }
+            (fv, proof)
+        } else {
+            (fv, "()".to_string())
+        }
+    }
+
+    fn container_view_key(constructor_name: &str, output_sort: &str) -> String {
+        format!("{constructor_name}_{output_sort}")
+    }
+
+    fn proof_container_encoding(&mut self, sort: &ArcSort) -> Vec<Command> {
+        let Some(spec) = sort.container_proof_spec() else {
+            return vec![];
+        };
+
+        spec.constructors
+            .iter()
+            .flat_map(|constructor| {
+                let view_key = Self::container_view_key(constructor.name, sort.name());
+                let view_name = self.view_name(&view_key);
+                let mut view_sorts = constructor
+                    .input_sorts
+                    .iter()
+                    .map(|sort| sort.name().to_string())
+                    .collect::<Vec<_>>();
+                view_sorts.push(sort.name().to_string());
+
+                let child_names = constructor
+                    .input_sorts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("c{i}_"))
+                    .collect::<Vec<_>>();
+                let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+                let congruence_rule = self.handle_congruence(
+                    &view_key,
+                    sort.name(),
+                    &child_names,
+                    &rebuilding_ruleset,
+                    "container_congruence_rule",
+                );
+                let to_ast_view_sort = self.add_to_ast(sort.name());
+                let proof_type = self.proof_type_str().to_string();
+
+                let mut commands = self.parse_program(&format!(
+                    "{to_ast_view_sort}
+                     (function {view_name} ({}) {proof_type} :merge old :internal-term-constructor {} :internal-hidden :unextractable)
+                     {congruence_rule}",
+                    ListDisplay(view_sorts, " "),
+                    constructor.name,
+                ));
+                let mut types = constructor.input_sorts.clone();
+                types.push(sort.clone());
+                commands.extend(self.rebuilding_rules_for_view(
+                    &types,
+                    &view_key,
+                    "container_rebuild_rule",
+                    Some(types.len() - 1),
+                ));
+                commands
+            })
+            .collect()
     }
 
     /// Each function/constructor gets a term table and a view table.
@@ -487,127 +716,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let types = fdecl.resolved_schema.view_types();
-
-        // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
-        if !types.iter().any(|t| t.is_eq_sort()) {
-            return vec![];
-        }
-
-        let view_name = self.view_name(&fdecl.name);
-        let child = |i: usize| format!("c{i}_");
-        let children_vec: Vec<String> = (0..types.len()).map(child).collect();
-        let children = format!("{}", ListDisplay(&children_vec, " "));
-
-        // For each eq-sort column, look up its leader via the UF table.
-        // For non-eq-sort columns, the leader is the same as the original.
-        let mut uf_queries = vec![];
-        let mut leader_vars: Vec<String> = vec![];
-        let mut bool_neq_exprs = vec![];
-        let mut uf_proof_vars: Vec<Option<String>> = vec![];
-
-        for (i, ty) in types.iter().enumerate() {
-            if ty.is_eq_sort() {
-                let leader_var = format!("c{i}_leader_");
-                let uf_function_name = self.uf_function_name(ty.name());
-                let ci = child(i);
-
-                if self.egraph.proof_state.proofs_enabled {
-                    // UF function index returns a Pair(leader, proof); one lookup gives both
-                    let pair_var = self.fresh_var();
-                    let proof_var = format!("(pair-second {pair_var})");
-                    uf_queries.push(format!(
-                        "(= {pair_var} ({uf_function_name} {ci}))
-                         (= {leader_var} (pair-first {pair_var}))"
-                    ));
-                    uf_proof_vars.push(Some(proof_var));
-                } else {
-                    uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
-                    uf_proof_vars.push(None);
-                }
-
-                bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
-                leader_vars.push(leader_var);
-            } else {
-                leader_vars.push(child(i));
-                uf_proof_vars.push(None);
-            }
-        }
-
-        let uf_query_str = uf_queries.join("\n       ");
-        let or_expr = format!("(or {})", bool_neq_exprs.join("\n             "));
-        let filter_query = format!("(guard {or_expr})");
-
-        // Build the updated children: use leader_var for eq-sort columns, original for others.
-        let children_updated: Vec<String> = leader_vars.clone();
-
-        let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
-        let (query_view, view_prf) = self.query_view_and_get_proof(&fdecl.name, &children_vec);
-
-        // Build proof code if proofs are enabled.
-        // We chain congruence proofs for each updated child and a transitivity proof
-        // for the representative (last column) update.
-        let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
-            let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
-            let congr_constructor = self.proof_names().congr_constructor.clone();
-            let sym_constructor = self.proof_names().eq_sym_constructor.clone();
-
-            // Start with the view proof and apply congruence for each eq-sort child
-            // (excluding the last column if this is a constructor, since that's the representative).
-            let mut current_proof = view_prf.clone();
-            let mut proof_code_parts = vec![];
-
-            for (i, ty) in types.iter().enumerate() {
-                if !ty.is_eq_sort() {
-                    continue;
-                }
-
-                let uf_prf = uf_proof_vars[i].as_ref().unwrap();
-
-                if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
-                    // Updating the representative term (last column of constructor):
-                    // use transitivity with sym of the UF proof
-                    let new_proof = self.fresh_var();
-                    proof_code_parts.push(format!(
-                        "(let {new_proof}
-                           ({eq_trans_constructor}
-                              ({sym_constructor} {uf_prf})
-                              {current_proof}))",
-                    ));
-                    current_proof = new_proof;
-                } else {
-                    // Updating a child via congruence
-                    let new_proof = self.fresh_var();
-                    proof_code_parts.push(format!(
-                        "(let {new_proof}
-                              ({congr_constructor} {current_proof} {i}
-                                                   {uf_prf}))",
-                    ));
-                    current_proof = new_proof;
-                }
-            }
-
-            (proof_code_parts.join("\n"), current_proof)
-        } else {
-            ("".to_string(), "()".to_string())
-        };
-
-        let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
-
-        // Make a single rule that updates the view when any child's leader differs.
-        let rule = format!(
-            "(rule ({query_view}
-                    {uf_query_str}
-                    {filter_query}
-                    )
-                 (
-                  {pf_code}
-                  {updated_view}
-                  (delete ({view_name} {children}))
-                 )
-                  :ruleset {} :name \"{fresh_name}\")",
-            self.proof_names().rebuilding_ruleset_name
-        );
-        self.parse_program(&rule)
+        let representative_column =
+            (fdecl.subtype == FunctionSubtype::Constructor).then_some(types.len() - 1);
+        self.rebuilding_rules_for_view(&types, &fdecl.name, "rebuild_rule", representative_column)
     }
 
     /// Instrument fact replaces terms with looking up
@@ -707,23 +818,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let var = &resolved_var.name;
                 (
                     resolved_var.name.clone(),
-                    if !self.egraph.proof_state.proofs_enabled {
-                        "()".to_string()
-                    } else if resolved_var.sort.is_eq_sort() {
-                        let term_proof_name = self.term_proof_name(resolved_var.sort.name());
-                        let fresh_proof = self.fresh_var();
-                        res.push(format!("(= {fresh_proof} ({term_proof_name} {var}))"));
-                        fresh_proof
-                    } else {
-                        let fiat_constructor = &self.proof_names().fiat_constructor;
-                        let lit_sort = resolved_var.sort.name();
-                        let to_ast = self
-                            .proof_names()
-                            .sort_to_ast_constructor
-                            .get(lit_sort)
-                            .unwrap();
-                        format!("({fiat_constructor} ({to_ast} {var}) ({to_ast} {var}))")
-                    },
+                    self.proof_for_value(&resolved_var.sort, var, res),
                 )
             }
             ResolvedExpr::Call(_, resolved_call, args) => {
@@ -742,41 +837,68 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
+                        if func_type.subtype == FunctionSubtype::Custom {
+                            return self.query_fact_view(
+                                &func_type.name,
+                                new_args,
+                                arg_proofs,
+                                res,
+                            );
+                        }
+
                         assert!(
                             func_type.subtype == FunctionSubtype::Constructor,
                             "Only constructor function calls are allowed in fact expressions due to proof normal form. Got {func_type:?}",
                         );
 
-                        let fv = self.fresh_var();
-                        let view_name = self.view_name(&func_type.name);
-                        let args_str = ListDisplay(new_args, " ");
-
-                        let proof = {
-                            // View is always a function; query it and bind the output
-                            let view_proof_var = self.fresh_var();
-                            res.push(format!(
-                                "(= {view_proof_var} ({view_name} {args_str} {fv}))"
-                            ));
-                            if self.proofs_enabled() {
-                                let mut proof = view_proof_var;
-                                for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                                    if let Some(arg_proof) = arg_proof {
-                                        let congr = &self.proof_names().congr_constructor;
-                                        proof = format!(
-                                            "
-                            ({congr} {proof} {i} {arg_proof})
-                            "
-                                        );
-                                    }
-                                }
-                                proof
-                            } else {
-                                "()".to_string()
-                            }
-                        };
-                        (fv, proof)
+                        self.query_fact_view(&func_type.name, new_args, arg_proofs, res)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
+                        if let Some(constructor) =
+                            proof_container_constructor(specialized_primitive)
+                        {
+                            let output_sort = specialized_primitive.output().name();
+                            let view_key = Self::container_view_key(constructor.name, output_sort);
+                            return self.query_fact_view(&view_key, new_args, arg_proofs, res);
+                        }
+
+                        let projection = (|| {
+                            if specialized_primitive.input().len() != 1 {
+                                return None;
+                            }
+                            let container_sort = specialized_primitive.input()[0].clone();
+                            let spec = container_sort.container_proof_spec()?;
+                            let (constructor, projection) =
+                                spec.projection(specialized_primitive.name())?;
+                            let field_index = projection.field;
+                            let field_sort = constructor.input_sorts.get(field_index)?.clone();
+                            (field_sort.name() == specialized_primitive.output().name())
+                                .then_some((constructor.clone(), container_sort, field_index))
+                        })();
+                        if let Some((constructor, container_sort, field_index)) = projection {
+                            let Some(container_value) = new_args.first() else {
+                                panic!("container projection primitive missing container argument");
+                            };
+                            let mut field_vars = constructor
+                                .input_sorts
+                                .iter()
+                                .map(|_| self.fresh_var())
+                                .collect::<Vec<_>>();
+                            let selected = field_vars[field_index].clone();
+                            field_vars.push(container_value.clone());
+                            let view_key =
+                                Self::container_view_key(constructor.name, container_sort.name());
+                            let (query, _view_proof_var) =
+                                self.query_view_and_get_proof(&view_key, &field_vars);
+                            res.push(query);
+                            let proof = self.proof_for_value(
+                                specialized_primitive.output(),
+                                &selected,
+                                res,
+                            );
+                            return (selected, proof);
+                        }
+
                         if specialized_primitive.output().is_eq_sort() {
                             panic!(
                                 "Term encoding does not support eq-sort primitive expressions in facts"
@@ -907,17 +1029,37 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[String],
         justification: &Justification,
     ) -> (Vec<String>, String) {
-        // A fresh variable for the new term.
+        let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
+        let canonical_sort =
+            (func_type.subtype == FunctionSubtype::Constructor).then(|| func_type.output.name());
+        self.add_created_term_and_view(
+            &func_type.name,
+            args,
+            &func_type.name,
+            &to_ast,
+            canonical_sort,
+            justification,
+        )
+    }
+
+    fn add_created_term_and_view(
+        &mut self,
+        term_name: &str,
+        args: &[String],
+        view_key: &str,
+        to_ast: &str,
+        canonical_sort: Option<&str>,
+        justification: &Justification,
+    ) -> (Vec<String>, String) {
         let fv = self.fresh_var();
         let mut res = vec![];
         // TODO might be able to get rid of this intermediate variable in encoding
         res.push(format!(
-            "(let {fv} ({} {}))",
-            func_type.name,
+            "(let {fv} ({term_name} {}))",
             ListDisplay(args, " ")
         ));
 
-        let args_with_fv = if func_type.subtype == FunctionSubtype::Constructor {
+        let view_args = if canonical_sort.is_some() {
             let mut a = args.to_vec();
             a.push(fv.clone());
             a
@@ -926,10 +1068,8 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         let (proof_str, view_proof_var) = if self.egraph.proof_state.proofs_enabled {
-            let to_ast = self.fname_to_ast_name(&func_type.name);
             let rule_constructor = &self.proof_names().rule_constructor;
             let fiat_constructor = &self.proof_names().fiat_constructor;
-
             let proof = match justification {
                 Justification::Rule(rule_name, rule_proof) => {
                     format!(
@@ -947,9 +1087,8 @@ impl<'a> ProofInstrumentor<'a> {
             };
 
             let proof_var = self.fresh_var();
-            // add a proof for the constructor if needed
-            let term_proof = if func_type.subtype == FunctionSubtype::Constructor {
-                let term_proof_constructor = self.term_proof_name(func_type.output.name());
+            let term_proof = if let Some(sort) = canonical_sort {
+                let term_proof_constructor = self.term_proof_name(sort);
                 format!("(set ({term_proof_constructor} {fv}) {proof_var})")
             } else {
                 "".to_string()
@@ -967,16 +1106,11 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         res.push(proof_str);
-        res.push(self.update_view(&func_type.name, &args_with_fv, &view_proof_var));
+        res.push(self.update_view(view_key, &view_args, &view_proof_var));
 
         // add to uf table to initialize eclass for constructors
-        if func_type.subtype == FunctionSubtype::Constructor {
-            res.push(self.union(
-                func_type.output.name(),
-                &fv,
-                &fv,
-                &Justification::Proof(view_proof_var),
-            ));
+        if let Some(sort) = canonical_sort {
+            res.push(self.union(sort, &fv, &fv, &Justification::Proof(view_proof_var)));
         }
 
         (res, fv)
@@ -1024,6 +1158,29 @@ impl<'a> ProofInstrumentor<'a> {
                         fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
+                        if let Some(constructor) =
+                            proof_container_constructor(specialized_primitive)
+                        {
+                            let output_sort = specialized_primitive.output().name();
+                            let to_ast = self
+                                .proof_names()
+                                .sort_to_ast_constructor
+                                .get(output_sort)
+                                .unwrap()
+                                .clone();
+                            let view_key = Self::container_view_key(constructor.name, output_sort);
+                            let (add_code, fv) = self.add_created_term_and_view(
+                                specialized_primitive.name(),
+                                &args,
+                                &view_key,
+                                &to_ast,
+                                Some(output_sort),
+                                proof,
+                            );
+                            res.extend(add_code);
+                            return fv;
+                        }
+
                         let fv = self.fresh_var();
                         res.push(format!(
                             "(let {} ({} {}))",
@@ -1175,6 +1332,17 @@ impl<'a> ProofInstrumentor<'a> {
                     unionable: *unionable,
                 });
                 res.extend(self.declare_sort(name));
+                let container_sort = self
+                    .egraph
+                    .proof_state
+                    .original_typechecking
+                    .as_ref()
+                    .and_then(|egraph| egraph.type_info.get_sort_by_name(name))
+                    .or_else(|| self.egraph.type_info.get_sort_by_name(name))
+                    .cloned();
+                if let Some(sort) = container_sort {
+                    res.extend(self.proof_container_encoding(&sort));
+                }
             }
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));

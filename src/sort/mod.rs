@@ -19,6 +19,54 @@ pub type Q = core_relations::Boxed<BigRational>;
 pub type F = core_relations::Boxed<OrderedFloat<f64>>;
 pub type S = core_relations::Boxed<String>;
 
+/// Proof-mode description of a container sort that can be encoded as
+/// constructor-like proof views.
+#[derive(Clone, Debug)]
+pub struct ContainerProofSpec {
+    /// Constructor-like cases that can create values of this container sort.
+    pub constructors: Vec<ContainerProofConstructorSpec>,
+}
+
+impl ContainerProofSpec {
+    /// Find the constructor case and projected field for a projection primitive.
+    pub fn projection(
+        &self,
+        primitive: &str,
+    ) -> Option<(
+        &ContainerProofConstructorSpec,
+        &ContainerProofProjectionSpec,
+    )> {
+        self.constructors.iter().find_map(|constructor| {
+            constructor
+                .projections
+                .iter()
+                .find(|projection| projection.primitive == primitive)
+                .map(|projection| (constructor, projection))
+        })
+    }
+}
+
+/// One constructor-like case used to expose a Rust-level container to proof
+/// mode.
+#[derive(Clone, Debug)]
+pub struct ContainerProofConstructorSpec {
+    /// Primitive name used as the constructor in proof views.
+    pub name: &'static str,
+    /// Sorts of the fields accepted by this constructor case.
+    pub input_sorts: Vec<ArcSort>,
+    /// Projection primitives that can recover fields from this constructor case.
+    pub projections: Vec<ContainerProofProjectionSpec>,
+}
+
+/// A projection primitive that recovers one field from a container proof view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContainerProofProjectionSpec {
+    /// Primitive name used for the projection.
+    pub primitive: &'static str,
+    /// Zero-based field index in the constructor case's `input_sorts`.
+    pub field: usize,
+}
+
 mod bigint;
 pub use bigint::*;
 mod bigrat;
@@ -43,6 +91,8 @@ mod r#fn;
 pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
+mod either;
+pub use either::*;
 mod pair;
 pub use pair::*;
 
@@ -82,6 +132,12 @@ pub trait Sort: Any + Send + Sync + Debug {
     // only eq_sort and eq_container_sort need to be canonicalized.
     fn is_eq_container_sort(&self) -> bool {
         false
+    }
+
+    /// Return proof-mode constructor/projection metadata for container sorts
+    /// that can participate in proof reconstruction.
+    fn container_proof_spec(&self) -> Option<ContainerProofSpec> {
+        None
     }
 
     /// Return the serialized name of the sort
@@ -149,6 +205,11 @@ pub trait Sort: Any + Send + Sync + Debug {
 pub trait Presort {
     fn presort_name() -> &'static str;
     fn reserved_primitives() -> Vec<&'static str>;
+    /// Return true when all sorts made from this presort have a
+    /// `container_proof_spec` and can be accepted by proof mode.
+    fn supports_proof_encoding() -> bool {
+        false
+    }
     fn make_sort(
         typeinfo: &mut TypeInfo,
         name: String,

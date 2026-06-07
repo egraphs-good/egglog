@@ -58,6 +58,10 @@ impl Presort for PairSort {
         vec!["pair", "pair-first", "pair-second"]
     }
 
+    fn supports_proof_encoding() -> bool {
+        true
+    }
+
     fn make_sort(
         typeinfo: &mut TypeInfo,
         name: String,
@@ -101,6 +105,25 @@ impl ContainerSort for PairSort {
             || self.second.is_eq_container_sort()
     }
 
+    fn container_proof_spec(&self) -> Option<ContainerProofSpec> {
+        Some(ContainerProofSpec {
+            constructors: vec![ContainerProofConstructorSpec {
+                name: "pair",
+                input_sorts: vec![self.first.clone(), self.second.clone()],
+                projections: vec![
+                    ContainerProofProjectionSpec {
+                        primitive: "pair-first",
+                        field: 0,
+                    },
+                    ContainerProofProjectionSpec {
+                        primitive: "pair-second",
+                        field: 1,
+                    },
+                ],
+            }],
+        })
+    }
+
     fn inner_values(
         &self,
         container_values: &ContainerValues,
@@ -119,17 +142,59 @@ impl ContainerSort for PairSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "pair" = {self.clone(): PairSort} |x: # (self.first()), y: # (self.second())| -> @PairContainer (arc) {
-            PairContainer {
-                do_rebuild_first: self.ctx.first.is_eq_sort() || self.ctx.first.is_eq_container_sort(),
-                do_rebuild_second: self.ctx.second.is_eq_sort() || self.ctx.second.is_eq_container_sort(),
-                first: x,
-                second: y,
+        add_primitive_with_validator!(
+            eg,
+            "pair" = {self.clone(): PairSort} |x: # (self.first()), y: # (self.second())| -> @PairContainer (arc) {
+                PairContainer {
+                    do_rebuild_first: self.ctx.first.is_eq_sort() || self.ctx.first.is_eq_container_sort(),
+                    do_rebuild_second: self.ctx.second.is_eq_sort() || self.ctx.second.is_eq_container_sort(),
+                    first: x,
+                    second: y,
+                }
+            },
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                if args.len() == 2 {
+                    Some(termdag.app("pair".into(), args.to_vec()))
+                } else {
+                    None
+                }
             }
-        });
+        );
 
-        add_primitive!(eg, "pair-first"  = |xs: @PairContainer (arc)| -> # (self.first())  { xs.first  });
-        add_primitive!(eg, "pair-second" = |xs: @PairContainer (arc)| -> # (self.second()) { xs.second });
+        add_primitive_with_validator!(
+            eg,
+            "pair-first"  = |xs: @PairContainer (arc)| -> # (self.first())  { xs.first  },
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [pair] = args else {
+                    return None;
+                };
+                match termdag.get(*pair) {
+                    Term::App(head, children)
+                        if head == "pair" && children.len() == 2 =>
+                    {
+                        Some(children[0])
+                    }
+                    _ => None,
+                }
+            }
+        );
+        add_primitive_with_validator!(
+            eg,
+            "pair-second" = |xs: @PairContainer (arc)| -> # (self.second()) { xs.second },
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [pair] = args else {
+                    return None;
+                };
+                match termdag.get(*pair) {
+                    Term::App(head, children)
+                        if head == "pair" && children.len() == 2 =>
+                    {
+                        Some(children[1])
+                    }
+                    _ => None,
+                }
+            }
+        );
     }
 
     fn reconstruct_termdag(

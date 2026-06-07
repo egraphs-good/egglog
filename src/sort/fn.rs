@@ -217,6 +217,7 @@ impl Sort for FunctionSort {
 
         register_vec_primitives_for_function(eg, self.clone());
         register_multiset_primitives_for_function(eg, self.clone());
+        register_either_primitives_for_function(eg, self.clone());
     }
 
     fn value_type(&self) -> Option<TypeId> {

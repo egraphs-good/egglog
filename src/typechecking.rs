@@ -198,6 +198,7 @@ impl Debug for PrimitiveWithId {
 #[derive(Clone, Default)]
 pub struct TypeInfo {
     mksorts: HashMap<String, MkSort>,
+    proof_supported_presorts: HashSet<&'static str>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
@@ -602,10 +603,17 @@ impl TypeInfo {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
                 e.insert(S::make_sort);
+                if S::supports_proof_encoding() {
+                    self.proof_supported_presorts.insert(name);
+                }
                 self.reserved_primitives.extend(S::reserved_primitives());
                 Ok(())
             }
         }
+    }
+
+    pub(crate) fn presort_supports_proof_encoding(&self, presort: &str) -> bool {
+        self.proof_supported_presorts.contains(presort)
     }
 
     /// Returns all sorts that satisfy the type and predicate.

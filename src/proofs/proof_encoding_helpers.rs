@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, TypeInfo,
+    EGraph, SpecializedPrimitive, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, Schedule,
@@ -54,6 +54,21 @@ pub(crate) enum Justification {
     Fiat,
     Proof(String),                 // existing proof
     Merge(String, String, String), // function name, proof1, proof2
+}
+
+pub(crate) fn proof_container_constructor(
+    primitive: &SpecializedPrimitive,
+) -> Option<crate::sort::ContainerProofConstructorSpec> {
+    let spec = primitive.output().container_proof_spec()?;
+    spec.constructors.into_iter().find(|constructor| {
+        constructor.name == primitive.name()
+            && constructor.input_sorts.len() == primitive.input().len()
+            && constructor
+                .input_sorts
+                .iter()
+                .zip(primitive.input())
+                .all(|(expected, actual)| expected.name() == actual.name())
+    })
 }
 
 impl EncodingNames {
@@ -533,6 +548,10 @@ pub(crate) fn command_supports_proof_encoding(
 
     // Now check command-specific constraints
     match command {
+        GenericCommand::Sort {
+            presort_and_args: Some((presort, _)),
+            ..
+        } if type_info.presort_supports_proof_encoding(presort) => Ok(()),
         GenericCommand::Sort {
             presort_and_args: Some(_),
             ..

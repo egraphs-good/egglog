@@ -1,0 +1,77 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(let t0 (boxed-left (Box (either-left (A))) (A)))
+(let prf0 (Fiat (= (A) (A))))
+(Rule
+  (= (@ExistsConstructor) (@ExistsConstructor))
+  (name "@prove_exists_rule")
+  (premises
+    (Rule
+      (= t0 t0)
+      (name "project-left")
+      (premises (Fiat (= (Box (either-left (A))) (Box (either-left (A))))) prf0)
+      (substitution
+        (value (either-left (A)))
+        (left (A))
+        (box (Box (either-left (A))))))
+    prf0)
+  (substitution (@n (A))))
+(let t0 (boxed-right (Box (either-right 7)) 7))
+(let prf0 (Fiat (= 7 7)))
+(Rule
+  (= (@ExistsConstructor1) (@ExistsConstructor1))
+  (name "@prove_exists_rule1")
+  (premises
+    (Rule
+      (= t0 t0)
+      (name "project-right")
+      (premises (Fiat (= (Box (either-right 7)) (Box (either-right 7)))) prf0)
+      (substitution
+        (value (either-right 7))
+        (right 7)
+        (box (Box (either-right 7)))))
+    prf0)
+  (substitution (@n1 7)))
+(Congr
+  (= (Box (either-left (A))) (Box (either-left (B))))
+  (Fiat (= (Box (either-left (A))) (Box (either-left (A)))))
+  (Congr
+    (= (either-left (A)) (either-left (B)))
+    (Fiat (= (either-left (A)) (either-left (A))))
+    (Sym (= (A) (B)) (Fiat (= (B) (A))))
+    0)
+  0)
+(Congr
+  (= (RightBox (either-right (A))) (RightBox (either-right (B))))
+  (Fiat (= (RightBox (either-right (A))) (RightBox (either-right (A)))))
+  (Congr
+    (= (either-right (A)) (either-right (B)))
+    (Fiat (= (either-right (A)) (either-right (A))))
+    (Sym (= (A) (B)) (Fiat (= (B) (A))))
+    0)
+  0)
+(let t0 (boxed-left (Box (either-left (A))) (A)))
+(Rule
+  (= (@ExistsConstructor4) (@ExistsConstructor4))
+  (name "@prove_exists_rule4")
+  (premises
+    (Rule
+      (= t0 t0)
+      (name "project-left")
+      (premises
+        (Fiat (= (Box (either-left (A))) (Box (either-left (A)))))
+        (Fiat (= (A) (A))))
+      (substitution
+        (value (either-left (A)))
+        (left (A))
+        (box (Box (either-left (A))))))
+    (Sym (= (A) (B)) (Fiat (= (B) (A)))))
+  (substitution (@n2 (A))))
+((A 1)
+ (B 1)
+ (Box 2)
+ (RightBox 1)
+ (boxed-left 1)
+ (boxed-right 1))
