@@ -31,7 +31,7 @@ jobs:
           tool: nextest,cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - run: make coverage
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           fail_ci_if_error: true
