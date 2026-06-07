@@ -197,6 +197,7 @@ impl ProofStore {
                     justification: Justification::Sym(right_id),
                 };
                 let sym_right_id = self.add_proof(sym_right);
+                let sym_right_id = self.simplify(sym_right_id);
 
                 // Create Sym(p1): b = a
                 let sym_left = Proof {
@@ -204,6 +205,7 @@ impl ProofStore {
                     justification: Justification::Sym(left_id),
                 };
                 let sym_left_id = self.add_proof(sym_left);
+                let sym_left_id = self.simplify(sym_left_id);
 
                 // Create Trans(Sym(p2), Sym(p1)): c = a
                 let new_trans = Proof {
