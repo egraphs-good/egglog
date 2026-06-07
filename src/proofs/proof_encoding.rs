@@ -1029,14 +1029,18 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[String],
         justification: &Justification,
     ) -> (Vec<String>, String) {
-        let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
+        let to_ast = self
+            .egraph
+            .proof_state
+            .proofs_enabled
+            .then(|| self.fname_to_ast_name(&func_type.name).to_string());
         let canonical_sort =
             (func_type.subtype == FunctionSubtype::Constructor).then(|| func_type.output.name());
         self.add_created_term_and_view(
             &func_type.name,
             args,
             &func_type.name,
-            &to_ast,
+            to_ast.as_deref(),
             canonical_sort,
             justification,
         )
@@ -1047,7 +1051,7 @@ impl<'a> ProofInstrumentor<'a> {
         term_name: &str,
         args: &[String],
         view_key: &str,
-        to_ast: &str,
+        to_ast: Option<&str>,
         canonical_sort: Option<&str>,
         justification: &Justification,
     ) -> (Vec<String>, String) {
@@ -1068,6 +1072,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         let (proof_str, view_proof_var) = if self.egraph.proof_state.proofs_enabled {
+            let to_ast = to_ast.expect("proof AST constructor missing for created term");
             let rule_constructor = &self.proof_names().rule_constructor;
             let fiat_constructor = &self.proof_names().fiat_constructor;
             let proof = match justification {
@@ -1162,18 +1167,19 @@ impl<'a> ProofInstrumentor<'a> {
                             proof_container_constructor(specialized_primitive)
                         {
                             let output_sort = specialized_primitive.output().name();
-                            let to_ast = self
-                                .proof_names()
-                                .sort_to_ast_constructor
-                                .get(output_sort)
-                                .unwrap()
-                                .clone();
+                            let to_ast = self.egraph.proof_state.proofs_enabled.then(|| {
+                                self.proof_names()
+                                    .sort_to_ast_constructor
+                                    .get(output_sort)
+                                    .unwrap()
+                                    .clone()
+                            });
                             let view_key = Self::container_view_key(constructor.name, output_sort);
                             let (add_code, fv) = self.add_created_term_and_view(
                                 specialized_primitive.name(),
                                 &args,
                                 &view_key,
-                                &to_ast,
+                                to_ast.as_deref(),
                                 Some(output_sort),
                                 proof,
                             );
