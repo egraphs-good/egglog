@@ -58,6 +58,10 @@ impl Presort for PairSort {
         vec!["pair", "pair-first", "pair-second"]
     }
 
+    // Proof support is presort-wide: every Pair instance has the same
+    // constructor/projection metadata. Instance-specific canonicalization is
+    // still gated by `is_eq_container_sort` and the per-field rebuild flags, so
+    // `(Pair i64 i64)` is admissible but contributes no rebuild work.
     fn supports_proof_encoding() -> bool {
         true
     }

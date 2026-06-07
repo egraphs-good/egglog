@@ -55,6 +55,14 @@ pub trait Presort {
 
 `TypeInfo` records this during presort registration, so `file_supports_proofs` asks type information instead of hard-coding specific presort names in proof encoding helpers.
 
+This is intentionally a presort-level admission check, not an instance-level
+canonicalization check. For `Pair` and `Either`, proof support means the Rust
+container has proof-level constructor/projection metadata. A fully primitive
+instance such as `(Pair i64 i64)` can be encoded as a constructor-like value, but
+it has no e-class fields to canonicalize. Rebuild and congruence work remains
+instance-sensitive through `Sort::is_eq_container_sort` and the container's
+per-field rebuild flags.
+
 ### Container Metadata
 
 Instantiated sorts describe their proof-level constructors and projections:
@@ -171,6 +179,17 @@ Another option is to add proof-language support for projection or datatype injec
 
 This RFC does not add that rule. The current proof language has constructor congruence, not constructor inversion: `Congr` lifts a child equality through an application, but it does not derive a child equality from an application equality. Adding projection or injectivity would expand the proof format and checker, and `Either` would need partial-unwrap and constructor-disjointness side conditions.
 
+This is consistent with the existing treatment of other primitive operations in
+proof mode. A primitive equality such as `(= (+ 1 2) 3)` can be checked by
+running the primitive validator and proving the resulting value reflexively, but
+proof mode does not generally emit a first-class proof term for the evaluation
+step when the primitive appears under an eq-sort constructor. For example,
+`(= (Num (+ 1 2)) (Num 3))` needs more than constructor congruence unless the
+primitive evaluation step is lifted into the proof object. Native container
+projections follow the same boundary: rule actions may evaluate `pair-first` or
+`either-unwrap-left` through validators, while standalone projection equalities
+would need a richer proof rule.
+
 The literature split supports keeping this first slice smaller. Proof-producing congruence-closure work such as de Moura, Ruess, and Shankar 2004, "Justifying Equality", and Nieuwenhuis and Oliveras 2007, "Fast Congruence Closure and Extensions", motivates recording equality explanations close to congruence closure. Lazy proof and provenance work such as Flanagan et al. 2003, "Theorem Proving Using Lazy Proof Explication", Cheney et al. 2009, "Provenance in Databases", and Deutch et al. 2014, "Circuits for Datalog Provenance", supports deferring richer derivation evidence until there is a clear checker boundary. For this Pair/Either slice, projection and unwrap uses inside rules are explained by the surrounding user rule plus primitive validator/view evidence; rebuilt container equality is the part that becomes explicit `Congr`.
 
 Re-enter this design if external proof checking without Rust primitive validators, field equality from container equality, or standalone projection equalities become requirements.
@@ -191,7 +210,7 @@ A proof-aware union-find backend may eventually simplify generated proof-mode ma
 
 - This adds a small proof metadata API to container sorts, so future non-fixed-shape containers may need a different extension point.
 - `Either` is only partially supported: constructors and unwrap projections are covered, but `either-match` is not.
-- Projection and unwrap proofs are less explicit than rebuilt container equality proofs. They rely on primitive validators and the surrounding user rule rather than a standalone projection/injectivity proof rule.
+- Projection and unwrap proofs are less explicit than rebuilt container equality proofs. They follow the existing primitive-evaluation boundary: primitive validators and the surrounding user rule can explain rule actions, but standalone primitive/projection equalities under eq-sort constructors are not made explicit without a future projection/injectivity or primitive-evaluation proof rule.
 - Proof mode remains inconsistent for direct non-eq globals until global primitive/container values get their own design.
 
 ## Acceptance Criteria

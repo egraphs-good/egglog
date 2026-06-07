@@ -453,6 +453,8 @@ pub enum ProofEncodingUnsupportedReason {
         "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
     )]
     SortWithPresort,
+    #[error("presort {0} does not support proof encoding.")]
+    PresortNotSupported(String),
     #[error(
         "sort has a :internal-uf annotation. The :internal-uf annotation is used internally by term encoding and cannot be specified manually in proof mode."
     )]
@@ -560,9 +562,11 @@ pub(crate) fn command_supports_proof_encoding(
             ..
         } if type_info.presort_supports_proof_encoding(presort) => Ok(()),
         GenericCommand::Sort {
-            presort_and_args: Some(_),
+            presort_and_args: Some((presort, _)),
             ..
-        } => Err(ProofEncodingUnsupportedReason::SortWithPresort),
+        } => Err(ProofEncodingUnsupportedReason::PresortNotSupported(
+            presort.clone(),
+        )),
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
         GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
         // Extract commands can't have non-global function lookups
@@ -607,5 +611,22 @@ pub(crate) fn command_supports_proof_encoding(
             }
         }
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::EGraph;
+
+    #[test]
+    fn unsupported_presort_error_names_presort() {
+        let err = EGraph::new_with_proofs()
+            .parse_and_run_program(None, "(sort IntVec (Vec i64))")
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Reason: presort Vec does not support proof encoding.")
+        );
     }
 }

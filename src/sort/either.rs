@@ -34,8 +34,8 @@ impl ContainerValue for EitherContainer {
     }
 
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        match self.data {
-            EitherData::Left(value) | EitherData::Right(value) => Some(value).into_iter(),
+        match &self.data {
+            EitherData::Left(value) | EitherData::Right(value) => Some(*value).into_iter(),
         }
     }
 }
@@ -72,6 +72,11 @@ impl Presort for EitherSort {
         ]
     }
 
+    // Proof support is presort-wide: every Either instance has the same
+    // constructor/projection metadata. Instance-specific canonicalization is
+    // still gated by `is_eq_container_sort` and the active branch's rebuild
+    // flag, so `(Either i64 String)` is admissible but contributes no rebuild
+    // work.
     fn supports_proof_encoding() -> bool {
         true
     }
@@ -151,13 +156,10 @@ impl ContainerSort for EitherSort {
         container_values: &ContainerValues,
         value: Value,
     ) -> Vec<(ArcSort, Value)> {
-        let either = container_values
-            .get_val::<EitherContainer>(value)
-            .unwrap()
-            .clone();
-        match either.data {
-            EitherData::Left(value) => vec![(self.left.clone(), value)],
-            EitherData::Right(value) => vec![(self.right.clone(), value)],
+        let either = container_values.get_val::<EitherContainer>(value).unwrap();
+        match &either.data {
+            EitherData::Left(value) => vec![(self.left.clone(), *value)],
+            EitherData::Right(value) => vec![(self.right.clone(), *value)],
         }
     }
 

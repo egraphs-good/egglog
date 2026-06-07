@@ -7,7 +7,11 @@ use egglog_ast::generic_ast::GenericExpr;
 /// Transforms queries so that they are in "proof normal form" by lifting subexpressions out, making them top level. In proof normal form:
 /// 1. Function calls like (lower-bound a b) are always top level and look like this:
 ///    (= (lower-bound a b) c)
-/// 2. Primitives can't have constructors or function calls as arguments.
+/// 2. Primitives can't have constructors or function calls as arguments, except
+///    `ResolvedCall::Primitive`s recognized by `proof_container_constructor`.
+///    Those container constructors are recursively normalized by `proof_form_expr`
+///    and kept as `ResolvedExpr::Call` so proof encoding can treat them as
+///    constructor-like views.
 ///    For example, (!= a (Const 0)) becomes:
 ///    (= (Const 0) v), (!= a v)
 ///
