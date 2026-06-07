@@ -118,14 +118,14 @@ fn proof_form_expr(
             resolved
         }
         ResolvedExpr::Call(span, head @ ResolvedCall::Primitive(_), args) => {
-            if let ResolvedCall::Primitive(primitive) = &head {
-                if proof_container_constructor(primitive).is_some() {
-                    let new_args = args
-                        .into_iter()
-                        .map(|expr| proof_form_expr(expr, res, fresh))
-                        .collect();
-                    return ResolvedExpr::Call(span, head, new_args);
-                }
+            if let ResolvedCall::Primitive(primitive) = &head
+                && proof_container_constructor(primitive).is_some()
+            {
+                let new_args = args
+                    .into_iter()
+                    .map(|expr| proof_form_expr(expr, res, fresh))
+                    .collect();
+                return ResolvedExpr::Call(span, head, new_args);
             }
 
             // For primitives, extract any constructor/custom function call arguments
