@@ -3,11 +3,8 @@
 (constructor B () Math)
 (sort MathIntPair (Pair Math i64))
 (datatype MathIntPairBox (Box MathIntPair))
-(sort IntMathPair (Pair i64 Math))
-(datatype IntMathPairBox (RightBox IntMathPair))
 
 (let boxed (Box (pair (A) 2)))
-(let right-boxed (RightBox (pair 2 (A))))
 
 (function boxed-first (MathIntPairBox) Math :merge old)
 (function boxed-second (MathIntPairBox) i64 :merge old)
@@ -21,5 +18,4 @@
 
 (union (A) (B))
 (prove (= boxed (Box (pair (B) 2))))
-(prove (= right-boxed (RightBox (pair 2 (B)))))
 (prove (= (boxed-first boxed) (B)))

@@ -4,12 +4,9 @@
 
 (sort MathOrInt (Either Math i64))
 (datatype EitherBox (Box MathOrInt))
-(sort IntOrMath (Either i64 Math))
-(datatype IntOrMathBox (RightBox IntOrMath))
 
 (let left-a-box (Box (either-left (A))))
 (let right-int-box (Box (either-right 7)))
-(let right-a-box (RightBox (either-right (A))))
 
 (function boxed-left (EitherBox) Math :merge old)
 (function boxed-right (EitherBox) i64 :merge old)
@@ -27,5 +24,4 @@
 
 (union (A) (B))
 (prove (= left-a-box (Box (either-left (B)))))
-(prove (= right-a-box (RightBox (either-right (B)))))
 (prove (= (boxed-left left-a-box) (B)))

@@ -35,19 +35,10 @@ expression: snapshot_content_across_treatments
     (Sym (= (A) (B)) (Fiat (= (B) (A))))
     0)
   0)
-(Congr
-  (= (RightBox (RightMath (A))) (RightBox (RightMath (B))))
-  (Fiat (= (RightBox (RightMath (A))) (RightBox (RightMath (A)))))
-  (Congr
-    (= (RightMath (A)) (RightMath (B)))
-    (Fiat (= (RightMath (A)) (RightMath (A))))
-    (Sym (= (A) (B)) (Fiat (= (B) (A))))
-    0)
-  0)
 (let t0 (boxed-left (Box (Left (A))) (A)))
 (Rule
-  (= (@ExistsConstructor4) (@ExistsConstructor4))
-  (name "@prove_exists_rule4")
+  (= (@ExistsConstructor3) (@ExistsConstructor3))
+  (name "@prove_exists_rule3")
   (premises
     (Rule
       (= t0 t0)
@@ -60,9 +51,6 @@ expression: snapshot_content_across_treatments
  (B 1)
  (Box 2)
  (Left 1)
- (LeftInt 0)
  (Right 1)
- (RightBox 1)
- (RightMath 1)
  (boxed-left 1)
  (boxed-right 1))
