@@ -29,6 +29,10 @@ pub struct ContainerProofSpec {
 
 impl ContainerProofSpec {
     /// Find the constructor case and projected field for a projection primitive.
+    ///
+    /// Projection primitive names must be unique within a `ContainerProofSpec`.
+    /// If duplicate primitive names are present, this returns the first matching
+    /// `(constructor, projection)` pair in constructor/projection order.
     pub fn projection(
         &self,
         primitive: &str,

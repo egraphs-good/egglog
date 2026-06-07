@@ -548,6 +548,13 @@ pub(crate) fn command_supports_proof_encoding(
 
     // Now check command-specific constraints
     match command {
+        GenericCommand::Sort { uf: Some(_), .. } => {
+            Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
+        }
+        GenericCommand::Sort {
+            proof_func: Some(_),
+            ..
+        } => Err(ProofEncodingUnsupportedReason::SortWithProofFuncAnnotation),
         GenericCommand::Sort {
             presort_and_args: Some((presort, _)),
             ..
@@ -556,13 +563,6 @@ pub(crate) fn command_supports_proof_encoding(
             presort_and_args: Some(_),
             ..
         } => Err(ProofEncodingUnsupportedReason::SortWithPresort),
-        GenericCommand::Sort { uf: Some(_), .. } => {
-            Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
-        }
-        GenericCommand::Sort {
-            proof_func: Some(_),
-            ..
-        } => Err(ProofEncodingUnsupportedReason::SortWithProofFuncAnnotation),
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
         GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
         // Extract commands can't have non-global function lookups

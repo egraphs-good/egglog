@@ -1129,6 +1129,12 @@ pub enum TypeError {
         "{1}\nView table {0} with :internal-term-constructor must have at least one input (the e-class)."
     )]
     TermConstructorNoInputs(String, Span),
+    #[error("Sort {sort} expects {expected} argument(s), got {actual}.")]
+    InvalidSortArity {
+        sort: String,
+        expected: usize,
+        actual: usize,
+    },
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",
         crate::GLOBAL_NAME_PREFIX

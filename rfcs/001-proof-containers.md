@@ -165,6 +165,16 @@ The smallest implementation could special-case `Pair`, `pair`, `pair-first`, `Ei
 
 Another option is to explain rebuilt container equalities with a container-specific proof rule or Rust callback. For fixed-shape containers, ordinary constructor congruence is enough: a child proof can be lifted through `pair`, `either-left`, or `either-right`. Using the existing `Congr` proof shape also makes container-backed snapshots comparable to user-land datatype snapshots.
 
+### First-Class Projection Or Injectivity Proof Rules
+
+Another option is to add proof-language support for projection or datatype injectivity. For example, a future rule could derive `(pair-first p) = x` from `p = (pair x y)`, or derive field equalities from equality of two same-constructor container values. That would make projection and unwrap proof objects more explicit and would reduce reliance on primitive validators for those steps.
+
+This RFC does not add that rule. The current proof language has constructor congruence, not constructor inversion: `Congr` lifts a child equality through an application, but it does not derive a child equality from an application equality. Adding projection or injectivity would expand the proof format and checker, and `Either` would need partial-unwrap and constructor-disjointness side conditions.
+
+The literature split supports keeping this first slice smaller. Proof-producing congruence-closure work such as de Moura, Ruess, and Shankar 2004, "Justifying Equality", and Nieuwenhuis and Oliveras 2007, "Fast Congruence Closure and Extensions", motivates recording equality explanations close to congruence closure. Lazy proof and provenance work such as Flanagan et al. 2003, "Theorem Proving Using Lazy Proof Explication", Cheney et al. 2009, "Provenance in Databases", and Deutch et al. 2014, "Circuits for Datalog Provenance", supports deferring richer derivation evidence until there is a clear checker boundary. For this Pair/Either slice, projection and unwrap uses inside rules are explained by the surrounding user rule plus primitive validator/view evidence; rebuilt container equality is the part that becomes explicit `Congr`.
+
+Re-enter this design if external proof checking without Rust primitive validators, field equality from container equality, or standalone projection equalities become requirements.
+
 ### Direct Container Globals In The First Slice
 
 Direct globals for non-eq container values would be useful, but proof-mode global desugaring still does not support non-eq primitive/container let bindings. This RFC keeps those globals out of scope and uses eq-sort constructors as the supported top-level proof boundary.
@@ -181,6 +191,7 @@ A proof-aware union-find backend may eventually simplify generated proof-mode ma
 
 - This adds a small proof metadata API to container sorts, so future non-fixed-shape containers may need a different extension point.
 - `Either` is only partially supported: constructors and unwrap projections are covered, but `either-match` is not.
+- Projection and unwrap proofs are less explicit than rebuilt container equality proofs. They rely on primitive validators and the surrounding user rule rather than a standalone projection/injectivity proof rule.
 - Proof mode remains inconsistent for direct non-eq globals until global primitive/container values get their own design.
 
 ## Acceptance Criteria
@@ -189,7 +200,7 @@ A proof-aware union-find backend may eventually simplify generated proof-mode ma
 - Pair and Either constructor primitives can appear inside eq-sort constructors and produce proof snapshots.
 - Pair projections and Either unwrap projections can be used in rules whose results are proved.
 - Rebuilding after a child equality produces explicit `Congr` over `pair`, `either-left`, or `either-right`, not an opaque container proof.
-- User-land datatype mirror tests produce comparable proof shapes for construction, projection, and rebuild behavior.
+- User-land datatype mirror tests produce comparable proof shapes for construction, rule-level projection/unwrap results, and rebuild behavior. Native projection/unwrap proofs do not need to be byte-for-byte identical to datatype pattern destructuring, and this slice does not require standalone projection eliminator proof terms.
 - Direct non-eq container globals remain unsupported in proof mode.
 
 Current test coverage:
@@ -203,5 +214,6 @@ Current test coverage:
 ## Open Questions
 
 - Is field-index projection metadata sufficient for future containers, or do richer eliminators need a different shape?
+- Should fixed-shape containers eventually expose first-class projection or injectivity proof rules, and if so should those rules live in the proof checker or in a future proof-producing equality service?
 - What metadata shape would be needed to support `either-match` proofs?
 - For future reordered containers such as `Map` and `Set`, what proof object should explain normalization, ordering, key lookup, and multiplicity? Positional `Congr` is sufficient for `Pair` and same-variant `Either`, but not for semantic container equality.

@@ -1,0 +1,5 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+Sort Either expects 2 argument(s), got 1.

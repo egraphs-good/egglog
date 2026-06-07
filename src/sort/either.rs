@@ -96,7 +96,11 @@ impl Presort for EitherSort {
             }
             .to_arcsort())
         } else {
-            panic!("Either sort requires exactly two arguments")
+            Err(TypeError::InvalidSortArity {
+                sort: Self::presort_name().to_string(),
+                expected: 2,
+                actual: args.len(),
+            })
         }
     }
 }
