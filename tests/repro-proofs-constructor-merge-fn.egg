@@ -4,13 +4,13 @@
 (constructor MyGt (Math Math) Math)
 (constructor Num (i64) Math)
 
-(function Biggie () Math :merge (MyGt old new))
+(function Biggie (i64) Math :merge (MyGt old new))
 
 
 (rule ()
-      ((set (Biggie) (Num 1))
-       (set (Biggie) (Num 2))
-       (set (Biggie) (Num 3))))
+      ((set (Biggie 1) (Num 1))
+       (set (Biggie 2) (Num 2))
+       (set (Biggie 3) (Num 3))))
 
 (run 1)
 
@@ -18,5 +18,5 @@
 
 (run 2)
 
-(check (= (Biggie) a)
+(check (= (Biggie 3) a)
        (= a (Num 3)))
