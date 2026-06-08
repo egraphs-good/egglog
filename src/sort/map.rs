@@ -139,14 +139,24 @@ impl ContainerSort for MapSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
+        // Proof term form of a map: nested `(map-insert (map-empty) k v ...)`,
+        // matching `reconstruct_termdag`. (Key collapse / last-write-wins for
+        // proof checking is refined in the Map proof stage.)
+        let map_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("map-empty".into(), vec![]))
+        };
+        let map_insert_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            (args.len() == 3).then(|| termdag.app("map-insert".into(), args.to_vec()))
+        };
+
+        add_primitive_with_validator!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
             data: BTreeMap::new()
-        } });
+        } }, map_empty_validator);
 
         add_primitive!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }});
+        add_primitive_with_validator!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }}, map_insert_validator);
         add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
 
         add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 });

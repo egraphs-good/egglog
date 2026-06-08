@@ -140,6 +140,25 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _termdag = termdag;
         todo!("reconstruct_termdag_leaf: {}", self.name());
     }
+
+    /// Canonicalize a container value for the term encoding by remapping each
+    /// contained value through `leaders` (an old-value -> union-find-leader
+    /// map), returning the new interned container value. Only container sorts
+    /// implement this; it is the value-level half of the container rebuild
+    /// performed by the term encoding's rebuild rules.
+    fn rebuild_container_with_leaders(
+        &self,
+        container_values: &ContainerValues,
+        exec_state: &mut ExecutionState,
+        value: Value,
+        leaders: &crate::util::HashMap<Value, Value>,
+    ) -> Value {
+        let _ = (container_values, exec_state, value, leaders);
+        panic!(
+            "rebuild_container_with_leaders called on non-container sort: {}",
+            self.name()
+        );
+    }
 }
 
 // Note: this trait is currently intended to be implemented on the

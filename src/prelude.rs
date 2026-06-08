@@ -939,6 +939,20 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0
             .reconstruct_termdag(container_values, value, termdag, element_terms)
     }
+
+    fn rebuild_container_with_leaders(
+        &self,
+        container_values: &ContainerValues,
+        exec_state: &mut ExecutionState,
+        value: Value,
+        leaders: &crate::util::HashMap<Value, Value>,
+    ) -> Value {
+        // Generic over every container type: clone the container, remap each
+        // contained value to its union-find leader, and re-intern.
+        container_values.rebuild_val_with::<T::Container>(value, exec_state, &|v| {
+            leaders.get(&v).copied().unwrap_or(v)
+        })
+    }
 }
 
 /// Add a [`BaseSort`] to the e-graph

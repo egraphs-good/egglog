@@ -162,6 +162,29 @@ impl ContainerValues {
         env.get_or_insert(&container, exec_state)
     }
 
+    /// Rebuild a single container value by remapping each of its contained
+    /// values through `remap`, returning the (possibly new) interned value.
+    ///
+    /// This is the single-container analogue of [`ContainerValues::rebuild_all`]:
+    /// instead of driving rebuilds off the backend union-find, the caller
+    /// supplies an explicit value remapping (e.g. a lookup into an
+    /// egglog-level union-find table during term encoding). The caller must
+    /// know the container type `C`. Returns the original value unchanged if it
+    /// is not a registered container of type `C`.
+    pub fn rebuild_val_with<C: ContainerValue>(
+        &self,
+        value: Value,
+        exec_state: &mut ExecutionState,
+        remap: &(dyn Fn(Value) -> Value + Send + Sync),
+    ) -> Value {
+        let Some(mut container) = self.get_val::<C>(value).map(|g| g.clone()) else {
+            return value;
+        };
+        let rebuilder = ClosureRebuilder { remap };
+        container.rebuild_contents(&rebuilder);
+        self.register_val(container, exec_state)
+    }
+
     /// Apply the given rebuild to the contents of each container.
     pub fn rebuild_all(
         &mut self,
@@ -735,5 +758,58 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
         table_size > 1000 && uf_size * 512 <= table_size
     } else {
         table_size > 1000 && uf_size * 8 <= table_size
+    }
+}
+
+/// A [`Rebuilder`] that remaps individual values through a caller-supplied
+/// closure. Used by [`ContainerValues::rebuild_val_with`] to rebuild a single
+/// container against an explicit value mapping (rather than a backend
+/// union-find). Only the value-level methods are reachable from
+/// [`ContainerValue::rebuild_contents`]; the table-level methods are never
+/// called in that path.
+struct ClosureRebuilder<'a> {
+    remap: &'a (dyn Fn(Value) -> Value + Send + Sync),
+}
+
+impl Rebuilder for ClosureRebuilder<'_> {
+    fn hint_col(&self) -> Option<ColumnId> {
+        None
+    }
+
+    fn rebuild_val(&self, val: Value) -> Value {
+        (self.remap)(val)
+    }
+
+    fn rebuild_buf(
+        &self,
+        _buf: &crate::row_buffer::RowBuffer,
+        _start: crate::RowId,
+        _end: crate::RowId,
+        _out: &mut TaggedRowBuffer,
+        _exec_state: &mut ExecutionState,
+    ) {
+        unreachable!("ClosureRebuilder is only used for single-container rebuilds")
+    }
+
+    fn rebuild_subset(
+        &self,
+        _other: crate::table_spec::WrappedTableRef,
+        _subset: SubsetRef,
+        _out: &mut TaggedRowBuffer,
+        _exec_state: &mut ExecutionState,
+    ) {
+        unreachable!("ClosureRebuilder is only used for single-container rebuilds")
+    }
+
+    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
+        let mut changed = false;
+        for v in vals.iter_mut() {
+            let new = (self.remap)(*v);
+            if new != *v {
+                *v = new;
+                changed = true;
+            }
+        }
+        changed
     }
 }

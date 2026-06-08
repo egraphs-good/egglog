@@ -363,3 +363,40 @@ The structure is the same as term mode — view updates use `set`, UF updates us
 For nested terms, congruence proofs are built to ensure
   the proof terms match the original queries.
 
+# Containers
+
+Container sorts (`Vec`, `Set`, `Map`, `MultiSet`, `Pair`) participate in the
+  encoding too.
+Unlike eq-sorts, containers are never unioned directly, so they get **no**
+  union-find tables; instead their elements are canonicalized structurally
+  during rebuilding.
+A column of an eq-container sort is rebuilt by calling a per-container *rebuild
+  primitive* (registered by the encoding) inside the rebuild rule.
+Because that primitive reads the element sorts' `UF_<E>f` indices, the rebuild
+  rule is marked `:naive`.
+The primitive clones the container, remaps each eq-sort element to its
+  union-find leader (via `ContainerValues::rebuild_val_with`),
+  and re-interns it.
+
+In proof mode, each container's "term form" is the s-expr headed by its
+  constructing primitive — `(vec-of e0 e1 ...)`, `(pair a b)`, etc. — which the
+  primitive's validator builds, so the generic `Congr` machinery applies with no
+  proof-format changes.
+Every container sort gets a `<Sort>Proof` table holding a reflexive
+  `container = container` proof (set when the container is created), used as the
+  anchor for a `Congr` chain over the changed elements that proves
+  `old_container = new_container`.
+This proof is folded into the view's congruence step exactly like an eq-sort
+  child's union-find proof.
+
+Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
+  rebuild through container-typed elements; each rebuilt container records its
+  own reflexive `<CSort>Proof` anchor so it can be rebuilt again later.
+
+Not yet supported: a proof for the *collapse* case of `Set`/`Map`/`MultiSet`
+  (where canonicalizing elements merges entries and changes arity, which a flat
+  `Congr` chain can't express — term-only rebuild still handles it), and the
+  desugar round-trip for container programs (the rebuild primitive is
+  registered programmatically and is not reproduced by re-parsing the desugared
+  output).
+

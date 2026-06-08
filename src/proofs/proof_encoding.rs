@@ -1,4 +1,5 @@
 #[doc = include_str!("proof_encoding.md")]
+use crate::exec_state::{Internal, RegistrySealed};
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
@@ -10,6 +11,13 @@ pub(crate) struct EncodingState {
     pub uf_function: HashMap<String, String>,
     /// Maps sort name -> proof function name (set from :internal-proof-func annotation).
     pub proof_func_parent: HashMap<String, String>,
+    /// Maps container sort name -> the name of its registered container-rebuild
+    /// primitive (see [`ContainerRebuild`]). Cached so each container sort gets
+    /// a single rebuild primitive shared across all functions using it.
+    pub container_rebuild_name: HashMap<String, String>,
+    /// Maps container sort name -> the name of its registered proof-producing
+    /// container-rebuild primitive (see [`ContainerRebuildProof`]). Proof mode only.
+    pub container_rebuild_proof_name: HashMap<String, String>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -26,6 +34,8 @@ impl EncodingState {
             uf_parent: HashMap::default(),
             uf_function: HashMap::default(),
             proof_func_parent: HashMap::default(),
+            container_rebuild_name: HashMap::default(),
+            container_rebuild_proof_name: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
             proofs_enabled: false,
@@ -90,7 +100,25 @@ impl<'a> ProofInstrumentor<'a> {
     /// When one term has two parents, those parents are unioned in the merge action.
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
-    fn declare_sort(&mut self, sort_name: &str) -> Vec<Command> {
+    fn declare_sort(&mut self, sort_name: &str, is_container: bool) -> Vec<Command> {
+        // Container sorts are never unioned directly; their values are
+        // canonicalized structurally by the container rebuild path (see
+        // `rebuilding_rules`). So they get no per-sort union-find tables or
+        // maintenance rules. In proof mode they still get a `<Sort>Proof`
+        // term-proof table (and an `Ast<Sort>` wrapper) used as the reflexive
+        // anchor for container rebuild proofs.
+        if is_container {
+            if self.egraph.proof_state.proofs_enabled {
+                let term_proof_name = self.term_proof_name(sort_name);
+                let add_to_ast_code = self.add_to_ast(sort_name);
+                let proof_type = self.proof_type_str().to_string();
+                return self.parse_program(&format!(
+                    "{add_to_ast_code}
+                     (function {term_proof_name} ({sort_name}) {proof_type} :merge old :internal-hidden)"
+                ));
+            }
+            return vec![];
+        }
         let pname = self.uf_name(sort_name);
         let uf_function_name = self.uf_function_name(sort_name);
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
@@ -487,9 +515,15 @@ impl<'a> ProofInstrumentor<'a> {
     /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let types = fdecl.resolved_schema.view_types();
+        let proofs_enabled = self.egraph.proof_state.proofs_enabled;
 
-        // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
-        if !types.iter().any(|t| t.is_eq_sort()) {
+        // Check if there are any rebuildable columns at all; if not, no rule needed.
+        // Container columns (eq-container sorts) are rebuilt by calling a
+        // per-container rebuild primitive; eq-sort columns by a UF lookup.
+        if !types
+            .iter()
+            .any(|t| t.is_eq_sort() || t.is_eq_container_sort())
+        {
             return vec![];
         }
 
@@ -498,12 +532,21 @@ impl<'a> ProofInstrumentor<'a> {
         let children_vec: Vec<String> = (0..types.len()).map(child).collect();
         let children = format!("{}", ListDisplay(&children_vec, " "));
 
-        // For each eq-sort column, look up its leader via the UF table.
-        // For non-eq-sort columns, the leader is the same as the original.
+        // For each rebuildable column, compute its canonical value (and, in
+        // proof mode, a proof that the original equals the canonical value).
+        // Non-rebuildable columns keep their original value and have no proof.
         let mut uf_queries = vec![];
         let mut leader_vars: Vec<String> = vec![];
         let mut bool_neq_exprs = vec![];
         let mut uf_proof_vars: Vec<Option<String>> = vec![];
+        // Action prologue for container columns (proof mode): bind each
+        // container rebuild proof and set a reflexive anchor for the rebuilt
+        // container value so it can itself be rebuilt later.
+        let mut container_proof_bindings: Vec<String> = vec![];
+        let mut container_reflexive_sets: Vec<String> = vec![];
+        // Whether any container column is present (forces a `:naive` rule, since
+        // the rebuild primitives read the UF index / mint proofs).
+        let mut has_container = false;
 
         for (i, ty) in types.iter().enumerate() {
             if ty.is_eq_sort() {
@@ -511,7 +554,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let uf_function_name = self.uf_function_name(ty.name());
                 let ci = child(i);
 
-                if self.egraph.proof_state.proofs_enabled {
+                if proofs_enabled {
                     // UF function index returns a Pair(leader, proof); one lookup gives both
                     let pair_var = self.fresh_var();
                     let proof_var = format!("(pair-second {pair_var})");
@@ -527,6 +570,35 @@ impl<'a> ProofInstrumentor<'a> {
 
                 bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
                 leader_vars.push(leader_var);
+            } else if ty.is_eq_container_sort() {
+                // Container column: canonicalize its elements via the per-container
+                // rebuild primitive in the rule body. The rule is `:naive` so this
+                // read primitive is permitted there.
+                has_container = true;
+                let rebuilt_var = format!("c{i}_rebuilt_");
+                let ci = child(i);
+                let value_prim = self.ensure_container_rebuild(ty);
+                uf_queries.push(format!("(= {rebuilt_var} ({value_prim} {ci}))"));
+                bool_neq_exprs.push(format!("(bool-!= {ci} {rebuilt_var})"));
+                leader_vars.push(rebuilt_var.clone());
+
+                if proofs_enabled {
+                    // The proof primitive (run in the action) mints a congruence
+                    // proof that `ci = rebuilt`. Anchor a reflexive proof on the
+                    // rebuilt value via `Trans(Sym p, p)` for future rebuilds.
+                    let proof_prim = self.ensure_container_rebuild_proof(ty);
+                    let proof_var = self.fresh_var();
+                    let cproof = self.term_proof_name(ty.name());
+                    let sym = self.proof_names().eq_sym_constructor.clone();
+                    let trans = self.proof_names().eq_trans_constructor.clone();
+                    container_proof_bindings.push(format!("(let {proof_var} ({proof_prim} {ci}))"));
+                    container_reflexive_sets.push(format!(
+                        "(set ({cproof} {rebuilt_var}) ({trans} ({sym} {proof_var}) {proof_var}))"
+                    ));
+                    uf_proof_vars.push(Some(proof_var));
+                } else {
+                    uf_proof_vars.push(None);
+                }
             } else {
                 leader_vars.push(child(i));
                 uf_proof_vars.push(None);
@@ -537,7 +609,7 @@ impl<'a> ProofInstrumentor<'a> {
         let or_expr = format!("(or {})", bool_neq_exprs.join("\n             "));
         let filter_query = format!("(guard {or_expr})");
 
-        // Build the updated children: use leader_var for eq-sort columns, original for others.
+        // Build the updated children: use leader_var for rebuildable columns, original for others.
         let children_updated: Vec<String> = leader_vars.clone();
 
         let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
@@ -546,24 +618,25 @@ impl<'a> ProofInstrumentor<'a> {
         // Build proof code if proofs are enabled.
         // We chain congruence proofs for each updated child and a transitivity proof
         // for the representative (last column) update.
-        let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
+        let (pf_code, pf_var) = if proofs_enabled {
             let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
             let congr_constructor = self.proof_names().congr_constructor.clone();
             let sym_constructor = self.proof_names().eq_sym_constructor.clone();
 
-            // Start with the view proof and apply congruence for each eq-sort child
-            // (excluding the last column if this is a constructor, since that's the representative).
+            // Start with the view proof and apply congruence for each rebuilt child
+            // (using transitivity instead for the representative column of a constructor).
             let mut current_proof = view_prf.clone();
             let mut proof_code_parts = vec![];
 
-            for (i, ty) in types.iter().enumerate() {
-                if !ty.is_eq_sort() {
+            for i in 0..types.len() {
+                let Some(uf_prf) = uf_proof_vars[i].clone() else {
                     continue;
-                }
+                };
 
-                let uf_prf = uf_proof_vars[i].as_ref().unwrap();
-
-                if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
+                if types[i].is_eq_sort()
+                    && fdecl.subtype == FunctionSubtype::Constructor
+                    && i == types.len() - 1
+                {
                     // Updating the representative term (last column of constructor):
                     // use transitivity with sym of the UF proof
                     let new_proof = self.fresh_var();
@@ -575,7 +648,7 @@ impl<'a> ProofInstrumentor<'a> {
                     ));
                     current_proof = new_proof;
                 } else {
-                    // Updating a child via congruence
+                    // Updating a child (eq-sort or container) via congruence
                     let new_proof = self.fresh_var();
                     proof_code_parts.push(format!(
                         "(let {new_proof}
@@ -592,18 +665,23 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
+        let container_proof_bindings_str = container_proof_bindings.join("\n");
+        let container_reflexive_sets_str = container_reflexive_sets.join("\n");
 
         // Make a single rule that updates the view when any child's leader differs.
+        let naive = if has_container { " :naive" } else { "" };
         let rule = format!(
             "(rule ({query_view}
                     {uf_query_str}
                     {filter_query}
                     )
                  (
+                  {container_proof_bindings_str}
                   {pf_code}
                   {updated_view}
+                  {container_reflexive_sets_str}
                   (delete ({view_name} {children}))
-                 )
+                 ){naive}
                   :ruleset {} :name \"{fresh_name}\")",
             self.proof_names().rebuilding_ruleset_name
         );
@@ -789,7 +867,22 @@ impl<'a> ProofInstrumentor<'a> {
                             ListDisplay(new_args, " ")
                         ));
 
-                        let proof = if self.proofs_enabled() {
+                        let proof = if !self.proofs_enabled() {
+                            "()".to_string()
+                        } else if specialized_primitive.output().is_eq_container_sort() {
+                            // A container term is an `App`, not a literal, so a
+                            // `Fiat` reflexive proof would be rejected by the
+                            // checker (not a global). Instead look up the
+                            // container's `<CSort>Proof` reflexive anchor, the
+                            // same way eq-sort terms use their term-proof table.
+                            let cproof =
+                                self.term_proof_name(specialized_primitive.output().name());
+                            let fresh_proof = self.fresh_var();
+                            res.push(format!("(= {fresh_proof} ({cproof} {fv}))"));
+                            fresh_proof
+                        } else {
+                            // Base primitives produce a literal result; a
+                            // reflexive `Fiat` over a literal is checker-valid.
                             let fiat_constructor = &self.proof_names().fiat_constructor;
                             let to_ast = self
                                 .proof_names()
@@ -797,8 +890,6 @@ impl<'a> ProofInstrumentor<'a> {
                                 .get(specialized_primitive.output().name())
                                 .unwrap();
                             format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
-                        } else {
-                            "()".to_string()
                         };
 
                         (fv.clone(), proof)
@@ -885,6 +976,33 @@ impl<'a> ProofInstrumentor<'a> {
         }
 
         res
+    }
+
+    /// Build the proof term that justifies a freshly-created term `fv`
+    /// (wrapped by the AST constructor `to_ast`) proving `fv = fv`, from the
+    /// surrounding [`Justification`]. Shared by constructor creation
+    /// (`add_term_and_view`) and container creation.
+    fn term_proof_for_justification(
+        &self,
+        fv: &str,
+        to_ast: &str,
+        justification: &Justification,
+    ) -> String {
+        let rule_constructor = &self.proof_names().rule_constructor;
+        let fiat_constructor = &self.proof_names().fiat_constructor;
+        match justification {
+            Justification::Rule(rule_name, rule_proof) => format!(
+                "({rule_constructor} \"{rule_name}\" {rule_proof} ({to_ast} {fv}) ({to_ast} {fv}))"
+            ),
+            Justification::Fiat => {
+                format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
+            }
+            Justification::Merge(fn_name, p1, p2) => {
+                let merge_constructor = &self.proof_names().merge_fn_constructor;
+                format!("({merge_constructor} \"{fn_name}\" {p1} {p2} ({to_ast} {fv}))")
+            }
+            Justification::Proof(existing_proof) => existing_proof.clone(),
+        }
     }
 
     /// Update the view with the given arguments.
@@ -1029,8 +1147,28 @@ impl<'a> ProofInstrumentor<'a> {
                             "(let {} ({} {}))",
                             fv,
                             specialized_primitive.name(),
-                            ListDisplay(args, " ")
+                            ListDisplay(&args, " ")
                         ));
+                        // In proof mode, a primitive that builds a container
+                        // value records a reflexive term-proof in `<CSort>Proof`.
+                        // This is the anchor for the container's rebuild
+                        // congruence proofs (see `rebuilding_rules`).
+                        if self.egraph.proof_state.proofs_enabled {
+                            let out = specialized_primitive.output();
+                            if out.is_eq_container_sort() {
+                                let csort = out.name().to_string();
+                                let to_ast = self
+                                    .proof_names()
+                                    .sort_to_ast_constructor
+                                    .get(&csort)
+                                    .unwrap()
+                                    .clone();
+                                let proof_str =
+                                    self.term_proof_for_justification(&fv, &to_ast, proof);
+                                let cproof = self.term_proof_name(&csort);
+                                res.push(format!("(set ({cproof} {fv}) {proof_str})"));
+                            }
+                        }
                         fv
                     }
                 }
@@ -1160,8 +1298,18 @@ impl<'a> ProofInstrumentor<'a> {
                 unionable,
                 ..
             } => {
-                let uf_name = self.uf_name(name);
-                let proof_func = if self.egraph.proof_state.proofs_enabled {
+                // After the proof-encoding gate, any sort carrying a presort
+                // is one of the supported container sorts. Containers have no
+                // per-sort union-find (they are canonicalized structurally),
+                // so they get `uf: None` and `find_canonical` leaves their
+                // value unchanged during extraction.
+                let is_container = presort_and_args.is_some();
+                let uf_name = if is_container {
+                    None
+                } else {
+                    Some(self.uf_name(name))
+                };
+                let proof_func = if self.egraph.proof_state.proofs_enabled && !is_container {
                     Some(self.term_proof_name(name))
                 } else {
                     None
@@ -1170,11 +1318,11 @@ impl<'a> ProofInstrumentor<'a> {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
-                    uf: Some(uf_name),
+                    uf: uf_name,
                     proof_func,
                     unionable: *unionable,
                 });
-                res.extend(self.declare_sort(name));
+                res.extend(self.declare_sort(name, is_container));
             }
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));
@@ -1287,4 +1435,356 @@ impl<'a> ProofInstrumentor<'a> {
 
         res
     }
+
+    /// Collect, transitively, the `UF_<E>f` index table name for every eq-sort
+    /// reachable from `sort`'s elements, recursing through nested containers.
+    fn collect_container_uf_names(
+        &mut self,
+        sort: &ArcSort,
+        uf_names: &mut HashMap<String, String>,
+    ) {
+        for elem in sort.inner_sorts() {
+            if elem.is_eq_sort() {
+                if !uf_names.contains_key(elem.name()) {
+                    let uf = self.uf_function_name(elem.name());
+                    uf_names.insert(elem.name().to_string(), uf);
+                }
+            } else if elem.is_eq_container_sort() {
+                self.collect_container_uf_names(&elem, uf_names);
+            }
+        }
+    }
+
+    /// Collect, transitively, the `<CSort>Proof` table name for `sort` and every
+    /// nested container sort reachable from its elements.
+    fn collect_container_proof_names(
+        &mut self,
+        sort: &ArcSort,
+        cproof_names: &mut HashMap<String, String>,
+    ) {
+        if !cproof_names.contains_key(sort.name()) {
+            let cp = self.term_proof_name(sort.name());
+            cproof_names.insert(sort.name().to_string(), cp);
+        }
+        for elem in sort.inner_sorts() {
+            if elem.is_eq_container_sort() {
+                self.collect_container_proof_names(&elem, cproof_names);
+            }
+        }
+    }
+
+    /// Ensure a container-rebuild primitive is registered for `container_sort`,
+    /// returning its (fresh) name. Cached per container sort. The primitive
+    /// canonicalizes a container's eq-sort elements to their union-find leaders
+    /// (recursing through nested containers) during rebuilding.
+    fn ensure_container_rebuild(&mut self, container_sort: &ArcSort) -> String {
+        let sort_name = container_sort.name().to_string();
+        if let Some(name) = self
+            .egraph
+            .proof_state
+            .container_rebuild_name
+            .get(&sort_name)
+        {
+            return name.clone();
+        }
+        let mut uf_names = HashMap::default();
+        self.collect_container_uf_names(container_sort, &mut uf_names);
+        let prim_name = self.egraph.parser.symbol_gen.fresh("container_rebuild");
+        let prim = ContainerRebuild {
+            name: prim_name.clone(),
+            container_sort: container_sort.clone(),
+            uf_names,
+            // In proof mode the UF index stores `(pair leader proof)`; the value
+            // rebuild only needs the leader (pair-first).
+            proof_mode: self.egraph.proof_state.proofs_enabled,
+        };
+        self.egraph.add_read_primitive(prim, None);
+        self.egraph
+            .proof_state
+            .container_rebuild_name
+            .insert(sort_name, prim_name.clone());
+        prim_name
+    }
+
+    /// Ensure a proof-producing container-rebuild primitive is registered for
+    /// `container_sort`, returning its (fresh) name. Proof mode only. The
+    /// primitive reads each eq-sort element's `UF_<E>f` proof and the
+    /// container's reflexive `<CSort>Proof` anchor, then mints a `Congr` chain
+    /// proving `old_container = rebuilt_container` (recursing through nested
+    /// containers, and anchoring a reflexive proof on each rebuilt container).
+    fn ensure_container_rebuild_proof(&mut self, container_sort: &ArcSort) -> String {
+        let sort_name = container_sort.name().to_string();
+        if let Some(name) = self
+            .egraph
+            .proof_state
+            .container_rebuild_proof_name
+            .get(&sort_name)
+        {
+            return name.clone();
+        }
+        let mut uf_names = HashMap::default();
+        self.collect_container_uf_names(container_sort, &mut uf_names);
+        let mut cproof_names = HashMap::default();
+        self.collect_container_proof_names(container_sort, &mut cproof_names);
+        let congr_name = self.proof_names().congr_constructor.clone();
+        let trans_name = self.proof_names().eq_trans_constructor.clone();
+        let sym_name = self.proof_names().eq_sym_constructor.clone();
+        // The proof datatype sort is declared in the (separately emitted) proof
+        // header, so it isn't in `type_info` yet; synthesize a matching EqSort
+        // for the primitive's type constraint (constraints match by name).
+        let proof_sort: ArcSort = std::sync::Arc::new(EqSort {
+            name: self.proof_names().proof_datatype.clone(),
+        });
+        let prim_name = self
+            .egraph
+            .parser
+            .symbol_gen
+            .fresh("container_rebuild_proof");
+        let prim = ContainerRebuildProof {
+            name: prim_name.clone(),
+            container_sort: container_sort.clone(),
+            proof_sort,
+            uf_names,
+            cproof_names,
+            congr_name,
+            trans_name,
+            sym_name,
+        };
+        self.egraph.add_full_primitive(prim, None);
+        self.egraph
+            .proof_state
+            .container_rebuild_proof_name
+            .insert(sort_name, prim_name.clone());
+        prim_name
+    }
+}
+
+/// Recursively canonicalize a container `value` of sort `sort` for the term
+/// encoding, returning the rebuilt interned value. Each element is resolved by
+/// a uniform per-child rule: an eq-sort element maps to its union-find leader
+/// (via `UF_<E>f`; in proof mode the index stores `(pair leader proof)`), a
+/// container element is recursively rebuilt, and anything else is unchanged.
+fn rebuild_container_value_rec(
+    state: &mut ReadState,
+    sort: &ArcSort,
+    value: Value,
+    uf_names: &HashMap<String, String>,
+    proof_mode: bool,
+) -> Option<Value> {
+    let elements = {
+        let cvs = state.container_values();
+        sort.inner_values(cvs, value)
+    };
+    let mut leaders: HashMap<Value, Value> = HashMap::default();
+    for (esort, eval) in &elements {
+        let new = if esort.is_eq_sort() {
+            match self_lookup_leader(state, uf_names, esort, *eval, proof_mode)? {
+                Some(leader) => leader,
+                None => *eval,
+            }
+        } else if esort.is_eq_container_sort() {
+            rebuild_container_value_rec(state, esort, *eval, uf_names, proof_mode)?
+        } else {
+            *eval
+        };
+        if new != *eval {
+            leaders.insert(*eval, new);
+        }
+    }
+    let cvs = state.container_values();
+    let es = state.raw_exec_state();
+    Some(sort.rebuild_container_with_leaders(cvs, es, value, &leaders))
+}
+
+/// Look up an eq-sort element's union-find leader, if a `UF_<E>f` row exists.
+/// In proof mode the index stores `(pair leader proof)`, so take `pair-first`.
+/// Returns `Ok(None)` when there is no UF row (element is its own leader).
+fn self_lookup_leader(
+    state: &mut ReadState,
+    uf_names: &HashMap<String, String>,
+    esort: &ArcSort,
+    eval: Value,
+    proof_mode: bool,
+) -> Option<Option<Value>> {
+    let Some(uf_name) = uf_names.get(esort.name()) else {
+        return Some(None);
+    };
+    let Some(looked_up) = state.lookup(uf_name, &[eval]) else {
+        return Some(None);
+    };
+    let leader = if proof_mode {
+        state
+            .container_values()
+            .get_val::<crate::sort::PairContainer>(looked_up)?
+            .first
+    } else {
+        looked_up
+    };
+    Some(Some(leader))
+}
+
+/// A term-encoding primitive that canonicalizes a container value's elements to
+/// their union-find leaders (recursing through nested containers). Registered
+/// per container sort by [`ProofInstrumentor::ensure_container_rebuild`] and
+/// invoked from the container-column arm of the rebuild rules. It reads the
+/// `UF_<E>f` tables, so it is only valid in a `:naive` rule (read-context body).
+#[derive(Clone)]
+struct ContainerRebuild {
+    name: String,
+    container_sort: ArcSort,
+    /// element-sort name -> `UF_<E>f` table name (all reachable eq-sorts)
+    uf_names: HashMap<String, String>,
+    /// In proof mode the UF index returns `(pair leader proof)`; take pair-first.
+    proof_mode: bool,
+}
+
+impl Primitive for ContainerRebuild {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            &self.name,
+            vec![self.container_sort.clone(), self.container_sort.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+
+impl ReadPrim for ContainerRebuild {
+    fn apply<'a, 'db>(&self, mut state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        rebuild_container_value_rec(
+            &mut state,
+            &self.container_sort,
+            args[0],
+            &self.uf_names,
+            self.proof_mode,
+        )
+    }
+}
+
+/// Proof-mode counterpart of [`ContainerRebuild`]: mints a `Congr` chain
+/// proving `old_container = rebuilt_container` (recursing through nested
+/// containers). Reads `UF_<E>f` (element equality proofs) and `<CSort>Proof`
+/// (reflexive bases), mints `Congr`/`Trans`/`Sym` terms, and anchors a
+/// reflexive proof on each rebuilt container so it can be rebuilt again later.
+/// It is a [`FullPrim`], valid only in a `:naive` rule's action.
+#[derive(Clone)]
+struct ContainerRebuildProof {
+    name: String,
+    container_sort: ArcSort,
+    proof_sort: ArcSort,
+    /// element-sort name -> `UF_<E>f` table name (all reachable eq-sorts)
+    uf_names: HashMap<String, String>,
+    /// container-sort name -> `<CSort>Proof` table name (all reachable containers)
+    cproof_names: HashMap<String, String>,
+    /// `Congr` / `Trans` / `Sym` proof constructor names
+    congr_name: String,
+    trans_name: String,
+    sym_name: String,
+}
+
+impl Primitive for ContainerRebuildProof {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            &self.name,
+            vec![self.container_sort.clone(), self.proof_sort.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+
+impl FullPrim for ContainerRebuildProof {
+    fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let (_rebuilt, proof) =
+            rebuild_container_proof_rec(&mut state, self, &self.container_sort, args[0])?;
+        Some(proof)
+    }
+}
+
+/// Recursively rebuild `value` (of container sort `sort`) and produce a proof
+/// that `value = rebuilt`. Returns `(rebuilt_value, proof)`. Uses the same
+/// per-child resolution as [`rebuild_container_value_rec`], additionally
+/// folding a `Congr` step for every changed child and recording a reflexive
+/// anchor `<CSort>Proof(rebuilt) = Trans(Sym proof, proof)` so the rebuilt
+/// value can itself be rebuilt in a later iteration.
+fn rebuild_container_proof_rec(
+    state: &mut FullState,
+    prim: &ContainerRebuildProof,
+    sort: &ArcSort,
+    value: Value,
+) -> Option<(Value, Value)> {
+    // Reflexive base proof `value = value`.
+    let base = state.lookup(prim.cproof_names.get(sort.name())?, &[value])?;
+    let elements = {
+        let cvs = state.container_values();
+        sort.inner_values(cvs, value)
+    };
+
+    let mut leaders: HashMap<Value, Value> = HashMap::default();
+    let mut child_proofs: Vec<(usize, Value)> = vec![];
+    for (j, (esort, eval)) in elements.iter().enumerate() {
+        if esort.is_eq_sort() {
+            if let Some(uf_name) = prim.uf_names.get(esort.name())
+                && let Some(pair_val) = state.lookup(uf_name, &[*eval])
+            {
+                let (leader, proof) = {
+                    let pc = state
+                        .container_values()
+                        .get_val::<crate::sort::PairContainer>(pair_val)?;
+                    (pc.first, pc.second)
+                };
+                if leader != *eval {
+                    leaders.insert(*eval, leader);
+                    child_proofs.push((j, proof));
+                }
+            }
+        } else if esort.is_eq_container_sort() {
+            let (rebuilt_child, child_proof) =
+                rebuild_container_proof_rec(state, prim, esort, *eval)?;
+            if rebuilt_child != *eval {
+                leaders.insert(*eval, rebuilt_child);
+                child_proofs.push((j, child_proof));
+            }
+        }
+    }
+
+    // Rebuild the value against the collected leaders.
+    let rebuilt = {
+        let cvs = state.container_values();
+        let es = state.raw_exec_state();
+        sort.rebuild_container_with_leaders(cvs, es, value, &leaders)
+    };
+
+    // Fold a `Congr` step per changed child onto the reflexive base.
+    let congr_action = state.registry().lookup_table(&prim.congr_name)?.clone();
+    let mut current = base;
+    for (j, proof) in child_proofs {
+        let j_val = state.base_values().get::<i64>(j as i64);
+        current =
+            congr_action.lookup_or_insert(state.raw_exec_state(), &[current, j_val, proof])?;
+    }
+
+    // Anchor a reflexive proof on the rebuilt value for future rebuilds.
+    if rebuilt != value {
+        let sym_action = state.registry().lookup_table(&prim.sym_name)?.clone();
+        let trans_action = state.registry().lookup_table(&prim.trans_name)?.clone();
+        let cproof_action = state
+            .registry()
+            .lookup_table(prim.cproof_names.get(sort.name())?)?
+            .clone();
+        // Sym(current): rebuilt = value;  Trans(Sym(current), current): rebuilt = rebuilt.
+        let sym_p = sym_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
+        let refl = trans_action.lookup_or_insert(state.raw_exec_state(), &[sym_p, current])?;
+        cproof_action.insert(state.raw_exec_state(), [rebuilt, refl].into_iter());
+    }
+
+    Some((rebuilt, current))
 }

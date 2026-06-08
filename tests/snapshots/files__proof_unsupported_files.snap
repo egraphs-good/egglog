@@ -12,7 +12,6 @@ container-fail.egg
 container-rebuild.egg
 cyk.egg
 cykjson.egg
-datatypes.egg
 delete.egg
 eggcc-2mm.egg
 eggcc-extraction.egg
@@ -37,7 +36,6 @@ map.egg
 math.egg
 merge_read.egg
 multiset.egg
-nested-container-dirty-propagation.egg
 pair.egg
 prims.egg
 print-function.egg
@@ -58,7 +56,6 @@ string_quotes.egg
 taylor51.egg
 towers-of-hanoi.egg
 tricky-type-checking.egg
-type-constraints-tests.egg
 typed_primitive_unstable_app.egg
 typeinfer.egg
 uf-extraction.egg

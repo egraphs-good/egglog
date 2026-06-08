@@ -128,10 +128,17 @@ impl ContainerSort for MultiSetSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
+        // Proof term form of a multiset: `(multiset-of e0 e1 ...)`, matching
+        // `reconstruct_termdag`. (Count merging for proof checking of
+        // collapsing multisets is refined in the MultiSet proof stage.)
+        let multiset_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("multiset-of".into(), args.to_vec()))
+        };
+
+        add_primitive_with_validator!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
-        } });
+        } }, multiset_of_validator);
 
         add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -?> @MultiSetContainer (arc) {
             i.try_into().ok().map(|i|

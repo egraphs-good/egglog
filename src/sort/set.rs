@@ -110,14 +110,24 @@ impl ContainerSort for SetSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
+        // Proof term form of a set: `(set-of e0 e1 ...)`, matching
+        // `reconstruct_termdag`. (Element dedup/ordering for proof checking of
+        // collapsing sets is refined in the Set proof stage.)
+        let set_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("set-of".into(), args.to_vec()))
+        };
+        let set_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("set-of".into(), vec![]))
+        };
+
+        add_primitive_with_validator!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: BTreeSet::new()
-        } });
-        add_primitive!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
+        } }, set_empty_validator);
+        add_primitive_with_validator!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
-        } });
+        } }, set_of_validator);
 
         add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
         add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }});
