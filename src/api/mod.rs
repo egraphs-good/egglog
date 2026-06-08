@@ -82,11 +82,15 @@ pub trait FromValue: Sized {
 
 /// Convert a Rust value into a row of egglog [`Value`]s.
 ///
+/// Yields the row's columns as an iterator, letting the caller choose
+/// the container — call sites collect into an inline `SmallVec`, so the
+/// common small-arity row stays off the heap.
+///
 /// Sealed; impls cover bare [`IntoValue`] (single-column row),
 /// tuples up to arity 8 of [`IntoValue`] values, and [`RawValues`]
 /// for variadic / pre-converted rows.
 pub trait IntoValues: sealed::Sealed {
-    fn into_values(self, bv: &BaseValues) -> Vec<Value>;
+    fn into_values(self, bv: &BaseValues) -> impl Iterator<Item = Value>;
 }
 
 /// Convert a row of egglog [`Value`]s back into a Rust value.
@@ -176,8 +180,8 @@ pub struct RawValues(pub Vec<Value>);
 
 impl sealed::Sealed for RawValues {}
 impl IntoValues for RawValues {
-    fn into_values(self, _bv: &BaseValues) -> Vec<Value> {
-        self.0
+    fn into_values(self, _bv: &BaseValues) -> impl Iterator<Item = Value> {
+        self.0.into_iter()
     }
 }
 
@@ -205,8 +209,8 @@ impl FromValues for () {
 
 impl<A: IntoValue> sealed::Sealed for A {}
 impl<A: IntoValue> IntoValues for A {
-    fn into_values(self, bv: &BaseValues) -> Vec<Value> {
-        vec![self.into_value(bv)]
+    fn into_values(self, bv: &BaseValues) -> impl Iterator<Item = Value> {
+        std::iter::once(self.into_value(bv))
     }
 }
 
@@ -222,9 +226,9 @@ macro_rules! impl_values_for_tuple {
 
             #[allow(non_snake_case)]
             impl<$($name: IntoValue),+> IntoValues for ($($name,)+) {
-                fn into_values(self, bv: &BaseValues) -> Vec<Value> {
+                fn into_values(self, bv: &BaseValues) -> impl Iterator<Item = Value> {
                     let ($($name,)+) = self;
-                    vec![ $( $name.into_value(bv) ),+ ]
+                    [ $( $name.into_value(bv) ),+ ].into_iter()
                 }
             }
 

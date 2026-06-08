@@ -39,6 +39,12 @@ use crate::core_relations::{
     Value,
 };
 use egglog_bridge::{ActionRegistry, RowScan, TableAction, TableKind};
+use smallvec::SmallVec;
+
+/// Inline scratch for a row of column values. Matches the
+/// `SmallVec<[_; 8]>` that `egglog_bridge::TableAction` uses internally,
+/// so rows up to 8 columns — the common case — never touch the heap.
+type ValueRow = SmallVec<[Value; 8]>;
 
 /// The four contexts a primitive may run in, named after the
 /// capability profile they grant. Each variant maps 1:1 to one of the
@@ -223,7 +229,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     fn lookup<K: IntoValues>(&self, name: &str, key: K) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        let key_values = key.into_values(self.base_values());
+        let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
     }
@@ -236,7 +242,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     fn eclass_of<K: IntoValues>(&self, name: &str, inputs: K) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
-        let key_values = inputs.into_values(self.base_values());
+        let key_values: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
     }
@@ -245,7 +251,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// for any subtype — never mints.
     fn contains<K: IntoValues>(&self, name: &str, key: K) -> Result<bool, Error> {
         let action = lookup_action(self.registry(), name)?;
-        let key_values = key.into_values(self.base_values());
+        let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
@@ -366,7 +372,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
         let bv = self.base_values();
-        let mut row = key.into_values(bv);
+        let mut row: ValueRow = key.into_values(bv).collect();
         check_arity(name, &action, row.len())?;
         row.push(value.into_value(bv));
         action.insert(self.es_mut(), row.into_iter());
@@ -383,7 +389,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     fn add<R: IntoValues>(&mut self, name: &str, inputs: R) -> Result<Value, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
-        let key = inputs.into_values(self.base_values());
+        let key: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key.len())?;
         let value = action
             .lookup_or_insert(self.es_mut(), &key)
@@ -394,7 +400,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Remove a row from the named table. Works for any subtype.
     fn remove<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        let key_values = key.into_values(self.base_values());
+        let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         action.remove(self.es_mut(), &key_values);
         Ok(())
@@ -403,7 +409,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Subsume a row in the named table.
     fn subsume<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        let key_values = key.into_values(self.base_values());
+        let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         action.subsume(self.es_mut(), key_values.into_iter());
         Ok(())

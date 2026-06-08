@@ -277,7 +277,7 @@ impl EGraph {
     ///
     /// # Seminaive-safety trust boundary
     ///
-    /// Like [`EGraph::update`], this is a raw escape —
+    /// Like [`EGraph::with_execution_state`], this is a raw escape —
     /// the registered function has unrestricted access and is not
     /// tracked by the per-context validity system. Prefer building
     /// primitives via the higher-level `egglog::Primitive` /
@@ -1337,7 +1337,7 @@ impl TableAction {
     /// Iterate this table's rows, calling `f` on each function row.
     /// Mirrors [`EGraph::for_each`] but reaches the table through an
     /// [`ExecutionState`] — so it's callable from primitive bodies via
-    /// the typed [`Read`](crate::Read)-style API.
+    /// the typed `Read`-style API.
     pub fn for_each(&self, state: &ExecutionState, mut f: impl FnMut(FunctionRow<'_>)) {
         self.for_each_while(state, |row| {
             f(row);

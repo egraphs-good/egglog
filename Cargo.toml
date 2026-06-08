@@ -142,6 +142,7 @@ log = { workspace = true }
 num = { workspace = true }
 ordered-float = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 dyn-clone = { workspace = true }
