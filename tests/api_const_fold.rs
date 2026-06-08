@@ -94,7 +94,8 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     //     `root` and whose i64 input is `9`.
     let mut found_num_nine = false;
     let nine_value = eg.base_to_value::<i64>(9);
-    for (inputs, eclass) in eg.update(|fs| fs.constructor_enodes("Num"))? {
+    let nums = eg.update(|fs| fs.constructor_enodes("Num"))?;
+    for (inputs, eclass) in nums.iter() {
         if eclass == root && inputs[0] == nine_value {
             found_num_nine = true;
             break;

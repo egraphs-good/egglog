@@ -19,9 +19,9 @@ fn function_entries_i64_to_i64() -> Result<(), Error> {
 ",
     )?;
 
-    let mut rows: Vec<(i64, i64)> = egraph
-        .update(|fs| fs.function_entries("f"))?
-        .into_iter()
+    let entries = egraph.update(|fs| fs.function_entries("f"))?;
+    let mut rows: Vec<(i64, i64)> = entries
+        .iter()
         .map(|(inputs, output)| {
             (
                 egraph.value_to_base::<i64>(inputs[0]),
@@ -118,7 +118,7 @@ fn constructor_enodes_basic() -> Result<(), Error> {
 
     let enodes = egraph.update(|fs| fs.constructor_enodes("Add"))?;
     assert_eq!(enodes.len(), 2);
-    for (inputs, _eclass) in &enodes {
+    for (inputs, _eclass) in enodes.iter() {
         // Two i64 inputs.
         assert_eq!(inputs.len(), 2);
         let _x = egraph.value_to_base::<i64>(inputs[0]);
@@ -156,7 +156,7 @@ fn constructor_enodes_relation() -> Result<(), Error> {
 
     let enodes = egraph.update(|fs| fs.constructor_enodes("R"))?;
     assert_eq!(enodes.len(), 2);
-    for (inputs, _eclass) in &enodes {
+    for (inputs, _eclass) in enodes.iter() {
         assert_eq!(inputs.len(), 1, "relation enode: one input");
     }
 

@@ -944,6 +944,17 @@ impl EGraph {
         self.db.with_execution_state(f)
     }
 
+    /// Like [`EGraph::with_execution_state`], but also reports whether `f`
+    /// staged any mutation. A read-only closure leaves the flag `false`, so
+    /// callers can skip a [`EGraph::flush_updates`] that would otherwise be a
+    /// no-op merge plus a spurious timestamp bump.
+    pub fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> (R, bool) {
+        self.db.with_execution_state_tracked(f)
+    }
+
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
@@ -1368,6 +1379,21 @@ impl TableAction {
         drain_buf!(buf);
     }
 
+    /// Scan every row of this table into a single [`RowScan`].
+    ///
+    /// Unlike [`TableAction::for_each`], the rows materialize into one
+    /// buffer (one allocation, often pooled) that the caller can iterate
+    /// after the [`ExecutionState`] borrow ends — without a heap allocation
+    /// per row.
+    pub fn scan_all(&self, state: &ExecutionState) -> RowScan {
+        let imp = state.get_table(self.table);
+        let all = imp.all();
+        RowScan {
+            buf: imp.scan(all.as_ref()),
+            math: self.table_math,
+        }
+    }
+
     /// Look up a row, inserting the configured default value if absent.
     /// For constructor tables this mints a fresh eclass ID; for custom
     /// functions (no default) this behaves identically to
@@ -1641,6 +1667,39 @@ struct RowVals<T> {
 pub struct FunctionRow<'a> {
     pub vals: &'a [Value],
     pub subsumed: bool,
+}
+
+/// Every row of a table scanned into a single buffer, produced by
+/// [`TableAction::scan_all`].
+///
+/// Owns its backing storage, so it can outlive the [`ExecutionState`] it was
+/// scanned from. [`RowScan::iter`] yields one [`FunctionRow`] per row,
+/// borrowing from the buffer — there is no per-row allocation.
+pub struct RowScan {
+    buf: TaggedRowBuffer,
+    math: SchemaMath,
+}
+
+impl RowScan {
+    /// The number of (live) rows in the scan.
+    pub fn len(&self) -> usize {
+        self.buf.non_stale().count()
+    }
+
+    /// Whether the scan produced no live rows.
+    pub fn is_empty(&self) -> bool {
+        self.buf.non_stale().next().is_none()
+    }
+
+    /// Iterate the rows as [`FunctionRow`]s, each borrowing from the
+    /// backing buffer.
+    pub fn iter(&self) -> impl Iterator<Item = FunctionRow<'_>> + '_ {
+        let math = self.math;
+        self.buf.non_stale().map(move |(_, row)| FunctionRow {
+            vals: &row[0..math.func_cols],
+            subsumed: math.subsume && row[math.subsume_col()] == SUBSUMED,
+        })
+    }
 }
 
 impl SchemaMath {

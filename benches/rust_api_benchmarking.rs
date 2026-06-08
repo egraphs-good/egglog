@@ -285,6 +285,58 @@ fn rust_rule_insert_loop(bencher: divan::Bencher, case: RustRuleInsertLoopBenchC
         });
 }
 
+#[derive(Clone, Copy)]
+struct ReadScanBenchCase {
+    n_enodes: usize,
+}
+
+impl std::fmt::Display for ReadScanBenchCase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "enodes{}", self.n_enodes)
+    }
+}
+
+fn read_scan_setup(case: ReadScanBenchCase) -> egglog::EGraph {
+    use std::fmt::Write;
+
+    common::configure_rayon_once();
+
+    let mut program = String::from("(sort Math)\n(constructor Add (i64 i64) Math)\n");
+    for i in 0..case.n_enodes {
+        let _ = writeln!(&mut program, "(Add {} {})", i as i64, (i + 1) as i64);
+    }
+
+    let mut egraph = egglog::EGraph::default();
+    egraph.parse_and_run_program(None, &program).unwrap();
+    egraph
+}
+
+// Read-path bench: scan every enode of a constructor table out through the
+// name-indexed `Read` API. Exercises `EGraph::update` + `constructor_enodes`
+// over a read-only closure — the flush should be skipped and the rows should
+// materialize into a single buffer rather than one Vec per row.
+#[divan::bench(
+    args = [
+        ReadScanBenchCase { n_enodes: 50_000 },
+    ],
+    sample_count = 20
+)]
+fn rust_read_constructor_enodes(bencher: divan::Bencher, case: ReadScanBenchCase) {
+    use egglog::Read;
+
+    bencher
+        .with_inputs(|| read_scan_setup(case))
+        .bench_local_refs(|egraph| {
+            let rows = egraph.update(|fs| fs.constructor_enodes("Add")).unwrap();
+            let mut n = 0usize;
+            for row in rows.iter() {
+                divan::black_box(&row);
+                n += 1;
+            }
+            n
+        });
+}
+
 fn main() {
     divan::main();
 }

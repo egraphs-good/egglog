@@ -38,7 +38,7 @@ use crate::core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
     Value,
 };
-use egglog_bridge::{ActionRegistry, TableAction, TableKind};
+use egglog_bridge::{ActionRegistry, RowScan, TableAction, TableKind};
 
 /// The four contexts a primitive may run in, named after the
 /// capability profile they grant. Each variant maps 1:1 to one of the
@@ -272,10 +272,12 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// use [`Read::function_entries`] for those. Convert individual
     /// input columns to typed Rust values with [`Core::value_to_base`]
     /// or [`Core::value_to_container`].
-    fn constructor_enodes(&self, name: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+    fn constructor_enodes(&self, name: &str) -> Result<Rows, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
-        Ok(collect_rows(&action, self.es()))
+        Ok(Rows {
+            scan: action.scan_all(self.es()),
+        })
     }
 
     /// Iterate every `(inputs, output)` entry of a function table.
@@ -284,25 +286,61 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// Errors with `WrongSubtype` if `name` is a constructor — use
     /// [`Read::constructor_enodes`] for those.
-    fn function_entries(&self, name: &str) -> Result<Vec<(Vec<Value>, Value)>, Error> {
+    fn function_entries(&self, name: &str) -> Result<Rows, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        Ok(collect_rows(&action, self.es()))
+        Ok(Rows {
+            scan: action.scan_all(self.es()),
+        })
     }
 }
 
-/// Split each row into `(inputs, output)`, where output is the last
-/// column. Shared by `constructor_enodes` and `function_entries`.
-fn collect_rows(action: &TableAction, state: &ExecutionState<'_>) -> Vec<(Vec<Value>, Value)> {
-    let mut out = Vec::with_capacity(action.row_count(state));
-    action.for_each(state, |row| {
-        let (output, inputs) = row
-            .vals
-            .split_last()
-            .expect("function row has at least an output column");
-        out.push((inputs.to_vec(), *output));
-    });
-    out
+/// A read-only snapshot of a table's rows, backed by a single buffer.
+///
+/// Returned by [`Read::constructor_enodes`] and [`Read::function_entries`].
+/// Iterate it with [`Rows::iter`]; each item is `(inputs, output)` as raw
+/// [`Value`]s borrowed from the buffer, so there is no per-row allocation.
+/// `output` is the trailing column — the
+/// eclass id for a constructor, the mapped value for a function. Convert
+/// individual columns with [`Core::value_to_base`] / [`Core::value_to_container`].
+pub struct Rows {
+    scan: RowScan,
+}
+
+impl Rows {
+    /// The number of rows.
+    pub fn len(&self) -> usize {
+        self.scan.len()
+    }
+
+    /// Whether the table had no rows.
+    pub fn is_empty(&self) -> bool {
+        self.scan.is_empty()
+    }
+
+    /// Iterate `(inputs, output)` pairs, borrowing from the backing
+    /// buffer (no per-row allocation).
+    ///
+    /// This is the monomorphized fast path — as cheap as a direct
+    /// streaming backend scan. (We deliberately do *not* implement
+    /// `IntoIterator for &Rows`: expressing its associated `IntoIter`
+    /// type would force a boxed `dyn Iterator`, whose per-row virtual
+    /// dispatch measurably slows the scan.)
+    pub fn iter(&self) -> impl Iterator<Item = (&[Value], Value)> + '_ {
+        self.scan.iter().map(|row| {
+            let (output, inputs) = row
+                .vals
+                .split_last()
+                .expect("table row has at least an output column");
+            (inputs, *output)
+        })
+    }
+}
+
+impl std::fmt::Debug for Rows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
 }
 
 /// Action-side write methods — name-indexed inserts/removes/subsumes

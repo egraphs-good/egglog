@@ -44,7 +44,9 @@ use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-pub use exec_state::{Context, Core, FullState, PureState, Read, ReadState, Write, WriteState};
+pub use exec_state::{
+    Context, Core, FullState, PureState, Read, ReadState, Rows, Write, WriteState,
+};
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
@@ -1890,7 +1892,7 @@ impl EGraph {
         &self.overall_run_report
     }
 
-    /// Convert from an egglog value to a Rust type. 
+    /// Convert from an egglog value to a Rust type.
     /// This method assumes `x` belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
@@ -1990,6 +1992,9 @@ impl EGraph {
     /// 2. Conversely, batching multiple writes in one closure is the
     ///    fast path — only one flush + rebuild happens, regardless of
     ///    how many writes occurred.
+    /// 3. A closure that only reads (e.g. `lookup`, `constructor_enodes`)
+    ///    stages nothing, so the flush is skipped entirely — a read
+    ///    costs no more than a direct backend scan.
     ///
     /// # Example
     /// ```
@@ -2025,11 +2030,17 @@ impl EGraph {
     ) -> Result<R, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        let result = self
+        let (result, changed) = self
             .backend
-            .with_execution_state(|es| f(FullState::wrap(es, &guard, Context::Full)));
+            .with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
         drop(guard);
-        self.backend.flush_updates();
+        // A read-only closure stages nothing, so `flush_updates` would only do
+        // a no-op merge plus a spurious timestamp bump and rebuild check. Skip
+        // it unless the closure actually wrote, keeping reads as cheap as a
+        // direct backend scan.
+        if changed {
+            self.backend.flush_updates();
+        }
         result
     }
 
