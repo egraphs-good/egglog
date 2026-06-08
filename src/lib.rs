@@ -1890,8 +1890,8 @@ impl EGraph {
         &self.overall_run_report
     }
 
-    /// Convert from an egglog value to a Rust type. Untyped — does
-    /// not check whether `x` actually belongs to sort `T`.
+    /// Convert from an egglog value to a Rust type. 
+    /// This method assumes `x` belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
     }
@@ -2508,7 +2508,7 @@ pub enum Error {
     },
     #[error(
         "`{api}` is incompatible with proof mode: {reason} \
-         Disable proofs or move the operation into a (parse-and-run) egglog program."
+         Disable proofs or make the operation a command in the syntax of the egglog language and use `EGraph::parse_and_run`."
     )]
     ProofsIncompatibleApi {
         api: &'static str,

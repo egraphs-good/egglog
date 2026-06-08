@@ -152,13 +152,13 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         cv.register_val(container, es)
     }
 
-    /// Convert an egglog [`Value`] to a Rust base type. Untyped: trust
-    /// that `x` belongs to sort `T`.
+    /// Convert an egglog [`Value`] to a Rust base type, assuming that the
+    /// value belongs to `T`.
     fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.es().base_values().unwrap::<T>(x)
     }
 
-    /// Convert a Rust base type to an egglog [`Value`]. Untyped.
+    /// Convert a Rust base type to an egglog [`Value`].
     fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.es().base_values().get::<T>(x)
     }
@@ -311,8 +311,7 @@ fn collect_rows(action: &TableAction, state: &ExecutionState<'_>) -> Vec<(Vec<Va
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort
-/// matching is **not** checked at this layer — the API is type-unsafe
-/// at the column level.
+/// matching is **not** checked at this layer.
 #[allow(private_bounds)]
 pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Set a function table's value at the given key — mirrors the
@@ -374,7 +373,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// Union two values in the e-graph's union-find. The caller is
     /// responsible for ensuring both values belong to the same
-    /// eq-sort — there is no runtime sort check.
+    /// eq-sort.
     fn union(&mut self, x: Value, y: Value) -> Result<(), Error> {
         let action = *self.registry().union_action();
         action.union(self.es_mut(), x, y);

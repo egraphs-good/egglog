@@ -2,7 +2,7 @@
 
 Egglog is a language for writing equality saturation applications.
 It is the successor to the Rust library [egg](https://github.com/egraphs-good/egg).
-Egglog is faster and more general than egg.
+Egglog is more expressive than egg and scales better to complex workloads.
 
 # Tutorial
 We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
