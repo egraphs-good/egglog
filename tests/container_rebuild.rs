@@ -219,3 +219,81 @@ fn pair_rebuild_term_only() {
         )
         .unwrap();
 }
+
+/// Proof mode: a `(MultiSet Math)` merge. Counts are preserved as repeated
+/// elements, so canonicalization is arity-preserving and the flat `Congr`
+/// chain checks.
+#[test]
+fn multiset_rebuild_proof_mode() {
+    let mut egraph = EGraph::new_with_proofs().with_proof_testing();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (sort MathMS (MultiSet Math))
+            (constructor Holds (MathMS) Math)
+            (Holds (multiset-of (A)))
+            (Holds (multiset-of (B)))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (multiset-of (A))) (Holds (multiset-of (B)))))
+            "#,
+        )
+        .unwrap();
+}
+
+/// Proof mode: a `(Set Math)` rebuild that does NOT collapse (the changed
+/// element stays distinct from the others), so arity is preserved and it
+/// checks. (The collapse case — two elements merging into one — is a known
+/// limitation; see CHANGELOG.)
+#[test]
+fn set_rebuild_noncollapse_proof_mode() {
+    let mut egraph = EGraph::new_with_proofs().with_proof_testing();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor C () Math)
+            (sort MathSet (Set Math))
+            (constructor Holds (MathSet) Math)
+            (Holds (set-of (A) (C)))
+            (Holds (set-of (B) (C)))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (set-of (A) (C))) (Holds (set-of (B) (C)))))
+            "#,
+        )
+        .unwrap();
+}
+
+/// Proof mode: a `(Map Math Math)` rebuild that does NOT collapse (a value
+/// changes, keys stay distinct), so arity is preserved and it checks.
+#[test]
+fn map_rebuild_noncollapse_proof_mode() {
+    let mut egraph = EGraph::new_with_proofs().with_proof_testing();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor K () Math)
+            (sort MathMap (Map Math Math))
+            (constructor Holds (MathMap) Math)
+            (Holds (map-insert (map-empty) (K) (A)))
+            (Holds (map-insert (map-empty) (K) (B)))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (map-insert (map-empty) (K) (A)))
+                      (Holds (map-insert (map-empty) (K) (B)))))
+            "#,
+        )
+        .unwrap();
+}

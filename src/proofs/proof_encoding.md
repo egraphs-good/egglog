@@ -393,10 +393,14 @@ Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
   rebuild through container-typed elements; each rebuilt container records its
   own reflexive `<CSort>Proof` anchor so it can be rebuilt again later.
 
-Not yet supported: a proof for the *collapse* case of `Set`/`Map`/`MultiSet`
-  (where canonicalizing elements merges entries and changes arity, which a flat
-  `Congr` chain can't express — term-only rebuild still handles it), and the
-  desugar round-trip for container programs (the rebuild primitive is
-  registered programmatically and is not reproduced by re-parsing the desugared
-  output).
+`MultiSet` merges are arity-preserving (counts become repeated elements), so
+  they rebuild like `Vec`. `Set`/`Map` rebuilds that don't merge elements/keys
+  are also arity-preserving and check fine.
+
+Not yet supported: a proof for the `Set`/`Map` *collapse* case, where
+  canonicalizing elements merges entries and reduces arity — a flat `Congr`
+  chain preserves arity, so it can't bridge `set-of(a, a)` to `set-of(a)`.
+  Term-only rebuild still handles it. Also not supported: the desugar
+  round-trip for container programs (the rebuild primitive is registered
+  programmatically and is not reproduced by re-parsing the desugared output).
 
