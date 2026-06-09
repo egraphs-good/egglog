@@ -857,6 +857,12 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     type Container: ContainerValue;
     fn name(&self) -> &str;
     fn is_eq_container_sort(&self) -> bool;
+    /// Whether this container's term form reorders or merges elements, so its
+    /// rebuild proof needs the term-level container axiom. Default `false`
+    /// (e.g. `Vec`/`Pair`); `Set`/`Map`/`MultiSet` override to `true`.
+    fn proof_normalizes(&self) -> bool {
+        false
+    }
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &ContainerValues, _: Value) -> Vec<(ArcSort, Value)>;
     fn register_primitives(&self, _eg: &mut EGraph) {}
@@ -919,6 +925,10 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
 
     fn is_eq_container_sort(&self) -> bool {
         self.0.is_eq_container_sort()
+    }
+
+    fn proof_normalizes(&self) -> bool {
+        self.0.proof_normalizes()
     }
 
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {

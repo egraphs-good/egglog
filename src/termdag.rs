@@ -124,6 +124,98 @@ impl TermDag {
         self.nodes.get_index(id).unwrap()
     }
 
+    /// A deterministic total order on terms by their AST *structure*, rather
+    /// than by insertion order (which is what comparing raw [`TermId`]s would
+    /// give). Literals order among themselves by value, variables by name, and
+    /// applications by head symbol, then arity, then children left-to-right;
+    /// across kinds, `Lit < Var < App`.
+    ///
+    /// Useful for canonicalizing the elements of an unordered structure (e.g. a
+    /// set or multiset) into a stable, reproducible term order.
+    pub fn ast_cmp(&self, a: TermId, b: TermId) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self.get(a), self.get(b)) {
+            (Term::Lit(x), Term::Lit(y)) => x.cmp(y),
+            (Term::Lit(_), _) => Ordering::Less,
+            (_, Term::Lit(_)) => Ordering::Greater,
+            (Term::Var(x), Term::Var(y)) => x.cmp(y),
+            (Term::Var(_), _) => Ordering::Less,
+            (_, Term::Var(_)) => Ordering::Greater,
+            (Term::App(hx, ax), Term::App(hy, ay)) => hx
+                .cmp(hy)
+                .then_with(|| ax.len().cmp(&ay.len()))
+                .then_with(|| {
+                    ax.iter()
+                        .zip(ay.iter())
+                        .map(|(&ca, &cb)| self.ast_cmp(ca, cb))
+                        .find(|o| o.is_ne())
+                        .unwrap_or(Ordering::Equal)
+                }),
+        }
+    }
+
+    /// Canonicalize a container term into the normal form determined by its
+    /// value semantics, ordering elements by [`TermDag::ast_cmp`] so the result
+    /// is reproducible from terms alone:
+    /// - `set-of`: sort children, drop duplicates.
+    /// - `multiset-of`: sort children (multiplicities kept as repeats).
+    /// - `map-empty`/`map-insert`: walk the insert spine, apply last-write-wins
+    ///   per key, then rebuild the inserts in sorted key order.
+    ///
+    /// Any other term (a leaf, `vec-of`, `pair`, …) is returned unchanged. This
+    /// is the single source of truth shared by `reconstruct_termdag`, the
+    /// container constructor validators, and the proof checker's container
+    /// axiom, so all three agree on the canonical term.
+    pub fn normalize_container_term(&mut self, term_id: TermId) -> TermId {
+        let Term::App(head, args) = self.get(term_id).clone() else {
+            return term_id;
+        };
+        match head.as_str() {
+            "set-of" => {
+                let mut cs = args;
+                cs.sort_by(|a, b| self.ast_cmp(*a, *b));
+                cs.dedup();
+                self.app("set-of".to_string(), cs)
+            }
+            "multiset-of" => {
+                let mut cs = args;
+                cs.sort_by(|a, b| self.ast_cmp(*a, *b));
+                self.app("multiset-of".to_string(), cs)
+            }
+            "map-empty" | "map-insert" => {
+                let mut entries: Vec<(TermId, TermId)> = Vec::new();
+                self.collect_map_entries(term_id, &mut entries);
+                // Last-write-wins: a later insert of an equal key (same
+                // hash-consed TermId) overrides an earlier one.
+                let mut pairs: Vec<(TermId, TermId)> = Vec::new();
+                for (k, v) in entries {
+                    pairs.retain(|(ek, _)| *ek != k);
+                    pairs.push((k, v));
+                }
+                pairs.sort_by(|(ka, _), (kb, _)| self.ast_cmp(*ka, *kb));
+                let mut acc = self.app("map-empty".to_string(), vec![]);
+                for (k, v) in pairs {
+                    acc = self.app("map-insert".to_string(), vec![acc, k, v]);
+                }
+                acc
+            }
+            _ => term_id,
+        }
+    }
+
+    /// Walk a `map-insert`/`map-empty` spine, pushing `(key, value)` pairs in
+    /// insertion order (innermost insert first).
+    fn collect_map_entries(&self, term_id: TermId, out: &mut Vec<(TermId, TermId)>) {
+        if let Term::App(head, args) = self.get(term_id)
+            && head == "map-insert"
+            && args.len() == 3
+        {
+            let (inner, k, v) = (args[0], args[1], args[2]);
+            self.collect_map_entries(inner, out);
+            out.push((k, v));
+        }
+    }
+
     /// Make and return a [`Term::App`] with the given head symbol and children,
     /// and insert into the DAG if it is not already present.
     ///
@@ -463,6 +555,35 @@ mod tests {
         let mut td = TermDag::default();
         let t = td.expr_to_term(&e);
         (td, t)
+    }
+
+    #[test]
+    fn test_ast_cmp() {
+        use std::cmp::Ordering;
+        let mut td = TermDag::default();
+        let i1 = td.lit(Literal::Int(1));
+        let i2 = td.lit(Literal::Int(2));
+        let vx = td.var("x".into());
+        let f_i1 = td.app("f".into(), vec![i1]);
+        let f_i2 = td.app("f".into(), vec![i2]);
+        let g_i1 = td.app("g".into(), vec![i1]);
+        let f_i1_i1 = td.app("f".into(), vec![i1, i1]);
+
+        // Cross-kind: Lit < Var < App.
+        assert_eq!(td.ast_cmp(i1, vx), Ordering::Less);
+        assert_eq!(td.ast_cmp(vx, f_i1), Ordering::Less);
+        assert_eq!(td.ast_cmp(i1, f_i1), Ordering::Less);
+        // Literals by value.
+        assert_eq!(td.ast_cmp(i1, i2), Ordering::Less);
+        // Apps: same head, compare children.
+        assert_eq!(td.ast_cmp(f_i1, f_i2), Ordering::Less);
+        // Apps: by head symbol first.
+        assert_eq!(td.ast_cmp(f_i1, g_i1), Ordering::Less);
+        // Apps: by arity when head equal and shorter is a prefix.
+        assert_eq!(td.ast_cmp(f_i1, f_i1_i1), Ordering::Less);
+        // Reflexive / total.
+        assert_eq!(td.ast_cmp(f_i1, f_i1), Ordering::Equal);
+        assert_eq!(td.ast_cmp(f_i2, f_i1), Ordering::Greater);
     }
 
     #[test]

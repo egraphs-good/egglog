@@ -1529,6 +1529,7 @@ impl<'a> ProofInstrumentor<'a> {
         let congr_name = self.proof_names().congr_constructor.clone();
         let trans_name = self.proof_names().eq_trans_constructor.clone();
         let sym_name = self.proof_names().eq_sym_constructor.clone();
+        let container_axiom_name = self.proof_names().container_axiom_constructor.clone();
         // The proof datatype sort is declared in the (separately emitted) proof
         // header, so it isn't in `type_info` yet; synthesize a matching EqSort
         // for the primitive's type constraint (constraints match by name).
@@ -1549,6 +1550,7 @@ impl<'a> ProofInstrumentor<'a> {
             congr_name,
             trans_name,
             sym_name,
+            container_axiom_name,
         };
         self.egraph.add_full_primitive(prim, None);
         self.egraph
@@ -1680,10 +1682,11 @@ struct ContainerRebuildProof {
     uf_names: HashMap<String, String>,
     /// container-sort name -> `<CSort>Proof` table name (all reachable containers)
     cproof_names: HashMap<String, String>,
-    /// `Congr` / `Trans` / `Sym` proof constructor names
+    /// `Congr` / `Trans` / `Sym` / `ContainerAxiom` proof constructor names
     congr_name: String,
     trans_name: String,
     sym_name: String,
+    container_axiom_name: String,
 }
 
 impl Primitive for ContainerRebuildProof {
@@ -1763,13 +1766,29 @@ fn rebuild_container_proof_rec(
         sort.rebuild_container_with_leaders(cvs, es, value, &leaders)
     };
 
-    // Fold a `Congr` step per changed child onto the reflexive base.
+    // Fold a `Congr` step per changed child onto the reflexive base. This
+    // proves `value = raw`, where `raw` is the term with children replaced in
+    // place (it may be in non-canonical order, or have duplicate/clobbering
+    // entries for collapsing containers).
     let congr_action = state.registry().lookup_table(&prim.congr_name)?.clone();
     let mut current = base;
     for (j, proof) in child_proofs {
         let j_val = state.base_values().get::<i64>(j as i64);
         current =
             congr_action.lookup_or_insert(state.raw_exec_state(), &[current, j_val, proof])?;
+    }
+
+    // For containers whose canonical form reorders/merges elements (Set, Map,
+    // MultiSet), bridge the non-canonical `raw` term to the canonical
+    // `rebuilt` term with the container axiom: `ContainerAxiom(current)` proves
+    // `value = normalize(raw)`, which the checker recomputes to match
+    // `reconstruct_termdag(rebuilt)`.
+    if sort.proof_normalizes() {
+        let axiom_action = state
+            .registry()
+            .lookup_table(&prim.container_axiom_name)?
+            .clone();
+        current = axiom_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
     }
 
     // Anchor a reflexive proof on the rebuilt value for future rebuilds.

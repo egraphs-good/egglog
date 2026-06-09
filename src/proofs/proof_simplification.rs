@@ -303,6 +303,19 @@ impl ProofStore {
                     changed = true;
                 }
             }
+            Justification::ContainerAxiom { proof: inner } => {
+                let mapped_inner = f(self, *inner);
+                if mapped_inner != *inner {
+                    *inner = mapped_inner;
+                    let (inner_lhs, inner_rhs) = {
+                        let p = self.get(*inner);
+                        (p.lhs(), p.rhs())
+                    };
+                    proof.proposition.lhs = inner_lhs;
+                    proof.proposition.rhs = self.term_dag.normalize_container_term(inner_rhs);
+                    changed = true;
+                }
+            }
         }
 
         if !changed {
@@ -344,6 +357,7 @@ impl Proof {
             } => {}
             Justification::Trans(_, _) => {}
             Justification::Sym(_) => {}
+            Justification::ContainerAxiom { proof: _ } => {}
         }
     }
 }

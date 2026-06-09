@@ -121,6 +121,10 @@ impl ContainerSort for MapSort {
             || self.value.is_eq_container_sort()
     }
 
+    fn proof_normalizes(&self) -> bool {
+        true
+    }
+
     fn inner_values(
         &self,
         container_values: &ContainerValues,
@@ -146,7 +150,11 @@ impl ContainerSort for MapSort {
             Some(termdag.app("map-empty".into(), vec![]))
         };
         let map_insert_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            (args.len() == 3).then(|| termdag.app("map-insert".into(), args.to_vec()))
+            if args.len() != 3 {
+                return None;
+            }
+            let raw = termdag.app("map-insert".into(), args.to_vec());
+            Some(termdag.normalize_container_term(raw))
         };
 
         add_primitive_with_validator!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
@@ -171,12 +179,16 @@ impl ContainerSort for MapSort {
         termdag: &mut TermDag,
         element_terms: Vec<TermId>,
     ) -> TermId {
+        // element_terms is [k0, v0, k1, v1, ...] (unique keys). Build the nested
+        // insert chain in deterministic AST key order so proof checking can
+        // reproduce it from terms alone.
+        let mut pairs: Vec<(TermId, TermId)> =
+            element_terms.chunks(2).map(|c| (c[0], c[1])).collect();
+        pairs.sort_by(|(ka, _), (kb, _)| termdag.ast_cmp(*ka, *kb));
         let mut term = termdag.app("map-empty".into(), vec![]);
-
-        for x in element_terms.chunks(2) {
-            term = termdag.app("map-insert".into(), vec![term, x[0], x[1]])
+        for (k, v) in pairs {
+            term = termdag.app("map-insert".into(), vec![term, k, v]);
         }
-
         term
     }
 

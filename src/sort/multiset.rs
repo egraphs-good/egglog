@@ -110,6 +110,10 @@ impl ContainerSort for MultiSetSort {
         self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
+    fn proof_normalizes(&self) -> bool {
+        true
+    }
+
     fn inner_values(
         &self,
         container_values: &ContainerValues,
@@ -132,7 +136,8 @@ impl ContainerSort for MultiSetSort {
         // `reconstruct_termdag`. (Count merging for proof checking of
         // collapsing multisets is refined in the MultiSet proof stage.)
         let multiset_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            Some(termdag.app("multiset-of".into(), args.to_vec()))
+            let raw = termdag.app("multiset-of".into(), args.to_vec());
+            Some(termdag.normalize_container_term(raw))
         };
 
         add_primitive_with_validator!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
@@ -220,8 +225,11 @@ impl ContainerSort for MultiSetSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<TermId>,
+        mut element_terms: Vec<TermId>,
     ) -> TermId {
+        // Sort by deterministic AST order (multiplicities preserved as repeated
+        // elements) so proof checking can reproduce it from terms alone.
+        element_terms.sort_by(|a, b| termdag.ast_cmp(*a, *b));
         termdag.app("multiset-of".into(), element_terms)
     }
 

@@ -27,6 +27,7 @@ pub(crate) struct EncodingNames {
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
+    pub(crate) container_axiom_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
@@ -68,6 +69,7 @@ impl EncodingNames {
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
+            container_axiom_constructor: symbol_gen.fresh("ContainerAxiom"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
             single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
@@ -363,6 +365,7 @@ impl ProofInstrumentor<'_> {
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
+            ref container_axiom_constructor,
             ref pcons,
             ref pnil,
             ..
@@ -398,6 +401,11 @@ impl ProofInstrumentor<'_> {
 ;; and a proof that ci = c2,
 ;; produces a justification that t1 = f(..., c2, ...)
 (constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype} :internal-hidden)
+
+;; given a proof that t1 = c, where c is a container term, produces a proof that
+;; t1 = normalize(c) (the container's canonicalizing axiom: sort/dedup for sets,
+;; last-write-wins for maps, sort for multisets)
+(constructor  {container_axiom_constructor} ({proof_datatype}) {proof_datatype} :internal-hidden)
                 "
         )
     }

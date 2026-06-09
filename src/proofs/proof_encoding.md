@@ -393,14 +393,19 @@ Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
   rebuild through container-typed elements; each rebuilt container records its
   own reflexive `<CSort>Proof` anchor so it can be rebuilt again later.
 
-`MultiSet` merges are arity-preserving (counts become repeated elements), so
-  they rebuild like `Vec`. `Set`/`Map` rebuilds that don't merge elements/keys
-  are also arity-preserving and check fine.
+Containers whose canonical form reorders or merges elements (`Set`, `Map`,
+  `MultiSet`) need one more step than `Vec`/`Pair`: a flat `Congr` chain
+  produces the term with children replaced in place, which may be in the wrong
+  order or contain duplicates. The **container axiom** (`ContainerAxiom` in
+  [`crate::proofs::proof_format`]) normalizes it — sort + dedup for sets, sort
+  for multisets, sort + last-write-wins for maps. The normalization is one
+  shared `TermDag` operation (`normalize_container_term`, ordered by the
+  deterministic structural `ast_cmp`) used by `reconstruct_termdag`, the
+  container constructor validators, and the checker, so all three agree.
 
-Not yet supported: a proof for the `Set`/`Map` *collapse* case, where
-  canonicalizing elements merges entries and reduces arity — a flat `Congr`
-  chain preserves arity, so it can't bridge `set-of(a, a)` to `set-of(a)`.
-  Term-only rebuild still handles it. Also not supported: the desugar
+Not yet supported: `Map` *key collapse* (two keys merging), because the nested
+  `map-insert` term form makes the rebuild `Congr` indices nested (non-collapse
+  Map proofs and term-only Map both work). Also not supported: the desugar
   round-trip for container programs (the rebuild primitive is registered
   programmatically and is not reproduced by re-parsing the desugared output).
 

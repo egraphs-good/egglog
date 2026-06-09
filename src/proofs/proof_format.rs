@@ -65,6 +65,14 @@ enum RawProof {
     /// and a proof that ci = c2,
     /// produces a justification that t1 = f(..., c2, ...)
     Congr(RawProofId, usize, RawProofId),
+    /// Given a proof that `t1 = c`, where `c` is a container term (e.g. a
+    /// `set-of`/`map-insert`/`multiset-of` application that may be in a
+    /// non-canonical order or contain duplicate/clobbering entries), produces a
+    /// proof that `t1 = normalize(c)`, where `normalize` is the container's
+    /// canonicalizing axiom (sort by [`TermDag::ast_cmp`], dedup for sets,
+    /// last-write-wins for maps). This is the bridge that a structural `Congr`
+    /// chain can't express, since canonicalization reorders/merges children.
+    ContainerAxiom(RawProofId),
 }
 
 /// A [`ProofStore`] is similar to a [`TermDag`].
@@ -168,6 +176,12 @@ pub enum Justification {
         child_index: usize,
         child_proof: ProofId,
     },
+    /// Given a `proof` proving `t1 = c` where `c` is a container term, proves
+    /// `t1 = normalize(c)`: the container's canonicalizing axiom applied to `c`
+    /// (sort children by [`TermDag::ast_cmp`]; dedup for sets; last-write-wins
+    /// for maps; sort for multisets). An axiom egglog assumes about container
+    /// sorts, justified by their value semantics.
+    ContainerAxiom { proof: ProofId },
 }
 
 impl RawProofStore {
@@ -230,6 +244,13 @@ impl RawProofStore {
             assert!(args.len() == 1, "sym constructor should have 1 arg");
             let inner = self.parse_proof(args[0]);
             RawProof::Sym(inner)
+        } else if head.contains("ContainerAxiom") {
+            assert!(
+                args.len() == 1,
+                "container axiom constructor should have 1 arg"
+            );
+            let inner = self.parse_proof(args[0]);
+            RawProof::ContainerAxiom(inner)
         } else if head.contains("Congr") {
             assert!(args.len() == 3, "congr constructor should have 3 args");
             let proof = self.parse_proof(args[0]);
@@ -451,6 +472,16 @@ impl ProofStore {
                     },
                 }
             }
+            RawProof::ContainerAxiom(inner_raw) => {
+                let inner_id = self.convert_raw_proof(prog, globals, raw_store, *inner_raw);
+                let inner_lhs = self.id_to_proof[inner_id].lhs();
+                let inner_rhs = self.id_to_proof[inner_id].rhs();
+                let normalized = self.term_dag.normalize_container_term(inner_rhs);
+                Proof {
+                    proposition: Proposition::new(inner_lhs, normalized),
+                    justification: Justification::ContainerAxiom { proof: inner_id },
+                }
+            }
         };
 
         let proof_id = self.id_to_proof.push(proof);
@@ -657,7 +688,9 @@ impl ProofStore {
         dag.to_string_with_let_internal(symbol_gen, proof_term_id, buffer, |constructor| {
             match constructor {
                 "=" => "prop".to_string(),
-                "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" => "prf".to_string(),
+                "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" | "ContainerAxiom" => {
+                    "prf".to_string()
+                }
                 _ => "t".to_string(),
             }
         })
@@ -752,6 +785,11 @@ impl ProofStore {
                     "Congr".to_string(),
                     vec![equality, base_term_id, child_term_id, index_term],
                 )
+            }
+            Justification::ContainerAxiom { proof: inner } => {
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
+                let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
+                dag.app("ContainerAxiom".to_string(), vec![equality, inner_term_id])
             }
         };
 

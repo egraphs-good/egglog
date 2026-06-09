@@ -92,6 +92,10 @@ impl ContainerSort for SetSort {
         self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
+    fn proof_normalizes(&self) -> bool {
+        true
+    }
+
     fn inner_values(
         &self,
         container_values: &ContainerValues,
@@ -114,7 +118,8 @@ impl ContainerSort for SetSort {
         // `reconstruct_termdag`. (Element dedup/ordering for proof checking of
         // collapsing sets is refined in the Set proof stage.)
         let set_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            Some(termdag.app("set-of".into(), args.to_vec()))
+            let raw = termdag.app("set-of".into(), args.to_vec());
+            Some(termdag.normalize_container_term(raw))
         };
         let set_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
             Some(termdag.app("set-of".into(), vec![]))
@@ -147,8 +152,13 @@ impl ContainerSort for SetSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<TermId>,
+        mut element_terms: Vec<TermId>,
     ) -> TermId {
+        // Canonical order is the deterministic AST order (not value-id order),
+        // so that proof checking can reproduce it from terms alone. Dedup too,
+        // matching the set's value semantics.
+        element_terms.sort_by(|a, b| termdag.ast_cmp(*a, *b));
+        element_terms.dedup();
         termdag.app("set-of".into(), element_terms)
     }
 

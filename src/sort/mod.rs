@@ -84,6 +84,15 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
+    /// Whether this container's canonical term form reorders or merges its
+    /// elements (so rebuilding it needs the term-level "container axiom" to
+    /// match `reconstruct_termdag`). True for `Set`/`Map`/`MultiSet`; false for
+    /// order-and-arity-preserving containers like `Vec`/`Pair` and for
+    /// non-containers. See [`crate::proofs`] container support.
+    fn proof_normalizes(&self) -> bool {
+        false
+    }
+
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
