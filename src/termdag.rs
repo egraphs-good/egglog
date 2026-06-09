@@ -182,37 +182,47 @@ impl TermDag {
                 cs.sort_by(|a, b| self.ast_cmp(*a, *b));
                 self.app("multiset-of".to_string(), cs)
             }
-            "map-empty" | "map-insert" => {
+            "map-of" | "map-empty" | "map-insert" => {
+                // Accept either the flat `map-of` form or a `map-insert`/
+                // `map-empty` spine; canonicalize to flat `map-of` in sorted
+                // key order, with last-write-wins on duplicate keys.
                 let mut entries: Vec<(TermId, TermId)> = Vec::new();
                 self.collect_map_entries(term_id, &mut entries);
-                // Last-write-wins: a later insert of an equal key (same
-                // hash-consed TermId) overrides an earlier one.
                 let mut pairs: Vec<(TermId, TermId)> = Vec::new();
                 for (k, v) in entries {
                     pairs.retain(|(ek, _)| *ek != k);
                     pairs.push((k, v));
                 }
                 pairs.sort_by(|(ka, _), (kb, _)| self.ast_cmp(*ka, *kb));
-                let mut acc = self.app("map-empty".to_string(), vec![]);
+                let mut flat = Vec::with_capacity(pairs.len() * 2);
                 for (k, v) in pairs {
-                    acc = self.app("map-insert".to_string(), vec![acc, k, v]);
+                    flat.push(k);
+                    flat.push(v);
                 }
-                acc
+                self.app("map-of".to_string(), flat)
             }
             _ => term_id,
         }
     }
 
-    /// Walk a `map-insert`/`map-empty` spine, pushing `(key, value)` pairs in
-    /// insertion order (innermost insert first).
+    /// Collect `(key, value)` pairs from a map term in insertion order. Handles
+    /// both the flat `map-of` form and a `map-insert`/`map-empty` spine
+    /// (innermost insert first).
     fn collect_map_entries(&self, term_id: TermId, out: &mut Vec<(TermId, TermId)>) {
-        if let Term::App(head, args) = self.get(term_id)
-            && head == "map-insert"
-            && args.len() == 3
-        {
-            let (inner, k, v) = (args[0], args[1], args[2]);
-            self.collect_map_entries(inner, out);
-            out.push((k, v));
+        match self.get(term_id) {
+            Term::App(head, args) if head == "map-insert" && args.len() == 3 => {
+                let (inner, k, v) = (args[0], args[1], args[2]);
+                self.collect_map_entries(inner, out);
+                out.push((k, v));
+            }
+            Term::App(head, args) if head == "map-of" => {
+                for chunk in args.chunks(2) {
+                    if let [k, v] = chunk {
+                        out.push((*k, *v));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

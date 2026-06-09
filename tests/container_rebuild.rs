@@ -372,3 +372,30 @@ fn multiset_rebuild_merge_counts_proof_mode() {
         )
         .unwrap();
 }
+
+/// Proof mode: a collapsing `(Map Math Math)` — two keys merge into one
+/// (last-write-wins). The flat `map-of` term form makes the rebuild Congr
+/// indices flat, and the container axiom normalizes (sort + last-write-wins).
+#[test]
+fn map_rebuild_collapse_proof_mode() {
+    let mut egraph = EGraph::new_with_proofs().with_proof_testing();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor V () Math)
+            (sort MathMap (Map Math Math))
+            (constructor Holds (MathMap) Math)
+            (Holds (map-insert (map-insert (map-empty) (A) (V)) (B) (V)))
+            (Holds (map-insert (map-empty) (B) (V)))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (map-insert (map-insert (map-empty) (A) (V)) (B) (V)))
+                      (Holds (map-insert (map-empty) (B) (V)))))
+            "#,
+        )
+        .unwrap();
+}

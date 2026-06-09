@@ -403,9 +403,12 @@ Containers whose canonical form reorders or merges elements (`Set`, `Map`,
   deterministic structural `ast_cmp`) used by `reconstruct_termdag`, the
   container constructor validators, and the checker, so all three agree.
 
-Not yet supported: `Map` *key collapse* (two keys merging), because the nested
-  `map-insert` term form makes the rebuild `Congr` indices nested (non-collapse
-  Map proofs and term-only Map both work). Also not supported: the desugar
-  round-trip for container programs (the rebuild primitive is registered
-  programmatically and is not reproduced by re-parsing the desugared output).
+Maps use a flat `(map-of k0 v0 k1 v1 ...)` term form (a `map-of` constructor,
+  like `set-of`/`vec-of`) rather than nested `map-insert`s, so their rebuild
+  `Congr` indices are flat and key collapse (last-write-wins) works like the
+  other containers.
+
+Not yet supported: the desugar round-trip for container programs (the rebuild
+  primitive is registered programmatically and is not reproduced by re-parsing
+  the desugared output).
 
