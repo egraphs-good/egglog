@@ -1764,8 +1764,6 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         bindings: &DenseIdMap<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'a>,
     ) {
-        // Size cap: once the cumulative cap is reached, stop the
-        // join and drop further matches instead of buffering/applying them.
         if self.match_counter.over_cap() {
             to_exec_state().trigger_early_stop();
             return;
@@ -1871,6 +1869,10 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
             action_state.len = 0;
             let match_counter = self.match_counter.clone();
             self.scope.spawn(move |_| {
+                if match_counter.over_cap() {
+                    state.trigger_early_stop();
+                    return;
+                }
                 let succeeded = state.run_instrs(&action_info.instrs, &mut bindings);
                 match_counter.inc_matches(action, succeeded);
                 if match_counter.over_cap() {
@@ -1935,11 +1937,11 @@ fn flush_action_states(
     rule_set: &RuleSet,
     match_counter: &MatchCounter,
 ) {
-    if match_counter.over_cap() {
-        return;
-    }
     for (action, ActionState { bindings, len, .. }) in actions.iter_mut() {
         if *len > 0 {
+            if match_counter.over_cap() {
+                return;
+            }
             let succeeded = exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
             bindings.clear();
             match_counter.inc_matches(action, succeeded);
