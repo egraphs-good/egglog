@@ -457,10 +457,12 @@ mod test {
             );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
-            assert!(report
-                .search_and_apply_time_per_rule
-                .keys()
-                .all(|k| k.starts_with("test-rule")));
+            assert!(
+                report
+                    .search_and_apply_time_per_rule
+                    .keys()
+                    .all(|k| k.starts_with("test-rule"))
+            );
             assert_eq!(
                 report.merge_time_per_ruleset.keys().collect::<Vec<_>>(),
                 [&"test".into()]
