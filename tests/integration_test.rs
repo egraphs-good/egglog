@@ -785,6 +785,35 @@ fn test_value_to_classid() {
 }
 
 #[test]
+fn test_serialize_sort_name_with_dash() {
+    // A sort whose name contains '-' (legal, like the built-in `vec-set`) must
+    // serialize without panicking, and its class ID must still round-trip.
+    let mut egraph = EGraph::default();
+    let outputs = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math-Expr (Lit i64))
+            (Lit 5)
+            (extract (Lit 5))
+            "#,
+        )
+        .unwrap();
+    let CommandOutput::ExtractBest(termdag, _cost, term) = outputs[0].clone() else {
+        panic!();
+    };
+    let expr = termdag.term_to_expr(&term, span!());
+    let (sort, value) = egraph.eval_expr(&expr).unwrap();
+    assert_eq!(sort.name(), "Math-Expr");
+
+    let serialize_output = egraph.serialize(SerializeConfig::default());
+    assert!(serialize_output.is_complete());
+    let class_id = egraph.value_to_class_id(&sort, value);
+    assert!(serialize_output.egraph.class_data.get(&class_id).is_some());
+    assert_eq!(value, egraph.class_id_to_value(&class_id));
+}
+
+#[test]
 fn test_serialize_617() {
     let program = "
         (sort Node)

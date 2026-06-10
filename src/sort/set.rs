@@ -60,11 +60,12 @@ impl Presort for SetSort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
+        if let [Expr::Var(arg_span, e)] = args {
             let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), arg_span.clone()))?;
 
             let out = Self {
                 name,
@@ -72,7 +73,10 @@ impl Presort for SetSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!()
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().to_owned(),
+                span,
+            ))
         }
     }
 }

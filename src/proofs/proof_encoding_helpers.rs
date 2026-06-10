@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, TypeInfo,
+    EGraph, Error, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, Schedule,
@@ -122,12 +122,12 @@ impl ProofInstrumentor<'_> {
             .fresh(&format!("UFPair_{sort}"))
     }
 
-    pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
+    pub(crate) fn parse_program(&mut self, input: &str) -> Result<Vec<Command>, Error> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
 
-        res.unwrap()
+        Ok(res?)
     }
 
     pub(crate) fn format_prooflist(&self, proofs: &[String]) -> String {
@@ -142,7 +142,7 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Header commands for term encoding, setting up rulesets.
-    pub(crate) fn term_header(&mut self) -> Vec<Command> {
+    pub(crate) fn term_header(&mut self) -> Result<Vec<Command>, Error> {
         let str = format!(
             "(ruleset {})
              (ruleset {})
@@ -160,31 +160,31 @@ impl ProofInstrumentor<'_> {
         self.parse_program(&str)
     }
 
-    /// Internal parse helper for term encoding- parse and crash on failure.
-    pub(crate) fn parse_schedule(&mut self, input: String) -> Schedule {
+    /// Internal parse helper for term encoding, propagating parse errors.
+    pub(crate) fn parse_schedule(&mut self, input: String) -> Result<Schedule, Error> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_schedule_from_string(None, &input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res.unwrap()
+        Ok(res?)
     }
 
-    /// Internal parse helper for term encoding- parse and crash on failure.
-    pub(crate) fn parse_facts(&mut self, input: &[String]) -> Vec<Fact> {
+    /// Internal parse helper for term encoding, propagating parse errors.
+    pub(crate) fn parse_facts(&mut self, input: &[String]) -> Result<Vec<Fact>, Error> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = input
             .iter()
-            .map(|f| self.egraph.parser.get_fact_from_string(None, f).unwrap())
-            .collect();
+            .map(|f| self.egraph.parser.get_fact_from_string(None, f))
+            .collect::<Result<Vec<_>, _>>();
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res
+        Ok(res?)
     }
 
-    /// Internal parse helper for term encoding- parse an expression and crash on failure.
-    pub(crate) fn parse_expr(&mut self, input: &str) -> Expr {
+    /// Internal parse helper for term encoding, propagating parse errors.
+    pub(crate) fn parse_expr(&mut self, input: &str) -> Result<Expr, Error> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_expr_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res.unwrap()
+        Ok(res?)
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
@@ -586,6 +586,12 @@ pub(crate) fn command_supports_proof_encoding(
             } else {
                 Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
             }
+        }
+        // (fail <cmd>) must still satisfy the proof encoding constraints on its inner command,
+        // e.g. (fail (let x 3)) should report the unsupported inner command rather than
+        // bypassing the guard and panicking later in proof global removal.
+        GenericCommand::Fail(_span, inner) => {
+            command_supports_proof_encoding(inner.as_ref(), type_info)
         }
         _ => Ok(()),
     }

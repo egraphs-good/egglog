@@ -121,14 +121,18 @@ pub fn cli(mut egraph: EGraph) {
         }
     } else {
         for input in &args.inputs {
-            let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
-                let arg = input.to_string_lossy();
-                panic!("Failed to read file {arg}")
-            });
+            let program = match std::fs::read_to_string(input) {
+                Ok(program) => program,
+                Err(e) => {
+                    let arg = input.to_string_lossy();
+                    log::error!("Failed to read file {arg}: {e}");
+                    std::process::exit(1)
+                }
+            };
 
             match run_commands(
                 &mut egraph,
-                Some(input.to_str().unwrap().into()),
+                Some(input.to_string_lossy().into_owned()),
                 &program,
                 io::stdout(),
                 args.mode,
@@ -158,28 +162,36 @@ pub fn cli(mut egraph: EGraph) {
                 let serialize_filename = if args.serialize_split_primitive_outputs {
                     input.with_file_name(format!(
                         "{}-split",
-                        input.file_stem().unwrap().to_str().unwrap()
+                        input
+                            .file_stem()
+                            .map(|s| s.to_string_lossy())
+                            .unwrap_or_default()
                     ))
                 } else {
                     input.clone()
                 };
                 if args.to_dot {
                     let dot_path = serialize_filename.with_extension("dot");
-                    serialized
-                        .to_dot_file(dot_path.clone())
-                        .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
+                    if let Err(e) = serialized.to_dot_file(dot_path.clone()) {
+                        log::error!("Failed to write dot file to {dot_path:?}: {e}");
+                        std::process::exit(1)
+                    }
                 }
                 if args.to_svg {
                     let svg_path = serialize_filename.with_extension("svg");
-                    serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
-                        panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
-                    );
+                    if let Err(e) = serialized.to_svg_file(svg_path.clone()) {
+                        log::error!(
+                            "Failed to write svg file to {svg_path:?}: {e}. Make sure you have the `dot` executable installed"
+                        );
+                        std::process::exit(1)
+                    }
                 }
                 if args.to_json {
                     let json_path = serialize_filename.with_extension("json");
-                    serialized
-                        .to_json_file(json_path.clone())
-                        .unwrap_or_else(|_| panic!("Failed to write json file to {json_path:?}"));
+                    if let Err(e) = serialized.to_json_file(json_path.clone()) {
+                        log::error!("Failed to write json file to {json_path:?}: {e}");
+                        std::process::exit(1)
+                    }
                 }
             }
         }
@@ -187,12 +199,17 @@ pub fn cli(mut egraph: EGraph) {
 
     if let Some(report_path) = args.save_report {
         let report = egraph.get_overall_run_report();
-        serde_json::to_writer(
-            std::fs::File::create(&report_path)
-                .unwrap_or_else(|_| panic!("Failed to create report file at {report_path:?}")),
-            &report,
-        )
-        .expect("Failed to serialize report");
+        let file = match std::fs::File::create(&report_path) {
+            Ok(file) => file,
+            Err(e) => {
+                log::error!("Failed to create report file at {report_path:?}: {e}");
+                std::process::exit(1)
+            }
+        };
+        if let Err(e) = serde_json::to_writer(file, &report) {
+            log::error!("Failed to serialize report: {e}");
+            std::process::exit(1)
+        }
         log::info!("Saved report to {report_path:?}");
     }
 

@@ -750,7 +750,10 @@ impl Parser {
                 [subcommand] => {
                     let mut cs = self.parse_command(subcommand)?;
                     if cs.len() != 1 {
-                        todo!("extend Fail to work with multiple parsed commands")
+                        return error!(
+                            span,
+                            "(fail ...) does not support commands that expand into multiple commands"
+                        );
                     }
                     vec![Command::Fail(span, Box::new(cs.remove(0)))]
                 }

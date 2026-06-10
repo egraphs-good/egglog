@@ -32,7 +32,7 @@ impl BaseSort for BigRatSort {
         add_primitive!(eg, "ceil" = |a: Q| -> Q { Q::new(a.0.ceil()) });
         add_primitive!(eg, "round" = |a: Q| -> Q { Q::new(a.round()) });
 
-        add_primitive!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(BigRational::new(a.0, b.0)) });
+        add_primitive!(eg, "bigrat" = |a: Z, b: Z| -?> Q { (!b.0.is_zero()).then(|| Q::new(BigRational::new(a.0, b.0))) });
         add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new(a.numer().clone()) });
         add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new(a.denom().clone()) });
         add_primitive!(eg, "to-f64" = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
@@ -75,7 +75,7 @@ impl BaseSort for BigRatSort {
             if a.is_one() {
                 Some(Q::new(BigRational::zero()))
             } else {
-                todo!("log of bigrat")
+                None
             }
         });
         add_primitive!(eg, "sqrt" = |a: Q| -?> Q {
@@ -96,7 +96,7 @@ impl BaseSort for BigRatSort {
             if a.is_one() {
                 Some(Q::new(BigRational::one()))
             } else {
-                todo!("cbrt of bigrat")
+                None
             }
         });
 

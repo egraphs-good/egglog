@@ -687,8 +687,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
-                        if *target == canonical_value {
-                            let cost = self.compute_cost_hyperedge(egraph, &row, func).unwrap();
+                        if *target == canonical_value
+                            && let Some(cost) = self.compute_cost_hyperedge(egraph, &row, func)
+                        {
                             root_variants.push((cost, func_name.clone(), row.vals.to_vec()));
                         }
                     }
@@ -840,7 +841,14 @@ impl EGraph {
         let extractor =
             Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
         let mut termdag = TermDag::default();
-        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
+        let (cost, term) = extractor
+            .extract_best(self, &mut termdag, value)
+            .ok_or_else(|| {
+                Error::ExtractError(
+                    "Unable to find any valid extraction (likely due to subsume or delete)"
+                        .to_string(),
+                )
+            })?;
         Ok((termdag, term, cost))
     }
 
