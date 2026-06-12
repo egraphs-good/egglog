@@ -350,19 +350,6 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 .iter()
                 .any(|f| run.path.ends_with(f));
 
-        // The container rebuild path registers per-container primitives
-        // programmatically (with fresh names), so the desugared proof program
-        // references primitives that a fresh `EGraph::default()` cannot resolve.
-        // Skip only the desugar round-trip variant for container-using files;
-        // the direct proof variants are exercised normally.
-        let uses_container = std::fs::read_to_string(&run.path)
-            .map(|src| {
-                ["(Vec ", "(Set ", "(Map ", "(Pair ", "(MultiSet "]
-                    .iter()
-                    .any(|p| src.contains(p))
-            })
-            .unwrap_or(false);
-
         if !requires_proofs {
             push_trial(run.clone());
 
@@ -401,14 +388,11 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
 
             // Complex mode: desugar using proof encoding, then run normally.
             // Yes this mode is important! It has found multiple bugs.
-            // (Skipped for container files: see `uses_container` above.)
-            if !uses_container {
-                push_trial(Run {
-                    proof_testing: true,
-                    desugar: true,
-                    ..run.clone()
-                });
-            }
+            push_trial(Run {
+                proof_testing: true,
+                desugar: true,
+                ..run.clone()
+            });
         }
     }
 

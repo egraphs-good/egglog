@@ -408,7 +408,13 @@ Maps use a flat `(map-of k0 v0 k1 v1 ...)` term form (a `map-of` constructor,
   `Congr` indices are flat and key collapse (last-write-wins) works like the
   other containers.
 
-Not yet supported: the desugar round-trip for container programs (the rebuild
-  primitive is registered programmatically and is not reproduced by re-parsing
-  the desugared output).
+The rebuild primitives are registered programmatically, with fresh names, so
+  they would not exist if the desugared program were re-parsed on its own. To
+  make the desugar round-trip work, the encoder serializes their configuration
+  (the primitive names, the per-element `UF_<E>f` index names, and — in proof
+  mode — the `<CSort>Proof` tables and proof constructors) onto the container's
+  `(sort …)` declaration as an `:internal-container-rebuild` annotation. When
+  that Sort command is typechecked (during encoding *and* on re-parse), the
+  primitives are re-registered from the spec, so the rebuild rules resolve in
+  both cases.
 

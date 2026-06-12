@@ -123,6 +123,13 @@ impl<'a> ProofInstrumentor<'a> {
         let uf_function_name = self.uf_function_name(sort_name);
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
         let uf_function_index_name = self.egraph.parser.symbol_gen.fresh("uf_function_index");
+        // Fresh query-variable names for the UF maintenance rules. These must be
+        // gensym'd (not literal `a`/`b`/`c`) so they cannot shadow a user-defined
+        // global constructor of the same name when the encoded program is
+        // re-parsed (e.g. a program with a `(constructor b () ...)`).
+        let a = self.egraph.parser.symbol_gen.fresh("uf_a");
+        let b = self.egraph.parser.symbol_gen.fresh("uf_b");
+        let c = self.egraph.parser.symbol_gen.fresh("uf_c");
 
         let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
@@ -141,31 +148,31 @@ impl<'a> ProofInstrumentor<'a> {
                 let sym = self.proof_names().eq_sym_constructor.clone();
                 (
                     format!(
-                        "(= {p1_fresh} ({pname} a b))
-                        (= {p2_fresh} ({pname} b c))"
+                        "(= {p1_fresh} ({pname} {a} {b}))
+                        (= {p2_fresh} ({pname} {b} {c}))"
                     ),
                     format!(
-                        "(delete ({pname} a b))
-                       (set ({pname} a c) ({trans} {p1_fresh} {p2_fresh}))"
+                        "(delete ({pname} {a} {b}))
+                       (set ({pname} {a} {c}) ({trans} {p1_fresh} {p2_fresh}))"
                     ),
                     format!(
-                        "(= {p1_fresh} ({pname} a b))
-                        (= {p2_fresh} ({pname} a c))"
+                        "(= {p1_fresh} ({pname} {a} {b}))
+                        (= {p2_fresh} ({pname} {a} {c}))"
                     ),
                     format!(
-                        "(delete ({pname} a b))
-                       (set ({pname} b c) ({trans} ({sym} {p1_fresh}) {p2_fresh}))"
+                        "(delete ({pname} {a} {b}))
+                       (set ({pname} {b} {c}) ({trans} ({sym} {p1_fresh}) {p2_fresh}))"
                     ),
                 )
             } else {
                 (
-                    format!("({pname} a b)\n                        ({pname} b c)"),
+                    format!("({pname} {a} {b})\n                        ({pname} {b} {c})"),
                     format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} a c) ())"
+                        "(delete ({pname} {a} {b}))\n                       (set ({pname} {a} {c}) ())"
                     ),
-                    format!("({pname} a b)\n                        ({pname} a c)"),
+                    format!("({pname} {a} {b})\n                        ({pname} {a} {c})"),
                     format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} b c) ())"
+                        "(delete ({pname} {a} {b}))\n                       (set ({pname} {b} {c}) ())"
                     ),
                 )
             };
@@ -179,15 +186,15 @@ impl<'a> ProofInstrumentor<'a> {
                 (
                     pair_sort.clone(),
                     format!("(sort {pair_sort} (Pair {sort_name} {proof_type}))"),
-                    format!("(= {proof_fresh} ({pname} a b))"),
-                    format!("(set ({uf_function_name} a) (pair b {proof_fresh}))"),
+                    format!("(= {proof_fresh} ({pname} {a} {b}))"),
+                    format!("(set ({uf_function_name} {a}) (pair {b} {proof_fresh}))"),
                 )
             } else {
                 (
                     sort_name.to_string(),
                     "".to_string(),
-                    format!("({pname} a b)"),
-                    format!("(set ({uf_function_name} a) b)"),
+                    format!("({pname} {a} {b})"),
+                    format!("(set ({uf_function_name} {a}) {b})"),
                 )
             };
 
@@ -197,14 +204,14 @@ impl<'a> ProofInstrumentor<'a> {
              (function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge new :unextractable :internal-hidden)
              ;; performs path compression, ensuring each term points to the representative
              (rule ({path_compress_query}
-                    (!= b c))
+                    (!= {b} {c}))
                   ({path_compress_action})
                    :ruleset {path_compress_ruleset_name}
                    :name \"{fresh_name}\")
              ;; ensures each term has only one parent
              (rule ({single_parent_query}
-                    (!= b c)
-                    (= (ordering-max b c) b))
+                    (!= {b} {c})
+                    (= (ordering-max {b} {c}) {b}))
                   ({single_parent_action})
                    :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
@@ -1314,6 +1321,25 @@ impl<'a> ProofInstrumentor<'a> {
                 } else {
                     None
                 };
+                // For container sorts, build the rebuild-primitive spec now (it
+                // generates and caches the fresh primitive names used by the
+                // rebuild rules below) and attach it as an annotation so the
+                // primitives can be re-registered when this desugared Sort
+                // command is typechecked / re-parsed.
+                let container_rebuild = if is_container {
+                    let container_sort = self
+                        .egraph
+                        .proof_state
+                        .original_typechecking
+                        .as_ref()
+                        .and_then(|tc| tc.get_sort_by_name(name).cloned())
+                        .unwrap_or_else(|| {
+                            panic!("container sort {name} not found while term-encoding")
+                        });
+                    Some(self.build_container_rebuild_spec(&container_sort))
+                } else {
+                    None
+                };
                 res.push(Command::Sort {
                     span: span.clone(),
                     name: name.clone(),
@@ -1321,6 +1347,7 @@ impl<'a> ProofInstrumentor<'a> {
                     uf: uf_name,
                     proof_func,
                     unionable: *unionable,
+                    container_rebuild,
                 });
                 res.extend(self.declare_sort(name, is_container));
             }
@@ -1473,91 +1500,168 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Ensure a container-rebuild primitive is registered for `container_sort`,
-    /// returning its (fresh) name. Cached per container sort. The primitive
-    /// canonicalizes a container's eq-sort elements to their union-find leaders
-    /// (recursing through nested containers) during rebuilding.
-    fn ensure_container_rebuild(&mut self, container_sort: &ArcSort) -> String {
+    /// Build the rebuild-primitive spec for a container sort, returning the
+    /// serialized spec (to attach as the `:internal-container-rebuild`
+    /// annotation). Generates and caches the fresh primitive names but does
+    /// *not* register the primitives — registration happens from the spec when
+    /// the Sort command is typechecked (see [`register_container_rebuild_from_spec`]),
+    /// so it works both during encoding and on re-parse of the desugared output.
+    ///
+    /// The spec is a space-separated token list:
+    /// `value_prim proof_flag uf_count (elemsort ufname)* [proof_prim congr trans sym axiom proof_datatype cp_count (csort cproof)*]`
+    fn build_container_rebuild_spec(&mut self, container_sort: &ArcSort) -> String {
         let sort_name = container_sort.name().to_string();
-        if let Some(name) = self
-            .egraph
-            .proof_state
-            .container_rebuild_name
-            .get(&sort_name)
-        {
-            return name.clone();
-        }
-        let mut uf_names = HashMap::default();
-        self.collect_container_uf_names(container_sort, &mut uf_names);
-        let prim_name = self.egraph.parser.symbol_gen.fresh("container_rebuild");
-        let prim = ContainerRebuild {
-            name: prim_name.clone(),
-            container_sort: container_sort.clone(),
-            uf_names,
-            // In proof mode the UF index stores `(pair leader proof)`; the value
-            // rebuild only needs the leader (pair-first).
-            proof_mode: self.egraph.proof_state.proofs_enabled,
-        };
-        self.egraph.add_read_primitive(prim, None);
+        let proof_mode = self.egraph.proof_state.proofs_enabled;
+
+        let value_prim = self.egraph.parser.symbol_gen.fresh("container_rebuild");
         self.egraph
             .proof_state
             .container_rebuild_name
-            .insert(sort_name, prim_name.clone());
-        prim_name
+            .insert(sort_name.clone(), value_prim.clone());
+
+        let mut uf_names = HashMap::default();
+        self.collect_container_uf_names(container_sort, &mut uf_names);
+        let uf_pairs: Vec<(String, String)> = uf_names.into_iter().collect();
+
+        let mut tokens: Vec<String> = vec![
+            value_prim,
+            if proof_mode { "1" } else { "0" }.to_string(),
+            uf_pairs.len().to_string(),
+        ];
+        for (es, uf) in &uf_pairs {
+            tokens.push(es.clone());
+            tokens.push(uf.clone());
+        }
+
+        if proof_mode {
+            let proof_prim = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh("container_rebuild_proof");
+            self.egraph
+                .proof_state
+                .container_rebuild_proof_name
+                .insert(sort_name, proof_prim.clone());
+
+            let mut cproof_names = HashMap::default();
+            self.collect_container_proof_names(container_sort, &mut cproof_names);
+            let cp_pairs: Vec<(String, String)> = cproof_names.into_iter().collect();
+
+            let congr = self.proof_names().congr_constructor.clone();
+            let trans = self.proof_names().eq_trans_constructor.clone();
+            let sym = self.proof_names().eq_sym_constructor.clone();
+            let axiom = self.proof_names().container_axiom_constructor.clone();
+            let proof_datatype = self.proof_names().proof_datatype.clone();
+
+            tokens.extend([proof_prim, congr, trans, sym, axiom, proof_datatype]);
+            tokens.push(cp_pairs.len().to_string());
+            for (cs, cp) in &cp_pairs {
+                tokens.push(cs.clone());
+                tokens.push(cp.clone());
+            }
+        }
+
+        tokens.join(" ")
     }
 
-    /// Ensure a proof-producing container-rebuild primitive is registered for
-    /// `container_sort`, returning its (fresh) name. Proof mode only. The
-    /// primitive reads each eq-sort element's `UF_<E>f` proof and the
-    /// container's reflexive `<CSort>Proof` anchor, then mints a `Congr` chain
-    /// proving `old_container = rebuilt_container` (recursing through nested
-    /// containers, and anchoring a reflexive proof on each rebuilt container).
-    fn ensure_container_rebuild_proof(&mut self, container_sort: &ArcSort) -> String {
-        let sort_name = container_sort.name().to_string();
-        if let Some(name) = self
-            .egraph
+    /// The (already-built) container value-rebuild primitive name for a sort.
+    fn ensure_container_rebuild(&mut self, container_sort: &ArcSort) -> String {
+        self.egraph
             .proof_state
-            .container_rebuild_proof_name
-            .get(&sort_name)
-        {
-            return name.clone();
-        }
-        let mut uf_names = HashMap::default();
-        self.collect_container_uf_names(container_sort, &mut uf_names);
-        let mut cproof_names = HashMap::default();
-        self.collect_container_proof_names(container_sort, &mut cproof_names);
-        let congr_name = self.proof_names().congr_constructor.clone();
-        let trans_name = self.proof_names().eq_trans_constructor.clone();
-        let sym_name = self.proof_names().eq_sym_constructor.clone();
-        let container_axiom_name = self.proof_names().container_axiom_constructor.clone();
-        // The proof datatype sort is declared in the (separately emitted) proof
-        // header, so it isn't in `type_info` yet; synthesize a matching EqSort
-        // for the primitive's type constraint (constraints match by name).
-        let proof_sort: ArcSort = std::sync::Arc::new(EqSort {
-            name: self.proof_names().proof_datatype.clone(),
-        });
-        let prim_name = self
-            .egraph
-            .parser
-            .symbol_gen
-            .fresh("container_rebuild_proof");
-        let prim = ContainerRebuildProof {
-            name: prim_name.clone(),
-            container_sort: container_sort.clone(),
-            proof_sort,
-            uf_names,
-            cproof_names,
-            congr_name,
-            trans_name,
-            sym_name,
-            container_axiom_name,
-        };
-        self.egraph.add_full_primitive(prim, None);
+            .container_rebuild_name
+            .get(container_sort.name())
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "container rebuild primitive not built for sort {}",
+                    container_sort.name()
+                )
+            })
+    }
+
+    /// The (already-built) container proof-rebuild primitive name for a sort.
+    fn ensure_container_rebuild_proof(&mut self, container_sort: &ArcSort) -> String {
         self.egraph
             .proof_state
             .container_rebuild_proof_name
-            .insert(sort_name, prim_name.clone());
-        prim_name
+            .get(container_sort.name())
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "container rebuild proof primitive not built for sort {}",
+                    container_sort.name()
+                )
+            })
+    }
+}
+
+/// Register a container sort's rebuild primitives from a spec built by
+/// [`ProofInstrumentor::build_container_rebuild_spec`]. Called when a container
+/// Sort command carrying an `:internal-container-rebuild` annotation is
+/// typechecked, so the primitives exist before the rebuild rules are
+/// typechecked — both during encoding and when the desugared program is
+/// re-parsed.
+pub(crate) fn register_container_rebuild_from_spec(eg: &mut EGraph, sort_name: &str, spec: &str) {
+    let Some(container_sort) = eg.get_sort_by_name(sort_name).cloned() else {
+        return;
+    };
+    let tokens: Vec<&str> = spec.split_whitespace().collect();
+    let mut i = 0;
+    let next = |i: &mut usize| -> String {
+        let t = tokens[*i].to_string();
+        *i += 1;
+        t
+    };
+    let value_prim = next(&mut i);
+    let proof_mode = next(&mut i) == "1";
+    let uf_count: usize = next(&mut i).parse().unwrap();
+    let mut uf_names = HashMap::default();
+    for _ in 0..uf_count {
+        let es = next(&mut i);
+        let uf = next(&mut i);
+        uf_names.insert(es, uf);
+    }
+    eg.add_read_primitive(
+        ContainerRebuild {
+            name: value_prim,
+            container_sort: container_sort.clone(),
+            uf_names: uf_names.clone(),
+            proof_mode,
+        },
+        None,
+    );
+    if proof_mode {
+        let proof_prim = next(&mut i);
+        let congr_name = next(&mut i);
+        let trans_name = next(&mut i);
+        let sym_name = next(&mut i);
+        let container_axiom_name = next(&mut i);
+        let proof_datatype = next(&mut i);
+        let cp_count: usize = next(&mut i).parse().unwrap();
+        let mut cproof_names = HashMap::default();
+        for _ in 0..cp_count {
+            let cs = next(&mut i);
+            let cp = next(&mut i);
+            cproof_names.insert(cs, cp);
+        }
+        let proof_sort: ArcSort = std::sync::Arc::new(EqSort {
+            name: proof_datatype,
+        });
+        eg.add_full_primitive(
+            ContainerRebuildProof {
+                name: proof_prim,
+                container_sort,
+                proof_sort,
+                uf_names,
+                cproof_names,
+                congr_name,
+                trans_name,
+                sym_name,
+                container_axiom_name,
+            },
+            None,
+        );
     }
 }
 

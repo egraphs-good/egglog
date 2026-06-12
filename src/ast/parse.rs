@@ -267,10 +267,28 @@ impl Parser {
                         presort_and_args: None,
                         uf: None,
                         proof_func: None,
+                        container_rebuild: None,
                         unionable: true,
                     }],
-                    [name, call @ Sexp::List(..)] => {
+                    [name, call @ Sexp::List(..), rest @ ..] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
+                        // Container sorts may carry an :internal-container-rebuild
+                        // spec (emitted by the term/proof encoder).
+                        let mut container_rebuild = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":internal-container-rebuild", [spec]) => {
+                                    container_rebuild =
+                                        Some(spec.expect_string("container rebuild spec")?);
+                                }
+                                _ => {
+                                    return error!(
+                                        span,
+                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-container-rebuild <spec>])"
+                                    );
+                                }
+                            }
+                        }
                         vec![Command::Sort {
                             span,
                             name: name.expect_atom("sort name")?,
@@ -280,6 +298,7 @@ impl Parser {
                             )),
                             uf: None,
                             proof_func: None,
+                            container_rebuild,
                             unionable: true,
                         }]
                     }
@@ -310,6 +329,7 @@ impl Parser {
                             presort_and_args: None,
                             uf,
                             proof_func,
+                            container_rebuild: None,
                             unionable: true,
                         }]
                     }

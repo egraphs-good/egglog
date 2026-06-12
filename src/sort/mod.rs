@@ -88,7 +88,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// elements (so rebuilding it needs the term-level "container axiom" to
     /// match `reconstruct_termdag`). True for `Set`/`Map`/`MultiSet`; false for
     /// order-and-arity-preserving containers like `Vec`/`Pair` and for
-    /// non-containers. See [`crate::proofs`] container support.
+    /// non-containers. Used by the proof/term encoding's container rebuild.
     fn proof_normalizes(&self) -> bool {
         false
     }

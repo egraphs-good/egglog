@@ -407,6 +407,7 @@ impl EGraph {
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
                 unionable,
             } => {
                 // Note this is bad since typechecking should be pure and idempotent
@@ -416,12 +417,22 @@ impl EGraph {
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
                 }
+                // A container sort under the term/proof encoding carries a spec
+                // for its rebuild primitives; register them here so they are
+                // available both during encoding and when the desugared program
+                // is re-parsed.
+                if let Some(spec) = container_rebuild {
+                    crate::proofs::proof_encoding::register_container_rebuild_from_spec(
+                        self, name, spec,
+                    );
+                }
                 ResolvedNCommand::Sort {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
                     proof_func: proof_func.clone(),
+                    container_rebuild: container_rebuild.clone(),
                     unionable: *unionable,
                 }
             }
