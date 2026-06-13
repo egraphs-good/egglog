@@ -152,14 +152,13 @@ impl ContainerSort for SetSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        mut element_terms: Vec<TermId>,
+        element_terms: Vec<TermId>,
     ) -> TermId {
-        // Canonical order is the deterministic AST order (not value-id order),
-        // so that proof checking can reproduce it from terms alone. Dedup too,
-        // matching the set's value semantics.
-        element_terms.sort_by(|a, b| termdag.ast_cmp(*a, *b));
-        element_terms.dedup();
-        termdag.app("set-of".into(), element_terms)
+        // Canonical form (sorted by deterministic AST order, deduped) via the
+        // shared `normalize_container_term`, so proof checking can reproduce it
+        // from terms alone.
+        let raw = termdag.app("set-of".into(), element_terms);
+        termdag.normalize_container_term(raw)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {

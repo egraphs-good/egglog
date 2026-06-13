@@ -225,12 +225,13 @@ impl ContainerSort for MultiSetSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        mut element_terms: Vec<TermId>,
+        element_terms: Vec<TermId>,
     ) -> TermId {
-        // Sort by deterministic AST order (multiplicities preserved as repeated
-        // elements) so proof checking can reproduce it from terms alone.
-        element_terms.sort_by(|a, b| termdag.ast_cmp(*a, *b));
-        termdag.app("multiset-of".into(), element_terms)
+        // Canonical form (sorted by deterministic AST order, multiplicities
+        // preserved as repeats) via the shared `normalize_container_term`, so
+        // proof checking can reproduce it from terms alone.
+        let raw = termdag.app("multiset-of".into(), element_terms);
+        termdag.normalize_container_term(raw)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
