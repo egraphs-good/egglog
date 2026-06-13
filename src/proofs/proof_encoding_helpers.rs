@@ -512,7 +512,7 @@ pub(crate) fn command_supports_proof_encoding(
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
     if let crate::ast::GenericCommand::Rule { rule } = command
-        && rule.unsafe_seminaive
+        && rule.eval_mode == crate::ast::RuleEvalMode::UnsafeSeminaive
     {
         return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
     }

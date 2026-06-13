@@ -80,6 +80,56 @@ where
     Expr(Span, GenericExpr<Head, Leaf>),
 }
 
+/// How a rule is evaluated, selected by mutually exclusive rule options.
+///
+/// The default ([`Seminaive`](RuleEvalMode::Seminaive)) and the two opt-in
+/// options ([`:naive`](RuleEvalMode::Naive) and
+/// [`:unsafe-seminaive`](RuleEvalMode::UnsafeSeminaive)) are mutually
+/// exclusive, so they share a single field on [`GenericRule`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RuleEvalMode {
+    /// The default: seminaive (delta) evaluation. The body is matched only
+    /// against rows that are new this iteration, and the query/action are
+    /// compiled with the restrictive `Pure`/`Write` primitive contexts (no
+    /// database reads in the RHS).
+    #[default]
+    Seminaive,
+    /// The `:naive` rule option disables seminaive evaluation. The body is
+    /// matched against the entire database every iteration and the
+    /// query/action are compiled with the permissive `Read`/`Full` primitive
+    /// contexts, allowing primitives that read or write the database inside
+    /// queries and actions.
+    Naive,
+    /// The `:unsafe-seminaive` rule option keeps seminaive (delta)
+    /// evaluation but compiles the query/action with the permissive
+    /// `Read`/`Full` primitive contexts (like `:naive`), and the
+    /// typechecker's "no function lookups in actions" check is skipped. This
+    /// lets the RHS perform arbitrary database reads — read-primitives and
+    /// function-table lookups — without paying for `:naive`'s whole-database
+    /// matching.
+    ///
+    /// It is **unsafe**: a read on a seminaive rule's RHS observes the
+    /// database mid-iteration, so it won't be re-evaluated if the data
+    /// changes. The caller takes responsibility.
+    UnsafeSeminaive,
+}
+
+impl RuleEvalMode {
+    /// Whether this rule disables seminaive (delta) evaluation, i.e. it is
+    /// `:naive`. Both [`Seminaive`](RuleEvalMode::Seminaive) and
+    /// [`UnsafeSeminaive`](RuleEvalMode::UnsafeSeminaive) evaluate seminaively.
+    pub fn is_naive(self) -> bool {
+        matches!(self, RuleEvalMode::Naive)
+    }
+
+    /// Whether the query/action should be compiled with the permissive
+    /// `Read`/`Full` primitive contexts. True for both `:naive` and
+    /// `:unsafe-seminaive`.
+    pub fn uses_read_contexts(self) -> bool {
+        !matches!(self, RuleEvalMode::Seminaive)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRule<Head, Leaf>
 where
@@ -93,28 +143,14 @@ where
     pub name: String,
     /// The ruleset this rule belongs to. Defaults to `""`.
     pub ruleset: String,
-    /// If `true`, this rule disables seminaive evaluation. The body is
-    /// matched against the entire database every iteration and the
-    /// query/action are compiled with the global (read+write) primitive
-    /// contexts, allowing primitives that read or write the database
-    /// inside queries and actions. Set via the `:naive` rule option.
-    pub naive: bool,
+    /// How this rule is evaluated. Set by the mutually exclusive `:naive`
+    /// and `:unsafe-seminaive` rule options; defaults to
+    /// [`RuleEvalMode::Seminaive`].
+    pub eval_mode: RuleEvalMode,
     /// If `true`, this rule skips tree-decomposition during query
     /// planning and evaluate rules as a single-bag (without decomposing
     /// it into smaller queries). Set via the `:no-decomp` rule option.
     pub no_decomp: bool,
-    /// If `true` (the `:unsafe-seminaive` rule option), the rule keeps
-    /// seminaive (delta) evaluation but its query/action are compiled
-    /// with the permissive `Read`/`Full` primitive contexts (like
-    /// `:naive`), and the typechecker's "no function lookups in actions"
-    /// check is skipped. This lets the RHS perform arbitrary database
-    /// reads — read-primitives and function-table lookups — without
-    /// paying for `:naive`'s whole-database matching.
-    ///
-    /// It is **unsafe**: a read on a seminaive rule's RHS observes the
-    /// database mid-iteration, so it won't be re-evaluated if the data
-    /// changes. Defaults to `false`.
-    pub unsafe_seminaive: bool,
 }
 
 /// Change a function entry.

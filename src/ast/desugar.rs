@@ -259,9 +259,8 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
                 )),
                 ruleset: ruleset.clone(),
                 name,
-                naive: false,
+                eval_mode: RuleEvalMode::Seminaive,
                 no_decomp: false,
-                unsafe_seminaive: false,
             },
         },
         // run the rule
@@ -349,9 +348,8 @@ fn desugar_rewrite(
             head,
             ruleset,
             name,
-            naive: false,
+            eval_mode: RuleEvalMode::Seminaive,
             no_decomp: false,
-            unsafe_seminaive: false,
         },
     }]
 }

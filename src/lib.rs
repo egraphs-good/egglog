@@ -1040,15 +1040,16 @@ impl EGraph {
         // evaluation. This widens primitive-context selection from
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
-        let seminaive = self.seminaive && !rule.naive;
+        let seminaive = self.seminaive && !rule.eval_mode.is_naive();
         // The `:no-decomp` rule option (and the global `--no-decomp`
         // flag) skips tree-decomposition in query planning, forcing
         // the single-bag fast path.
         let no_decomp = self.no_decomp || rule.no_decomp;
-        // `:unsafe-seminaive` keeps delta evaluation (`new_rule(seminaive)`)
-        // but compiles the query/action with Read/Full contexts so the RHS
-        // can read the database. See `GenericRule::unsafe_seminaive`.
-        let context_seminaive = seminaive && !rule.unsafe_seminaive;
+        // `:naive` (or `eg.seminaive == false`) and `:unsafe-seminaive` both
+        // compile the query/action with Read/Full contexts so the RHS can
+        // read the database. `:unsafe-seminaive` still evaluates seminaively
+        // (`new_rule(seminaive)`). See `RuleEvalMode`.
+        let context_seminaive = seminaive && !rule.eval_mode.uses_read_contexts();
 
         let rule_id = {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
@@ -1264,9 +1265,8 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
-            naive: false,
+            eval_mode: RuleEvalMode::default(),
             no_decomp: false,
-            unsafe_seminaive: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,

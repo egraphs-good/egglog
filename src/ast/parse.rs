@@ -475,16 +475,29 @@ impl Parser {
 
                     let mut ruleset = String::new();
                     let mut name = String::new();
-                    let mut naive = false;
+                    // `:naive` and `:unsafe-seminaive` are mutually
+                    // exclusive; `eval_mode` is set at most once.
+                    let mut eval_mode: Option<RuleEvalMode> = None;
                     let mut no_decomp = false;
-                    let mut unsafe_seminaive = false;
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":name", [s]) => name = s.expect_string("rule name")?,
-                            (":naive", []) => naive = true,
+                            (":naive", []) | (":unsafe-seminaive", []) => {
+                                let mode = if option.0 == ":naive" {
+                                    RuleEvalMode::Naive
+                                } else {
+                                    RuleEvalMode::UnsafeSeminaive
+                                };
+                                if eval_mode.is_some() {
+                                    return error!(
+                                        span,
+                                        ":naive and :unsafe-seminaive are mutually exclusive"
+                                    );
+                                }
+                                eval_mode = Some(mode);
+                            }
                             (":no-decomp", []) => no_decomp = true,
-                            (":unsafe-seminaive", []) => unsafe_seminaive = true,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -496,9 +509,8 @@ impl Parser {
                             body,
                             name,
                             ruleset,
-                            naive,
+                            eval_mode: eval_mode.unwrap_or_default(),
                             no_decomp,
-                            unsafe_seminaive,
                         },
                     }]
                 }

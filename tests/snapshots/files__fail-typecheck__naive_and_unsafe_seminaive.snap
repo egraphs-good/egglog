@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 4:1-61 of naive-and-unsafe-seminaive.egg: (rule ((trigger ?x)) ((trigger ?x)) :naive :unsafe-seminaive)
+parse error: :naive and :unsafe-seminaive are mutually exclusive

@@ -5,7 +5,9 @@ use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
-use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
+use ast::{
+    ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule, RuleEvalMode,
+};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use egglog_bridge::ActionRegistry;
@@ -829,9 +831,8 @@ impl TypeInfo {
             body,
             name,
             ruleset,
-            naive,
+            eval_mode,
             no_decomp,
-            unsafe_seminaive,
         } = rule;
         let mut constraints = vec![];
 
@@ -839,17 +840,18 @@ impl TypeInfo {
         // `:naive` option or the global `EGraph::seminaive == false`
         // applies. Both must widen primitive-context selection to
         // Read/Full so primitives that read or write the database can
-        // run; mirrors the backend's `self.seminaive && !rule.naive`
+        // run; mirrors the backend's `self.seminaive && !rule.eval_mode.is_naive()`
         // check at rule-build time.
-        let seminaive = global_seminaive && !*naive;
-        // `:unsafe-seminaive` keeps seminaive evaluation but widens the
-        // typecheck (and backend) primitive contexts to Read/Full, so the
-        // RHS may read the database. See `GenericRule::unsafe_seminaive`.
-        let context_seminaive = seminaive && !*unsafe_seminaive;
-        let (query_ctx, action_ctx) = if context_seminaive {
-            (Context::Pure, Context::Write)
-        } else {
+        let seminaive = global_seminaive && !eval_mode.is_naive();
+        // `:naive` (or `eg.seminaive == false`) and `:unsafe-seminaive` both
+        // widen the typecheck (and backend) primitive contexts to Read/Full
+        // so the RHS may read the database. `:unsafe-seminaive` keeps
+        // seminaive evaluation; see `RuleEvalMode`.
+        let read_contexts = !seminaive || eval_mode.uses_read_contexts();
+        let (query_ctx, action_ctx) = if read_contexts {
             (Context::Read, Context::Full)
+        } else {
+            (Context::Pure, Context::Write)
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -883,8 +885,8 @@ impl TypeInfo {
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
         // `:unsafe-seminaive` opts out of the "no function lookups in
-        // actions" check (that's the point of the flag).
-        if !*unsafe_seminaive {
+        // actions" check (that's the point of the option).
+        if *eval_mode != RuleEvalMode::UnsafeSeminaive {
             self.check_lookup_actions(&actions)?;
         }
 
@@ -894,9 +896,8 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
-            naive: *naive,
+            eval_mode: *eval_mode,
             no_decomp: *no_decomp,
-            unsafe_seminaive: *unsafe_seminaive,
         })
     }
 

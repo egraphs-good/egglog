@@ -13,6 +13,7 @@ use crate::core::{
 use crate::*;
 pub use egglog_ast::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
+    RuleEvalMode,
 };
 pub use egglog_ast::span::{RustSpan, Span};
 use egglog_ast::util::ListDisplay;
@@ -1723,9 +1724,8 @@ where
                     ruleset: fun(rule.ruleset),
                     head: rule.head,
                     body: rule.body,
-                    naive: rule.naive,
+                    eval_mode: rule.eval_mode,
                     no_decomp: rule.no_decomp,
-                    unsafe_seminaive: rule.unsafe_seminaive,
                 };
                 GenericCommand::Rule { rule }
             }
