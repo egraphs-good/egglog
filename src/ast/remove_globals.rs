@@ -78,7 +78,7 @@ fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
     }
 }
 
-fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
+pub(crate) fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
     expr.visit_exprs(&mut replace_global_vars)
 }
 
