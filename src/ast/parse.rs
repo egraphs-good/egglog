@@ -603,16 +603,33 @@ impl Parser {
                     _ => return error!(span, "could not parse run options"),
                 };
 
-                vec![Command::RunSchedule(Schedule::Repeat(
-                    span.clone(),
-                    limit,
-                    Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
-                ))]
+                vec![Command::RunSchedule(
+                    Schedule::Repeat(
+                        span.clone(),
+                        limit,
+                        Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
+                    ),
+                    None,
+                )]
             }
-            "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
-                span,
-                map_fallible(tail, self, Self::parse_schedule)?,
-            ))],
+            "run-schedule" => {
+                let split = tail
+                    .iter()
+                    .position(|s| matches!(s, Sexp::Atom(a, _) if a.starts_with(':')))
+                    .unwrap_or(tail.len());
+                let (scheds, opts) = tail.split_at(split);
+
+                let size_limit = match self.parse_options(opts)?.as_slice() {
+                    [] => None,
+                    [(":size-limit", [n])] => Some(n.expect_uint("size limit")?),
+                    _ => return error!(span, "could not parse run-schedule options"),
+                };
+
+                vec![Command::RunSchedule(
+                    Schedule::Sequence(span, map_fallible(scheds, self, Self::parse_schedule)?),
+                    size_limit,
+                )]
+            }
             "extract" => match tail {
                 [e] => vec![Command::Extract(
                     span.clone(),

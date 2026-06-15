@@ -588,6 +588,22 @@ impl EGraph {
         self.run_rules_inner(rules)
     }
 
+    pub fn set_size_cap(&self, cap: usize) {
+        self.db.set_size_cap(cap);
+    }
+
+    pub fn sync_size_estimate(&self, actual_size: usize) {
+        self.db.sync_size_estimate(actual_size);
+    }
+
+    pub fn size_cap_active(&self) -> bool {
+        self.db.size_cap_active()
+    }
+
+    pub fn size_cap_hit(&self) -> bool {
+        self.db.size_cap_hit()
+    }
+
     fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 

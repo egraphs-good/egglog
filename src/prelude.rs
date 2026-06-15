@@ -153,13 +153,16 @@ pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutp
 
 /// Run one iteration of a ruleset.
 pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
-        span!(),
-        RunConfig {
-            ruleset: ruleset.to_owned(),
-            until: None,
-        },
-    ))])
+    egraph.run_program(vec![Command::RunSchedule(
+        Schedule::Run(
+            span!(),
+            RunConfig {
+                ruleset: ruleset.to_owned(),
+                until: None,
+            },
+        ),
+        None,
+    )])
 }
 
 #[macro_export]

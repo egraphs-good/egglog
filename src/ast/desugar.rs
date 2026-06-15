@@ -158,8 +158,8 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::RunSchedule(sched) => {
-            vec![NCommand::RunSchedule(sched.clone())]
+        Command::RunSchedule(sched, size_limit) => {
+            vec![NCommand::RunSchedule(sched.clone(), size_limit)]
         }
         Command::PrintOverallStatistics(span, file) => {
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
@@ -264,13 +264,16 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             },
         },
         // run the rule
-        NCommand::RunSchedule(GenericSchedule::Run(
-            span.clone(),
-            GenericRunConfig {
-                ruleset,
-                until: None,
-            },
-        )),
+        NCommand::RunSchedule(
+            GenericSchedule::Run(
+                span.clone(),
+                GenericRunConfig {
+                    ruleset,
+                    until: None,
+                },
+            ),
+            None,
+        ),
         // get a proof for the constructor
         NCommand::ProveExists(span, constructor_name),
     ]

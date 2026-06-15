@@ -252,6 +252,11 @@ impl EGraph {
             .run_rules(&action_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
+        if self.size_cap_active() {
+            let n = self.num_tuples();
+            self.sync_size_estimate(n);
+        }
+
         // Step 5: combine the reports
         let mut query_report = RunReport::singleton(ruleset, query_iter_report);
         let mut action_report = RunReport::singleton(ruleset, action_iter_report);
