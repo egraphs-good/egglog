@@ -740,7 +740,21 @@ impl Display for Literal {
                 }
             }
             Literal::Bool(b) => Display::fmt(b, f),
-            Literal::String(s) => write!(f, "\"{s}\""),
+            // Escape backslashes and quotes so the output round-trips through the
+            // lexer; otherwise a string holding either character produces text
+            // that fails to re-parse. Other characters (newlines, tabs, ...) are
+            // accepted verbatim by the lexer, so we leave them as-is.
+            Literal::String(s) => {
+                write!(f, "\"")?;
+                for c in s.chars() {
+                    match c {
+                        '\\' => write!(f, "\\\\")?,
+                        '"' => write!(f, "\\\"")?,
+                        c => write!(f, "{c}")?,
+                    }
+                }
+                write!(f, "\"")
+            }
             Literal::Unit => write!(f, "()"),
         }
     }
@@ -774,5 +788,14 @@ mod tests {
 
         assert_eq!(delete.to_string(), "(delete (foo))");
         assert_eq!(subsume.to_string(), "(subsume (foo))");
+    }
+
+    #[test]
+    fn display_string_literal_escapes_special_characters() {
+        assert_eq!(Literal::String("plain".into()).to_string(), "\"plain\"");
+        assert_eq!(Literal::String("a\"b".into()).to_string(), "\"a\\\"b\"");
+        assert_eq!(Literal::String("a\\b".into()).to_string(), "\"a\\\\b\"");
+        // Newlines and tabs are accepted verbatim by the lexer, so they are not escaped.
+        assert_eq!(Literal::String("a\nb".into()).to_string(), "\"a\nb\"");
     }
 }

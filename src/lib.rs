@@ -1793,7 +1793,7 @@ impl EGraph {
             }
 
             let term_encoding_added =
-                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
+                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =

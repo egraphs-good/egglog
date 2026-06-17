@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, Error, TypeInfo,
+    EGraph, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, Schedule,
@@ -122,12 +122,14 @@ impl ProofInstrumentor<'_> {
             .fresh(&format!("UFPair_{sort}"))
     }
 
-    pub(crate) fn parse_program(&mut self, input: &str) -> Result<Vec<Command>, Error> {
+    pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
 
-        Ok(res?)
+        // This program is generated internally by term encoding, so a parse
+        // failure is an egglog bug rather than a user error.
+        res.expect("internally generated term-encoding program must parse")
     }
 
     pub(crate) fn format_prooflist(&self, proofs: &[String]) -> String {
@@ -142,7 +144,7 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Header commands for term encoding, setting up rulesets.
-    pub(crate) fn term_header(&mut self) -> Result<Vec<Command>, Error> {
+    pub(crate) fn term_header(&mut self) -> Vec<Command> {
         let str = format!(
             "(ruleset {})
              (ruleset {})
@@ -160,31 +162,36 @@ impl ProofInstrumentor<'_> {
         self.parse_program(&str)
     }
 
-    /// Internal parse helper for term encoding, propagating parse errors.
-    pub(crate) fn parse_schedule(&mut self, input: String) -> Result<Schedule, Error> {
+    /// Internal parse helper for term encoding- parse and crash on failure.
+    pub(crate) fn parse_schedule(&mut self, input: String) -> Schedule {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_schedule_from_string(None, &input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        Ok(res?)
+        res.expect("internally generated term-encoding schedule must parse")
     }
 
-    /// Internal parse helper for term encoding, propagating parse errors.
-    pub(crate) fn parse_facts(&mut self, input: &[String]) -> Result<Vec<Fact>, Error> {
+    /// Internal parse helper for term encoding- parse and crash on failure.
+    pub(crate) fn parse_facts(&mut self, input: &[String]) -> Vec<Fact> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = input
             .iter()
-            .map(|f| self.egraph.parser.get_fact_from_string(None, f))
-            .collect::<Result<Vec<_>, _>>();
+            .map(|f| {
+                self.egraph
+                    .parser
+                    .get_fact_from_string(None, f)
+                    .expect("internally generated term-encoding fact must parse")
+            })
+            .collect();
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        Ok(res?)
+        res
     }
 
-    /// Internal parse helper for term encoding, propagating parse errors.
-    pub(crate) fn parse_expr(&mut self, input: &str) -> Result<Expr, Error> {
+    /// Internal parse helper for term encoding- parse an expression and crash on failure.
+    pub(crate) fn parse_expr(&mut self, input: &str) -> Expr {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_expr_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        Ok(res?)
+        res.expect("internally generated term-encoding expression must parse")
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.

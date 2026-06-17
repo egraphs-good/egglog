@@ -40,6 +40,12 @@ pub struct Matches {
     matches: Vec<Value>,
     chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
+    /// Width of each stored tuple in `matches`. This is `vars.len()` for an
+    /// ordinary rule. A rule whose head references no variables would otherwise
+    /// have zero-width tuples, making its match count unrecoverable; for those we
+    /// collect a single unit marker per match, so the width is 1 while `vars` is
+    /// empty.
+    tuple_width: usize,
     all_chosen: bool,
 }
 
@@ -60,12 +66,15 @@ impl Match<'_> {
 
 impl Matches {
     fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>) -> Self {
-        let total_len = matches.len();
-        let tuple_len = vars.len();
-        assert!(total_len.is_multiple_of(tuple_len));
+        // Variable-free rules collect one unit marker per match (see
+        // `SchedulerRuleInfo::new`), so each stored tuple is one value wide even
+        // though there are no variables.
+        let tuple_width = vars.len().max(1);
+        assert!(matches.len().is_multiple_of(tuple_width));
         Self {
             matches,
             vars,
+            tuple_width,
             chosen: Vec::new(),
             all_chosen: false,
         }
@@ -73,14 +82,7 @@ impl Matches {
 
     /// The number of matches in total.
     pub fn match_size(&self) -> usize {
-        // A rule whose actions reference no variables produces empty tuples, so
-        // `vars` is empty and `matches` carries no values. Guard the division to
-        // avoid dividing by zero in that degenerate case.
-        if self.vars.is_empty() {
-            0
-        } else {
-            self.matches.len() / self.vars.len()
-        }
+        self.matches.len() / self.tuple_width
     }
 
     /// The length of a tuple.
@@ -114,26 +116,30 @@ impl Matches {
         state: &mut ExecutionState<'_>,
         table_action: &TableAction,
     ) -> Vec<Value> {
-        let tuple_len = self.tuple_len();
+        // Width of the stored tuples (1 for variable-free rules, see `new`) versus
+        // the number of variable columns actually written into the `decided` table.
+        // For a variable-free rule the stored unit marker is dropped and only the
+        // trailing unit is inserted, producing the single `(unit)` row that the
+        // action rule fires on.
+        let tuple_width = self.tuple_width;
+        let var_len = self.vars.len();
         let unit = state.base_values().get(());
 
-        // A rule whose actions reference no variables has zero-width match tuples
-        // (`tuple_len == 0`); there is nothing to instantiate per match, and
-        // `slice::chunks(0)` would panic. `match_size` already reports 0 for this
-        // degenerate case, so there are no residual matches to return.
-        if tuple_len == 0 {
-            return Vec::new();
-        }
-
         if self.all_chosen {
-            for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+            for row in self.matches.chunks(tuple_width) {
+                table_action.insert(
+                    state,
+                    row[..var_len].iter().cloned().chain(std::iter::once(unit)),
+                );
             }
             vec![]
         } else {
             for idx in self.chosen.iter() {
-                let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                let row = &self.matches[idx * tuple_width..(idx + 1) * tuple_width];
+                table_action.insert(
+                    state,
+                    row[..var_len].iter().cloned().chain(std::iter::once(unit)),
+                );
             }
 
             // swap remove the chosen matches
@@ -145,14 +151,14 @@ impl Matches {
                 // matches are exhausted.
                 p -= 1;
                 if c != p {
-                    let idx_c = c * tuple_len;
-                    let idx_p = p * tuple_len;
-                    for i in 0..tuple_len {
+                    let idx_c = c * tuple_width;
+                    let idx_p = p * tuple_width;
+                    for i in 0..tuple_width {
                         self.matches.swap(idx_c + i, idx_p + i);
                     }
                 }
             }
-            self.matches.truncate(p * tuple_len);
+            self.matches.truncate(p * tuple_width);
 
             self.matches
         }
@@ -381,10 +387,17 @@ impl SchedulerRuleInfo {
             true, // seminaive rule context
         );
         qrule_builder.query(&rule.body, true)?;
-        let entries = free_vars
+        let mut entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
+        // A rule whose head references no variables would otherwise collect empty
+        // tuples, leaving the scheduler unable to tell whether the query matched and
+        // so never applying its actions. Collect a single unit marker per match so
+        // the match count is recoverable.
+        if entries.is_empty() {
+            entries.push(unit_entry.clone());
+        }
         let _var = qrule_builder.rb.call_external_func(
             collect_matches,
             &entries,
@@ -587,5 +600,37 @@ mod test {
         egraph
             .step_rules_with_scheduler(scheduler_id, "test")
             .unwrap();
+    }
+
+    /// A scheduler that fires every match.
+    #[derive(Clone)]
+    struct ChooseAllScheduler;
+
+    impl Scheduler for ChooseAllScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            matches.choose_all();
+            false
+        }
+    }
+
+    #[test]
+    fn test_no_free_vars_rule_applies_actions() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+        // The action `(S)` references no variables, so the rule has no free vars.
+        // The scheduler must still apply it when the query matches.
+        let input = r#"
+        (ruleset test)
+        (relation R (i64))
+        (relation S ())
+        (rule ((R x)) ((S)) :ruleset test :name "no-vars")
+        (R 0)
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+        assert_eq!(egraph.get_size("S"), 0);
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        assert_eq!(egraph.get_size("S"), 1);
     }
 }

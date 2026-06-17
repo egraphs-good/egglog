@@ -687,6 +687,10 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
+                        // A variant whose cost is `None` has a child e-class with no
+                        // finite extraction (e.g. a purely cyclic child); such a variant
+                        // can never appear in a minimal extraction, so we skip it. The
+                        // target e-class still extracts via its other, costed variants.
                         if *target == canonical_value
                             && let Some(cost) = self.compute_cost_hyperedge(egraph, &row, func)
                         {

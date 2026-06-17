@@ -75,7 +75,7 @@ impl BaseSort for BigRatSort {
             if a.is_one() {
                 Some(Q::new(BigRational::zero()))
             } else {
-                None
+                todo!("log of bigrat")
             }
         });
         add_primitive!(eg, "sqrt" = |a: Q| -?> Q {
@@ -96,7 +96,7 @@ impl BaseSort for BigRatSort {
             if a.is_one() {
                 Some(Q::new(BigRational::one()))
             } else {
-                None
+                todo!("cbrt of bigrat")
             }
         });
 

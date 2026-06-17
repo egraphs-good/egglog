@@ -45,7 +45,7 @@ impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
         program: Vec<ResolvedNCommand>,
-    ) -> Result<Vec<Command>, Error> {
+    ) -> Vec<Command> {
         Self { egraph }.add_term_encoding_helper(program)
     }
 
@@ -90,7 +90,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// When one term has two parents, those parents are unioned in the merge action.
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
-    fn declare_sort(&mut self, sort_name: &str) -> Result<Vec<Command>, Error> {
+    fn declare_sort(&mut self, sort_name: &str) -> Vec<Command> {
         let pname = self.uf_name(sort_name);
         let uf_function_name = self.uf_function_name(sort_name);
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
@@ -406,7 +406,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// The view table stores child terms and their eclass.
     /// The view table is mutated using delete, but we never delete from term tables.
     /// We re-use the original name of the function for the term table.
-    fn term_and_view(&mut self, fdecl: &ResolvedFunctionDecl) -> Result<Vec<Command>, Error> {
+    fn term_and_view(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let schema = &fdecl.schema;
         let out_type = schema.output.clone();
 
@@ -485,12 +485,12 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Rules that update the views when children change.
-    fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Result<Vec<Command>, Error> {
+    fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let types = fdecl.resolved_schema.view_types();
 
         // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
         if !types.iter().any(|t| t.is_eq_sort()) {
-            return Ok(vec![]);
+            return vec![];
         }
 
         let view_name = self.view_name(&fdecl.name);
@@ -1055,7 +1055,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// adding to term and view tables in actions.
     /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
     /// Finally, each view update also updates the proof tables.
-    fn instrument_rule(&mut self, rule: &ResolvedRule) -> Result<Vec<Command>, Error> {
+    fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         let (facts, proof_str) = self.instrument_facts(&rule.body);
         let proof_var = self.fresh_var();
         let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
@@ -1088,7 +1088,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Any schedule should be sound as long as we saturate.
-    fn rebuild(&mut self) -> Result<Schedule, Error> {
+    fn rebuild(&mut self) -> Schedule {
         let path_compress_ruleset = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent = self.proof_names().single_parent_ruleset_name.clone();
         let uf_function_index = self.proof_names().uf_function_index_ruleset_name.clone();
@@ -1107,13 +1107,13 @@ impl<'a> ProofInstrumentor<'a> {
         ))
     }
 
-    fn instrument_schedule(&mut self, schedule: &ResolvedSchedule) -> Result<Schedule, Error> {
+    fn instrument_schedule(&mut self, schedule: &ResolvedSchedule) -> Schedule {
         match schedule {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
                         let (instrumented, _proof) = self.instrument_facts(facts);
-                        let instrumented_facts = self.parse_facts(&instrumented)?;
+                        let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
                             RunConfig {
@@ -1130,35 +1130,27 @@ impl<'a> ProofInstrumentor<'a> {
                         },
                     ),
                 };
-                Ok(Schedule::Sequence(
-                    span.clone(),
-                    vec![new_run, self.rebuild()?],
-                ))
+                Schedule::Sequence(span.clone(), vec![new_run, self.rebuild()])
             }
-            ResolvedSchedule::Sequence(span, schedules) => Ok(Schedule::Sequence(
+            ResolvedSchedule::Sequence(span, schedules) => Schedule::Sequence(
                 span.clone(),
                 schedules
                     .iter()
                     .map(|s| self.instrument_schedule(s))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            ResolvedSchedule::Saturate(span, schedule) => Ok(Schedule::Saturate(
-                span.clone(),
-                Box::new(self.instrument_schedule(schedule)?),
-            )),
-            GenericSchedule::Repeat(span, n, schedule) => Ok(Schedule::Repeat(
+                    .collect(),
+            ),
+            ResolvedSchedule::Saturate(span, schedule) => {
+                Schedule::Saturate(span.clone(), Box::new(self.instrument_schedule(schedule)))
+            }
+            GenericSchedule::Repeat(span, n, schedule) => Schedule::Repeat(
                 span.clone(),
                 *n,
-                Box::new(self.instrument_schedule(schedule)?),
-            )),
+                Box::new(self.instrument_schedule(schedule)),
+            ),
         }
     }
 
-    fn term_encode_command(
-        &mut self,
-        command: &ResolvedNCommand,
-        res: &mut Vec<Command>,
-    ) -> Result<(), Error> {
+    fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
         log::debug!("Term encoding for {command}");
         match &command {
             ResolvedNCommand::Sort {
@@ -1182,42 +1174,38 @@ impl<'a> ProofInstrumentor<'a> {
                     proof_func,
                     unionable: *unionable,
                 });
-                res.extend(self.declare_sort(name)?);
+                res.extend(self.declare_sort(name));
             }
             ResolvedNCommand::Function(fdecl) => {
-                res.extend(self.term_and_view(fdecl)?);
-                res.extend(self.rebuilding_rules(fdecl)?);
+                res.extend(self.term_and_view(fdecl));
+                res.extend(self.rebuilding_rules(fdecl));
             }
             ResolvedNCommand::NormRule { rule } => {
-                res.extend(self.instrument_rule(rule)?);
+                res.extend(self.instrument_rule(rule));
             }
             ResolvedNCommand::CoreAction(action) => {
                 let instrumented = self
                     .instrument_action(action, &Justification::Fiat)
                     .join("\n");
-                res.extend(self.parse_program(&instrumented)?);
+                res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
                 let (instrumented, _proof) = self.instrument_facts(facts);
                 res.push(Command::Check(
                     span.clone(),
-                    self.parse_facts(&instrumented)?,
+                    self.parse_facts(&instrumented),
                 ));
             }
             ResolvedNCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(self.instrument_schedule(schedule)?));
+                res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
             }
             ResolvedNCommand::Fail(span, cmd) => {
-                self.term_encode_command(cmd, res)?;
-                let Some(last) = res.pop() else {
-                    return Err(Error::DesugarError(
-                        span.clone(),
-                        format!(
-                            "(fail ...) inner command produced no instrumented command: {}",
-                            cmd.to_command()
-                        ),
-                    ));
-                };
+                self.term_encode_command(cmd, res);
+                // Every term-encodable inner command pushes at least one command, so
+                // this pop cannot fail; an empty `res` would be an egglog bug.
+                let last = res
+                    .pop()
+                    .expect("(fail ...) inner command produced no instrumented command");
                 res.push(Command::Fail(span.clone(), Box::new(last)));
             }
             ResolvedNCommand::Extract(span, expr, variants) => {
@@ -1230,14 +1218,14 @@ impl<'a> ProofInstrumentor<'a> {
 
                 // Add any action statements needed to set up the expressions
                 for stmt in action_stmts {
-                    res.extend(self.parse_program(&stmt)?);
+                    res.extend(self.parse_program(&stmt));
                 }
                 // Rebuild before extract; we may have added new view rows that need canonicalization
-                res.push(Command::RunSchedule(self.rebuild()?));
+                res.push(Command::RunSchedule(self.rebuild()));
                 res.push(Command::Extract(
                     span.clone(),
-                    self.parse_expr(&instrumented_expr)?,
-                    self.parse_expr(&instrumented_variants)?,
+                    self.parse_expr(&instrumented_expr),
+                    self.parse_expr(&instrumented_variants),
                 ));
             }
             ResolvedNCommand::PrintSize(span, name) => {
@@ -1271,26 +1259,25 @@ impl<'a> ProofInstrumentor<'a> {
                 panic!("User defined commands unsupported in term encoding");
             }
         }
-        Ok(())
     }
 
     pub(crate) fn add_term_encoding_helper(
         &mut self,
         program: Vec<ResolvedNCommand>,
-    ) -> Result<Vec<Command>, Error> {
+    ) -> Vec<Command> {
         let mut res = vec![];
 
         if !self.egraph.proof_state.term_header_added {
-            res.extend(self.term_header()?);
+            res.extend(self.term_header());
             if self.egraph.proof_state.proofs_enabled {
                 let proof_header = self.proof_header();
-                res.extend(self.parse_program(&proof_header)?);
+                res.extend(self.parse_program(&proof_header));
             }
             self.egraph.proof_state.term_header_added = true;
         }
 
         for command in program {
-            self.term_encode_command(&command, &mut res)?;
+            self.term_encode_command(&command, &mut res);
 
             // run rebuilding after every command except a few
             if let ResolvedNCommand::Function(..)
@@ -1298,10 +1285,10 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
-                res.push(Command::RunSchedule(self.rebuild()?));
+                res.push(Command::RunSchedule(self.rebuild()));
             }
         }
 
-        Ok(res)
+        res
     }
 }
