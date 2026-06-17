@@ -774,8 +774,49 @@ impl Database {
             .table
     }
 
+    /// Remove every row from the given table.
+    ///
+    /// This is intended as a faster alternative to staging a per-row
+    /// `stage_remove` for every key in the table. The underlying [`Table::clear`]
+    /// implementation drops the row storage in bulk and bumps the table's major
+    /// generation, so any cached indexes/subsets observed by future readers will
+    /// be lazily rebuilt against the now-empty table. Any pending staged
+    /// inserts or removes for this table are dropped (they pre-dated the clear,
+    /// so they no longer make sense once the table is empty).
+    ///
+    /// This method also resets the cached column- and key-indexes for the
+    /// table so subsequent merges can take the `Arc::get_mut`-based reset path,
+    /// matching the invariant maintained by [`Database::merge_all`].
+    ///
+    /// This does **not** flush pending changes for *other* tables; it is the
+    /// caller's responsibility to call [`Database::merge_all`] beforehand if
+    /// they need staged updates from a previous step to land before the clear.
+    pub fn clear_table(&mut self, table: TableId) {
+        let info = self
+            .tables
+            .get_mut(table)
+            .expect("must access a table that has been declared in this database");
+        let prev_len = info.table.len();
+        info.table.clear();
+        // The version bump from `clear` is enough on its own to make the
+        // indexes self-refresh on next access (see `Index::refresh`). We still
+        // reset them eagerly here so that the next `merge_all` sees the same
+        // "indexes are resettable" state it expects after a successful merge.
+        info.column_indexes.update(|_, ti| {
+            if let Some(arc) = Arc::get_mut(ti) {
+                arc.reset();
+            }
+        });
+        info.indexes.update(|_, ti| {
+            if let Some(arc) = Arc::get_mut(ti) {
+                arc.reset();
+            }
+        });
+        self.total_size_estimate = self.total_size_estimate.wrapping_sub(prev_len);
+    }
+
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
-        plan::plan_query(query)
+        plan::plan_query(query, ColumnCardEst::new(self))
     }
 }
 
@@ -832,4 +873,104 @@ fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> Has
             .needs_refresh(table_info.table.as_ref())
     );
     index
+}
+
+#[derive(Clone)]
+pub struct ColumnCardEst<'a> {
+    db: &'a Database,
+}
+
+impl ColumnCardEst<'_> {
+    pub fn new(db: &Database) -> ColumnCardEst<'_> {
+        ColumnCardEst { db }
+    }
+
+    pub fn col_uniqueness(&self, table: TableId, col: ColumnId) -> ColUniqueness {
+        let col_idx = get_column_index_from_tableinfo(&self.db.tables[table], col);
+        let table = &self.db.tables[table].table;
+        ColUniqueness {
+            col_size: col_idx.get().unwrap().len(),
+            table_size: table.len(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ColumnCardEst<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnCardEst").finish_non_exhaustive()
+    }
+}
+
+/// A coarse cardinality estimate for a column of a table, used by the query
+/// planner to decide which variable to eliminate next during tree
+/// decomposition.
+///
+/// `table_size` is the number of rows in the (sub)table and `col_size` is the
+/// number of distinct values in the column. Their ratio
+/// (`table_size / col_size`) approximates the average number of rows that share
+/// a given value of the column: a smaller ratio means the column is closer to
+/// being unique and therefore cheaper to join on. [`ColUniqueness`] is ordered
+/// by this ratio (see the [`Ord`] impl), so the planner prefers variables with
+/// the most selective (most unique) columns.
+#[derive(Copy, Clone, Debug)]
+pub struct ColUniqueness {
+    table_size: usize,
+    col_size: usize,
+}
+
+impl Default for ColUniqueness {
+    fn default() -> ColUniqueness {
+        ColUniqueness {
+            table_size: 1,
+            col_size: 1,
+        }
+    }
+}
+
+impl ColUniqueness {
+    #[allow(dead_code)] // not yet wired up into the planner
+    fn scale(&self, subset_size: usize) -> ColUniqueness {
+        if self.table_size == 0 || subset_size == 0 {
+            return ColUniqueness {
+                table_size: 0,
+                col_size: 0,
+            };
+        }
+        ColUniqueness {
+            table_size: subset_size,
+            col_size: self.col_size.saturating_mul(subset_size) / self.table_size,
+        }
+    }
+    fn join(&self, other: &ColUniqueness) -> ColUniqueness {
+        ColUniqueness {
+            table_size: self.table_size.saturating_mul(other.table_size),
+            col_size: self.col_size.max(other.col_size),
+        }
+    }
+
+    #[allow(dead_code)] // not yet wired up into the planner
+    fn col_size(&self) -> usize {
+        self.col_size
+    }
+}
+
+impl PartialEq for ColUniqueness {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for ColUniqueness {}
+
+impl PartialOrd for ColUniqueness {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ColUniqueness {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.table_size.saturating_mul(other.col_size))
+            .cmp(&(other.table_size.saturating_mul(self.col_size)))
+    }
 }

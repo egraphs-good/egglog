@@ -6,10 +6,10 @@
 //! To create a function value, use the `(unstable-fn "name" [<partial args>])` primitive and to apply it use the `(unstable-app function arg1 arg2 ...)` primitive.
 //! The number of args must match the number of arguments in the function sort.
 //!
-//!
 //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
 //! the set is a `(Symbol, Vec<(Sort, Value)>)` pairs. The Symbol is the function name, and the `Vec<(Sort, Value)>` is
 //! the list of partially applied arguments.
+use std::any::TypeId;
 use std::sync::Mutex;
 
 use crate::exec_state::Internal;
@@ -272,61 +272,137 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         );
         // If first arg is a literal string and we know the name of the function and can use that to know what
         // types to expect
-        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0]
-            && let Some(func_type) = typeinfo.get_func_type(name)
-        {
+        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0] {
             // The arguments contains the return sort as well as the function name
             let n_partial_args = arguments.len() - 2;
-            // the number of partial args must match the number of inputs from the func type minus the number from
-            // this function sort
-            if self.function.inputs.len() + n_partial_args != func_type.input.len() {
-                return vec![constraint::impossible(
-                    constraint::ImpossibleConstraint::ArityMismatch {
-                        atom: core::Atom {
-                            span: self.span.clone(),
-                            head: self.name.clone(),
-                            args: arguments.to_vec(),
+            if let Some(func_type) = typeinfo.get_func_type(name) {
+                // the number of partial args must match the number of inputs from the func type minus the number from
+                // this function sort
+                if self.function.inputs.len() + n_partial_args != func_type.input.len() {
+                    return vec![constraint::impossible(
+                        constraint::ImpossibleConstraint::ArityMismatch {
+                            atom: core::Atom {
+                                span: self.span.clone(),
+                                head: self.name.clone(),
+                                args: arguments.to_vec(),
+                            },
+                            expected: self.function.inputs.len() + func_type.input.len() + 1,
                         },
-                        expected: self.function.inputs.len() + func_type.input.len() + 1,
-                    },
-                )];
-            }
-            // the output type and input types (starting after the partial args) must match between these functions
-            let expected_output = self.function.output.clone();
-            let expected_input = self.function.inputs.clone();
-            let actual_output = func_type.output.clone();
-            let actual_input: Vec<ArcSort> = func_type
-                .input
-                .iter()
-                .skip(n_partial_args)
-                .cloned()
-                .collect();
-            if expected_output.name() != actual_output.name()
-                || expected_input
+                    )];
+                }
+                // the output type and input types (starting after the partial args) must match between these functions
+                let expected_output = self.function.output.clone();
+                let expected_input = self.function.inputs.clone();
+                let actual_output = func_type.output.clone();
+                let actual_input: Vec<ArcSort> = func_type
+                    .input
                     .iter()
-                    .map(|s| s.name())
-                    .ne(actual_input.iter().map(|s| s.name()))
-            {
-                return vec![constraint::impossible(
-                    constraint::ImpossibleConstraint::FunctionMismatch {
-                        expected_output,
-                        expected_input,
-                        actual_output,
-                        actual_input,
-                    },
-                )];
+                    .skip(n_partial_args)
+                    .cloned()
+                    .collect();
+                if expected_output.name() != actual_output.name()
+                    || expected_input
+                        .iter()
+                        .map(|s| s.name())
+                        .ne(actual_input.iter().map(|s| s.name()))
+                {
+                    return vec![constraint::impossible(
+                        constraint::ImpossibleConstraint::FunctionMismatch {
+                            expected_output,
+                            expected_input,
+                            actual_output,
+                            actual_input,
+                        },
+                    )];
+                }
+                // if they match, then just make sure the partial args match as well
+                return func_type
+                    .input
+                    .iter()
+                    .take(n_partial_args)
+                    .zip(arguments.iter().skip(1))
+                    .map(|(expected_sort, actual_term)| {
+                        constraint::assign(actual_term.clone(), expected_sort.clone())
+                    })
+                    .chain(once(output_sort_constraint))
+                    .collect();
             }
-            // if they match, then just make sure the partial args match as well
-            return func_type
-                .input
-                .iter()
-                .take(n_partial_args)
-                .zip(arguments.iter().skip(1))
-                .map(|(expected_sort, actual_term)| {
-                    constraint::assign(actual_term.clone(), expected_sort.clone())
-                })
-                .chain(once(output_sort_constraint))
-                .collect();
+
+            if let Some(primitives) = typeinfo.get_prims(name) {
+                // Primitive targets are checked by asking each overload whether
+                // a full call would typecheck after stitching together:
+                //
+                //   explicit partial args from `(unstable-fn "name" ...)`
+                //   + synthetic future args from the requested UnstableFn sort
+                //   + one synthetic output term
+                //
+                // For example, `(unstable-fn "+" old)` as `UnstableFn (i64) i64`
+                // checks each `+` overload as though it were called with
+                // `(old, future_arg) -> future_output`. The i64 overload matches;
+                // f64/string/etc. overloads become impossible constraints. If
+                // `old` is omitted, the same sort only provides one future arg,
+                // so no binary `+` overload has enough arguments to match.
+                let mut primitive_constraints = Vec::with_capacity(primitives.len());
+                for primitive in primitives {
+                    let mut primitive_args = arguments[1..arguments.len() - 1].to_vec();
+                    primitive_constraints.push(Vec::new());
+                    let alternative_constraints = primitive_constraints.last_mut().unwrap();
+                    for (index, sort) in self
+                        .function
+                        .inputs
+                        .iter()
+                        .chain(once(&self.function.output))
+                        .enumerate()
+                    {
+                        let term = AtomTerm::Var(
+                            self.span.clone(),
+                            format!(
+                                "__unstable_fn_target_{}_{}_arg_{index}",
+                                name,
+                                self.function.name()
+                            ),
+                        );
+                        alternative_constraints
+                            .push(constraint::assign(term.clone(), sort.clone()));
+                        primitive_args.push(term);
+                    }
+                    alternative_constraints.extend(
+                        primitive
+                            .primitive
+                            .get_type_constraints(&self.span)
+                            .get(&primitive_args, typeinfo),
+                    );
+                }
+
+                // No alternatives is defensive, one alternative is ordinary
+                // non-overloaded primitive resolution, and multiple alternatives
+                // are overloaded primitives such as `+`; the xor lets the type
+                // solver pick exactly one viable overload.
+                return match primitive_constraints.len() {
+                    0 => vec![constraint::impossible(
+                        constraint::ImpossibleConstraint::ArityMismatch {
+                            atom: core::Atom {
+                                span: self.span.clone(),
+                                head: self.name.clone(),
+                                args: arguments.to_vec(),
+                            },
+                            expected: n_partial_args + self.function.inputs.len() + 2,
+                        },
+                    )],
+                    1 => once(output_sort_constraint)
+                        .chain(primitive_constraints.pop().unwrap())
+                        .collect(),
+                    _ => vec![
+                        output_sort_constraint,
+                        constraint::xor(
+                            primitive_constraints
+                                .into_iter()
+                                .map(constraint::and)
+                                .collect(),
+                        ),
+                    ],
+                };
+            }
         }
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not

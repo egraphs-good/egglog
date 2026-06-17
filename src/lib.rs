@@ -61,9 +61,15 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
+
+/// Read-only proof reconstruction API.
+pub mod proof {
+    pub use crate::proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition};
+}
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
+use std::any::{Any, TypeId};
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -257,6 +263,12 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
+trait ExtensionStateValue: Any + dyn_clone::DynClone + Send + Sync {}
+
+impl<T> ExtensionStateValue for T where T: Any + Clone + Send + Sync {}
+
+dyn_clone::clone_trait_object!(ExtensionStateValue);
+
 #[derive(Clone)]
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
@@ -275,6 +287,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
     strict_mode: bool,
     warned_about_global_prefix: bool,
     /// Registry for command-level macros
@@ -291,7 +304,7 @@ pub struct EGraph {
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
-    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
+    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error>;
 }
 
 /// A function in the e-graph.
@@ -385,6 +398,7 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            extension_state: Default::default(),
             strict_mode: false,
             warned_about_global_prefix: false,
             command_macros: Default::default(),
@@ -550,6 +564,33 @@ impl EGraph {
         rayon::current_num_threads()
     }
 
+    /// Return extension-owned state stored on this e-graph.
+    ///
+    /// Extension state is keyed by Rust type and follows the same lifecycle as
+    /// the rest of the e-graph: cloning an [`EGraph`] clones the state, and
+    /// `push`/`pop` snapshots and restores it.
+    pub fn extension_state<T>(&self) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        let value = self.extension_state.get(&TypeId::of::<T>())?;
+        (value.as_ref() as &dyn Any).downcast_ref()
+    }
+
+    /// Return mutable extension-owned state, inserting `T::default()` when absent.
+    pub fn extension_state_or_default<T>(&mut self) -> &mut T
+    where
+        T: Default + Clone + Send + Sync + 'static,
+    {
+        let value = self
+            .extension_state
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()));
+        (value.as_mut() as &mut dyn Any)
+            .downcast_mut()
+            .expect("extension state entry must have the requested type")
+    }
+
     /// Add a user-defined command to the e-graph
     /// Get the type information for this e-graph
     pub fn type_info(&mut self) -> &mut TypeInfo {
@@ -712,10 +753,31 @@ impl EGraph {
                 ))
             }
             GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
-                let translated_args = args
+                let mut translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
+                if p.name() == "unstable-fn" {
+                    let Some(GenericExpr::Lit(_, Literal::String(name))) = args.first() else {
+                        return Err(Error::BackendError(
+                            "expected string literal after `unstable-fn`".into(),
+                        ));
+                    };
+                    let resolved = resolve_function_container_target_with_context(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        name,
+                        p,
+                        self.backend
+                            .action_registry()
+                            .read()
+                            .unwrap()
+                            .default_panic_id(),
+                    )?;
+                    translated_args[0] =
+                        egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
+                }
                 Ok(egglog_bridge::MergeFn::Primitive(
                     p.external_id(crate::Context::Write),
                     translated_args,
@@ -943,6 +1005,10 @@ impl EGraph {
 
         let GenericRunConfig { ruleset, until } = config;
 
+        if !self.rulesets.contains_key(ruleset) {
+            return Err(Error::NoSuchRuleset(ruleset.clone(), span.clone()));
+        }
+
         if let Some(facts) = until
             && self.check_facts(span, facts).is_ok()
         {
@@ -1103,6 +1169,30 @@ impl EGraph {
         Ok(())
     }
 
+    /// Remove every row from the named function in bulk.
+    ///
+    /// This is intended as a faster alternative to issuing a `(delete …)` for
+    /// every row of the function: it drops the backing row storage in
+    /// O(1)-in-row-count time, rather than O(n) per-row teardown. Any pending
+    /// staged inserts/removes for this function are dropped as part of the
+    /// clear, so callers that have staged updates they want to land first
+    /// should arrange for those to be flushed beforehand.
+    ///
+    /// Cached indexes and subsets that reference this table are invalidated by
+    /// a generation bump and are lazily rebuilt against the now-empty table on
+    /// next access.
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn clear_function(&mut self, func_name: &str) -> Result<(), Error> {
+        let backend_id = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?
+            .backend_id;
+        self.backend.clear_table(backend_id);
+        Ok(())
+    }
+
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
@@ -1123,6 +1213,134 @@ impl EGraph {
         let sort = resolved_expr.output_type();
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
+    }
+
+    /// Typecheck an expression under explicit local bindings, an expected
+    /// output sort, and a primitive call context.
+    ///
+    /// `bindings` contains the local variables in scope while resolving `expr`.
+    /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
+    /// tied to that binding. `output_sort` constrains overload resolution and
+    /// output-type inference for the expression. Global references are rewritten
+    /// into the same zero-argument function calls used during command execution.
+    /// `context` should match the runtime context where the resolved expression
+    /// will be evaluated.
+    pub fn typecheck_expr_with_bindings_and_output(
+        &mut self,
+        expr: &Expr,
+        bindings: &[(String, Span, ArcSort)],
+        output_sort: ArcSort,
+        context: Context,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let mut binding_map = IndexMap::default();
+        binding_map.reserve(bindings.len());
+        for (name, span, sort) in bindings {
+            if binding_map
+                .insert(name.as_str(), (span.clone(), sort.clone()))
+                .is_some()
+            {
+                return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
+            }
+        }
+        let resolved = self.type_info.typecheck_expr_with_output(
+            &mut self.parser.symbol_gen,
+            expr,
+            &binding_map,
+            output_sort,
+            context,
+        )?;
+        Ok(remove_globals::remove_globals_expr(resolved))
+    }
+
+    /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
+    ///
+    /// The returned expression must be evaluated with the returned bindings in
+    /// scope before any caller-supplied local bindings. This lets direct
+    /// execution-state evaluation use the same hidden `ResolvedFunction` value
+    /// that backend rule lowering injects for `unstable-fn`.
+    ///
+    /// For example, a resolved body like `(unstable-app (unstable-fn "f") _0)`
+    /// cannot evaluate the string literal `"f"` directly. This helper replaces
+    /// the `(unstable-fn "f")` sub-expression with a fresh hidden variable and
+    /// returns a binding from that variable to the prepared function value.
+    pub fn prepare_unstable_fn_targets_for_eval(
+        &mut self,
+        expr: &ResolvedExpr,
+    ) -> Result<(ResolvedExpr, Vec<(String, Value)>), Error> {
+        let mut bindings = Vec::new();
+        let expr = self.prepare_unstable_fn_targets_for_eval_inner(expr, &mut bindings)?;
+        Ok((expr, bindings))
+    }
+
+    fn prepare_unstable_fn_targets_for_eval_inner(
+        &mut self,
+        expr: &ResolvedExpr,
+        bindings: &mut Vec<(String, Value)>,
+    ) -> Result<ResolvedExpr, Error> {
+        match expr {
+            ResolvedExpr::Lit(..) | ResolvedExpr::Var(..) => Ok(expr.clone()),
+            ResolvedExpr::Call(span, resolved_call, children) => {
+                if let ResolvedCall::Primitive(prim) = resolved_call
+                    && prim.name() == "unstable-fn"
+                {
+                    let Some(ResolvedExpr::Lit(target_span, Literal::String(name))) =
+                        children.first()
+                    else {
+                        return Err(Error::BackendError(format!(
+                            "{}\nunstable-fn requires a literal string function name",
+                            children
+                                .first()
+                                .map(ResolvedExpr::span)
+                                .unwrap_or_else(|| Span::Panic)
+                        )));
+                    };
+                    let panic_id = self.backend.new_panic(format!(
+                        "unstable-fn over `{name}` was applied in a context where its wrapped \
+                         function is not valid for this call site, if in a rule, add :naive."
+                    ));
+                    let resolved_function = resolve_function_container_target_with_context(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        name,
+                        prim,
+                        panic_id,
+                    )?;
+                    let fn_value = self.backend.base_values().get(resolved_function);
+                    let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
+                    bindings.push((binding_name.clone(), fn_value));
+                    let mut prepared_children = Vec::with_capacity(children.len());
+                    prepared_children.push(ResolvedExpr::Var(
+                        target_span.clone(),
+                        ResolvedVar {
+                            name: binding_name,
+                            sort: children[0].output_type(),
+                            is_global_ref: false,
+                        },
+                    ));
+                    for child in &children[1..] {
+                        prepared_children.push(
+                            self.prepare_unstable_fn_targets_for_eval_inner(child, bindings)?,
+                        );
+                    }
+                    return Ok(ResolvedExpr::Call(
+                        span.clone(),
+                        resolved_call.clone(),
+                        prepared_children,
+                    ));
+                }
+
+                let prepared_children = children
+                    .iter()
+                    .map(|child| self.prepare_unstable_fn_targets_for_eval_inner(child, bindings))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ResolvedExpr::Call(
+                    span.clone(),
+                    resolved_call.clone(),
+                    prepared_children,
+                ))
+            }
+        }
     }
 
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
@@ -1259,7 +1477,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Vec<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort {
@@ -1303,14 +1521,14 @@ impl EGraph {
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
-                return Ok(Some(CommandOutput::RunSchedule(report)));
+                return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
                 None => {
                     log::info!("Printed overall statistics");
-                    return Ok(Some(CommandOutput::OverallStatistics(
+                    return Ok(vec![CommandOutput::OverallStatistics(
                         self.overall_run_report.clone(),
-                    )));
+                    )]);
                 }
                 Some(path) => {
                     let mut file = std::fs::File::create(&path)
@@ -1353,7 +1571,7 @@ impl EGraph {
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                         }
-                        Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
+                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                     } else {
                         Err(Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
@@ -1373,7 +1591,7 @@ impl EGraph {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(Some(CommandOutput::ExtractVariants(termdag, terms)))
+                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1399,13 +1617,16 @@ impl EGraph {
                             .map_err(|e| Error::IoError(file.into(), e, span.clone()))
                     })
                     .transpose()?;
-                return self.print_function(&f, n, file, mode).map_err(|e| match e {
-                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
-                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
-                    }
-                    // This case is currently impossible
-                    _ => e,
-                });
+                return self
+                    .print_function(&f, n, file, mode)
+                    .map_err(|e| match e {
+                        Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                            Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                        }
+                        // This case is currently impossible
+                        _ => e,
+                    })
+                    .map(|opt| opt.into_iter().collect());
             }
             ResolvedNCommand::PrintSize(span, f) => {
                 let res = self.print_size(f.as_deref()).map_err(|e| match e {
@@ -1415,7 +1636,7 @@ impl EGraph {
                     // This case is currently impossible
                     _ => e,
                 })?;
-                return Ok(Some(res));
+                return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
@@ -1465,13 +1686,16 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
-                let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
-                    panic!("Unrecognized user-defined command: {name}");
-                });
-                let res = command.update(self, &exprs);
-                self.commands.insert(name, command);
-                return res;
+                let command = self
+                    .commands
+                    .get(&name)
+                    .ok_or_else(|| {
+                        NotFoundError(format!("Unrecognized user-defined command: {name}"))
+                    })?
+                    .clone();
+                return command.update(self, &exprs);
             }
+
             ResolvedNCommand::ProveExists(span, resolved_call) => {
                 let mut instrument = ProofInstrumentor { egraph: self };
                 let (proof_store, proof_id) =
@@ -1481,14 +1705,14 @@ impl EGraph {
                             span: span.clone(),
                             error,
                         })?;
-                return Ok(Some(CommandOutput::ProveExists {
+                return Ok(vec![CommandOutput::ProveExists {
                     proof_store,
                     proof_id,
-                }));
+                }]);
             }
         };
 
-        Ok(None)
+        Ok(vec![])
     }
 
     fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
@@ -1721,7 +1945,7 @@ impl EGraph {
                 // handle include specially- we keep them as-is for desugaring
                 if let Command::Include(span, file) = &command {
                     let s = std::fs::read_to_string(file)
-                        .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                        .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()))?;
                     let included_program = self
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
@@ -1749,9 +1973,7 @@ impl EGraph {
                             )
                         {
                             let result = self.run_command(processed)?;
-                            if let Some(output) = result {
-                                outputs.push(output);
-                            }
+                            outputs.extend(result);
                         }
                     }
                 }
@@ -1921,6 +2143,51 @@ impl EGraph {
         self.functions.get(name)
     }
 
+    /// Returns `true` if a user-defined command with the given name is
+    /// registered in this e-graph.
+    pub fn has_command(&self, name: &str) -> bool {
+        self.commands.contains_key(name)
+    }
+
+    /// Invoke a registered user-defined command by name, passing the given
+    /// unresolved expression arguments.
+    ///
+    /// This is equivalent to writing `(name args...)` at the top level, but
+    /// callable directly from Rust.  Returns an error if no command with the given
+    /// name is registered.
+    pub fn run_user_defined_command(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Vec<CommandOutput>, Error> {
+        self.run_command(ResolvedNCommand::UserDefined(
+            span!(),
+            name.to_string(),
+            args.to_vec(),
+        ))
+    }
+
+    /// Run a closure with full read-write access to the database, then flush
+    /// pending writes.
+    ///
+    /// This is the top-level equivalent of [`FullPrim::apply`], and the closure receives a
+    ///  [`FullState`].
+    ///
+    /// Pending writes staged inside the closure are flushed (and the
+    /// union-find rebuilt if necessary) before this method returns.
+    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
+        // Clone the Arc so the guard is not lifetime-tied to &self.backend,
+        // allowing flush_updates(&mut self.backend) after the closure.
+        let registry_arc = self.backend.action_registry().clone();
+        let registry_guard = registry_arc.read().unwrap();
+        let result = self
+            .backend
+            .with_execution_state(|es| f(FullState::wrap(es, &registry_guard, Context::Full)));
+        drop(registry_guard);
+        self.backend.flush_updates();
+        result
+    }
+
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.backend.set_report_level(level);
     }
@@ -1942,6 +2209,132 @@ impl EGraph {
     pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
         UnionAction::new(&self.backend)
     }
+}
+
+/// Build the runtime value backing a resolved `(unstable-fn name)` target.
+///
+/// For table-backed functions, this captures the table action that
+/// `unstable-app` will call later. For primitive targets, this bakes one
+/// dispatch id per runtime context so application can choose the entrypoint
+/// matching the primitive body's current call-site context.
+fn resolve_function_container_target_with_context(
+    backend: &egglog_bridge::EGraph,
+    functions: &IndexMap<String, Function>,
+    type_info: &TypeInfo,
+    name: &str,
+    primitive: &core::SpecializedPrimitive,
+    panic_id: ExternalFunctionId,
+) -> Result<ResolvedFunction, Error> {
+    let target_function = type_info
+        .get_sorts::<FunctionSort>()
+        .into_iter()
+        .find(|function| function.name() == primitive.output().name())
+        .ok_or_else(|| {
+            Error::BackendError(format!(
+                "`unstable-fn` output sort `{}` is not a function sort",
+                primitive.output().name()
+            ))
+        })?;
+
+    let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
+    let remaining_inputs = target_function.inputs();
+    let output = target_function.output();
+
+    let id = if let Some(func) = functions.get(name) {
+        let func_type = type_info
+            .get_func_type(name)
+            .ok_or_else(|| Error::BackendError(format!("No resolution for {name:?}")))?;
+        let expected_inputs = partial_arcsorts
+            .iter()
+            .chain(remaining_inputs)
+            .collect::<Vec<_>>();
+        let inputs_match = func_type.input.len() == expected_inputs.len()
+            && func_type
+                .input
+                .iter()
+                .zip(&expected_inputs)
+                .all(|(actual, expected)| actual.name() == expected.name());
+        if !inputs_match || func_type.output.name() != output.name() {
+            let expected_input_names = expected_inputs
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let actual_input_names = func_type
+                .input
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::BackendError(format!(
+                "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
+                expected_input_names,
+                output.name(),
+                actual_input_names,
+                func_type.output.name(),
+            )));
+        }
+
+        let action = egglog_bridge::TableAction::new(backend, func.backend_id);
+        match func_type.subtype {
+            ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
+            ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
+        }
+    } else if let Some(primitives) = type_info.get_prims(name) {
+        let signature: Vec<_> = partial_arcsorts
+            .iter()
+            .chain(remaining_inputs)
+            .chain(once(&output))
+            .cloned()
+            .collect();
+        let candidates: Vec<_> = primitives
+            .iter()
+            .filter(|primitive| primitive.accept(&signature, type_info))
+            .collect();
+        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
+        for runtime_ctx in Context::ALL {
+            let mut ids = candidates
+                .iter()
+                .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
+            // The first `next` finds the candidate for this runtime context;
+            // the second detects whether there is more than one such candidate.
+            match (ids.next(), ids.next()) {
+                (None, _) => {}
+                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
+                (Some(_), Some(_)) => {
+                    return Err(Error::BackendError(format!(
+                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                    )));
+                }
+            }
+        }
+        if !context_ids.iter().any(|(_, id)| id.is_some()) {
+            let (output_sort, input_sorts) = signature
+                .split_last()
+                .expect("primitive signature should include an output sort");
+            let input_names = input_sorts
+                .iter()
+                .map(|sort| sort.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::BackendError(format!(
+                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
+                 context ids: {context_ids:?}",
+                input_names,
+                output_sort.name(),
+            )));
+        }
+        ResolvedFunctionId::Primitive { context_ids }
+    } else {
+        return Err(Error::BackendError(format!("No resolution for {name:?}")));
+    };
+
+    Ok(ResolvedFunction {
+        id,
+        partial_arcsorts,
+        name: name.to_owned(),
+        panic_id,
+    })
 }
 
 struct BackendRule<'a> {
@@ -2038,66 +2431,6 @@ impl<'a> BackendRule<'a> {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
-            let id = if let Some(f) = self.type_info.get_func_type(name) {
-                // Distinguish constructor-table lookups (write-on-miss
-                // via `lookup_or_insert`) from custom-function lookups
-                // (pure read via `lookup`). `FunctionContainer::apply`
-                // uses this distinction to allow `unstable-app` over a
-                // custom function in any DB-read-capable context (e.g.
-                // global checks) while refusing constructors outright
-                // anywhere they can't mint — a no-mint constructor
-                // would silently miss instead of producing the eclass
-                // the user asked for.
-                let action = egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f));
-                match f.subtype {
-                    ast::FunctionSubtype::Constructor => ResolvedFunctionId::Constructor(action),
-                    ast::FunctionSubtype::Custom => ResolvedFunctionId::Function(action),
-                }
-            } else {
-                let fn_sort = Arc::downcast::<FunctionSort>(prim.output().clone().as_arc_any())
-                    .unwrap_or_else(|_| panic!("expected `unstable-fn` to return a function sort"));
-                let types: Vec<_> = prim
-                    .input()
-                    .iter()
-                    .skip(1)
-                    .cloned()
-                    .chain(fn_sort.inputs().iter().cloned())
-                    .chain(std::iter::once(fn_sort.output()))
-                    .collect();
-                // Bake every exact-signature registration. The
-                // build-site `ctx` here is intentionally unused: the
-                // *application*-time context (carried on `state.ctx`
-                // by the wrapping HOF body) selects which candidate
-                // dispatches at runtime. Filtering by build-site ctx
-                // would trap an `unstable-fn` value in the context it
-                // was constructed in (e.g. a `let`-bound function value
-                // built at top-level `Full` couldn't be applied later
-                // from a `Read` query).
-                let ps: Vec<_> = self
-                    .type_info
-                    .get_prims(name)
-                    .into_iter()
-                    .flatten()
-                    .filter(|p| p.accept(&types, self.type_info))
-                    .collect();
-                let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
-                    let mut ids = ps.iter().filter_map(|p| p.context_ids[runtime_ctx]);
-                    match (ids.next(), ids.next()) {
-                        (None, _) => None,
-                        (Some(id), None) => Some(id),
-                        (Some(_), Some(_)) => panic!(
-                            "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                        ),
-                    }
-                });
-                assert!(
-                    context_ids.iter().any(|(_, id)| id.is_some()),
-                    "no callable for {name}"
-                );
-                ResolvedFunctionId::Primitive { context_ids }
-            };
-            let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
-
             // Pre-register a panic id used by `FunctionContainer::apply`
             // when the wrapped function is applied in a context that
             // doesn't admit it. Triggered at runtime via the egglog
@@ -2107,13 +2440,17 @@ impl<'a> BackendRule<'a> {
                 "unstable-fn over `{name}` was applied in a context where its wrapped \
                  function is not valid for this call site, if in a rule, add :naive."
             ));
-
-            qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
-                id,
-                partial_arcsorts,
-                name: name.clone(),
+            let resolved = resolve_function_container_target_with_context(
+                self.rb.egraph(),
+                self.functions,
+                self.type_info,
+                name,
+                prim,
                 panic_id,
-            });
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+            qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
 
         (
@@ -2350,6 +2687,26 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FullOnly;
+
+    impl Primitive for FullOnly {
+        fn name(&self) -> &str {
+            "full-only"
+        }
+
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+            SimpleTypeConstraint::new(self.name(), vec![I64Sort.to_arcsort()], span.clone())
+                .into_box()
+        }
+    }
+
+    impl FullPrim for FullOnly {
+        fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+            Some(state.base_values().get::<i64>(1))
+        }
+    }
+
     #[test]
     fn test_user_defined_primitive() {
         let mut egraph = EGraph::default();
@@ -2376,6 +2733,161 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rejects_mismatch() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(+ 1 2)").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap();
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                BoolSort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::Mismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected.name(), BoolSort.name());
+                assert_eq!(actual.name(), I64Sort.name());
+            }
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+
+        let literal = parser.get_expr_from_string(None, "1").unwrap();
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &literal,
+                &[],
+                BoolSort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::Mismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected.name(), BoolSort.name());
+                assert_eq!(actual.name(), I64Sort.name());
+            }
+            other => panic!("expected literal mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_uses_explicit_bindings() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(+ x 2)").unwrap();
+        let bindings = vec![("x".to_string(), span!(), I64Sort.to_arcsort())];
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &bindings,
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap();
+
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_uses_context() {
+        let mut egraph = EGraph::default();
+        egraph.add_full_primitive(FullOnly, None);
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Full,
+            )
+            .unwrap();
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
+            other => panic!("expected unbound function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rejects_duplicate_bindings() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "x").unwrap();
+        let bindings = vec![
+            ("x".to_string(), span!(), I64Sort.to_arcsort()),
+            ("x".to_string(), span!(), BoolSort.to_arcsort()),
+        ];
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &bindings,
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+
+        match err {
+            TypeError::AlreadyDefined(name, _) => assert_eq!(name, "x"),
+            other => panic!("expected duplicate binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rewrites_globals() {
+        let mut egraph = EGraph::default();
+        egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "$x").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Read,
+            )
+            .unwrap();
+
+        match resolved {
+            ResolvedExpr::Call(_, ResolvedCall::Func(func), children) => {
+                assert_eq!(func.name, "$x");
+                assert!(children.is_empty());
+                assert_eq!(func.output.name(), I64Sort.name());
+            }
+            other => panic!("expected global function call rewrite, got {other:?}"),
+        }
+    }
+
     // Test that an `EGraph` is `Send` & `Sync`
     #[test]
     fn test_egraph_send_sync() {
@@ -2387,6 +2899,26 @@ mod tests {
         }
         let egraph = EGraph::default();
         assert!(is_send(&egraph) && is_sync(&egraph));
+    }
+
+    #[test]
+    fn test_extension_state_clones_and_restores_with_egraph() {
+        let mut egraph = EGraph::default();
+        assert_eq!(egraph.extension_state::<usize>(), None);
+        assert_eq!(egraph.clone().extension_state::<usize>(), None);
+
+        *egraph.extension_state_or_default::<usize>() = 1;
+
+        let mut cloned = egraph.clone();
+        assert_eq!(cloned.extension_state::<usize>(), Some(&1));
+        *cloned.extension_state_or_default::<usize>() = 2;
+        assert_eq!(egraph.extension_state::<usize>(), Some(&1));
+
+        egraph.push();
+        *egraph.extension_state_or_default::<usize>() = 3;
+        egraph.pop().unwrap();
+
+        assert_eq!(egraph.extension_state::<usize>(), Some(&1));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
@@ -2497,5 +3029,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res[0].to_string(), "(expensive)\n");
+    }
+
+    #[test]
+    fn test_run_undefined_ruleset_errors() {
+        let mut egraph = EGraph::default();
+        let err = egraph
+            .parse_and_run_program(None, "(ruleset test)\n(run test2 1)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "test2"));
     }
 }

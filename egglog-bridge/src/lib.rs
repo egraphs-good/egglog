@@ -406,6 +406,23 @@ impl EGraph {
         self.db.get_table(self.funcs[table].table).len()
     }
 
+    /// Remove every row from the given function's backing table.
+    ///
+    /// This is the bulk counterpart to staging a `remove` for every key in the
+    /// table: the underlying `Database::clear_table` drops the row buffer in
+    /// O(1)-in-row-count time and bumps the table's major generation, which
+    /// lazily invalidates any cached subsets or indexes a later reader might
+    /// consult. Any rows staged for this table by an in-flight
+    /// `MutationBuffer` are dropped along with the table contents.
+    ///
+    /// Callers that have staged inserts/removes for *other* tables that they
+    /// want flushed first should call [`EGraph::flush_updates`] before
+    /// clearing.
+    pub fn clear_table(&mut self, func: FunctionId) {
+        let table_id = self.funcs[func].table;
+        self.db.clear_table(table_id);
+    }
+
     /// Read the contents of the given function.
     ///
     /// The callback `f` is called with each row and its subsumption status.

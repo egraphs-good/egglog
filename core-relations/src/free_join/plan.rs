@@ -48,7 +48,7 @@ use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::{
     TableId,
-    free_join::ProcessedConstraints,
+    free_join::{ColUniqueness, ColumnCardEst, ProcessedConstraints},
     numeric_id::{DenseIdMap, NumericId},
     query::{FunDeps, SymbolMap},
 };
@@ -147,7 +147,6 @@ pub(crate) enum JoinStage {
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
-        is_leaf_scan: bool,
     },
     FusedIntersectMat {
         cover: MatId,
@@ -157,62 +156,55 @@ pub(crate) enum JoinStage {
     },
 }
 
-impl JoinStage {
-    /// Attempt to fuse two stages into one.
-    ///
-    /// This operation is very conservative right now, it only fuses multiple
-    /// scans that do no filtering whatsoever.
-    fn fuse(&mut self, other: &JoinStage) -> bool {
-        use JoinStage::*;
-        match (&*self, other) {
-            (
-                FusedIntersect {
-                    cover: cover1,
-                    bind: bind1,
-                    to_intersect: to_intersect1,
-                    is_leaf_scan: is_leaf_scan1,
-                },
-                FusedIntersect {
-                    cover: cover2,
-                    bind: bind2,
-                    to_intersect: to_intersect2,
-                    is_leaf_scan: is_leaf_scan2,
-                },
-            ) if cover1.to_index.atom == cover2.to_index.atom
-                && to_intersect1.is_empty()
-                && to_intersect2.is_empty()
-                && (cover1.constraints.is_empty() || cover2.constraints.is_empty()) =>
-            {
-                assert!(!*is_leaf_scan1 && !is_leaf_scan2);
-                let to_index = SubAtom {
-                    atom: cover1.to_index.atom,
-                    vars: cover1
-                        .to_index
-                        .vars
-                        .iter()
-                        .chain(cover2.to_index.vars.iter())
-                        .copied()
-                        .collect(),
-                };
-                let bind = bind1.iter().chain(bind2.iter()).copied().collect();
-                *self = FusedIntersect {
-                    cover: ScanSpec {
-                        to_index,
-                        constraints: cover1
-                            .constraints
-                            .iter()
-                            .chain(cover2.constraints.iter())
-                            .cloned()
-                            .collect(),
-                    },
-                    bind,
-                    to_intersect: Default::default(),
-                    is_leaf_scan: false,
-                };
-                true
+/// Merge every `FusedIntersect { to_intersect: [] }` into the first earlier such stage on the
+/// same cover atom, so each atom contributes at most one single-scan stage. Same-atom no-
+/// `to_intersect` covers can always be merged: their projections share an atom and any
+/// per-atom constraints are produced exactly once by `take_atom_constraints_if_new`.
+fn fuse_single_scans(stages: &mut Vec<JoinStage>) {
+    let mut i = 0;
+    while i < stages.len() {
+        let cur_atom = match &stages[i] {
+            JoinStage::FusedIntersect {
+                cover,
+                to_intersect,
+                ..
+            } if to_intersect.is_empty() => cover.to_index.atom,
+            _ => {
+                i += 1;
+                continue;
             }
-            _ => false,
-        }
+        };
+        let target = (0..i).find(|&j| {
+            matches!(
+                &stages[j],
+                JoinStage::FusedIntersect { cover, to_intersect, .. }
+                    if to_intersect.is_empty() && cover.to_index.atom == cur_atom
+            )
+        });
+        let Some(j) = target else {
+            i += 1;
+            continue;
+        };
+        let JoinStage::FusedIntersect {
+            cover: cover_i,
+            bind: bind_i,
+            ..
+        } = stages.remove(i)
+        else {
+            unreachable!("checked above")
+        };
+        let JoinStage::FusedIntersect {
+            cover: cover_j,
+            bind: bind_j,
+            ..
+        } = &mut stages[j]
+        else {
+            unreachable!("checked above")
+        };
+        cover_j.to_index.vars.extend(cover_i.to_index.vars);
+        cover_j.constraints.extend(cover_i.constraints);
+        bind_j.extend(bind_i);
+        // Don't advance `i`: stages.remove shifts later entries down by one.
     }
 }
 
@@ -341,7 +333,6 @@ impl SinglePlan {
                     cover,
                     bind: _,
                     to_intersect,
-                    is_leaf_scan: _,
                 } => {
                     let cover_atom_name = get_atom(cover.to_index.atom);
                     let cover_cols: Vec<(String, i64)> = cover
@@ -430,10 +421,11 @@ fn next_var_to_eliminate(
     vars: &DenseIdMap<Variable, VarInfo>,
     atoms: &DenseIdMap<AtomId, Atom>,
     fun_deps: &FunDeps,
+    col_est: &ColumnCardEst<'_>,
 ) -> Option<IndexSet<Variable>> {
     let (_var, subquery_vars) = vars
         .iter()
-        .map(|(var, _vinfo)| {
+        .map(|(var, vinfo)| {
             let subquery_vars = atoms
                 .iter()
                 // every atom that contains this variable
@@ -443,18 +435,38 @@ fn next_var_to_eliminate(
 
             // Optimization: use functional dependencies to find all variables inferred by the
             // current neightborhood.
-            let subquery_vars = fun_deps.closure(subquery_vars);
+            // let subquery_vars = fun_deps.closure(subquery_vars);
+            let subquery_vars: DenseIdMap<_, ()> = subquery_vars.map(|v| (v, ())).collect();
 
             let occ = atoms
                 .iter()
                 .filter(|(_, atom)| atom.vars().any(|v| subquery_vars.contains_key(v)))
                 .count();
-            (occ, var, subquery_vars)
+            let size_estimation = vinfo
+                .occurrences
+                .iter()
+                .filter_map(|occ| {
+                    let atom = &atoms[occ.atom];
+                    let table = atom.table;
+                    if table.is_dummy() {
+                        return None;
+                    }
+                    let col = atom.get_col(var).unwrap();
+                    // TODO: plan header before query decomposition so we know the exact
+                    // subset we are handling
+                    Some(col_est.col_uniqueness(table, col))
+                })
+                .fold(ColUniqueness::default(), |a, b| a.join(&b));
+            ((occ, size_estimation), var, subquery_vars)
+            // (occ, var, subquery_vars)
         })
         .min_by_key(|a| a.0)
         .map(|a| (a.1, a.2))?;
     Some(IndexSet::from_iter(
-        subquery_vars.into_iter().map(|(var, _)| var),
+        fun_deps
+            .closure(subquery_vars.iter().map(|(var, _)| var))
+            .into_iter()
+            .map(|(var, _)| var),
     ))
 }
 
@@ -554,7 +566,7 @@ fn update_hypergraph(
 ///
 /// Another invariant we maintain is higher-indexed bags are heavier (closer to the root of the tree decomposition), so they will be evaluated later and constrained
 /// by evaluation of earlier bags.
-fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
+fn decompose_into_bags<'a>(original_ctx: &PlanningContext<'a>) -> Vec<PlanningContext<'a>> {
     let mut atoms = original_ctx.atoms.clone();
     let mut vars = original_ctx.vars.clone();
 
@@ -568,7 +580,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     let mut bags = Vec::new();
 
     // Variable elimination loop
-    while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &original_ctx.fun_deps) {
+    while let Some(subquery_vars) =
+        next_var_to_eliminate(&vars, &atoms, &original_ctx.fun_deps, &original_ctx.col_est)
+    {
         // Create a fake covering atom to bridge back to the main query
         // Remove hyperedges that only contain subquery variables.
         update_hypergraph(&subquery_vars, &mut vars, &mut atoms);
@@ -594,6 +608,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             vars: subquery_var_map,
             atoms: subquery_atoms,
             fun_deps: original_ctx.fun_deps.clone(),
+            col_est: original_ctx.col_est.clone(),
         });
     }
 
@@ -674,14 +689,11 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
             // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
             if i < j {
-                let bag = mem::take(&mut bags[i]);
-                bags[j].merge_bag(&bag);
-                bags.remove(i);
+                let bag = bags.remove(i);
+                bags[j - 1].merge_bag(&bag);
             } else {
-                let bag = mem::take(&mut bags[j]);
-                bags[i].merge_bag(&bag);
-                bags.remove(j);
-                i += 1;
+                let bag = bags.remove(j);
+                bags[i - 1].merge_bag(&bag);
             }
             changed = true;
         }
@@ -952,13 +964,6 @@ fn plan_single_bag(
     let (header, mut instrs) = plan_stages(&stripped_bag, strat);
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
-    // `plan_gj` decides `is_leaf_scan` based only on the stages it produces, so it cannot
-    // see the prologue/epilogue stages we just spliced in. A leaf scan factorizes its
-    // bound variables into `binding_info.binding_sets` rather than `binding_info.bindings`,
-    // which breaks any later `FusedIntersectMat::Value`/`Lookup` that reads those variables
-    // directly from `bindings`. Downgrade bad leaf scans now that the full instruction
-    // sequence is known.
-    revert_bad_leaf_scans(&mut instrs);
 
     let stages = JoinStages {
         instrs: Arc::new(instrs),
@@ -1051,66 +1056,6 @@ fn fuse_last_stage(
     last_block.instrs = Arc::new(instrs);
 
     (blocks, last_block)
-}
-
-/// Downgrade any `FusedIntersect { is_leaf_scan: true, .. }` whose factorized bindings
-/// would be observed as missing by a later stage.
-///
-/// `is_leaf_scan` instructs the executor to factorize the stage's bindings into
-/// `BindingInfo::binding_sets` instead of materializing them into `BindingInfo::bindings`.
-/// That is OK only if no subsequent stage in the same `JoinStages` reads any of those
-/// variables as a scalar value from `bindings`. The only stages that do so are
-/// `FusedIntersectMat::Value` / `Lookup`, whose `index_vars` are looked up directly.
-///
-/// `plan_gj` performs its own (cover-atom-based) check, but that runs before prologue /
-/// epilogue stages are spliced into the instruction list, so it cannot detect
-/// `FusedIntersectMat` lookups that come from the epilogue. This pass closes that gap.
-///
-/// # Example
-///
-/// Suppose `plan_gj` produces the following two stages for a bag, where stage 0 is
-/// the last `FusedIntersect` and binds variable `y` from atom `A` via a leaf scan
-/// (no atom later in `plan_gj`'s output reuses `A`):
-///
-/// ```text
-///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
-/// ```
-///
-/// `plan_single_bag` then splices an epilogue that looks up an earlier block's
-/// materialization keyed on `y`:
-///
-/// ```text
-///   stage 0: FusedIntersect { cover: A, bind: [(col, y)], is_leaf_scan: true, ... }
-///   stage 1: FusedIntersectMat { mode: Lookup([y]), ... }
-/// ```
-///
-/// With `is_leaf_scan: true`, stage 0 puts `y` into `binding_sets` instead of
-/// `bindings`. Stage 1 then tries `binding_info.bindings[y]` and panics on a missing
-/// entry. This pass detects the overlap (`y ∈ bound_vars ∩ Lookup`'s index_vars) and
-/// flips stage 0's `is_leaf_scan` back to `false`.
-fn revert_bad_leaf_scans(stages: &mut [JoinStage]) {
-    for i in 0..stages.len() {
-        let bound_vars: SmallVec<[Variable; 4]> = match &stages[i] {
-            JoinStage::FusedIntersect {
-                bind,
-                is_leaf_scan: true,
-                ..
-            } => bind.iter().map(|(_, v)| *v).collect(),
-            _ => continue,
-        };
-
-        let needs_scalar = ((i + 1)..stages.len()).any(|j| match &stages[j] {
-            JoinStage::FusedIntersectMat {
-                mode: MatScanMode::Value(vars) | MatScanMode::Lookup(vars),
-                ..
-            } => vars.iter().any(|v| bound_vars.contains(v)),
-            _ => false,
-        });
-
-        if needs_scalar && let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] {
-            *is_leaf_scan = false;
-        }
-    }
 }
 
 /// Eagerly lift materialization lookups up
@@ -1235,12 +1180,13 @@ pub(crate) fn tree_decompose_and_plan(
     })
 }
 
-pub(crate) fn plan_query(query: Query) -> Plan {
+pub(crate) fn plan_query<'a>(query: Query, col_est: ColumnCardEst<'a>) -> Plan {
     let atoms = query.atoms;
     let ctx = PlanningContext {
         vars: query.var_info,
         atoms,
         fun_deps: Arc::new(query.fun_deps),
+        col_est,
     };
     tree_decompose_and_plan(ctx, query.plan_strategy, query.action, query.no_decomp)
 }
@@ -1262,15 +1208,16 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PlanningContext {
+#[derive(Debug, Clone)]
+pub(crate) struct PlanningContext<'a> {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
     fun_deps: Arc<FunDeps>,
+    col_est: ColumnCardEst<'a>,
 }
 
-impl PlanningContext {
-    fn is_subsumed_by(&self, bag2: &PlanningContext) -> bool {
+impl<'a> PlanningContext<'a> {
+    fn is_subsumed_by(&self, bag2: &PlanningContext<'a>) -> bool {
         self.is_subsumed_by_vars(&bag2.vars)
     }
 
@@ -1278,7 +1225,7 @@ impl PlanningContext {
         self.vars.iter().all(|(var, _)| bag2.contains_key(var))
     }
 
-    fn merge_bag(&mut self, bag2: &PlanningContext) {
+    fn merge_bag(&mut self, bag2: &PlanningContext<'a>) {
         for (var, vinfo) in bag2.vars.iter() {
             if self.vars.contains_key(var) {
                 for new_occ in vinfo.occurrences.iter().cloned() {
@@ -1302,10 +1249,10 @@ impl PlanningContext {
         }
     }
 
-    fn common_vars_with<'a>(
-        &'a self,
-        other: &'a PlanningContext,
-    ) -> impl Iterator<Item = Variable> + 'a {
+    fn common_vars_with<'b>(
+        &'b self,
+        other: &'b PlanningContext<'a>,
+    ) -> impl Iterator<Item = Variable> + 'b {
         self.vars
             .iter()
             .filter(|(var, _)| other.vars.contains_key(*var))
@@ -1420,15 +1367,15 @@ impl<'a> BucketQueue<'a> {
 
 /// Build join headers from fast constraints and compute remaining constraints for planning.
 /// Returns (headers, remaining_constraints) tuple.
-fn plan_headers(
-    ctx: &PlanningContext,
+fn plan_headers<'a, 'b>(
+    ctx: &'b PlanningContext<'a>,
 ) -> (
     Vec<JoinHeader>,
     DenseIdMap<
         AtomId,
         (
             usize, /* The approx size of the subset matching the constraints. */
-            &Pooled<Vec<Constraint>>,
+            &'b Pooled<Vec<Constraint>>,
         ),
     >,
 ) {
@@ -1578,50 +1525,45 @@ fn get_next_freejoin_stage(
 }
 
 /// Plan generic join queries (one variable per stage).
+///
+/// Variables are visited in their natural id order. Runtime `sort_plan_by_size` reorders stages
+/// anyway, so static ordering only needs to be deterministic; [`fuse_single_scans`] collapses
+/// any same-atom single-scans afterwards regardless of where they ended up.
 fn plan_gj(
     ctx: &PlanningContext,
     state: &mut PlanningState,
-    remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
+    _remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
     stages: &mut Vec<JoinStage>,
 ) {
-    // First, map all variables to the size of the smallest atom in which they appear:
-    let mut min_sizes = Vec::with_capacity(ctx.vars.n_ids());
+    let mut planned_vars = Vec::with_capacity(ctx.vars.n_ids());
     let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
     for (var, var_info) in ctx.vars.iter() {
         let n_occs = var_info.occurrences.len();
-        if n_occs == 1 && !var_info.used_in_rhs {
-            // Do not plan this one. Unless (see below).
+        if n_occs == 0 {
+            // No occurrences: ignore (may be bound on the RHS or simply unused).
             continue;
         }
-        if let Some(min_size) = var_info
-            .occurrences
-            .iter()
-            .map(|subatom| {
-                atoms_hit.set(subatom.atom.index(), true);
-                remaining_constraints[subatom.atom].0
-            })
-            .min()
-        {
-            min_sizes.push((var, min_size, n_occs));
+        if n_occs == 1 && !var_info.used_in_rhs {
+            // Skip for now; we'll plan it below only if its atom is otherwise unmentioned.
+            continue;
         }
-        // If the variable has no ocurrences, it may be bound on the RHS of a
-        // rule (or it may just be unused). Either way, we will ignore it when
-        // planning the query.
+        for subatom in var_info.occurrences.iter() {
+            atoms_hit.set(subatom.atom.index(), true);
+        }
+        planned_vars.push(var);
     }
     for (var, var_info) in ctx.vars.iter() {
         if var_info.occurrences.len() == 1 && !var_info.used_in_rhs {
-            // We skipped this variable the first time around because it
-            // looks "unused". If it belongs to an atom that otherwise has
-            // gone unmentioned, though, we need to plan it anyway.
-            let atom = var_info.occurrences[0].atom;
-            if !atoms_hit.contains(atom.index()) {
-                min_sizes.push((var, remaining_constraints[atom].0, 1));
+            // The variable looks "unused" but we still need to touch its atom if nothing else
+            // has so the join visits every relation.
+            let subatom = &var_info.occurrences[0];
+            if !atoms_hit.contains(subatom.atom.index()) {
+                atoms_hit.set(subatom.atom.index(), true);
+                planned_vars.push(var);
             }
         }
     }
-    // Sort ascending by size, then descending by number of occurrences.
-    min_sizes.sort_by_key(|(_, size, occs)| (*size, -(*occs as i64)));
-    for (var, _, _) in min_sizes {
+    for var in planned_vars {
         let occ = ctx.vars[var].occurrences[0].clone();
         let mut info = StageInfo {
             cover: occ,
@@ -1633,47 +1575,9 @@ fn plan_gj(
                 .push((occ.clone(), smallvec![ColumnId::new(0); occ.vars.len()]));
         }
 
-        let next_stage = compile_stage(ctx, state, info);
-        if let Some(prev) = stages.last_mut()
-            && prev.fuse(&next_stage)
-        {
-            continue;
-        }
-        stages.push(next_stage);
+        stages.push(compile_stage(ctx, state, info));
     }
-    for i in 0..stages.len() {
-        if let JoinStage::FusedIntersect {
-            cover,
-            to_intersect,
-            ..
-        } = &stages[i]
-            && to_intersect.is_empty()
-        {
-            let cover_atom = cover.to_index.atom;
-            let mut used_later = false;
-            for later_stage in &stages[i + 1..] {
-                used_later = used_later
-                    || match later_stage {
-                        JoinStage::Intersect { scans, .. } => {
-                            scans.iter().any(|scan| scan.atom == cover_atom)
-                        }
-                        JoinStage::FusedIntersect { cover, .. } => {
-                            cover.to_index.atom == cover_atom
-                        }
-                        JoinStage::FusedIntersectMat { .. } => unreachable!(),
-                    };
-                if used_later {
-                    break;
-                }
-            }
-            if !used_later {
-                let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] else {
-                    unreachable!();
-                };
-                *is_leaf_scan = true;
-            }
-        }
-    }
+    fuse_single_scans(stages);
 }
 
 /// Compile a stage info into a concrete join stage, updating constraint state.
@@ -1747,6 +1651,5 @@ fn compile_stage(
         cover: cover_spec,
         bind,
         to_intersect,
-        is_leaf_scan: false,
     }
 }

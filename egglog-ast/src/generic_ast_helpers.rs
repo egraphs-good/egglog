@@ -159,37 +159,6 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_nullary_call_without_trailing_space() {
-        let expr = GenericExpr::<String, String>::Call(Span::Panic, "foo".into(), vec![]);
-
-        assert_eq!(expr.to_string(), "(foo)");
-    }
-
-    #[test]
-    fn display_nullary_change_without_trailing_space() {
-        let delete = GenericAction::<String, String>::Change(
-            Span::Panic,
-            Change::Delete,
-            "foo".into(),
-            vec![],
-        );
-        let subsume = GenericAction::<String, String>::Change(
-            Span::Panic,
-            Change::Subsume,
-            "foo".into(),
-            vec![],
-        );
-
-        assert_eq!(delete.to_string(), "(delete (foo))");
-        assert_eq!(subsume.to_string(), "(subsume (foo))");
-    }
-}
-
 impl<Head, Leaf> Default for GenericActions<Head, Leaf>
 where
     Head: Clone + Display,
@@ -774,5 +743,36 @@ impl Display for Literal {
             Literal::String(s) => write!(f, "\"{s}\""),
             Literal::Unit => write!(f, "()"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_nullary_call_without_trailing_space() {
+        let expr = GenericExpr::<String, String>::Call(Span::Panic, "foo".into(), vec![]);
+
+        assert_eq!(expr.to_string(), "(foo)");
+    }
+
+    #[test]
+    fn display_nullary_change_without_trailing_space() {
+        let delete = GenericAction::<String, String>::Change(
+            Span::Panic,
+            Change::Delete,
+            "foo".into(),
+            vec![],
+        );
+        let subsume = GenericAction::<String, String>::Change(
+            Span::Panic,
+            Change::Subsume,
+            "foo".into(),
+            vec![],
+        );
+
+        assert_eq!(delete.to_string(), "(delete (foo))");
+        assert_eq!(subsume.to_string(), "(subsume (foo))");
     }
 }

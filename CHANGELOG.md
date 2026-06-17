@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Fix custom schedulers so fresh matches ignore subsumed rows.
 - Fix custom schedulers so chosen or held matches are rechecked against the current rule body before actions run, preventing matches made stale by rebuild, subsumption, or deletion from firing.
 - Fix custom schedulers so multiple body-only witnesses for the same action key validate once, preventing duplicate action attempts and match counts for rules like `(rule ((A x y)) ((Hit x)))`.
@@ -12,6 +13,8 @@
 - Add a BigRat to-i64 primitive for integral rationals.
 - Add f64 exp, log, and sqrt primitives.
 - Add `RunReport::can_stop` so scheduler progress can be reported separately from database updates.
+- Add `EGraph::typecheck_expr_with_bindings_and_output`, `Core::eval_resolved_expr`, and `Core::apply_primitive` for body-defined primitive support, including normal command-path global rewrites for expressions typechecked through the helper.
+- Allow `unstable-fn` function containers to target primitive overloads.
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
 - **Typed primitive surface for seminaive safety (#772).** Custom primitives now pick one of `PurePrim` / `ReadPrim` / `WritePrim` / `FullPrim` based on what the body needs, and register via the matching `add_*_primitive`. Rust enforces capability bounds via the state wrapper passed to the body; the egglog typechecker enforces context bounds. See the `egglog::exec_state` module docs and the `*Prim` trait docs for the full picture. Migration: `rust_rule` callbacks now take `&mut WriteState` (replacing `RustRuleContext`); a new `rust_rule_full` gives action callbacks read access. Higher-order primitives over `unstable-fn` values dispatch via `state.apply_function(&fc, args)`.
