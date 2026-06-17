@@ -18,8 +18,10 @@ use crate::{
 
 /// A scheduler decides which matches to be applied for a rule.
 ///
-/// The matches that are not chosen in this iteration will be delayed
-/// to the next iteration.
+/// The matches that are not chosen in this iteration will be delayed to the
+/// next scheduler iteration. Before a delayed match can run actions later, the
+/// scheduler runner rechecks that the original rule body still has a
+/// non-subsumed witness for the chosen action key.
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     /// Whether or not the rules can be considered as saturated once no database
     /// changes were made in the current iteration.
@@ -108,6 +110,12 @@ impl Matches {
     }
 
     /// Apply the chosen matches and return the residual matches.
+    ///
+    /// Scheduler matches are keyed by the variables that appear in the rule
+    /// action. Body-only variables are witnesses for that key, so `A(1, 10)`
+    /// and `A(1, 20)` are the same scheduler key for `(rule ((A x y)) ((Hit
+    /// x)))`. Chosen and residual rows are deduplicated by key to keep one
+    /// witness per scheduler key.
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
@@ -297,6 +305,7 @@ impl EGraph {
         // query matches don't count
         query_report.updated = false;
         query_report.num_matches_per_rule.clear();
+        query_report.can_stop = true;
         // validation and cleanup only touch scheduler-internal tables
         validation_report.updated = false;
         validation_report.num_matches_per_rule.clear();
@@ -328,12 +337,17 @@ pub(crate) struct SchedulerRecord {
     rule_info: HashMap<String, SchedulerRuleInfo>,
 }
 
-/// To enable scheduling without modifying the backend, we split a rule into
-/// scheduler-internal worklist and validation relations plus four rules:
-/// (rule query (worklist vars false)),
-/// (rule (worklist vars false) query (validated vars false)),
-/// (rule (validated vars false) (action ...)), and
-/// (rule (worklist vars false) (delete ...)).
+/// To enable scheduling without modifying the backend, each scheduled rule is
+/// split into scheduler-internal `decided` and `validated` tables plus four
+/// backend rules:
+/// - query: `rule.body -> decided(vars, ())`
+/// - validation: `decided(vars, ()) + rule.body -> validated(vars, ())`
+/// - action: `validated(vars, ()) -> rule.head`
+/// - cleanup: `decided(vars, ()) -> remove decided/validated`
+///
+/// The trailing `()` column is the unit sentinel used by backend tables with a
+/// default value. The scheduler key itself is `vars`: the variables used by the
+/// rule actions.
 ///
 /// Scheduler keys are the variables used by the rule actions. Body-only
 /// variables are only witnesses that the key is currently valid. For example,
@@ -342,10 +356,13 @@ pub(crate) struct SchedulerRecord {
 /// `validated(x)` row before the action rule runs, instead of letting every
 /// body-only `y` witness run the same `Hit(1)` action.
 ///
-/// Validation also protects held matches. If a scheduler delays a key and a
-/// later rebuild, subsumption, or deletion makes the original body false, the
-/// validation rule will not produce a `validated` row. The cleanup rule still
-/// removes the stale worklist key so the scheduler does not keep carrying it.
+/// Validation also protects held matches. In a schedule such as
+/// `run-with bo rewrite; run analysis; run-with bo rewrite`, a persistent
+/// scheduler may delay a key during the first rewrite step. If the analysis step
+/// later subsumes or deletes the body witness, the validation rule will not
+/// produce a `validated` row and the stale key cannot fire user actions. The
+/// cleanup rule still removes the stale worklist key so the scheduler does not
+/// keep carrying it.
 #[derive(Clone)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
@@ -436,8 +453,9 @@ impl SchedulerRuleInfo {
         let qrule_id = qrule_builder.build();
 
         // Step 2: build the validation rule. This rechecks that the original
-        // body still has some witness for the chosen scheduler key, but writes
-        // only one keyed row even if body-only variables have multiple matches.
+        // body still has a non-subsumed witness for the chosen scheduler key,
+        // but writes only one keyed row even if body-only variables have
+        // multiple matches.
         // For `A(1, 10)` and `A(1, 20)`, a chosen `x = 1` key validates once.
         let mut validation_rule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),

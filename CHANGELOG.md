@@ -4,7 +4,7 @@
 
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Fix custom schedulers so fresh matches ignore subsumed rows.
-- Fix custom schedulers so chosen or held matches are rechecked against the current rule body before actions run, preventing matches made stale by rebuild, subsumption, or deletion from firing.
+- Fix custom schedulers so chosen or held matches are rechecked against the current rule body before actions run, preventing persistent scheduler keys made stale by subsumption or deletion from firing.
 - Fix custom schedulers so multiple body-only witnesses for the same action key validate once, preventing duplicate action attempts and match counts for rules like `(rule ((A x y)) ((Hit x)))`.
 - Fix custom scheduler cleanup so stale internal worklist rows are removed without reporting user-visible database updates or blocking `RunReport::can_stop`.
 - Report full source file paths in egglog span and error messages.
