@@ -8,13 +8,7 @@ use egglog_bridge::{
 use egglog_reports::RunReport;
 use numeric_id::define_id;
 
-use crate::{
-    ast::ResolvedVar,
-    core::GenericAtomTerm,
-    core::ResolvedCoreRule,
-    util::{IndexMap, IndexSet},
-    *,
-};
+use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
 
 /// A scheduler decides which matches to be applied for a rule.
 ///
@@ -119,17 +113,12 @@ impl Matches {
 
     /// Apply the chosen matches and return the residual matches.
     ///
-    /// Scheduler matches are keyed by the variables that appear in the rule
-    /// action. Body-only variables are witnesses for that key, so `A(1, 10)`
-    /// and `A(1, 20)` are the same scheduler key for `(rule ((A x y)) ((Hit
-    /// x)))`. Chosen and residual rows are deduplicated by key to keep one
-    /// witness per scheduler key.
-    ///
-    /// Chosen fresh keys came from the current rule-body query, so they are
+    /// Chosen fresh rows came from the current rule-body query, so they are
     /// already valid for this scheduler iteration and are inserted directly into
-    /// the action-ready table. Chosen held keys came from an earlier scheduler
+    /// the action-ready table. Chosen held rows came from an earlier scheduler
     /// iteration and must be revalidated against the current rule body before
-    /// actions run.
+    /// actions run. Rows that the scheduler does not choose are kept as the
+    /// held backlog for a later scheduler iteration.
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
@@ -140,13 +129,6 @@ impl Matches {
         let unit = state.base_values().get(());
         let match_size = self.match_size();
 
-        let fresh_keys = self
-            .matches
-            .chunks(tuple_len)
-            .skip(self.held_match_size)
-            .map(|row| row.to_vec())
-            .collect::<IndexSet<_>>();
-
         let chosen_indices = if self.all_chosen {
             (0..match_size).collect::<Vec<_>>()
         } else {
@@ -155,57 +137,27 @@ impl Matches {
             std::mem::take(&mut self.chosen)
         };
 
-        let mut chosen_keys = IndexMap::default();
+        let mut chose_held_matches = false;
         for idx in chosen_indices.iter().copied() {
             let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-            let key = row.to_vec();
-            let source = if fresh_keys.contains(&key) {
-                ChosenMatchSource::Fresh
+            if idx < self.held_match_size {
+                chose_held_matches = true;
+                needs_validation_action
+                    .insert(state, row.iter().copied().chain(std::iter::once(unit)));
             } else {
-                ChosenMatchSource::Held
-            };
-            chosen_keys
-                .entry(key)
-                .and_modify(|existing| {
-                    if source == ChosenMatchSource::Fresh {
-                        *existing = ChosenMatchSource::Fresh;
-                    }
-                })
-                .or_insert(source);
-        }
-
-        let mut chose_held_matches = false;
-        for (key, source) in &chosen_keys {
-            match source {
-                ChosenMatchSource::Fresh => {
-                    ready_action.insert(state, key.iter().copied().chain(std::iter::once(unit)));
-                }
-                ChosenMatchSource::Held => {
-                    chose_held_matches = true;
-                    needs_validation_action
-                        .insert(state, key.iter().copied().chain(std::iter::once(unit)));
-                }
+                ready_action.insert(state, row.iter().copied().chain(std::iter::once(unit)));
             }
         }
 
         let residual_matches = if self.all_chosen {
             vec![]
         } else {
-            // A chosen key consumes all indistinguishable body-only witnesses for
-            // that key; otherwise a duplicate witness can be revalidated later.
             let mut residual = Vec::new();
-            let mut residual_keys = IndexSet::default();
             for (idx, row) in self.matches.chunks(tuple_len).enumerate() {
                 if chosen_indices.binary_search(&idx).is_ok() {
                     continue;
                 }
-                let key = row.to_vec();
-                if chosen_keys.contains_key(&key) {
-                    continue;
-                }
-                if residual_keys.insert(key) {
-                    residual.extend_from_slice(row);
-                }
+                residual.extend_from_slice(row);
             }
 
             residual
@@ -214,15 +166,9 @@ impl Matches {
         InstantiatedMatches {
             residual_matches,
             chose_held_matches,
-            chose_any_matches: !chosen_keys.is_empty(),
+            chose_any_matches: !chosen_indices.is_empty(),
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ChosenMatchSource {
-    Held,
-    Fresh,
 }
 
 struct InstantiatedMatches {
@@ -420,13 +366,7 @@ pub(crate) struct SchedulerRecord {
 /// default value. The scheduler key itself is `vars`: the variables used by the
 /// rule actions.
 ///
-/// Scheduler keys are the variables used by the rule actions. Body-only
-/// variables are only witnesses that the key is currently valid. For example,
-/// `(rule ((A x y)) ((Hit x)))` can have `A(1, 10)` and `A(1, 20)`, but the
-/// scheduler key is only `x = 1`. Chosen and residual keys are deduplicated so
-/// `Hit(1)` runs once instead of once for every body-only `y` witness.
-///
-/// Validation also protects held matches. In a schedule such as
+/// Validation protects held matches. In a schedule such as
 /// `run-with bo rewrite; run analysis; run-with bo rewrite`, a persistent
 /// scheduler may delay a key during the first rewrite step. If the analysis step
 /// later subsumes or deletes the body witness, the validation rule will not
@@ -684,21 +624,6 @@ mod test {
         }
     }
 
-    #[derive(Clone, Default)]
-    struct ChooseFirstScheduler {
-        match_sizes: Arc<Mutex<Vec<usize>>>,
-    }
-
-    impl Scheduler for ChooseFirstScheduler {
-        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
-            self.match_sizes.lock().unwrap().push(matches.match_size());
-            if matches.match_size() > 0 {
-                matches.choose(0);
-            }
-            false
-        }
-    }
-
     #[test]
     fn test_first_n_scheduler() {
         let mut egraph = EGraph::default();
@@ -800,91 +725,6 @@ mod test {
         assert!(
             !report.updated,
             "scheduled rules should not report progress from subsumed-row matches"
-        );
-    }
-
-    /// A fresh chosen scheduler key should not duplicate user actions for
-    /// multiple body-only witnesses or run the held-key validation path.
-    ///
-    /// In `(rule ((A x y)) ((Hit x)))`, `y` proves that the body matches but
-    /// does not appear in the action key. With `A(1, 10)` and `A(1, 20)`, a
-    /// scheduler can choose one `x = 1` key. The key came from the current
-    /// query, so it can go straight to the action-ready table. The duplicate
-    /// body witnesses must still collapse to one action attempt, and the report
-    /// should contain query/action/cleanup iterations with no validation
-    /// iteration.
-    #[test]
-    fn test_scheduler_fresh_choice_deduplicates_body_only_witnesses_without_validation() {
-        let mut egraph = EGraph::default();
-        let match_sizes = Arc::new(Mutex::new(Vec::new()));
-        let scheduler_id = egraph.add_scheduler(Box::new(ChooseFirstScheduler {
-            match_sizes: match_sizes.clone(),
-        }));
-        let input = r#"
-        (ruleset test)
-        (relation A (i64 i64))
-        (relation Hit (i64))
-        (A 1 10)
-        (A 1 20)
-        (rule ((A x y)) ((Hit x)) :ruleset test :name "hit")
-        "#;
-        egraph.parse_and_run_program(None, input).unwrap();
-
-        let report = egraph
-            .step_rules_with_scheduler(scheduler_id, "test")
-            .unwrap();
-
-        assert_eq!(*match_sizes.lock().unwrap(), vec![2]);
-        assert_eq!(egraph.get_size("Hit"), 1);
-        assert_eq!(report.num_matches_per_rule["hit"], 1);
-        assert_eq!(
-            report.iterations.len(),
-            3,
-            "fresh chosen keys should skip the held-key validation phase"
-        );
-    }
-
-    /// Duplicate body-only witnesses should not leave duplicate scheduler keys
-    /// in the residual backlog.
-    ///
-    /// The first step chooses `x = 1` from two indistinguishable body witnesses.
-    /// The duplicate residual key must be discarded; otherwise a second scheduler
-    /// step would try the same key again and count another `Hit(1)` action
-    /// attempt even though the user-visible row already exists.
-    #[test]
-    fn test_scheduler_deduplicates_residual_body_only_witnesses() {
-        let mut egraph = EGraph::default();
-        let match_sizes = Arc::new(Mutex::new(Vec::new()));
-        let scheduler_id = egraph.add_scheduler(Box::new(ChooseFirstScheduler {
-            match_sizes: match_sizes.clone(),
-        }));
-        let input = r#"
-        (ruleset test)
-        (relation A (i64 i64))
-        (relation Hit (i64))
-        (A 1 10)
-        (A 1 20)
-        (rule ((A x y)) ((Hit x)) :ruleset test :name "hit")
-        "#;
-        egraph.parse_and_run_program(None, input).unwrap();
-
-        let first = egraph
-            .step_rules_with_scheduler(scheduler_id, "test")
-            .unwrap();
-        let second = egraph
-            .step_rules_with_scheduler(scheduler_id, "test")
-            .unwrap();
-
-        assert_eq!(*match_sizes.lock().unwrap(), vec![2, 0]);
-        assert_eq!(egraph.get_size("Hit"), 1);
-        assert_eq!(first.num_matches_per_rule["hit"], 1);
-        assert_eq!(
-            second
-                .num_matches_per_rule
-                .get("hit")
-                .copied()
-                .unwrap_or_default(),
-            0
         );
     }
 
