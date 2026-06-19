@@ -42,6 +42,7 @@ pub struct Matches {
     matches: Vec<Value>,
     chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
+    held_match_size: usize,
     all_chosen: bool,
 }
 
@@ -61,14 +62,16 @@ impl Match<'_> {
 }
 
 impl Matches {
-    fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>) -> Self {
+    fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>, held_match_size: usize) -> Self {
         let total_len = matches.len();
         let tuple_len = vars.len();
         assert!(total_len.is_multiple_of(tuple_len));
+        assert!(held_match_size <= total_len / tuple_len);
         Self {
             matches,
             vars,
             chosen: Vec::new(),
+            held_match_size,
             all_chosen: false,
         }
     }
@@ -105,34 +108,45 @@ impl Matches {
 
     /// Apply the chosen matches and return the residual matches.
     ///
-    /// Chosen rows are inserted into the scheduler worklist. The action rule
-    /// later rechecks the original rule body before user actions run, because a
-    /// row held from an earlier scheduler iteration can become stale after
-    /// subsumption or deletion.
+    /// Chosen fresh rows came from this scheduler iteration's body query, so
+    /// they go straight into the action-ready table. Chosen held rows came from
+    /// an earlier iteration and must recheck the original rule body before user
+    /// actions run.
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
-        table_action: &TableAction,
-    ) -> Vec<Value> {
+        needs_validation_action: &TableAction,
+        ready_action: &TableAction,
+    ) -> InstantiatedMatches {
         let tuple_len = self.tuple_len();
         let unit = state.base_values().get(());
+        let match_size = self.match_size();
 
-        if self.all_chosen {
-            for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
-            }
-            vec![]
+        let chosen_indices = if self.all_chosen {
+            (0..match_size).collect::<Vec<_>>()
         } else {
-            for idx in self.chosen.iter() {
-                let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
-            }
-
-            // swap remove the chosen matches
             self.chosen.sort_unstable();
             self.chosen.dedup();
+            std::mem::take(&mut self.chosen)
+        };
+
+        let mut chose_held_matches = false;
+        for idx in chosen_indices.iter().copied() {
+            let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
+            if idx < self.held_match_size {
+                chose_held_matches = true;
+                needs_validation_action
+                    .insert(state, row.iter().copied().chain(std::iter::once(unit)));
+            } else {
+                ready_action.insert(state, row.iter().copied().chain(std::iter::once(unit)));
+            }
+        }
+
+        let residual_matches = if self.all_chosen {
+            vec![]
+        } else {
             let mut p = self.match_size();
-            for c in self.chosen.into_iter().rev() {
+            for c in chosen_indices.iter().copied().rev() {
                 // It's important to decrement `p` first, because otherwise it might underflow when
                 // matches are exhausted.
                 p -= 1;
@@ -147,8 +161,20 @@ impl Matches {
             self.matches.truncate(p * tuple_len);
 
             self.matches
+        };
+
+        InstantiatedMatches {
+            residual_matches,
+            chose_held_matches,
+            chose_any_matches: !chosen_indices.is_empty(),
         }
     }
+}
+
+struct InstantiatedMatches {
+    residual_matches: Vec<Value>,
+    chose_held_matches: bool,
+    chose_any_matches: bool,
 }
 
 define_id!(
@@ -200,7 +226,7 @@ impl EGraph {
         collect_rules(ruleset, &rulesets, &mut rules);
         let mut schedulers = std::mem::take(&mut self.schedulers);
 
-        // Step 1: build all the query/action rules and worklist if have not already
+        // Step 1: build the scheduler helper rules if they do not exist yet
         let record = &mut schedulers[scheduler_id];
         rules.iter().for_each(|(id, rule)| {
             record
@@ -208,6 +234,17 @@ impl EGraph {
                 .entry((*id).to_owned())
                 .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
         });
+
+        // The query rule appends fresh rows to `matches`, so record the current
+        // backlog length first. Rows before this boundary are held from an
+        // earlier scheduler iteration and need validation if chosen.
+        for (rule_id, _rule) in rules.iter() {
+            let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+            let tuple_len = rule_info.free_vars.len();
+            let matches = rule_info.matches.lock().unwrap();
+            assert!(matches.len().is_multiple_of(tuple_len));
+            rule_info.held_match_size = matches.len() / tuple_len;
+        }
 
         // Step 2: run all the queries for one iteration
         let query_rules = rules
@@ -229,59 +266,76 @@ impl EGraph {
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 3: let the scheduler decide which matches need to be kept
+        let mut validation_rules = Vec::new();
+        let mut action_rules = Vec::new();
+        let mut cleanup_rules = Vec::new();
         self.backend.with_execution_state(|state| {
             for (rule_id, _rule) in rules.iter() {
                 let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
                 let matches: Vec<Value> =
                     std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+                let mut matches = Matches::new(
+                    matches,
+                    rule_info.free_vars.clone(),
+                    rule_info.held_match_size,
+                );
                 rule_info.should_seek =
                     record
                         .scheduler
                         .filter_matches(rule_id, ruleset, &mut matches);
-                let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
+                let needs_validation_action =
+                    TableAction::new(&self.backend, rule_info.needs_validation);
+                let ready_action = TableAction::new(&self.backend, rule_info.ready);
+                let instantiated =
+                    matches.instantiate(state, &needs_validation_action, &ready_action);
+                *rule_info.matches.lock().unwrap() = instantiated.residual_matches;
+                if instantiated.chose_held_matches {
+                    validation_rules.push(rule_info.validation_rule);
+                    cleanup_rules.push(rule_info.cleanup_needs_validation_rule);
+                }
+                if instantiated.chose_any_matches {
+                    cleanup_rules.push(rule_info.cleanup_ready_rule);
+                }
+                action_rules.push(rule_info.action_rule);
             }
         });
         self.backend.flush_updates();
 
-        // Step 4: recheck chosen matches and run user actions. The cleanup rule
-        // runs separately so stale matches are removed even when the body
-        // recheck does not match.
-        let action_rules = rules
-            .iter()
-            .map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-                rule_info.action_rule
-            })
-            .collect::<Vec<_>>();
+        // Step 4: recheck held chosen matches and run action-ready matches.
+        // Fresh chosen matches skip validation because they came from this
+        // iteration's rule-body query.
+        let validation_iter_report = (!validation_rules.is_empty())
+            .then(|| self.backend.run_rules(&validation_rules))
+            .transpose()
+            .map_err(|e| Error::BackendError(e.to_string()))?;
         let action_iter_report = self
             .backend
             .run_rules(&action_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
-        let cleanup_rules = rules
-            .iter()
-            .map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-                rule_info.cleanup_rule
-            })
-            .collect::<Vec<_>>();
-        let cleanup_iter_report = self
-            .backend
-            .run_rules(&cleanup_rules)
+        let cleanup_iter_report = (!cleanup_rules.is_empty())
+            .then(|| self.backend.run_rules(&cleanup_rules))
+            .transpose()
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 5: combine the reports
         let mut query_report = RunReport::singleton(ruleset, query_iter_report);
+        let mut validation_report = validation_iter_report
+            .map(|report| RunReport::singleton(ruleset, report))
+            .unwrap_or_default();
         let mut action_report = RunReport::singleton(ruleset, action_iter_report);
-        let mut cleanup_report = RunReport::singleton(ruleset, cleanup_iter_report);
+        let mut cleanup_report = cleanup_iter_report
+            .map(|report| RunReport::singleton(ruleset, report))
+            .unwrap_or_default();
 
         // query matches don't count
         query_report.updated = false;
         query_report.num_matches_per_rule.clear();
         query_report.can_stop = true;
-        // cleanup only touches scheduler-internal tables
+        // validation and cleanup only touch scheduler-internal tables
+        validation_report.updated = false;
+        validation_report.num_matches_per_rule.clear();
+        validation_report.can_stop = true;
         cleanup_report.updated = false;
         cleanup_report.num_matches_per_rule.clear();
         cleanup_report.can_stop = true;
@@ -292,6 +346,7 @@ impl EGraph {
             record.scheduler.can_stop(&rule_ids, ruleset)
         };
 
+        query_report.union(validation_report);
         query_report.union(action_report);
         query_report.union(cleanup_report);
 
@@ -309,10 +364,12 @@ pub(crate) struct SchedulerRecord {
 }
 
 /// To enable scheduling without modifying the backend, each scheduled rule is
-/// split into a scheduler-internal worklist plus backend rules:
+/// split into scheduler-internal validation and action-ready tables plus
+/// backend rules:
 /// - query: `rule.body -> fresh scheduler keys`
-/// - action: `decided(vars, ()) + rule.body -> rule.head`
-/// - cleanup: remove `decided` rows
+/// - validation: `needs_validation(vars, ()) + rule.body -> ready(vars, ())`
+/// - action: `ready(vars, ()) -> rule.head`
+/// - cleanup: remove temporary scheduler rows
 ///
 /// The trailing `()` column is the unit sentinel used by backend tables with a
 /// default value. The scheduler key itself is `vars`: the variables used by the
@@ -321,16 +378,21 @@ pub(crate) struct SchedulerRecord {
 /// Rechecking `rule.body` protects held matches. In a schedule such as
 /// `run-with bo rewrite; run analysis; run-with bo rewrite`, a persistent
 /// scheduler may delay a key during the first rewrite step. If the analysis
-/// step later subsumes or deletes the body witness, the action rule will not
-/// match and the stale key cannot fire user actions.
+/// step later subsumes or deletes the body witness, validation will not produce
+/// a `ready` row and the stale key cannot fire user actions. Fresh keys skip
+/// validation because they came from the current rule-body query.
 #[derive(Clone)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
+    held_match_size: usize,
     should_seek: bool,
-    decided: FunctionId,
+    needs_validation: FunctionId,
+    ready: FunctionId,
     query_rule: RuleId,
+    validation_rule: RuleId,
     action_rule: RuleId,
-    cleanup_rule: RuleId,
+    cleanup_needs_validation_rule: RuleId,
+    cleanup_ready_rule: RuleId,
     free_vars: Vec<ResolvedVar>,
 }
 
@@ -370,12 +432,19 @@ impl SchedulerRuleInfo {
         let collect_matches = egraph
             .backend
             .register_external_func(Box::new(CollectMatches::new(matches.clone())));
-        let schema = free_vars
+        let schema: Vec<_> = free_vars
             .iter()
             .map(|v| v.sort.column_ty(&egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
-        let decided = egraph.backend.add_table(FunctionConfig {
+        let needs_validation = egraph.backend.add_table(FunctionConfig {
+            schema: schema.clone(),
+            default: DefaultVal::Const(unit),
+            merge: MergeFn::AssertEq,
+            name: "backend".to_string(),
+            can_subsume: false,
+        });
+        let ready = egraph.backend.add_table(FunctionConfig {
             schema,
             default: DefaultVal::Const(unit),
             merge: MergeFn::AssertEq,
@@ -404,8 +473,29 @@ impl SchedulerRuleInfo {
         );
         let qrule_id = qrule_builder.build();
 
-        // Step 2: build the action rule. Chosen scheduler rows recheck the
-        // original body here, so stale held rows cannot fire user actions.
+        // Step 2: build the validation rule. Only held keys use this rule; fresh
+        // keys came from this iteration's query and go straight to `ready`.
+        let mut validation_rule_builder = BackendRule::new(
+            egraph.backend.new_rule(name, false),
+            &egraph.functions,
+            &egraph.type_info,
+            true, // seminaive rule context for rechecking the original body
+        );
+        let mut entries = free_vars
+            .iter()
+            .map(|fv| validation_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .collect::<Vec<_>>();
+        entries.push(unit_entry.clone());
+        validation_rule_builder
+            .rb
+            .query_table(needs_validation, &entries, None)
+            .unwrap();
+        validation_rule_builder.query(&rule.body, false);
+        validation_rule_builder.rb.set(ready, &entries);
+        let validation_rule = validation_rule_builder.build();
+
+        // Step 3: build the action rule. Fresh chosen keys and validated held
+        // keys both flow through `ready`.
         let mut arule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
@@ -417,17 +507,13 @@ impl SchedulerRuleInfo {
             .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
         entries.push(unit_entry.clone());
-        arule_builder
-            .rb
-            .query_table(decided, &entries, None)
-            .unwrap();
-        arule_builder.query(&rule.body, false);
+        arule_builder.rb.query_table(ready, &entries, None).unwrap();
         arule_builder.actions(&rule.head).unwrap();
         let arule_id = arule_builder.build();
 
-        // Cleanup is separate from the action rule so stale rows are removed
-        // even when the body recheck fails.
-        let mut cleanup_rule_builder = BackendRule::new(
+        // Cleanup is separate from validation and action rules so internal
+        // scheduler rows do not count as user-visible progress.
+        let mut cleanup_needs_validation_rule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
@@ -435,24 +521,52 @@ impl SchedulerRuleInfo {
         );
         let mut entries = free_vars
             .iter()
-            .map(|fv| cleanup_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .map(|fv| {
+                cleanup_needs_validation_rule_builder
+                    .entry(&GenericAtomTerm::Var(span!(), fv.clone()))
+            })
             .collect::<Vec<_>>();
-        entries.push(unit_entry);
-        cleanup_rule_builder
+        entries.push(unit_entry.clone());
+        cleanup_needs_validation_rule_builder
             .rb
-            .query_table(decided, &entries, None)
+            .query_table(needs_validation, &entries, None)
             .unwrap();
         entries.pop();
-        cleanup_rule_builder.rb.remove(decided, &entries);
-        let cleanup_rule = cleanup_rule_builder.build();
+        cleanup_needs_validation_rule_builder
+            .rb
+            .remove(needs_validation, &entries);
+        let cleanup_needs_validation_rule = cleanup_needs_validation_rule_builder.build();
+
+        let mut cleanup_ready_rule_builder = BackendRule::new(
+            egraph.backend.new_rule(name, false),
+            &egraph.functions,
+            &egraph.type_info,
+            false, // scheduler maintenance rule with no user body/actions
+        );
+        let mut entries = free_vars
+            .iter()
+            .map(|fv| cleanup_ready_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .collect::<Vec<_>>();
+        entries.push(unit_entry);
+        cleanup_ready_rule_builder
+            .rb
+            .query_table(ready, &entries, None)
+            .unwrap();
+        entries.pop();
+        cleanup_ready_rule_builder.rb.remove(ready, &entries);
+        let cleanup_ready_rule = cleanup_ready_rule_builder.build();
 
         SchedulerRuleInfo {
             free_vars,
             query_rule: qrule_id,
+            validation_rule,
             action_rule: arule_id,
-            cleanup_rule,
+            cleanup_needs_validation_rule,
+            cleanup_ready_rule,
             matches,
-            decided,
+            held_match_size: 0,
+            needs_validation,
+            ready,
             should_seek: true,
         }
     }
@@ -620,8 +734,8 @@ mod test {
     /// The scheduler first holds the match instead of choosing it. After the
     /// analysis rules subsume the matched expression, the held key is still in
     /// scheduler state but the original body is no longer true. The validation
-    /// rule rejects that key, and the cleanup rule removes it so no stale
-    /// worklist tuple remains.
+    /// rule produces no `ready` row for that key, and cleanup removes the
+    /// scheduler-internal validation tuple.
     #[test]
     fn test_scheduler_drops_held_matches_that_become_subsumed() {
         let mut egraph = EGraph::default();
