@@ -149,24 +149,33 @@ impl Matches {
             }
         }
 
+        let chose_any_matches = !chosen_indices.is_empty();
         let residual_matches = if self.all_chosen {
             vec![]
         } else {
-            let mut residual = Vec::new();
-            for (idx, row) in self.matches.chunks(tuple_len).enumerate() {
-                if chosen_indices.binary_search(&idx).is_ok() {
-                    continue;
+            // swap remove the chosen matches
+            let mut p = match_size;
+            for c in chosen_indices.into_iter().rev() {
+                // It's important to decrement `p` first, because otherwise it might underflow when
+                // matches are exhausted.
+                p -= 1;
+                if c != p {
+                    let idx_c = c * tuple_len;
+                    let idx_p = p * tuple_len;
+                    for i in 0..tuple_len {
+                        self.matches.swap(idx_c + i, idx_p + i);
+                    }
                 }
-                residual.extend_from_slice(row);
             }
+            self.matches.truncate(p * tuple_len);
 
-            residual
+            self.matches
         };
 
         InstantiatedMatches {
             residual_matches,
             chose_held_matches,
-            chose_any_matches: !chosen_indices.is_empty(),
+            chose_any_matches,
         }
     }
 }
@@ -256,7 +265,6 @@ impl EGraph {
 
         // Step 3: let the scheduler decide which matches need to be kept
         let mut validation_rules = Vec::new();
-        let mut action_rules = Vec::new();
         let mut cleanup_rules = Vec::new();
         self.backend.with_execution_state(|state| {
             for (rule_id, _rule) in rules.iter() {
@@ -282,7 +290,6 @@ impl EGraph {
                     cleanup_rules.push(rule_info.cleanup_needs_validation_rule);
                 }
                 if instantiated.chose_any_matches {
-                    action_rules.push(rule_info.action_rule);
                     cleanup_rules.push(rule_info.cleanup_ready_rule);
                 }
             }
@@ -298,9 +305,16 @@ impl EGraph {
             .then(|| self.backend.run_rules(&validation_rules))
             .transpose()
             .map_err(|e| Error::BackendError(e.to_string()))?;
-        let action_iter_report = (!action_rules.is_empty())
-            .then(|| self.backend.run_rules(&action_rules))
-            .transpose()
+        let action_rules = rules
+            .iter()
+            .map(|(rule_id, _rule)| {
+                let rule_info = record.rule_info.get(rule_id).unwrap();
+                rule_info.action_rule
+            })
+            .collect::<Vec<_>>();
+        let action_iter_report = self
+            .backend
+            .run_rules(&action_rules)
             .map_err(|e| Error::BackendError(e.to_string()))?;
         let cleanup_iter_report = (!cleanup_rules.is_empty())
             .then(|| self.backend.run_rules(&cleanup_rules))
@@ -312,9 +326,7 @@ impl EGraph {
         let mut validation_report = validation_iter_report
             .map(|report| RunReport::singleton(ruleset, report))
             .unwrap_or_default();
-        let mut action_report = action_iter_report
-            .map(|report| RunReport::singleton(ruleset, report))
-            .unwrap_or_default();
+        let mut action_report = RunReport::singleton(ruleset, action_iter_report);
         let mut cleanup_report = cleanup_iter_report
             .map(|report| RunReport::singleton(ruleset, report))
             .unwrap_or_default();
@@ -652,12 +664,8 @@ mod test {
 
             let expected_matches = if iter <= 10 { 10 } else { 12 - iter };
             assert_eq!(
-                report
-                    .num_matches_per_rule
-                    .get("test-rule")
-                    .copied()
-                    .unwrap_or_default(),
-                expected_matches
+                report.num_matches_per_rule.iter().collect::<Vec<_>>(),
+                [(&"test-rule".into(), &expected_matches)]
             );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
