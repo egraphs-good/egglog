@@ -3,7 +3,7 @@
 ## [Unreleased] - ReleaseDate
 
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
-- Fix custom schedulers so stale matches from subsumed or deleted rows are dropped before actions run, without reporting scheduler worklist cleanup as user-visible progress.
+- Fix custom schedulers so stale matches from subsumed or deleted rows are dropped before actions run.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.
 - Render nullary AST calls without a trailing space, e.g. (foo) instead of (foo ).
