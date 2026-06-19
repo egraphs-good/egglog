@@ -246,20 +246,9 @@ impl EGraph {
         });
         self.backend.flush_updates();
 
-        // Step 4: recheck chosen matches and run user actions. Validation
-        // writes each still-valid scheduler row once to `validated` before
-        // user actions run.
-        let validation_rules = rules
-            .iter()
-            .map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-                rule_info.validation_rule
-            })
-            .collect::<Vec<_>>();
-        let validation_iter_report = self
-            .backend
-            .run_rules(&validation_rules)
-            .map_err(|e| Error::BackendError(e.to_string()))?;
+        // Step 4: recheck chosen matches and run user actions. The cleanup rule
+        // runs separately so stale matches are removed even when the body
+        // recheck does not match.
         let action_rules = rules
             .iter()
             .map(|(rule_id, _rule)| {
@@ -273,12 +262,9 @@ impl EGraph {
             .map_err(|e| Error::BackendError(e.to_string()))?;
         let cleanup_rules = rules
             .iter()
-            .flat_map(|(rule_id, _rule)| {
+            .map(|(rule_id, _rule)| {
                 let rule_info = record.rule_info.get(rule_id).unwrap();
-                [
-                    rule_info.cleanup_decided_rule,
-                    rule_info.cleanup_validated_rule,
-                ]
+                rule_info.cleanup_rule
             })
             .collect::<Vec<_>>();
         let cleanup_iter_report = self
@@ -288,7 +274,6 @@ impl EGraph {
 
         // Step 5: combine the reports
         let mut query_report = RunReport::singleton(ruleset, query_iter_report);
-        let mut validation_report = RunReport::singleton(ruleset, validation_iter_report);
         let mut action_report = RunReport::singleton(ruleset, action_iter_report);
         let mut cleanup_report = RunReport::singleton(ruleset, cleanup_iter_report);
 
@@ -296,10 +281,7 @@ impl EGraph {
         query_report.updated = false;
         query_report.num_matches_per_rule.clear();
         query_report.can_stop = true;
-        // validation and cleanup only touch scheduler-internal tables
-        validation_report.updated = false;
-        validation_report.num_matches_per_rule.clear();
-        validation_report.can_stop = true;
+        // cleanup only touches scheduler-internal tables
         cleanup_report.updated = false;
         cleanup_report.num_matches_per_rule.clear();
         cleanup_report.can_stop = true;
@@ -310,7 +292,6 @@ impl EGraph {
             record.scheduler.can_stop(&rule_ids, ruleset)
         };
 
-        query_report.union(validation_report);
         query_report.union(action_report);
         query_report.union(cleanup_report);
 
@@ -330,9 +311,8 @@ pub(crate) struct SchedulerRecord {
 /// To enable scheduling without modifying the backend, each scheduled rule is
 /// split into a scheduler-internal worklist plus backend rules:
 /// - query: `rule.body -> fresh scheduler keys`
-/// - validation: `decided(vars, ()) + rule.body -> validated(vars, ())`
-/// - action: `validated(vars, ()) -> rule.head`
-/// - cleanup: remove `decided` and `validated` rows
+/// - action: `decided(vars, ()) + rule.body -> rule.head`
+/// - cleanup: remove `decided` rows
 ///
 /// The trailing `()` column is the unit sentinel used by backend tables with a
 /// default value. The scheduler key itself is `vars`: the variables used by the
@@ -341,18 +321,16 @@ pub(crate) struct SchedulerRecord {
 /// Rechecking `rule.body` protects held matches. In a schedule such as
 /// `run-with bo rewrite; run analysis; run-with bo rewrite`, a persistent
 /// scheduler may delay a key during the first rewrite step. If the analysis
-/// step later subsumes or deletes the body witness, validation will not produce
-/// a `validated` row and the stale key cannot fire user actions.
+/// step later subsumes or deletes the body witness, the action rule will not
+/// match and the stale key cannot fire user actions.
 #[derive(Clone)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
     should_seek: bool,
     decided: FunctionId,
     query_rule: RuleId,
-    validation_rule: RuleId,
     action_rule: RuleId,
-    cleanup_decided_rule: RuleId,
-    cleanup_validated_rule: RuleId,
+    cleanup_rule: RuleId,
     free_vars: Vec<ResolvedVar>,
 }
 
@@ -396,15 +374,8 @@ impl SchedulerRuleInfo {
             .iter()
             .map(|v| v.sort.column_ty(&egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
-            .collect::<Vec<_>>();
+            .collect();
         let decided = egraph.backend.add_table(FunctionConfig {
-            schema: schema.clone(),
-            default: DefaultVal::Const(unit),
-            merge: MergeFn::AssertEq,
-            name: "backend".to_string(),
-            can_subsume: false,
-        });
-        let validated = egraph.backend.add_table(FunctionConfig {
             schema,
             default: DefaultVal::Const(unit),
             merge: MergeFn::AssertEq,
@@ -433,29 +404,8 @@ impl SchedulerRuleInfo {
         );
         let qrule_id = qrule_builder.build();
 
-        // Step 2: build the validation rule. Chosen scheduler rows recheck the
-        // original body here. Multiple body witnesses for the same scheduler row
-        // collapse to one `validated` row before user actions run.
-        let mut validation_rule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, false),
-            &egraph.functions,
-            &egraph.type_info,
-            false, // seminaive off for scheduler action rule
-        );
-        let mut entries = free_vars
-            .iter()
-            .map(|fv| validation_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
-            .collect::<Vec<_>>();
-        entries.push(unit_entry.clone());
-        validation_rule_builder
-            .rb
-            .query_table(decided, &entries, None)
-            .unwrap();
-        validation_rule_builder.query(&rule.body, false);
-        validation_rule_builder.rb.set(validated, &entries);
-        let validation_rule = validation_rule_builder.build();
-
-        // Step 3: build the action rule.
+        // Step 2: build the action rule. Chosen scheduler rows recheck the
+        // original body here, so stale held rows cannot fire user actions.
         let mut arule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
@@ -469,15 +419,15 @@ impl SchedulerRuleInfo {
         entries.push(unit_entry.clone());
         arule_builder
             .rb
-            .query_table(validated, &entries, None)
+            .query_table(decided, &entries, None)
             .unwrap();
+        arule_builder.query(&rule.body, false);
         arule_builder.actions(&rule.head).unwrap();
         let arule_id = arule_builder.build();
 
-        // Cleanup is separate from validation and action rules so stale rows are
-        // removed even when the body recheck fails, and internal table changes
-        // can be hidden from the user-facing report.
-        let mut cleanup_decided_rule_builder = BackendRule::new(
+        // Cleanup is separate from the action rule so stale rows are removed
+        // even when the body recheck fails.
+        let mut cleanup_rule_builder = BackendRule::new(
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
@@ -485,49 +435,22 @@ impl SchedulerRuleInfo {
         );
         let mut entries = free_vars
             .iter()
-            .map(|fv| {
-                cleanup_decided_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone()))
-            })
+            .map(|fv| cleanup_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
-        entries.push(unit_entry.clone());
-        cleanup_decided_rule_builder
+        entries.push(unit_entry);
+        cleanup_rule_builder
             .rb
             .query_table(decided, &entries, None)
             .unwrap();
         entries.pop();
-        cleanup_decided_rule_builder.rb.remove(decided, &entries);
-        let cleanup_decided_rule = cleanup_decided_rule_builder.build();
-
-        let mut cleanup_validated_rule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, false),
-            &egraph.functions,
-            &egraph.type_info,
-            false, // scheduler maintenance rule with no user body/actions
-        );
-        let mut entries = free_vars
-            .iter()
-            .map(|fv| {
-                cleanup_validated_rule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone()))
-            })
-            .collect::<Vec<_>>();
-        entries.push(unit_entry);
-        cleanup_validated_rule_builder
-            .rb
-            .query_table(validated, &entries, None)
-            .unwrap();
-        entries.pop();
-        cleanup_validated_rule_builder
-            .rb
-            .remove(validated, &entries);
-        let cleanup_validated_rule = cleanup_validated_rule_builder.build();
+        cleanup_rule_builder.rb.remove(decided, &entries);
+        let cleanup_rule = cleanup_rule_builder.build();
 
         SchedulerRuleInfo {
             free_vars,
             query_rule: qrule_id,
-            validation_rule,
             action_rule: arule_id,
-            cleanup_decided_rule,
-            cleanup_validated_rule,
+            cleanup_rule,
             matches,
             decided,
             should_seek: true,
