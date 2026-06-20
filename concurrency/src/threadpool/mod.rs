@@ -752,6 +752,20 @@ unsafe fn erase_job_lifetime<'scope>(job: ScopedJob<'scope>) -> Job {
     unsafe { mem::transmute::<ScopedJob<'scope>, Job>(job) }
 }
 
+/// A short-lived queue consumer that replaces a blocked background worker.
+///
+/// Scoped work may itself open a nested scope. If the worker running that outer
+/// job blocks waiting for the nested scope to finish, the pool has one fewer
+/// thread draining the shared job queue. With a one-thread pool, that would
+/// deadlock: the only primary worker would be asleep while the nested job it is
+/// waiting for is still queued. `BackupWorker` temporarily clones the pool's
+/// receiver, installs the same current-pool and background-worker thread-local
+/// state as a primary worker, and runs queued jobs until the blocked worker
+/// finishes waiting.
+///
+/// The guard owns a shutdown channel and joins the spawned thread on drop, so a
+/// backup worker is tied to exactly one blocking wait. It also exits if the pool
+/// work channel is closed.
 struct BackupWorker {
     shutdown: Sender<()>,
     worker: Option<JoinHandle<()>>,
