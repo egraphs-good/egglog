@@ -138,7 +138,7 @@ impl ProofStore {
     /// (its rhs equals the inner proof's rhs).
     fn opt_redundant_container_axiom(&mut self, proof_id: ProofId) -> Option<ProofId> {
         let proof = self.get(proof_id);
-        if let Justification::ContainerAxiom { proof: inner, .. } = proof.justification()
+        if let Justification::ContainerAxiom { proof: inner } = proof.justification()
             && proof.rhs() == self.get(*inner).rhs()
         {
             return Some(*inner);
@@ -321,7 +321,7 @@ impl ProofStore {
                     changed = true;
                 }
             }
-            Justification::ContainerAxiom { proof: inner, .. } => {
+            Justification::ContainerAxiom { proof: inner } => {
                 let mapped_inner = f(self, *inner);
                 if mapped_inner != *inner {
                     *inner = mapped_inner;
@@ -375,7 +375,7 @@ impl Proof {
             } => {}
             Justification::Trans(_, _) => {}
             Justification::Sym(_) => {}
-            Justification::ContainerAxiom { .. } => {}
+            Justification::ContainerAxiom { proof: _ } => {}
         }
     }
 }
