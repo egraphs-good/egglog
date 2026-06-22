@@ -45,7 +45,7 @@ use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
-    Context, Core, FullState, PureState, Read, ReadState, Rows, Write, WriteState,
+    Context, Core, FullState, PureState, Read, ReadState, TableRows, Write, WriteState,
 };
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
@@ -1102,6 +1102,32 @@ impl EGraph {
     /// e-graph, in registration order.
     pub fn functions_iter(&self) -> impl Iterator<Item = (&String, &Function)> {
         self.functions.iter()
+    }
+
+    /// Iterate every `(inputs, output)` entry of a function table.
+    /// Iterate the returned [`TableRows`] with [`TableRows::iter`], or
+    /// [`TableRows::iter_with_subsumption`] to also see which rows are
+    /// subsumed.
+    ///
+    /// This is the top-level form of [`Read::function_entries`] — the
+    /// same scan available from inside a rule callback or [`EGraph::update`].
+    /// Errors if `name` is a constructor (use [`EGraph::constructor_enodes`])
+    /// or is not registered.
+    pub fn function_entries(&mut self, name: &str) -> Result<TableRows, Error> {
+        self.update_unchecked(|fs| fs.function_entries(name))
+    }
+
+    /// Iterate every enode `(inputs, eclass)` of a constructor / relation
+    /// table. Iterate the returned [`TableRows`] with [`TableRows::iter`], or
+    /// [`TableRows::iter_with_subsumption`] to also see which rows are
+    /// subsumed.
+    ///
+    /// This is the top-level form of [`Read::constructor_enodes`] — the
+    /// same scan available from inside a rule callback or [`EGraph::update`].
+    /// Errors if `name` is a function table (use [`EGraph::function_entries`])
+    /// or is not registered.
+    pub fn constructor_enodes(&mut self, name: &str) -> Result<TableRows, Error> {
+        self.update_unchecked(|fs| fs.constructor_enodes(name))
     }
 
     /// Remove every row from the named function in bulk.

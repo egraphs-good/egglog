@@ -277,10 +277,10 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// use [`Read::function_entries`] for those. Convert individual
     /// input columns to typed Rust values with [`Core::value_to_base`]
     /// or [`Core::value_to_container`].
-    fn constructor_enodes(&self, name: &str) -> Result<Rows, Error> {
+    fn constructor_enodes(&self, name: &str) -> Result<TableRows, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
-        Ok(Rows {
+        Ok(TableRows {
             scan: action.scan_all(self.es()),
         })
     }
@@ -291,10 +291,10 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ///
     /// Errors with `WrongSubtype` if `name` is a constructor — use
     /// [`Read::constructor_enodes`] for those.
-    fn function_entries(&self, name: &str) -> Result<Rows, Error> {
+    fn function_entries(&self, name: &str) -> Result<TableRows, Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        Ok(Rows {
+        Ok(TableRows {
             scan: action.scan_all(self.es()),
         })
     }
@@ -303,15 +303,15 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 /// A read-only snapshot of a table's rows, backed by a single buffer.
 ///
 /// Returned by [`Read::constructor_enodes`] and [`Read::function_entries`].
-/// Iterate it with [`Rows::iter`]; each item is `(inputs, output)` as raw
+/// Iterate it with [`TableRows::iter`]; each item is `(inputs, output)` as raw
 /// [`Value`]s. `output` is the trailing column — the
 /// eclass id for a constructor, the mapped value for a function. Convert
 /// individual columns with [`Core::value_to_base`] / [`Core::value_to_container`].
-pub struct Rows {
+pub struct TableRows {
     scan: RowScan,
 }
 
-impl Rows {
+impl TableRows {
     /// The number of rows.
     pub fn len(&self) -> usize {
         self.scan.len()
@@ -324,17 +324,24 @@ impl Rows {
 
     /// Iterate `(inputs, output)` pairs from rows.
     pub fn iter(&self) -> impl Iterator<Item = (&[Value], Value)> + '_ {
+        self.iter_with_subsumption()
+            .map(|(inputs, output, _)| (inputs, output))
+    }
+
+    /// Like [`TableRows::iter`], but each item also carries whether the
+    /// row has been subsumed.
+    pub fn iter_with_subsumption(&self) -> impl Iterator<Item = (&[Value], Value, bool)> + '_ {
         self.scan.iter().map(|row| {
             let (output, inputs) = row
                 .vals
                 .split_last()
                 .expect("table row has at least an output column");
-            (inputs, *output)
+            (inputs, *output, row.subsumed)
         })
     }
 }
 
-impl std::fmt::Debug for Rows {
+impl std::fmt::Debug for TableRows {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
