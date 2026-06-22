@@ -979,11 +979,22 @@ impl EGraph {
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
+                let mut i = 0usize;
                 loop {
+                    i += 1;
+                    log::debug!(
+                        "Saturate iteration {i} start: {}",
+                        Self::schedule_for_log(sched)
+                    );
                     let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
+                    log::debug!(
+                        "Saturate iteration {i} end: {}",
+                        Self::run_report_debug_summary(&rec)
+                    );
                     report.union(rec);
                     if !updated {
+                        log::debug!("Saturate reached fixpoint after {i} iteration(s)");
                         break;
                     }
                 }
@@ -1023,10 +1034,53 @@ impl EGraph {
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
-            log::debug!("database size: {}", self.num_tuples());
+            log::debug!(
+                "Finished ruleset {ruleset}: database size {}, {}",
+                self.num_tuples(),
+                Self::run_report_debug_summary(&report)
+            );
         }
 
         Ok(report)
+    }
+
+    fn run_report_debug_summary(report: &RunReport) -> String {
+        let mut rules = report
+            .num_matches_per_rule
+            .iter()
+            .filter(|(_, matches)| **matches > 0)
+            .collect::<Vec<_>>();
+        rules.sort_by(|(_, left), (_, right)| right.cmp(left));
+
+        let top_rules = rules
+            .into_iter()
+            .take(5)
+            .map(|(rule, matches)| {
+                format!("{}={matches}", Self::truncate_for_log(rule.as_ref(), 80))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            "updated={}, can_stop={}, iterations={}, top_matches=[{}]",
+            report.updated,
+            report.can_stop,
+            report.iterations.len(),
+            top_rules
+        )
+    }
+
+    fn schedule_for_log(sched: &ResolvedSchedule) -> String {
+        Self::truncate_for_log(&sched.to_string(), 160)
+    }
+
+    fn truncate_for_log(s: &str, limit: usize) -> String {
+        let mut s = s.replace('\n', " ");
+        if s.len() > limit {
+            s.truncate(limit);
+            s.push_str("...");
+        }
+        s
     }
 
     /// Runs a ruleset for an iteration.
@@ -1090,7 +1144,7 @@ impl EGraph {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
             let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
-            translator.query(query, false);
+            translator.query(query, rule.include_subsumed);
             translator.actions(actions)?;
             translator.build()
         };
@@ -1429,6 +1483,7 @@ impl EGraph {
             ruleset: fresh_ruleset.clone(),
             naive: false,
             no_decomp: false,
+            include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1901,7 +1956,7 @@ impl EGraph {
                 let desugared =
                     desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
                 for cmd in &desugared {
-                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                    log::trace!("Desugared term encoding: {}", cmd.to_command());
                 }
 
                 // Now typecheck using self, adding term type information.

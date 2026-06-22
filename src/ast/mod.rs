@@ -1725,6 +1725,7 @@ where
                     body: rule.body,
                     naive: rule.naive,
                     no_decomp: rule.no_decomp,
+                    include_subsumed: rule.include_subsumed,
                 };
                 GenericCommand::Rule { rule }
             }

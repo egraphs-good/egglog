@@ -838,6 +838,7 @@ impl TypeInfo {
             ruleset,
             naive,
             no_decomp,
+            include_subsumed,
         } = rule;
         let mut constraints = vec![];
 
@@ -894,6 +895,7 @@ impl TypeInfo {
             ruleset: ruleset.clone(),
             naive: *naive,
             no_decomp: *no_decomp,
+            include_subsumed: *include_subsumed,
         })
     }
 
