@@ -82,10 +82,6 @@ pub trait FromValue: Sized {
 
 /// Convert a Rust value into a row of egglog [`Value`]s.
 ///
-/// Yields the row's columns as an iterator, letting the caller choose
-/// the container — call sites collect into an inline `SmallVec`, so the
-/// common small-arity row stays off the heap.
-///
 /// Sealed; impls cover bare [`IntoValue`] (single-column row),
 /// tuples up to arity 8 of [`IntoValue`] values, and [`RawValues`]
 /// for variadic / pre-converted rows.

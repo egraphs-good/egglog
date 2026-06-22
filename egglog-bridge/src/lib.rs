@@ -1382,9 +1382,7 @@ impl TableAction {
     /// Scan every row of this table into a single [`RowScan`].
     ///
     /// Unlike [`TableAction::for_each`], the rows materialize into one
-    /// buffer (one allocation, often pooled) that the caller can iterate
-    /// after the [`ExecutionState`] borrow ends — without a heap allocation
-    /// per row.
+    /// buffer.
     pub fn scan_all(&self, state: &ExecutionState) -> RowScan {
         let imp = state.get_table(self.table);
         let all = imp.all();
@@ -1673,8 +1671,7 @@ pub struct FunctionRow<'a> {
 /// [`TableAction::scan_all`].
 ///
 /// Owns its backing storage, so it can outlive the [`ExecutionState`] it was
-/// scanned from. [`RowScan::iter`] yields one [`FunctionRow`] per row,
-/// borrowing from the buffer — there is no per-row allocation.
+/// scanned from.
 pub struct RowScan {
     buf: TaggedRowBuffer,
     math: SchemaMath,

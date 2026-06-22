@@ -42,8 +42,7 @@ use egglog_bridge::{ActionRegistry, RowScan, TableAction, TableKind};
 use smallvec::SmallVec;
 
 /// Inline scratch for a row of column values. Matches the
-/// `SmallVec<[_; 8]>` that `egglog_bridge::TableAction` uses internally,
-/// so rows up to 8 columns — the common case — never touch the heap.
+/// `SmallVec<[_; 8]>` that `egglog_bridge::TableAction` uses internally.
 type ValueRow = SmallVec<[Value; 8]>;
 
 /// The four contexts a primitive may run in, named after the
@@ -305,8 +304,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 ///
 /// Returned by [`Read::constructor_enodes`] and [`Read::function_entries`].
 /// Iterate it with [`Rows::iter`]; each item is `(inputs, output)` as raw
-/// [`Value`]s borrowed from the buffer, so there is no per-row allocation.
-/// `output` is the trailing column — the
+/// [`Value`]s. `output` is the trailing column — the
 /// eclass id for a constructor, the mapped value for a function. Convert
 /// individual columns with [`Core::value_to_base`] / [`Core::value_to_container`].
 pub struct Rows {
@@ -324,14 +322,7 @@ impl Rows {
         self.scan.is_empty()
     }
 
-    /// Iterate `(inputs, output)` pairs, borrowing from the backing
-    /// buffer (no per-row allocation).
-    ///
-    /// This is the monomorphized fast path — as cheap as a direct
-    /// streaming backend scan. (We deliberately do *not* implement
-    /// `IntoIterator for &Rows`: expressing its associated `IntoIter`
-    /// type would force a boxed `dyn Iterator`, whose per-row virtual
-    /// dispatch measurably slows the scan.)
+    /// Iterate `(inputs, output)` pairs from rows.
     pub fn iter(&self) -> impl Iterator<Item = (&[Value], Value)> + '_ {
         self.scan.iter().map(|row| {
             let (output, inputs) = row
