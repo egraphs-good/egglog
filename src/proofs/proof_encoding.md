@@ -393,15 +393,19 @@ Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
   rebuild through container-typed elements; each rebuilt container records its
   own reflexive `<CSort>Proof` anchor so it can be rebuilt again later.
 
-Containers whose canonical form reorders or merges elements (`Set`, `Map`,
-  `MultiSet`) need one more step than `Vec`/`Pair`: a flat `Congr` chain
-  produces the term with children replaced in place, which may be in the wrong
-  order or contain duplicates. The **container axiom** (`ContainerAxiom` in
-  [`crate::proofs::proof_format`]) normalizes it — sort + dedup for sets, sort
-  for multisets, sort + last-write-wins for maps. The normalization is one
-  shared `TermDag` operation (`normalize_container_term`, ordered by the
-  deterministic structural `ast_cmp`) used by `reconstruct_termdag`, the
-  container constructor validators, and the checker, so all three agree.
+The flat `Congr` chain produces the term with children replaced in place, which
+  for a reordering/merging container (`Set`, `Map`, `MultiSet`) may be in the
+  wrong order or contain duplicates. The **container axiom** (`ContainerAxiom`
+  in [`crate::proofs::proof_format`]) bridges that gap: it normalizes the term —
+  sort + dedup for sets, sort for multisets, sort + last-write-wins for maps.
+  Every rebuild mints the axiom unconditionally and tags it with the
+  normalization's name (`set-dedup`, `multiset-sort`, `map-last-write-wins`,
+  from the term head); the proof simplifier then drops it wherever normalization
+  is the identity — always for order/arity-preserving `Vec`/`Pair`, and for
+  already-canonical sets/maps. The normalization is one shared `TermDag`
+  operation (`normalize_container_term`, ordered by the deterministic structural
+  `ast_cmp`) used by `reconstruct_termdag`, the container constructor
+  validators, and the checker, so all three agree.
 
 Maps use a flat `(map-of k0 v0 k1 v1 ...)` term form (a `map-of` constructor,
   like `set-of`/`vec-of`) rather than nested `map-insert`s, so their rebuild

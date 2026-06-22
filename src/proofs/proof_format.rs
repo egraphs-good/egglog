@@ -180,8 +180,14 @@ pub enum Justification {
     /// `t1 = normalize(c)`: the container's canonicalizing axiom applied to `c`
     /// (sort children by [`TermDag::ast_cmp`]; dedup for sets; last-write-wins
     /// for maps; sort for multisets). An axiom egglog assumes about container
-    /// sorts, justified by their value semantics.
-    ContainerAxiom { proof: ProofId },
+    /// sorts, justified by their value semantics. `name` identifies which
+    /// normalization was applied (e.g. `set-dedup`), derived from `c`'s head; it
+    /// is `None` when the head isn't normalized (such an axiom is a no-op the
+    /// proof simplifier removes).
+    ContainerAxiom {
+        name: Option<String>,
+        proof: ProofId,
+    },
 }
 
 impl RawProofStore {
@@ -477,9 +483,16 @@ impl ProofStore {
                 let inner_lhs = self.id_to_proof[inner_id].lhs();
                 let inner_rhs = self.id_to_proof[inner_id].rhs();
                 let normalized = self.term_dag.normalize_container_term(inner_rhs);
+                let name = self
+                    .term_dag
+                    .container_axiom_name(inner_rhs)
+                    .map(str::to_string);
                 Proof {
                     proposition: Proposition::new(inner_lhs, normalized),
-                    justification: Justification::ContainerAxiom { proof: inner_id },
+                    justification: Justification::ContainerAxiom {
+                        name,
+                        proof: inner_id,
+                    },
                 }
             }
         };
@@ -786,10 +799,16 @@ impl ProofStore {
                     vec![equality, base_term_id, child_term_id, index_term],
                 )
             }
-            Justification::ContainerAxiom { proof: inner } => {
+            Justification::ContainerAxiom { name, proof: inner } => {
                 let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
-                dag.app("ContainerAxiom".to_string(), vec![equality, inner_term_id])
+                let mut children = vec![equality];
+                if let Some(name) = name {
+                    let name_literal = dag.lit(Literal::String(name.clone()));
+                    children.push(dag.app("name".to_string(), vec![name_literal]));
+                }
+                children.push(inner_term_id);
+                dag.app("ContainerAxiom".to_string(), children)
             }
         };
 

@@ -853,11 +853,16 @@ impl ProofStore {
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
-            Justification::ContainerAxiom { proof: inner_id } => {
+            Justification::ContainerAxiom {
+                proof: inner_id, ..
+            } => {
                 // The sub-proof establishes `t1 = raw`; the axiom normalizes
                 // `raw` to its canonical container form. We recompute the
                 // normalization (rather than trusting the proof's rhs) so the
-                // axiom is sound even against an adversarial proof term.
+                // axiom is sound even against an adversarial proof term. (The
+                // axiom `name` is derived from `raw`'s head, the same thing
+                // `normalize_container_term` dispatches on, so it needs no
+                // separate check.)
                 let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
                 let raw = inner_prop.rhs;
                 let normalized = self.term_dag.normalize_container_term(raw);

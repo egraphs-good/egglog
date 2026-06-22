@@ -92,10 +92,6 @@ impl ContainerSort for SetSort {
         self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
-    fn proof_normalizes(&self) -> bool {
-        true
-    }
-
     fn inner_values(
         &self,
         container_values: &ContainerValues,

@@ -1882,18 +1882,17 @@ fn rebuild_container_proof_rec(
             congr_action.lookup_or_insert(state.raw_exec_state(), &[current, j_val, proof])?;
     }
 
-    // For containers whose canonical form reorders/merges elements (Set, Map,
-    // MultiSet), bridge the non-canonical `raw` term to the canonical
-    // `rebuilt` term with the container axiom: `ContainerAxiom(current)` proves
+    // Bridge the (possibly non-canonical) `raw` term to the canonical `rebuilt`
+    // term with the container axiom: `ContainerAxiom(current)` proves
     // `value = normalize(raw)`, which the checker recomputes to match
-    // `reconstruct_termdag(rebuilt)`.
-    if sort.proof_normalizes() {
-        let axiom_action = state
-            .registry()
-            .lookup_table(&prim.container_axiom_name)?
-            .clone();
-        current = axiom_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
-    }
+    // `reconstruct_termdag(rebuilt)`. We mint it unconditionally; for
+    // order/arity-preserving containers (Vec/Pair) the normalization is the
+    // identity, so the axiom is a no-op the proof simplifier removes.
+    let axiom_action = state
+        .registry()
+        .lookup_table(&prim.container_axiom_name)?
+        .clone();
+    current = axiom_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
 
     // Anchor a reflexive proof on the rebuilt value for future rebuilds.
     if rebuilt != value {

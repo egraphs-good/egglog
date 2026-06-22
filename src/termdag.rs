@@ -205,6 +205,22 @@ impl TermDag {
         }
     }
 
+    /// The name of the canonicalizing axiom that `normalize_container_term`
+    /// applies to a term, keyed on its head — or `None` for heads it leaves
+    /// unchanged (leaves, `vec-of`, `pair`, …). Used to label `ContainerAxiom`
+    /// proof steps; the normalization kind is fully determined by the head.
+    pub fn container_axiom_name(&self, term_id: TermId) -> Option<&'static str> {
+        let Term::App(head, _) = self.get(term_id) else {
+            return None;
+        };
+        match head.as_str() {
+            "set-of" => Some("set-dedup"),
+            "multiset-of" => Some("multiset-sort"),
+            "map-of" | "map-empty" | "map-insert" => Some("map-last-write-wins"),
+            _ => None,
+        }
+    }
+
     /// Collect `(key, value)` pairs from a map term in insertion order. Handles
     /// both the flat `map-of` form and a `map-insert`/`map-empty` spine
     /// (innermost insert first).

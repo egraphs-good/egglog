@@ -10,6 +10,7 @@ expression: snapshot_content_across_treatments
             (Fiat (= t0 t0))
             (ContainerAxiom
               (= (set-of (A) (B)) (set-of (A)))
+              (name "set-dedup")
               (Congr
                 (= (set-of (A) (B)) (set-of (A) (A)))
                 (Fiat (= (set-of (A) (B)) (set-of (A) (B))))
