@@ -395,10 +395,10 @@ Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
 
 The flat `Congr` chain produces the term with children replaced in place, which
   for a reordering/merging container (`Set`, `Map`, `MultiSet`) may be in the
-  wrong order or contain duplicates. The **container axiom** (`ContainerAxiom`
+  wrong order or contain duplicates. The **container axiom** (`ContainerNormalize`
   in [`crate::proofs::proof_format`]) bridges that gap: it normalizes the term —
   sort + dedup for sets, sort for multisets, sort + last-write-wins for maps,
-  selected by the term head. Every rebuild mints the axiom unconditionally; the
+  selected by the term head. Every rebuild mints the normalization unconditionally; the
   proof simplifier then drops it wherever normalization is the identity — always
   for order/arity-preserving `Vec`/`Pair`, and for already-canonical sets/maps.
   The normalization is one shared `TermDag`

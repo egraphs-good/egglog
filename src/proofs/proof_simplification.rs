@@ -74,7 +74,7 @@ impl ProofStore {
     /// - Collapse double symmetry: Sym(Sym(p)) -> p
     /// - Push symmetry through transitivity: Sym(Trans(p1, p2)) -> Trans(Sym(p2), Sym(p1))
     ///   This enables further simplifications by exposing the inner proofs
-    /// - Remove redundant container axiom: ContainerAxiom(p) -> p when the
+    /// - Remove redundant container axiom: ContainerNormalize(p) -> p when the
     ///   normalization left the term unchanged (always the case for
     ///   order/arity-preserving containers like Vec/Pair, which mint the axiom
     ///   unconditionally, and for already-canonical sets/maps/multisets)
@@ -104,7 +104,7 @@ impl ProofStore {
             Self::opt_reflexive_sym,
             Self::opt_double_sym,
             Self::opt_sym_trans,
-            Self::opt_redundant_container_axiom,
+            Self::opt_redundant_container_normalize,
         ];
 
         for opt in optimizations {
@@ -134,11 +134,11 @@ impl ProofStore {
     }
 
     /// Optimization: Remove a redundant container axiom.
-    /// ContainerAxiom(p) -> p when normalization left the term unchanged
+    /// ContainerNormalize(p) -> p when normalization left the term unchanged
     /// (its rhs equals the inner proof's rhs).
-    fn opt_redundant_container_axiom(&mut self, proof_id: ProofId) -> Option<ProofId> {
+    fn opt_redundant_container_normalize(&mut self, proof_id: ProofId) -> Option<ProofId> {
         let proof = self.get(proof_id);
-        if let Justification::ContainerAxiom { proof: inner } = proof.justification()
+        if let Justification::ContainerNormalize { proof: inner } = proof.justification()
             && proof.rhs() == self.get(*inner).rhs()
         {
             return Some(*inner);
@@ -321,7 +321,7 @@ impl ProofStore {
                     changed = true;
                 }
             }
-            Justification::ContainerAxiom { proof: inner } => {
+            Justification::ContainerNormalize { proof: inner } => {
                 let mapped_inner = f(self, *inner);
                 if mapped_inner != *inner {
                     *inner = mapped_inner;
@@ -375,7 +375,7 @@ impl Proof {
             } => {}
             Justification::Trans(_, _) => {}
             Justification::Sym(_) => {}
-            Justification::ContainerAxiom { proof: _ } => {}
+            Justification::ContainerNormalize { proof: _ } => {}
         }
     }
 }

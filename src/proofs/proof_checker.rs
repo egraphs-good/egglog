@@ -437,11 +437,11 @@ pub enum ProofCheckErrorKind {
     /// Two rules have the same name
     #[error("Duplicate rule name '{rule_name}' found in the program")]
     DuplicateRuleName { rule_name: String },
-    /// Container axiom proof: the normalized container term doesn't match the claim
+    /// Container-normalize proof: the normalized container term doesn't match the claim
     #[error(
         "Proof {proof_id}: container axiom error - normalizing {raw:?} gives {normalized:?}, but proof claims rhs {proof_rhs:?} (lhs ok: {lhs_ok})"
     )]
-    ContainerAxiomMismatch {
+    ContainerNormalizeMismatch {
         proof_id: ProofId,
         raw: TermId,
         normalized: TermId,
@@ -853,7 +853,7 @@ impl ProofStore {
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
-            Justification::ContainerAxiom { proof: inner_id } => {
+            Justification::ContainerNormalize { proof: inner_id } => {
                 // The sub-proof establishes `t1 = raw`; the axiom normalizes
                 // `raw` to its canonical container form (selected by `raw`'s
                 // head). We recompute the normalization (rather than trusting
@@ -864,7 +864,7 @@ impl ProofStore {
                 let normalized = self.term_dag.normalize_container_term(raw);
                 let lhs_ok = proof.lhs() == inner_prop.lhs;
                 if !lhs_ok || proof.rhs() != normalized {
-                    return Err(ProofCheckErrorKind::ContainerAxiomMismatch {
+                    return Err(ProofCheckErrorKind::ContainerNormalizeMismatch {
                         proof_id,
                         raw,
                         normalized,

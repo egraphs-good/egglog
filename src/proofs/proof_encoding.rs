@@ -1551,7 +1551,7 @@ impl<'a> ProofInstrumentor<'a> {
             let congr = self.proof_names().congr_constructor.clone();
             let trans = self.proof_names().eq_trans_constructor.clone();
             let sym = self.proof_names().eq_sym_constructor.clone();
-            let axiom = self.proof_names().container_axiom_constructor.clone();
+            let axiom = self.proof_names().container_normalize_constructor.clone();
             let proof_datatype = self.proof_names().proof_datatype.clone();
 
             tokens.extend([proof_prim, congr, trans, sym, axiom, proof_datatype]);
@@ -1636,7 +1636,7 @@ pub(crate) fn register_container_rebuild_from_spec(eg: &mut EGraph, sort_name: &
         let congr_name = next(&mut i);
         let trans_name = next(&mut i);
         let sym_name = next(&mut i);
-        let container_axiom_name = next(&mut i);
+        let container_normalize_name = next(&mut i);
         let proof_datatype = next(&mut i);
         let cp_count: usize = next(&mut i).parse().unwrap();
         let mut cproof_names = HashMap::default();
@@ -1658,7 +1658,7 @@ pub(crate) fn register_container_rebuild_from_spec(eg: &mut EGraph, sort_name: &
                 congr_name,
                 trans_name,
                 sym_name,
-                container_axiom_name,
+                container_normalize_name,
             },
             None,
         );
@@ -1786,11 +1786,11 @@ struct ContainerRebuildProof {
     uf_names: HashMap<String, String>,
     /// container-sort name -> `<CSort>Proof` table name (all reachable containers)
     cproof_names: HashMap<String, String>,
-    /// `Congr` / `Trans` / `Sym` / `ContainerAxiom` proof constructor names
+    /// `Congr` / `Trans` / `Sym` / `ContainerNormalize` proof constructor names
     congr_name: String,
     trans_name: String,
     sym_name: String,
-    container_axiom_name: String,
+    container_normalize_name: String,
 }
 
 impl Primitive for ContainerRebuildProof {
@@ -1883,14 +1883,14 @@ fn rebuild_container_proof_rec(
     }
 
     // Bridge the (possibly non-canonical) `raw` term to the canonical `rebuilt`
-    // term with the container axiom: `ContainerAxiom(current)` proves
+    // term with the container axiom: `ContainerNormalize(current)` proves
     // `value = normalize(raw)`, which the checker recomputes to match
     // `reconstruct_termdag(rebuilt)`. We mint it unconditionally; for
     // order/arity-preserving containers (Vec/Pair) the normalization is the
     // identity, so the axiom is a no-op the proof simplifier removes.
     let axiom_action = state
         .registry()
-        .lookup_table(&prim.container_axiom_name)?
+        .lookup_table(&prim.container_normalize_name)?
         .clone();
     current = axiom_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
 
