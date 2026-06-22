@@ -792,7 +792,10 @@ impl ProofStore {
             Justification::ContainerNormalize { proof: inner } => {
                 let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
-                dag.app("ContainerNormalize".to_string(), vec![equality, inner_term_id])
+                dag.app(
+                    "ContainerNormalize".to_string(),
+                    vec![equality, inner_term_id],
+                )
             }
         };
 
