@@ -70,6 +70,23 @@ To view documentation in a browser, run `cargo doc --open`.
 
 Run `cargo test` to run the core `egglog` tests.
 
+### Git size budget
+
+PRs run a Git size budget check to catch accidentally committed generated data
+or other large files. The check measures compressed Git objects reachable from
+the PR merge commit but not from the base commit, so it also catches files that
+were added in an earlier PR commit and deleted before the final diff.
+
+To run the same check locally, compare the base ref with the ref you want to
+measure:
+
+```bash
+python3 scripts/git-size-budget.py upstream/main HEAD
+```
+
+To try different thresholds locally, set `SOFT_LIMIT_BYTES` and
+`HARD_LIMIT_BYTES`.
+
 ## Community extensions
 
 The community has maintained egglog extensions for IDEs. However, they are outdated at the time of writing.
