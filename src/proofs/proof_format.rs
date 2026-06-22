@@ -179,10 +179,11 @@ pub enum Justification {
     /// Given a `proof` proving `t1 = c` where `c` is a container term, proves
     /// `t1 = normalize(c)`: the container's canonicalization applied to `c`
     /// (sort children by [`TermDag::ast_cmp`]; dedup for sets; last-write-wins
-    /// for maps; sort for multisets). An axiom egglog assumes about container
-    /// sorts, justified by their value semantics. The normalization is selected
-    /// by `c`'s head — the rebuild always canonicalizes, so there is nothing to
-    /// disambiguate and no name is needed; the checker recomputes it.
+    /// for maps; sort for multisets). Soundness rests on the assumption that
+    /// normalization preserves the container's value, justified by container
+    /// value semantics. The normalization is selected by `c`'s head — the
+    /// rebuild always canonicalizes, so there is nothing to disambiguate and no
+    /// name is needed; the checker recomputes it.
     ContainerNormalize { proof: ProofId },
 }
 

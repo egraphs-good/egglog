@@ -300,7 +300,7 @@ fn map_rebuild_noncollapse_proof_mode() {
 
 /// Proof mode: a collapsing `(Set Math)`. Unioning A and B collapses `{A,B}` to
 /// a singleton; the `Congr` chain rebuilds to the (non-canonical) `set-of(A,A)`
-/// and the container axiom normalizes it to `set-of(A)`, matching `{A}`.
+/// and the container normalization gives `set-of(A)`, matching `{A}`.
 #[test]
 fn set_rebuild_collapse_proof_mode() {
     let mut egraph = EGraph::new_with_proofs().with_proof_testing();
@@ -324,7 +324,7 @@ fn set_rebuild_collapse_proof_mode() {
 }
 
 /// Proof mode: a `(Set Math)` rebuild where a leader sorts to a different slot
-/// (reorder without collapse). The container axiom re-sorts to canonical order.
+/// (reorder without collapse). The container normalization re-sorts to canonical order.
 #[test]
 fn set_rebuild_reorder_proof_mode() {
     let mut egraph = EGraph::new_with_proofs().with_proof_testing();
@@ -350,7 +350,7 @@ fn set_rebuild_reorder_proof_mode() {
 
 /// Proof mode: a `(MultiSet Math)` merge that adds counts (`{A:2}` after
 /// unioning two distinct elements). Multiplicities are preserved as repeated
-/// elements, so the axiom just re-sorts.
+/// elements, so the normalization just re-sorts.
 #[test]
 fn multiset_rebuild_merge_counts_proof_mode() {
     let mut egraph = EGraph::new_with_proofs().with_proof_testing();
@@ -375,7 +375,7 @@ fn multiset_rebuild_merge_counts_proof_mode() {
 
 /// Proof mode: a collapsing `(Map Math Math)` — two keys merge into one
 /// (last-write-wins). The flat `map-of` term form makes the rebuild Congr
-/// indices flat, and the container axiom normalizes (sort + last-write-wins).
+/// indices flat, and the container normalization re-sorts and merges keys (last-write-wins).
 #[test]
 fn map_rebuild_collapse_proof_mode() {
     let mut egraph = EGraph::new_with_proofs().with_proof_testing();

@@ -439,7 +439,7 @@ pub enum ProofCheckErrorKind {
     DuplicateRuleName { rule_name: String },
     /// Container-normalize proof: the normalized container term doesn't match the claim
     #[error(
-        "Proof {proof_id}: container axiom error - normalizing {raw:?} gives {normalized:?}, but proof claims rhs {proof_rhs:?} (lhs ok: {lhs_ok})"
+        "Proof {proof_id}: container normalization error - normalizing {raw:?} gives {normalized:?}, but proof claims rhs {proof_rhs:?} (lhs ok: {lhs_ok})"
     )]
     ContainerNormalizeMismatch {
         proof_id: ProofId,
@@ -854,10 +854,10 @@ impl ProofStore {
             }
 
             Justification::ContainerNormalize { proof: inner_id } => {
-                // The sub-proof establishes `t1 = raw`; the axiom normalizes
+                // The sub-proof establishes `t1 = raw`; the normalization maps
                 // `raw` to its canonical container form (selected by `raw`'s
                 // head). We recompute the normalization (rather than trusting
-                // the proof's rhs) so the axiom is sound even against an
+                // the proof's rhs) so it is sound even against an
                 // adversarial proof term.
                 let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
                 let raw = inner_prop.rhs;

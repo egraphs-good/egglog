@@ -165,7 +165,7 @@ impl TermDag {
     /// Any other term (a leaf, `vec-of`, `pair`, …) is returned unchanged. This
     /// is the single source of truth shared by `reconstruct_termdag`, the
     /// container constructor validators, and the proof checker's container
-    /// axiom, so all three agree on the canonical term.
+    /// normalization step, so all three agree on the canonical term.
     pub fn normalize_container_term(&mut self, term_id: TermId) -> TermId {
         let Term::App(head, args) = self.get(term_id).clone() else {
             return term_id;

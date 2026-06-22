@@ -6,7 +6,7 @@
 ;;
 ;; The proof exercises the container rebuild path: a `Congr` chain rebuilds the
 ;; set's element to its union-find leader, producing the (non-canonical)
-;; `set-of(A, A)`, and the container axiom normalizes it (sort + dedup) to
+;; `set-of(A, A)`, and the container normalization (sort + dedup) reduces it to
 ;; `set-of(A)` to match the canonical value.
 
 (sort Math)

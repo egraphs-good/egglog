@@ -8,7 +8,7 @@ expression: snapshot_content_across_treatments
   (Congr
             (= t0 (Holds (set-of (A))))
             (Fiat (= t0 t0))
-            (ContainerAxiom
+            (ContainerNormalize
               (= (set-of (A) (B)) (set-of (A)))
               (Congr
                 (= (set-of (A) (B)) (set-of (A) (A)))

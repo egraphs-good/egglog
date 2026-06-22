@@ -74,9 +74,9 @@ impl ProofStore {
     /// - Collapse double symmetry: Sym(Sym(p)) -> p
     /// - Push symmetry through transitivity: Sym(Trans(p1, p2)) -> Trans(Sym(p2), Sym(p1))
     ///   This enables further simplifications by exposing the inner proofs
-    /// - Remove redundant container axiom: ContainerNormalize(p) -> p when the
+    /// - Remove redundant container normalization: ContainerNormalize(p) -> p when the
     ///   normalization left the term unchanged (always the case for
-    ///   order/arity-preserving containers like Vec/Pair, which mint the axiom
+    ///   order/arity-preserving containers like Vec/Pair, which mint the normalization
     ///   unconditionally, and for already-canonical sets/maps/multisets)
     pub fn simplify(&mut self, proof_id: ProofId) -> ProofId {
         // First, recursively simplify all child proofs
@@ -133,7 +133,7 @@ impl ProofStore {
         None
     }
 
-    /// Optimization: Remove a redundant container axiom.
+    /// Optimization: Remove a redundant container normalization.
     /// ContainerNormalize(p) -> p when normalization left the term unchanged
     /// (its rhs equals the inner proof's rhs).
     fn opt_redundant_container_normalize(&mut self, proof_id: ProofId) -> Option<ProofId> {

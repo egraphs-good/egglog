@@ -1508,7 +1508,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// so it works both during encoding and on re-parse of the desugared output.
     ///
     /// The spec is a space-separated token list:
-    /// `value_prim proof_flag uf_count (elemsort ufname)* [proof_prim congr trans sym axiom proof_datatype cp_count (csort cproof)*]`
+    /// `value_prim proof_flag uf_count (elemsort ufname)* [proof_prim congr trans sym normalize proof_datatype cp_count (csort cproof)*]`
     fn build_container_rebuild_spec(&mut self, container_sort: &ArcSort) -> String {
         let sort_name = container_sort.name().to_string();
         let proof_mode = self.egraph.proof_state.proofs_enabled;
@@ -1551,10 +1551,10 @@ impl<'a> ProofInstrumentor<'a> {
             let congr = self.proof_names().congr_constructor.clone();
             let trans = self.proof_names().eq_trans_constructor.clone();
             let sym = self.proof_names().eq_sym_constructor.clone();
-            let axiom = self.proof_names().container_normalize_constructor.clone();
+            let normalize = self.proof_names().container_normalize_constructor.clone();
             let proof_datatype = self.proof_names().proof_datatype.clone();
 
-            tokens.extend([proof_prim, congr, trans, sym, axiom, proof_datatype]);
+            tokens.extend([proof_prim, congr, trans, sym, normalize, proof_datatype]);
             tokens.push(cp_pairs.len().to_string());
             for (cs, cp) in &cp_pairs {
                 tokens.push(cs.clone());
@@ -1883,16 +1883,16 @@ fn rebuild_container_proof_rec(
     }
 
     // Bridge the (possibly non-canonical) `raw` term to the canonical `rebuilt`
-    // term with the container axiom: `ContainerNormalize(current)` proves
+    // term with the container normalization: `ContainerNormalize(current)` proves
     // `value = normalize(raw)`, which the checker recomputes to match
     // `reconstruct_termdag(rebuilt)`. We mint it unconditionally; for
     // order/arity-preserving containers (Vec/Pair) the normalization is the
-    // identity, so the axiom is a no-op the proof simplifier removes.
-    let axiom_action = state
+    // identity, so it is a no-op the proof simplifier removes.
+    let normalize_action = state
         .registry()
         .lookup_table(&prim.container_normalize_name)?
         .clone();
-    current = axiom_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
+    current = normalize_action.lookup_or_insert(state.raw_exec_state(), &[current])?;
 
     // Anchor a reflexive proof on the rebuilt value for future rebuilds.
     if rebuilt != value {
