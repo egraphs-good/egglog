@@ -1056,6 +1056,14 @@ impl EGraph {
         }
     }
 
+    /// If `sort` is a `Pair` container sort, return its two component sorts.
+    /// A function whose output is a `Pair` is stored with TWO value columns
+    /// (one per component) instead of a single boxed container value.
+    fn pair_components(sort: &ArcSort) -> Option<(ArcSort, ArcSort)> {
+        let pair = sort.clone().as_arc_any().downcast::<PairSort>().ok()?;
+        Some((pair.first(), pair.second()))
+    }
+
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
         let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
             Some(sort) => Ok(sort.clone()),
@@ -1080,23 +1088,44 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
+        // Multi-value output: a function whose output sort is a `Pair`
+        // container is stored as TWO value columns (its component sorts)
+        // instead of one boxed container value.
+        let pair_output = Self::pair_components(&output);
+        let (num_values, value_col_sorts): (usize, Vec<&ArcSort>) = match &pair_output {
+            Some((first, second)) => (2, vec![first, second]),
+            None => (1, vec![&output]),
+        };
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
-            num_values: 1,
+            num_values,
             schema: input
                 .iter()
-                .chain([&output])
+                .chain(value_col_sorts)
                 .map(|sort| sort.column_ty(&self.backend))
                 .collect(),
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
             },
-            merge: match decl.subtype {
-                FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Custom => match &decl.merge {
-                    None => MergeFn::AssertEq,
-                    Some(expr) => self.translate_merge_to_mergefn(&decl.merge_action, expr)?,
-                },
+            merge: {
+                // For the default merges (UnionId / AssertEq) a multi-value
+                // function applies the same per-column merge to each value
+                // column via a `Tuple`. Custom merges build their own
+                // (possibly tuple) merge in `translate_merge_to_mergefn`.
+                let default_multi = |mk: fn() -> MergeFn| -> MergeFn {
+                    if num_values == 1 {
+                        mk()
+                    } else {
+                        MergeFn::Tuple((0..num_values).map(|_| mk()).collect())
+                    }
+                };
+                match decl.subtype {
+                    FunctionSubtype::Constructor => default_multi(|| MergeFn::UnionId),
+                    FunctionSubtype::Custom => match &decl.merge {
+                        None => default_multi(|| MergeFn::AssertEq),
+                        Some(expr) => self.translate_merge_to_mergefn(&decl.merge_action, expr)?,
+                    },
+                }
             },
             name: decl.name.to_string(),
             can_subsume,
@@ -2740,6 +2769,84 @@ impl<'a> BackendRule<'a> {
         self.functions[&f.name].backend_id
     }
 
+    /// If function `f`'s output sort is a `Pair` container, return
+    /// `(first_sort, second_sort, pair_sort)`. Such functions are stored with
+    /// two value columns; reads box the two columns back into a pair value and
+    /// writes unbox a pair value into the two columns.
+    fn pair_info(&self, f: &typechecking::FuncType) -> Option<(ArcSort, ArcSort, ArcSort)> {
+        let out = &f.output;
+        EGraph::pair_components(out).map(|(a, b)| (a, b, out.clone()))
+    }
+
+    /// Resolve a specialized `pair` family primitive (`pair` / `pair-first` /
+    /// `pair-second`) and return its external function id for `ctx`.
+    /// `in_sorts` are the argument sorts and `out_sort` is the result sort.
+    fn pair_prim_extid(
+        &self,
+        name: &str,
+        in_sorts: &[ArcSort],
+        out_sort: &ArcSort,
+        ctx: crate::Context,
+    ) -> ExternalFunctionId {
+        let mut types: Vec<ArcSort> = in_sorts.to_vec();
+        types.push(out_sort.clone());
+        match ResolvedCall::from_resolution(name, &types, self.type_info, ctx) {
+            ResolvedCall::Primitive(p) => p.external_id(ctx),
+            ResolvedCall::Func(_) => panic!("expected primitive resolution for {name}"),
+        }
+    }
+
+    /// Box two value-column entries into the pair `result` entry on the query
+    /// side (via the `pair` primitive; `result` is bound to `(pair v0 v1)`).
+    fn box_pair_query(
+        &mut self,
+        v0: QueryEntry,
+        v1: QueryEntry,
+        result: QueryEntry,
+        first: &ArcSort,
+        second: &ArcSort,
+        pair_sort: &ArcSort,
+    ) {
+        let ctx = self.query_context();
+        let ext = self.pair_prim_extid("pair", &[first.clone(), second.clone()], pair_sort, ctx);
+        let ty = pair_sort.column_ty(self.rb.egraph());
+        self.rb.query_prim(ext, &[v0, v1, result], ty).unwrap();
+    }
+
+    /// Unbox a `pair` value into its two component entries on the action side.
+    fn unbox_pair_action(
+        &mut self,
+        pair_val: QueryEntry,
+        first: &ArcSort,
+        second: &ArcSort,
+        pair_sort: &ArcSort,
+    ) -> (QueryEntry, QueryEntry) {
+        let ctx = self.action_context();
+        let first_ext =
+            self.pair_prim_extid("pair-first", std::slice::from_ref(pair_sort), first, ctx);
+        let second_ext =
+            self.pair_prim_extid("pair-second", std::slice::from_ref(pair_sort), second, ctx);
+        let v0 = self
+            .rb
+            .call_external_func(
+                first_ext,
+                std::slice::from_ref(&pair_val),
+                first.column_ty(self.rb.egraph()),
+                || "pair-first failed".to_string(),
+            )
+            .into();
+        let v1 = self
+            .rb
+            .call_external_func(
+                second_ext,
+                &[pair_val],
+                second.column_ty(self.rb.egraph()),
+                || "pair-second failed".to_string(),
+            )
+            .into();
+        (v0, v1)
+    }
+
     fn prim(
         &mut self,
         prim: &core::SpecializedPrimitive,
@@ -2797,13 +2904,35 @@ impl<'a> BackendRule<'a> {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let f = self.func(f);
-                    let args = self.args(&atom.args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap();
+                    if let Some((first, second, pair_sort)) = self.pair_info(f) {
+                        // Pair-valued function: the backend table has two value
+                        // columns. Bind both, then box them back into a pair
+                        // value for the (single) result entry of this atom.
+                        let backend_f = self.func(f);
+                        let (result_term, children) = atom
+                            .args
+                            .split_last()
+                            .expect("function atom must have a result term");
+                        let mut args = self.args(children);
+                        let v0: QueryEntry =
+                            self.rb.new_var(first.column_ty(self.rb.egraph())).into();
+                        let v1: QueryEntry =
+                            self.rb.new_var(second.column_ty(self.rb.egraph())).into();
+                        args.push(v0.clone());
+                        args.push(v1.clone());
+                        self.rb.query_table(backend_f, &args, is_subsumed).unwrap();
+                        // Bind the result term to the boxed pair value.
+                        let result_entry = self.entry(result_term);
+                        self.box_pair_query(v0, v1, result_entry, &first, &second, &pair_sort);
+                    } else {
+                        let backend_f = self.func(f);
+                        let args = self.args(&atom.args);
+                        self.rb.query_table(backend_f, &args, is_subsumed).unwrap();
+                    }
                 }
                 ResolvedCall::Primitive(p) => {
                     let ctx = self.query_context();
@@ -2819,27 +2948,67 @@ impl<'a> BackendRule<'a> {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                    let y = match f {
+                    let y: QueryEntry = match f {
+                        ResolvedCall::Func(f) if self.pair_info(f).is_some() => {
+                            // Pair-valued function lookup: read both value
+                            // columns, then box them into a pair value.
+                            let (first, second, pair_sort) = self.pair_info(f).unwrap();
+                            let name = f.name.clone();
+                            let backend_f = self.func(f);
+                            let args = self.args(args);
+                            let sp0 = span.clone();
+                            let v0: QueryEntry = self
+                                .rb
+                                .lookup_value_col(backend_f, &args, 0, move || {
+                                    format!("{sp0}: lookup of function {name} failed")
+                                })
+                                .into();
+                            let name = f.name.clone();
+                            let sp1 = span.clone();
+                            let v1: QueryEntry = self
+                                .rb
+                                .lookup_value_col(backend_f, &args, 1, move || {
+                                    format!("{sp1}: lookup of function {name} failed")
+                                })
+                                .into();
+                            let ctx = self.action_context();
+                            let ext = self.pair_prim_extid(
+                                "pair",
+                                &[first.clone(), second.clone()],
+                                &pair_sort,
+                                ctx,
+                            );
+                            let ty = pair_sort.column_ty(self.rb.egraph());
+                            self.rb
+                                .call_external_func(ext, &[v0, v1], ty, || {
+                                    "pair construction failed".to_string()
+                                })
+                                .into()
+                        }
                         ResolvedCall::Func(f) => {
                             let name = f.name.clone();
                             let f = self.func(f);
                             let args = self.args(args);
                             let span = span.clone();
-                            self.rb.lookup(f, &args, move || {
-                                format!("{span}: lookup of function {name} failed")
-                            })
+                            self.rb
+                                .lookup(f, &args, move || {
+                                    format!("{span}: lookup of function {name} failed")
+                                })
+                                .into()
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
                             let ctx = self.action_context();
                             let (p, args, ty) = self.prim(p, args, ctx);
                             let span = span.clone();
-                            self.rb.call_external_func(p, &args, ty, move || {
-                                format!("{span}: call of primitive {name} failed")
-                            })
+                            self.rb
+                                .call_external_func(p, &args, ty, move || {
+                                    format!("{span}: call of primitive {name} failed")
+                                })
+                                .into()
                         }
                     };
-                    self.entries.insert(v, y.into());
+                    self.entries.insert(v, y);
                 }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
@@ -2849,9 +3018,22 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Set(_, f, xs, y) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive set!"),
                     ResolvedCall::Func(f) => {
-                        let f = self.func(f);
-                        let args = self.args(xs.iter().chain([y]));
-                        self.rb.set(f, &args)
+                        if let Some((first, second, pair_sort)) = self.pair_info(f) {
+                            // Pair-valued function: unbox the single value `y`
+                            // into the two component value columns.
+                            let backend_f = self.func(f);
+                            let mut args = self.args(xs.iter());
+                            let yv = self.entry(y);
+                            let (v0, v1) =
+                                self.unbox_pair_action(yv, &first, &second, &pair_sort);
+                            args.push(v0);
+                            args.push(v1);
+                            self.rb.set(backend_f, &args)
+                        } else {
+                            let backend_f = self.func(f);
+                            let args = self.args(xs.iter().chain([y]));
+                            self.rb.set(backend_f, &args)
+                        }
                     }
                 },
                 core::GenericCoreAction::Change(span, change, f, args) => match f {

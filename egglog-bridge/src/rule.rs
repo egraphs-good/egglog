@@ -626,6 +626,94 @@ impl RuleBuilder<'_> {
         )
     }
 
+    /// Look up a single value column (`value_col`, 0-based among the value
+    /// columns) of a multi-value function. Like [`Self::lookup`] but selects an
+    /// arbitrary value column rather than asserting a single value column.
+    pub fn lookup_value_col(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        value_col: usize,
+        panic_msg: impl FnOnce() -> String + Send + 'static,
+    ) -> Variable {
+        let subsumed = QueryEntry::Const {
+            val: NOT_SUBSUMED,
+            ty: ColumnTy::Id,
+        };
+        let entries = entries.to_vec();
+        let info = &self.egraph.funcs[func];
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+            num_values: info.num_values,
+        };
+        let dst_col = schema_math.num_keys() + value_col;
+        let ret_ty = info.schema[dst_col];
+        let res = self
+            .query
+            .vars
+            .push(VarInfo {
+                ty: ret_ty,
+                name: None,
+            })
+            .to_var();
+        let table = info.table;
+        let id_counter = self.query.id_counter;
+        let cb: BuildRuleCallback = match info.default_val {
+            DefaultVal::Const(_) | DefaultVal::FreshId => {
+                let wv: WriteVal = match &info.default_val {
+                    DefaultVal::Const(c) => (*c).into(),
+                    DefaultVal::FreshId => WriteVal::IncCounter(id_counter),
+                    _ => unreachable!(),
+                };
+                let get_write_vals = move |inner: &mut Bindings| {
+                    let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
+                    for i in schema_math.num_keys()..schema_math.table_columns() {
+                        if i == schema_math.ts_col() {
+                            write_vals.push(inner.next_ts().into());
+                        } else if schema_math.subsume && i == schema_math.subsume_col() {
+                            write_vals.push(inner.convert(&subsumed).into());
+                        } else if schema_math.value_cols().contains(&i) {
+                            write_vals.push(wv);
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    write_vals
+                };
+                Box::new(move |inner, rb| {
+                    let write_vals = get_write_vals(inner);
+                    let dst_vars = inner.convert_all(&entries);
+                    let var = rb.lookup_or_insert(
+                        table,
+                        &dst_vars,
+                        &write_vals,
+                        ColumnId::from_usize(dst_col),
+                    )?;
+                    inner.mapping.insert(res.id, var.into());
+                    Ok(())
+                })
+            }
+            DefaultVal::Fail => {
+                let panic_func = self.egraph.new_panic_lazy(panic_msg);
+                Box::new(move |inner, rb| {
+                    let dst_vars = inner.convert_all(&entries);
+                    let var = rb.lookup_with_fallback(
+                        table,
+                        &dst_vars,
+                        ColumnId::from_usize(dst_col),
+                        panic_func,
+                        &[],
+                    )?;
+                    inner.mapping.insert(res.id, var.into());
+                    Ok(())
+                })
+            }
+        };
+        self.query.add_rule.push(cb);
+        res
+    }
+
     /// Merge the two values in the union-find.
     pub fn union(&mut self, l: QueryEntry, r: QueryEntry) {
         self.query.add_rule.push(Box::new(move |inner, rb| {
