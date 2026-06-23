@@ -190,8 +190,12 @@ impl Default for EGraph {
 
 /// Properties of a function added to an [`EGraph`].
 pub struct FunctionConfig {
-    /// The function's schema. The last column in the schema is the return type.
+    /// The function's schema. The last `num_values` columns are the value
+    /// (return) columns; the rest are keys.
     pub schema: Vec<ColumnTy>,
+    /// Number of value (non-key) columns. Defaults conceptually to 1; set
+    /// higher for functions whose value compiles to multiple columns.
+    pub num_values: usize,
     /// The behavior of the function when lookups are made on keys not currently present.
     pub default: DefaultVal,
     /// How to resolve FD conflicts for the function.
@@ -335,6 +339,7 @@ impl EGraph {
             let schema_math = SchemaMath {
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
+                num_values: table_info.num_values,
             };
             let table_id = table_info.table;
             extended_row.extend_from_slice(&row);
@@ -365,6 +370,7 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
         };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
@@ -391,6 +397,7 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
         };
         let table_id = info.table;
         let table = self.db.get_table(table_id);
@@ -441,6 +448,7 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
         };
         let imp = self.db.get_table(table);
         let all = imp.all();
@@ -507,11 +515,16 @@ impl EGraph {
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
         let FunctionConfig {
             schema,
+            num_values,
             default,
             merge,
             name,
             can_subsume,
         } = config;
+        assert!(
+            num_values >= 1 && num_values <= schema.len(),
+            "num_values must be >=1 and not exceed the column count"
+        );
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -525,6 +538,7 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: can_subsume,
             func_cols: schema.len(),
+            num_values,
         };
         let n_args = schema_math.num_keys();
         let n_cols = schema_math.table_columns();
@@ -551,6 +565,7 @@ impl EGraph {
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
+            num_values,
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
@@ -983,6 +998,9 @@ struct CachedPlanInfo {
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
+    /// Number of value (non-key) columns; the last `num_values` columns of
+    /// `schema` are the function's value. Usually 1.
+    num_values: usize,
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
@@ -1027,6 +1045,16 @@ pub enum MergeFn {
     /// as a "base case" in a more complicated merge function (e.g. one that clamps a value between
     /// 1 and 100) than it is as a standalone merge function.
     Const(Value),
+    /// Insert a row into the given function's table (the args evaluate to the
+    /// full row), respecting that table's own merge. Returns the old value
+    /// (its return is meant to be discarded inside a [`MergeFn::Seq`]). Used to
+    /// model a `(set (f ...) v)` action inside a merge; declares `f`'s table as
+    /// a write-dependency so the side write is safe during batched merges.
+    TableInsert(FunctionId, Vec<MergeFn>),
+    /// Evaluate each merge function in order (for their effects) and return the
+    /// value of the last one. Models an action-block merge: the leading entries
+    /// are effects (e.g. [`MergeFn::TableInsert`]) and the last is the value.
+    Seq(Vec<MergeFn>),
 }
 
 impl MergeFn {
@@ -1051,6 +1079,19 @@ impl MergeFn {
             }
             UnionId => {
                 write_deps.insert(egraph.uf_table);
+            }
+            TableInsert(func, args) => {
+                // The side write makes the target table a write-dependency, so
+                // its buffer is pre-allocated during batched merges (the whole
+                // reason this exists rather than a by-name primitive insert).
+                write_deps.insert(egraph.funcs[*func].table);
+                args.iter()
+                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
+            }
+            Seq(items) => {
+                items
+                    .iter()
+                    .for_each(|item| item.fill_deps(egraph, read_deps, write_deps));
             }
             AssertEq | Old | New | Const(..) => {}
         }
@@ -1147,6 +1188,19 @@ impl MergeFn {
                         .collect::<Vec<_>>(),
                 }
             }
+            MergeFn::TableInsert(func, args) => ResolvedMergeFn::TableInsert {
+                table: TableAction::new(egraph, *func),
+                args: args
+                    .iter()
+                    .map(|arg| arg.resolve(function_name, egraph))
+                    .collect::<Vec<_>>(),
+            },
+            MergeFn::Seq(items) => ResolvedMergeFn::Seq(
+                items
+                    .iter()
+                    .map(|item| item.resolve(function_name, egraph))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -1175,6 +1229,11 @@ enum ResolvedMergeFn {
         args: Vec<ResolvedMergeFn>,
         panic: ExternalFunctionId,
     },
+    TableInsert {
+        table: TableAction,
+        args: Vec<ResolvedMergeFn>,
+    },
+    Seq(Vec<ResolvedMergeFn>),
 }
 
 impl ResolvedMergeFn {
@@ -1241,6 +1300,24 @@ impl ResolvedMergeFn {
                     cur
                 })
             }
+            ResolvedMergeFn::TableInsert { table, args } => {
+                let row = args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<Vec<_>>();
+                // Insert respects the target table's own merge; the timestamp
+                // column is appended by `TableAction::insert`.
+                table.insert(state, row.into_iter());
+                // Return value is discarded by the enclosing `Seq`.
+                cur
+            }
+            ResolvedMergeFn::Seq(items) => {
+                let mut result = cur;
+                for item in items {
+                    result = item.run(state, cur, new, ts);
+                }
+                result
+            }
         }
     }
 }
@@ -1266,6 +1343,7 @@ impl TableAction {
             table_math: SchemaMath {
                 func_cols: func_info.schema.len(),
                 subsume: func_info.can_subsume,
+                num_values: func_info.num_values,
             },
             default: match &func_info.default_val {
                 DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
@@ -1544,8 +1622,11 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 struct SchemaMath {
     /// Whether or not the table is enabled for subsumption.
     subsume: bool,
-    /// The number of columns in the function (including the return value).
+    /// The number of columns in the function (keys + all value columns).
     func_cols: usize,
+    /// The number of value (non-key) columns. Almost always 1; functions whose
+    /// value is compiled to multiple columns (e.g. an unboxed pair) have more.
+    num_values: usize,
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with
@@ -1595,14 +1676,26 @@ impl SchemaMath {
     }
 
     fn num_keys(&self) -> usize {
-        self.func_cols - 1
+        self.func_cols - self.num_values
     }
 
     fn table_columns(&self) -> usize {
         self.func_cols + 1 /* timestamp */ + if self.subsume { 1 } else { 0 }
     }
 
+    /// The column indices of the value (non-key) columns: `num_keys..func_cols`.
+    /// Used by the multi-value merge path (wired up next).
+    #[allow(dead_code)]
+    fn value_cols(&self) -> std::ops::Range<usize> {
+        self.num_keys()..self.func_cols
+    }
+
+    /// The single value column. Only valid when `num_values == 1`.
     fn ret_val_col(&self) -> usize {
+        debug_assert_eq!(
+            self.num_values, 1,
+            "ret_val_col requires a single value column"
+        );
         self.func_cols - 1
     }
 

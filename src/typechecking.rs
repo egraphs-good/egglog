@@ -733,13 +733,9 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
-        // View tables (with term_constructor) must have at least one input (the e-class)
-        if fdecl.term_constructor.is_some() && fdecl.schema.input.is_empty() {
-            return Err(TypeError::TermConstructorNoInputs(
-                fdecl.name.clone(),
-                fdecl.span.clone(),
-            ));
-        }
+        // Note: FD view tables (with term_constructor) may have zero inputs
+        // (e.g. the view for a global), because the e-class now lives in the
+        // value column rather than as the last input.
         let ftype = self.function_to_functype(fdecl)?;
         if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
             return Err(TypeError::FunctionAlreadyBound(
@@ -775,6 +771,14 @@ impl TypeInfo {
                 )?),
                 None => None,
             },
+            // Effect actions of a block-form merge: resolved + typechecked via
+            // the same pipeline as rule actions, with `old`/`new` bound.
+            merge_action: self.typecheck_standalone_actions(
+                symbol_gen,
+                &fdecl.merge_action,
+                &bound_vars,
+                Context::Write,
+            )?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
             internal_hidden: fdecl.internal_hidden,

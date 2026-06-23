@@ -108,6 +108,7 @@ impl GlobalRemover<'_> {
                         },
                         resolved_schema: resolved_call.clone(),
                         merge: None,
+                        merge_action: Default::default(),
                         cost: None,
                         unextractable: true,
                         internal_hidden: false,

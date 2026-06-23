@@ -116,10 +116,20 @@ impl ProofInstrumentor<'_> {
     /// Returns the name of the Pair sort used to bundle (leader, proof) in the UF function index.
     /// Only used in proof mode.
     pub(crate) fn uf_pair_sort_name(&mut self, sort: &str) -> String {
-        self.egraph
-            .parser
-            .symbol_gen
-            .fresh(&format!("UFPair_{sort}"))
+        if let Some(name) = self.egraph.proof_state.uf_pair_sort.get(sort) {
+            name.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("UFPair_{sort}"));
+            self.egraph
+                .proof_state
+                .uf_pair_sort
+                .insert(sort.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {

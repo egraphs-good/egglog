@@ -336,6 +336,7 @@ impl Parser {
             "function" => match tail {
                 [name, inputs, output, rest @ ..] => {
                     let mut merge = None;
+                    let mut merge_action = GenericActions(Vec::new());
                     let mut hidden = false;
                     let mut let_binding = false;
                     let mut term_constructor = None;
@@ -358,7 +359,24 @@ impl Parser {
                                         "conflicting merge options: :merge and :no-merge cannot both be specified"
                                     );
                                 }
-                                merge = Some(Some(self.parse_expr(e)?));
+                                // Block form `:merge ((action)... value)`: when the
+                                // first element is itself a list, the leading forms are
+                                // effect actions and the last form is the merged value.
+                                // (A plain expression always has an atom head.)
+                                if let Sexp::List(items, _) = e
+                                    && let [Sexp::List(..), ..] = items.as_slice()
+                                {
+                                    let (value_sexp, action_sexps) =
+                                        items.split_last().expect("non-empty list");
+                                    let mut actions = Vec::new();
+                                    for a in action_sexps {
+                                        actions.extend(self.parse_action(a)?);
+                                    }
+                                    merge_action = GenericActions(actions);
+                                    merge = Some(Some(self.parse_expr(value_sexp)?));
+                                } else {
+                                    merge = Some(Some(self.parse_expr(e)?));
+                                }
                             }
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
@@ -382,6 +400,7 @@ impl Parser {
                         name: name.expect_atom("function name")?,
                         schema: self.parse_schema(inputs, output)?,
                         merge,
+                        merge_action,
                         hidden,
                         let_binding,
                         term_constructor,

@@ -733,6 +733,7 @@ pub fn add_function(
         name: name.to_owned(),
         schema,
         merge,
+        merge_action: Default::default(),
         hidden: false,
         let_binding: false,
         term_constructor: None,

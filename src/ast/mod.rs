@@ -140,6 +140,7 @@ where
                     schema: f.schema.clone(),
                     name: f.name.clone(),
                     merge: f.merge.clone(),
+                    merge_action: f.merge_action.clone(),
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
                     term_constructor: f.term_constructor.clone(),
@@ -699,6 +700,9 @@ where
         name: String,
         schema: Schema,
         merge: Option<GenericExpr<Head, Leaf>>,
+        /// Effect actions run before computing the merge value (block-form
+        /// `:merge`). Empty for the common single-expression merge.
+        merge_action: GenericActions<Head, Leaf>,
         hidden: bool,
         let_binding: bool,
         term_constructor: Option<String>,
@@ -978,6 +982,7 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
@@ -985,7 +990,16 @@ where
             } => {
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
-                    write!(f, " :merge {merge}")?;
+                    if merge_action.0.is_empty() {
+                        write!(f, " :merge {merge}")?;
+                    } else {
+                        // block-form merge: an action sequence then the value
+                        write!(f, " :merge (")?;
+                        for action in &merge_action.0 {
+                            write!(f, "{action} ")?;
+                        }
+                        write!(f, "{merge})")?;
+                    }
                 } else {
                     write!(f, " :no-merge")?;
                 }
@@ -1249,6 +1263,9 @@ where
     /// Resolved schema after typechecking is stored here, otherwise "".
     pub resolved_schema: Head,
     pub merge: Option<GenericExpr<Head, Leaf>>,
+    /// Effect actions run before computing the merge value (block-form
+    /// `:merge`). Empty for the common single-expression merge.
+    pub merge_action: GenericActions<Head, Leaf>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
     /// Hidden functions are excluded from print-size output.
@@ -1317,6 +1334,7 @@ impl FunctionDecl {
             schema,
             resolved_schema: String::new(),
             merge,
+            merge_action: Default::default(),
             cost: None,
             unextractable: true,
             internal_hidden: false,
@@ -1341,6 +1359,7 @@ impl FunctionDecl {
             resolved_schema: String::new(),
             schema,
             merge: None,
+            merge_action: Default::default(),
             cost,
             unextractable,
             internal_hidden: hidden,
@@ -1366,6 +1385,7 @@ where
             schema: self.schema,
             resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
+            merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
             unextractable: self.unextractable,
             internal_hidden: self.internal_hidden,
@@ -1691,6 +1711,7 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
@@ -1703,6 +1724,7 @@ where
                     output: fun(schema.output),
                 },
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor: term_constructor.map(&mut *fun),
@@ -1785,6 +1807,7 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
@@ -1794,6 +1817,7 @@ where
                 name,
                 schema,
                 merge: merge.map(|e| e.visit_exprs(f)),
+                merge_action: merge_action.visit_exprs(f),
                 hidden,
                 let_binding,
                 term_constructor,
@@ -1924,6 +1948,7 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
@@ -1933,6 +1958,7 @@ where
                 name,
                 schema,
                 merge: merge.map(|expr| expr.map_symbols(head, leaf)),
+                merge_action: merge_action.map_symbols(head, leaf),
                 hidden,
                 let_binding,
                 term_constructor,

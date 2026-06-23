@@ -360,11 +360,13 @@ impl RuleBuilder<'_> {
             SchemaMath {
                 subsume: info.can_subsume,
                 func_cols: info.schema.len(),
+                num_values: info.num_values,
             }
         } else {
             SchemaMath {
                 subsume: subsume_entry.is_some(),
                 func_cols: entries.len(),
+                num_values: 1,
             }
         };
         schema_math.write_table_row(
@@ -487,6 +489,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
         };
         assert!(info.can_subsume);
         assert_eq!(entries.len() + 1, info.schema.len());
@@ -543,6 +546,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
         };
         let cb: BuildRuleCallback = match info.default_val {
             DefaultVal::Const(_) | DefaultVal::FreshId => {
@@ -676,6 +680,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
         };
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);

@@ -46,7 +46,7 @@ use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_add_primitive::add_primitive_with_validator;
-use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
+use egglog_ast::generic_ast::{Change, GenericAction, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
@@ -460,10 +460,233 @@ impl Default for EGraph {
             if a > b { a } else { b }
         });
 
+        // `begin` evaluates all of its arguments (for their effects) and
+        // returns the last one. This lets a `:merge` expression perform a
+        // side effect (e.g. `uf-set`) and still return a value.
+        eg.add_pure_primitive(
+            Begin {
+                name: "begin".to_string(),
+            },
+            None,
+        );
+        // `uf-set` inserts a row into a named table from within an
+        // expression (including a `:merge`). The first argument is the
+        // table name (a String), the rest are the row (key columns +
+        // value column). Returns Unit.
+        eg.add_write_primitive(
+            UfSet {
+                name: "uf-set".to_string(),
+            },
+            None,
+        );
+        // `(select-eq a b x y)` returns `x` if `a == b` else `y`. Used in
+        // the FD-merge proof encoding to pick the orientation-correct proof
+        // (since a `:merge` expression cannot branch on `ordering-max`).
+        eg.add_pure_primitive(
+            SelectEq {
+                name: "select-eq".to_string(),
+            },
+            None,
+        );
+
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
 
         eg
+    }
+}
+
+/// `begin` primitive: evaluate all arguments, return the last.
+#[derive(Clone)]
+struct Begin {
+    name: String,
+}
+
+impl Primitive for Begin {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(BeginTypeConstraint {
+            name: self.name.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl PurePrim for Begin {
+    fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        args.last().copied()
+    }
+}
+
+/// Type constraint for `begin`: the output type equals the type of the
+/// last argument; the other arguments may have any type. Requires at
+/// least one (input) argument.
+struct BeginTypeConstraint {
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for BeginTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // `arguments` is `[input_0, .., input_{n-1}, output]`, so we need
+        // at least two entries (one real input plus the output).
+        if arguments.len() < 2 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 2,
+                },
+            )];
+        }
+        let output = arguments[arguments.len() - 1].clone();
+        let last_input = arguments[arguments.len() - 2].clone();
+        vec![constraint::eq(output, last_input)]
+    }
+}
+
+/// `uf-set` primitive: insert a row into a named table. Used to let a
+/// `:merge` expression write to a side table (e.g. the proof union-find).
+#[derive(Clone)]
+struct UfSet {
+    name: String,
+}
+
+impl Primitive for UfSet {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(UfSetTypeConstraint {
+            name: self.name.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl WritePrim for UfSet {
+    fn apply<'a, 'db>(&self, mut state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        // First argument is the table name; the rest are the row.
+        let table_name: String = state
+            .base_values()
+            .unwrap::<crate::sort::S>(args[0])
+            .as_str()
+            .to_owned();
+        let row: Vec<Value> = args[1..].to_vec();
+        state.insert(&table_name, row.into_iter());
+        Some(state.base_values().get::<()>(()))
+    }
+}
+
+/// Type constraint for `uf-set`: the first argument is a `String` (the
+/// table name) and the output is `Unit`. The remaining arguments (the
+/// row) are left unconstrained and inferred from their expressions.
+struct UfSetTypeConstraint {
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for UfSetTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // `[name, row.., output]`: need the name plus the output at least.
+        if arguments.len() < 2 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 2,
+                },
+            )];
+        }
+        let string_sort = typeinfo.get_sort_by_name("String").unwrap().clone();
+        let unit_sort = typeinfo.get_sort_by_name("Unit").unwrap().clone();
+        let output = arguments[arguments.len() - 1].clone();
+        vec![
+            constraint::assign(arguments[0].clone(), string_sort),
+            constraint::assign(output, unit_sort),
+        ]
+    }
+}
+
+/// `select-eq` primitive: `(select-eq a b x y)` returns `x` if `a == b`
+/// (value equality) else `y`.
+#[derive(Clone)]
+struct SelectEq {
+    name: String,
+}
+
+impl Primitive for SelectEq {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(SelectEqTypeConstraint {
+            name: self.name.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl PurePrim for SelectEq {
+    fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        if args[0] == args[1] {
+            Some(args[2])
+        } else {
+            Some(args[3])
+        }
+    }
+}
+
+/// Type constraint for `select-eq`: `[a, b, x, y, output]` with `a==b` the
+/// same sort and `x==y==output` the same sort.
+struct SelectEqTypeConstraint {
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for SelectEqTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // `[a, b, x, y, output]`
+        if arguments.len() != 5 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 5,
+                },
+            )];
+        }
+        vec![
+            constraint::eq(arguments[0].clone(), arguments[1].clone()),
+            constraint::eq(arguments[2].clone(), arguments[3].clone()),
+            constraint::eq(arguments[3].clone(), arguments[4].clone()),
+        ]
     }
 }
 
@@ -786,6 +1009,53 @@ impl EGraph {
         }
     }
 
+    /// Lower a (possibly block-form) merge into a backend [`MergeFn`].
+    ///
+    /// With no leading effect actions this is just the value expression. With
+    /// effect actions it becomes a `Seq` of the lowered actions followed by the
+    /// value, so the effects run (and declare their write-dependencies via
+    /// `TableInsert`) before the merged value is produced.
+    fn translate_merge_to_mergefn(
+        &self,
+        actions: &crate::ast::ResolvedActions,
+        value: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        if actions.0.is_empty() {
+            return self.translate_expr_to_mergefn(value);
+        }
+        let mut items = Vec::with_capacity(actions.0.len() + 1);
+        for action in &actions.0 {
+            items.push(self.translate_action_to_mergefn(action)?);
+        }
+        items.push(self.translate_expr_to_mergefn(value)?);
+        Ok(egglog_bridge::MergeFn::Seq(items))
+    }
+
+    /// Lower a single effect action from a block-form merge. Only `(set (f
+    /// ...) v)` on a function is supported (it becomes a `TableInsert`, which
+    /// declares `f`'s table as a write-dependency of this merge).
+    fn translate_action_to_mergefn(
+        &self,
+        action: &crate::ast::ResolvedAction,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        match action {
+            GenericAction::Set(_, ResolvedCall::Func(f), args, rhs) => {
+                let mut row = args
+                    .iter()
+                    .map(|arg| self.translate_expr_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                row.push(self.translate_expr_to_mergefn(rhs)?);
+                Ok(egglog_bridge::MergeFn::TableInsert(
+                    self.functions[&f.name].backend_id,
+                    row,
+                ))
+            }
+            _ => Err(Error::BackendError(
+                "only `(set (f ...) v)` actions are supported inside a `:merge` block".into(),
+            )),
+        }
+    }
+
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
         let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
             Some(sort) => Ok(sort.clone()),
@@ -811,6 +1081,7 @@ impl EGraph {
 
         use egglog_bridge::{DefaultVal, MergeFn};
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+            num_values: 1,
             schema: input
                 .iter()
                 .chain([&output])
@@ -824,7 +1095,7 @@ impl EGraph {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
-                    Some(expr) => self.translate_expr_to_mergefn(expr)?,
+                    Some(expr) => self.translate_merge_to_mergefn(&decl.merge_action, expr)?,
                 },
             },
             name: decl.name.to_string(),

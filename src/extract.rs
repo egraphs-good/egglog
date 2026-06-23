@@ -231,13 +231,13 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input column
-                let output_sort_name = func.1.extraction_output_sort().name();
+                let output_sort_name = func.1.extraction_output_sort(egraph).name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
                 } else {
                     rev_index.insert(output_sort_name.to_owned(), vec![func_name]);
                     if extract_all_sorts {
-                        rootsorts.push(func.1.extraction_output_sort().clone());
+                        rootsorts.push(func.1.extraction_output_sort(egraph).clone());
                     }
                 }
             }
@@ -270,7 +270,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     if !funcs_set.contains(h) {
                         let func = egraph.functions.get(h).unwrap();
                         // For view tables, children are all but the last input (which is the e-class)
-                        let num_children = func.extraction_num_children();
+                        let num_children = func.extraction_num_children(egraph);
                         for ch in func.schema.input.iter().take(num_children) {
                             let ch_name = ch.name();
                             if !seen.contains(ch_name) {
@@ -293,7 +293,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            let output_sort_name = func.extraction_output_sort().name();
+            let output_sort_name = func.extraction_output_sort(egraph).name();
             if !costs.contains_key(output_sort_name) {
                 costs.insert(output_sort_name.to_owned(), Default::default());
                 topo_rnk.insert(output_sort_name.to_owned(), Default::default());
@@ -347,7 +347,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
         let sorts = &func.schema.input;
-        let num_children = func.extraction_num_children();
+        let num_children = func.extraction_num_children(egraph);
         for (value, sort) in row.vals.iter().take(num_children).zip(sorts.iter()) {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
@@ -384,7 +384,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         func: &Function,
     ) -> usize {
         let sorts = &func.schema.input;
-        let num_children = func.extraction_num_children();
+        let num_children = func.extraction_num_children(egraph);
         row.vals
             .iter()
             .take(num_children)
@@ -414,9 +414,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             for func_name in funcs.iter() {
                 let func = egraph.functions.get(func_name).unwrap();
-                let target_sort = func.extraction_output_sort();
+                let target_sort = func.extraction_output_sort(egraph);
 
-                let output_idx = func.extraction_output_index();
+                let output_idx = func.extraction_output_index(egraph);
                 let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
@@ -461,8 +461,8 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         // Save the edges for reconstruction
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            let target_sort = func.extraction_output_sort();
-            let output_idx = func.extraction_output_index();
+            let target_sort = func.extraction_output_sort(egraph);
+            let output_idx = func.extraction_output_index(egraph);
 
             let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
                 if !row.subsumed {
@@ -547,7 +547,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let func = egraph.functions.get(func_name).unwrap();
             let ch_sorts = &func.schema.input;
 
-            let num_children = func.extraction_num_children();
+            let num_children = func.extraction_num_children(egraph);
             let output_name = func.extraction_term_name();
 
             let mut ch_terms: Vec<TermId> = Vec::new();
@@ -673,7 +673,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                         .functions
                         .get(func_name)
                         .unwrap()
-                        .extraction_output_sort()
+                        .extraction_output_sort(egraph)
                         .name()
                 {
                     root_funcs.push(func_name.clone());
@@ -682,7 +682,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             for func_name in root_funcs.iter() {
                 let func = egraph.functions.get(func_name).unwrap();
-                let output_idx = func.extraction_output_index();
+                let output_idx = func.extraction_output_index(egraph);
 
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
@@ -705,7 +705,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let mut ch_terms: Vec<TermId> = Vec::new();
                 let func = egraph.functions.get(&func_name).unwrap();
                 let ch_sorts = &func.schema.input;
-                let num_children = func.extraction_num_children();
+                let num_children = func.extraction_num_children(egraph);
                 // For view tables, children are all but the last input (which is the e-class)
                 for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()).take(num_children) {
                     ch_terms.push(self.reconstruct_termdag_node_helper(
@@ -771,11 +771,26 @@ impl Function {
         }
     }
 
-    /// For view tables (with term_constructor), the effective output sort is the last input column.
-    /// For regular tables, it's the output sort.
-    /// This is used by extraction to determine which sort a table produces values for.
-    pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
-        if self.decl.term_constructor.is_some() {
+    /// Whether this is a "legacy" view table whose e-class lives in the last
+    /// input column (the old custom-function view shape). FD views — those
+    /// whose `term_constructor` refers to a constructor — keep the e-class in
+    /// the value column and so behave like a regular table for extraction.
+    fn is_legacy_view(&self, egraph: &EGraph) -> bool {
+        match &self.decl.term_constructor {
+            Some(tc) => egraph
+                .functions
+                .get(tc)
+                .map(|f| f.decl.subtype != FunctionSubtype::Constructor)
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// The sort this table produces values for during extraction.
+    /// For legacy view tables this is the last input column (the e-class);
+    /// otherwise it is the output sort.
+    pub(crate) fn extraction_output_sort(&self, egraph: &EGraph) -> &ArcSort {
+        if self.is_legacy_view(egraph) {
             self.schema.input.last().unwrap()
         } else {
             &self.schema.output
@@ -783,9 +798,9 @@ impl Function {
     }
 
     /// Returns the number of children for extraction purposes.
-    /// For view tables, this excludes the last column (the e-class).
-    pub(crate) fn extraction_num_children(&self) -> usize {
-        if self.decl.term_constructor.is_some() {
+    /// For legacy view tables, this excludes the last input (the e-class).
+    pub(crate) fn extraction_num_children(&self, egraph: &EGraph) -> usize {
+        if self.is_legacy_view(egraph) {
             self.schema.input.len() - 1
         } else {
             self.schema.input.len()
@@ -802,16 +817,14 @@ impl Function {
     }
 
     /// Returns the index of the output value in a row for extraction purposes.
-    /// For view tables, the e-class is the last input column (second-to-last in the row).
-    /// For regular tables, it's the last column (the actual output).
-    pub(crate) fn extraction_output_index(&self) -> usize {
-        if self.decl.term_constructor.is_some() {
-            // For view tables: input is [children..., eclass], output is view_sort
-            // Row is [children..., eclass, view_sort]
-            // We want eclass which is at index input.len() - 1
+    /// For legacy view tables the e-class is the last input column; otherwise
+    /// it is the last column (the actual output).
+    pub(crate) fn extraction_output_index(&self, egraph: &EGraph) -> usize {
+        if self.is_legacy_view(egraph) {
+            // Legacy view: row is [children..., eclass, view_sort]; eclass at input.len() - 1.
             self.schema.input.len() - 1
         } else {
-            // For regular tables: row is [inputs..., output]
+            // Regular / FD view: row is [inputs..., output].
             self.schema.input.len()
         }
     }
