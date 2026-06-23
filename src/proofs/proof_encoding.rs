@@ -18,6 +18,10 @@ pub(crate) struct EncodingState {
     pub proofs_enabled: bool,
     pub proof_testing: bool,
     pub proof_names: EncodingNames,
+    /// Test-only knob: annotate RHS-reading rules `:naive` (the safe
+    /// whole-database baseline) instead of `:unsafe-seminaive`, so tests can
+    /// assert the two produce the same database.
+    pub force_proof_naive: bool,
 }
 
 impl EncodingState {
@@ -31,6 +35,7 @@ impl EncodingState {
             proofs_enabled: false,
             proof_names: EncodingNames::new(symbol_gen),
             proof_testing: false,
+            force_proof_naive: false,
         }
     }
 }
@@ -1158,14 +1163,12 @@ impl<'a> ProofInstrumentor<'a> {
     /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
     /// Finally, each view update also updates the proof tables.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
-        // Fetch eq-sort variables' term_proofs as action-side lookups
-        // rather than body joins (see instrument_facts). Those are
-        // function lookups in a RHS, so the generated rule opts into
-        // `:unsafe-seminaive` (keeps delta evaluation, permits the reads).
+        // term_proofs are fetched as action-side lookups (see instrument_facts),
+        // so a rule with any needs a Read/Full action context (`eval_opt` below).
         let (facts, action_lookups, proof_str) = self.instrument_facts(&rule.body);
         let proof_var = self.fresh_var();
         let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
-        let needs_unsafe_seminaive = !action_lookups.is_empty();
+        let reads_in_rhs = !action_lookups.is_empty();
         // The looked-up proofs feed `proof_str`, so bind them first.
         let action_lookups_str = ListDisplay(&action_lookups, "\n                    ");
         let proof_var_binding = if self.egraph.proof_state.proofs_enabled {
@@ -1185,8 +1188,17 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             format!(":ruleset {}", rule.ruleset)
         };
-        let unsafe_opt = if needs_unsafe_seminaive {
-            ":unsafe-seminaive"
+        // Preserve a user `:naive` (else it silently reverts to seminaive).
+        // Otherwise an RHS-reading rule needs `:unsafe-seminaive` (or `:naive`
+        // under the test knob).
+        let eval_opt = if rule.eval_mode.is_naive() {
+            ":naive"
+        } else if reads_in_rhs {
+            if self.egraph.proof_state.force_proof_naive {
+                ":naive"
+            } else {
+                ":unsafe-seminaive"
+            }
         } else {
             ""
         };
@@ -1194,7 +1206,7 @@ impl<'a> ProofInstrumentor<'a> {
             "(rule ({})
                    ({proof_var_binding}
                     {})
-                    {ruleset_opt} {unsafe_opt}
+                    {ruleset_opt} {eval_opt}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),

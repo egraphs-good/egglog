@@ -80,50 +80,30 @@ where
     Expr(Span, GenericExpr<Head, Leaf>),
 }
 
-/// How a rule is evaluated, selected by mutually exclusive rule options.
-///
-/// The default ([`Seminaive`](RuleEvalMode::Seminaive)) and the two opt-in
-/// options ([`:naive`](RuleEvalMode::Naive) and
-/// [`:unsafe-seminaive`](RuleEvalMode::UnsafeSeminaive)) are mutually
-/// exclusive, so they share a single field on [`GenericRule`].
+/// How a rule is evaluated. The three modes are mutually exclusive, so they
+/// share one field on [`GenericRule`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum RuleEvalMode {
-    /// The default: seminaive (delta) evaluation. The body is matched only
-    /// against rows that are new this iteration, and the query/action are
-    /// compiled with the restrictive `Pure`/`Write` primitive contexts (no
-    /// database reads in the RHS).
+    /// Default: seminaive (delta) evaluation with restrictive `Pure`/`Write`
+    /// primitive contexts (no database reads in the RHS).
     #[default]
     Seminaive,
-    /// The `:naive` rule option disables seminaive evaluation. The body is
-    /// matched against the entire database every iteration and the
-    /// query/action are compiled with the permissive `Read`/`Full` primitive
-    /// contexts, allowing primitives that read or write the database inside
-    /// queries and actions.
+    /// `:naive`: match the whole database every iteration, with permissive
+    /// `Read`/`Full` contexts so the RHS may read the database.
     Naive,
-    /// The `:unsafe-seminaive` rule option keeps seminaive (delta)
-    /// evaluation but compiles the query/action with the permissive
-    /// `Read`/`Full` primitive contexts (like `:naive`), and the
-    /// typechecker's "no function lookups in actions" check is skipped. This
-    /// lets the RHS perform arbitrary database reads — read-primitives and
-    /// function-table lookups — without paying for `:naive`'s whole-database
-    /// matching.
-    ///
-    /// It is **unsafe**: a read on a seminaive rule's RHS observes the
-    /// database mid-iteration, so it won't be re-evaluated if the data
-    /// changes. The caller takes responsibility.
+    /// `:unsafe-seminaive`: like `:naive`'s `Read`/`Full` contexts (the RHS may
+    /// read the database) but keeps delta evaluation. **Unsafe**: an RHS read
+    /// observes the database mid-iteration and isn't re-evaluated if it changes.
     UnsafeSeminaive,
 }
 
 impl RuleEvalMode {
-    /// Whether this rule disables seminaive (delta) evaluation, i.e. it is
-    /// `:naive`. Both [`Seminaive`](RuleEvalMode::Seminaive) and
-    /// [`UnsafeSeminaive`](RuleEvalMode::UnsafeSeminaive) evaluate seminaively.
+    /// `:naive` — disables seminaive evaluation (unlike `:unsafe-seminaive`).
     pub fn is_naive(self) -> bool {
         matches!(self, RuleEvalMode::Naive)
     }
 
-    /// Whether the query/action should be compiled with the permissive
-    /// `Read`/`Full` primitive contexts. True for both `:naive` and
+    /// Uses the permissive `Read`/`Full` contexts: true for `:naive` and
     /// `:unsafe-seminaive`.
     pub fn uses_read_contexts(self) -> bool {
         !matches!(self, RuleEvalMode::Seminaive)
@@ -143,9 +123,7 @@ where
     pub name: String,
     /// The ruleset this rule belongs to. Defaults to `""`.
     pub ruleset: String,
-    /// How this rule is evaluated. Set by the mutually exclusive `:naive`
-    /// and `:unsafe-seminaive` rule options; defaults to
-    /// [`RuleEvalMode::Seminaive`].
+    /// How this rule is evaluated; set by `:naive` / `:unsafe-seminaive`.
     pub eval_mode: RuleEvalMode,
     /// If `true`, this rule skips tree-decomposition during query
     /// planning and evaluate rules as a single-bag (without decomposing

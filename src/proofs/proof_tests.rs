@@ -1,10 +1,101 @@
 #[cfg(test)]
 mod tests {
-    use crate::ast::{ResolvedCommand, sanitize_internal_names};
+    use crate::CommandOutput;
+    use crate::ast::{ResolvedCommand, RuleEvalMode, sanitize_internal_names};
 
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
         egraph.resolve_program(None, source).unwrap()
+    }
+
+    /// The proof encoder reads body variables' `term_proof`s from the RHS via
+    /// `:unsafe-seminaive` lookups. Assert this produces the same database as
+    /// the safe baseline (the same rules annotated `:naive`), for a hardcoded
+    /// handful of files (running it across all tests would be too slow).
+    #[test]
+    fn unsafe_seminaive_matches_naive() {
+        let files = [
+            "tests/calc.egg",
+            "tests/integer_math.egg",
+            "tests/fibonacci-demand.egg",
+            "tests/until.egg",
+        ];
+
+        for file in files {
+            let source = std::fs::read_to_string(file)
+                .unwrap_or_else(|e| panic!("couldn't read {file}: {e}"));
+
+            // Guard against a vacuous comparison: the two encodings must differ.
+            let encode = |naive: bool| -> String {
+                let mut egraph = crate::EGraph::new_with_proofs();
+                egraph.proof_state.force_proof_naive = naive;
+                egraph
+                    .resolve_program(Some(file.to_string()), &source)
+                    .unwrap_or_else(|e| panic!("{file} resolve (naive={naive}) failed: {e}"))
+                    .iter()
+                    .map(|cmd| cmd.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                encode(false).contains(":unsafe-seminaive") && encode(false) != encode(true),
+                "expected {file} to exercise the `:unsafe-seminaive` encoding path"
+            );
+
+            // `print-size` summarizes the whole database (per-function row
+            // counts, sorted) deterministically.
+            let program = format!("{source}\n(print-size)");
+
+            let run = |naive: bool| -> Vec<CommandOutput> {
+                let mut egraph = crate::EGraph::new_with_proofs();
+                egraph.proof_state.force_proof_naive = naive;
+                egraph
+                    .parse_and_run_program(Some(file.to_string()), &program)
+                    .unwrap_or_else(|e| panic!("{file} (naive={naive}) failed: {e}"))
+            };
+
+            let unsafe_seminaive = CommandOutput::snapshot_stable_under_proof_encoding(&run(false));
+            let naive = CommandOutput::snapshot_stable_under_proof_encoding(&run(true));
+
+            assert_eq!(
+                unsafe_seminaive, naive,
+                ":unsafe-seminaive and :naive proof encodings disagree for {file}"
+            );
+        }
+    }
+
+    /// A user rule marked `:naive` must stay `:naive` through proof encoding;
+    /// dropping it would silently switch the rule to seminaive evaluation.
+    #[test]
+    fn proof_encoding_preserves_naive() {
+        // The second case binds an eq-sort body var, whose `term_proof` RHS
+        // read would otherwise force `:unsafe-seminaive`. Both must stay naive.
+        let cases = [
+            r#"(relation r (i64))
+               (relation s (i64))
+               (rule ((r x)) ((s x)) :naive :name "keep")"#,
+            r#"(sort Math)
+               (constructor Num (i64) Math)
+               (constructor Neg (Math) Math)
+               (relation seen (Math))
+               (rule ((Neg m)) ((seen m)) :naive :name "keep")"#,
+        ];
+        for source in cases {
+            let mut egraph = crate::EGraph::new_with_proofs();
+            let resolved = egraph.resolve_program(None, source).unwrap();
+            let rule = resolved
+                .iter()
+                .find_map(|c| match c {
+                    ResolvedCommand::Rule { rule } if rule.name == "keep" => Some(rule),
+                    _ => None,
+                })
+                .expect("instrumented rule not found");
+            assert_eq!(
+                rule.eval_mode,
+                RuleEvalMode::Naive,
+                "proof encoding did not preserve :naive for:\n{source}"
+            );
+        }
     }
 
     #[test]

@@ -169,6 +169,28 @@ pub enum CommandOutput {
     UserDefined(Arc<dyn UserDefinedCommandOutput>),
 }
 
+impl CommandOutput {
+    /// Render command outputs to a string that is identical whether the program
+    /// ran normally or under proof encoding (`--proofs`). Drops outputs that
+    /// legitimately differ or are non-deterministic (timing, `PrintFunction`
+    /// per #793, extraction variants) and reduces `ExtractBest` to its cost.
+    pub fn snapshot_stable_under_proof_encoding(outputs: &[CommandOutput]) -> String {
+        outputs
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::OverallStatistics(_) => None,
+                CommandOutput::PrintFunction(..) => None,
+                CommandOutput::ExtractBest(_, cost, _) => {
+                    Some(format!("(extraction-costs {cost})\n"))
+                }
+                CommandOutput::ExtractVariants(..) => None,
+                other => Some(other.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
+
 impl std::fmt::Display for CommandOutput {
     /// Format the command output for display, ending with a newline.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

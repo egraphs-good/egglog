@@ -7,7 +7,6 @@ use crate::{
 };
 use ast::{
     MappedExprExt, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule,
-    RuleEvalMode,
 };
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
@@ -891,9 +890,9 @@ impl TypeInfo {
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
-        // `:unsafe-seminaive` opts out of the "no function lookups in
-        // actions" check (that's the point of the option).
-        if *eval_mode != RuleEvalMode::UnsafeSeminaive {
+        // Function lookups in actions need a `Full` action context, which only
+        // `:naive` / `:unsafe-seminaive` provide; reject them otherwise.
+        if !eval_mode.uses_read_contexts() {
             self.check_lookup_actions(&actions)?;
         }
 

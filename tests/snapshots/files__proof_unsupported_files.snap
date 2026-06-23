@@ -37,6 +37,7 @@ map.egg
 math.egg
 merge_read.egg
 multiset.egg
+naive-action-lookup.egg
 nested-container-dirty-propagation.egg
 pair.egg
 prims.egg
