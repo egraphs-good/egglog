@@ -34,6 +34,7 @@ fn ac_test(can_subsume: bool) {
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "num".into(),
@@ -41,6 +42,7 @@ fn ac_test(can_subsume: bool) {
     });
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
@@ -112,6 +114,7 @@ fn ac_fail() {
     let one = egraph.base_value_constant(1i64);
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "num".into(),
@@ -119,6 +122,7 @@ fn ac_fail() {
     });
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
@@ -208,6 +212,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     // tables
     let diff = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "diff".into(),
@@ -215,6 +220,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let integral = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "integral".into(),
@@ -222,6 +228,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let add = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
@@ -229,6 +236,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let sub = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sub".into(),
@@ -236,6 +244,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let mul = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "mul".into(),
@@ -243,6 +252,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let div = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "div".into(),
@@ -250,6 +260,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let pow = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "pow".into(),
@@ -258,6 +269,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
 
     let ln = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "ln".into(),
@@ -265,6 +277,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let sqrt = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sqrt".into(),
@@ -272,6 +285,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let sin = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sin".into(),
@@ -279,6 +293,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let cos = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "cos".into(),
@@ -286,6 +301,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let rat = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "rat".into(),
@@ -293,6 +309,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     });
     let var = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "var".into(),
@@ -535,6 +552,7 @@ fn container_test() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "num".into(),
@@ -542,6 +560,7 @@ fn container_test() {
     });
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
@@ -549,6 +568,7 @@ fn container_test() {
     });
     let vec_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 2],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "vec".into(),
@@ -720,6 +740,7 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
     let mut egraph = EGraph::default();
     let k_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "k".into(),
@@ -727,6 +748,7 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
     });
     let w_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "w".into(),
@@ -734,6 +756,7 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
     });
     let l_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "l".into(),
@@ -822,6 +845,7 @@ fn rhs_only_rule() {
     let one = egraph.base_values_mut().get(1i64);
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "num".into(),
@@ -910,6 +934,7 @@ fn mergefn_arithmetic() {
     // This uses nested MergeFn::Primitive with external functions to build the complex merge function
     let f_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Base(int_base)],
+        num_values: 1,
         default: DefaultVal::Fail,
         merge: MergeFn::Primitive(
             add_func,
@@ -1006,6 +1031,7 @@ fn mergefn_nested_function() {
     // Create a function g that will be used in the merge function for f
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
@@ -1016,6 +1042,7 @@ fn mergefn_nested_function() {
     // This uses nested MergeFn::Function to build the complex merge function
     let f_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::Function(
             g_table,
@@ -1128,6 +1155,7 @@ fn constrain_prims_simple() {
     let bool_base = egraph.base_values_mut().register_type::<bool>();
     let f_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "f".into(),
@@ -1135,6 +1163,7 @@ fn constrain_prims_simple() {
     });
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
@@ -1221,6 +1250,7 @@ fn constrain_prims_abstract() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let f_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "f".into(),
@@ -1228,6 +1258,7 @@ fn constrain_prims_abstract() {
     });
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
@@ -1318,6 +1349,7 @@ fn basic_subsumption() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let f_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "f".into(),
@@ -1325,6 +1357,7 @@ fn basic_subsumption() {
     });
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
@@ -1397,6 +1430,7 @@ fn lookup_failure_panics() {
     let mut egraph = EGraph::default();
     let f = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        num_values: 1,
         default: DefaultVal::Fail,
         merge: MergeFn::UnionId,
         name: "test".into(),

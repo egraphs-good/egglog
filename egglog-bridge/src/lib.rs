@@ -1037,10 +1037,20 @@ pub enum MergeFn {
     /// The output of a merge is determined by looking up the value for the given function and the
     /// given arguments in the egraph.
     Function(FunctionId, Vec<MergeFn>),
-    /// Always return the old value for the given function.
+    /// Always return the old value for the given function (value column 0).
     Old,
-    /// Always return the new value for the given function.
+    /// Always return the new value for the given function (value column 0).
     New,
+    /// The old value of value column `i` (for multi-value functions). `Old` is
+    /// `OldCol(0)`.
+    OldCol(usize),
+    /// The new value of value column `i` (for multi-value functions). `New` is
+    /// `NewCol(0)`.
+    NewCol(usize),
+    /// A multi-value result: one merge function per value column. Used as the
+    /// top-level merge of a function with more than one value column; each
+    /// element may read any column via `OldCol`/`NewCol`. Not nested.
+    Tuple(Vec<MergeFn>),
     /// Always overwrite the new value for the given function with a constant. This is more useful
     /// as a "base case" in a more complicated merge function (e.g. one that clamps a value between
     /// 1 and 100) than it is as a standalone merge function.
@@ -1093,7 +1103,12 @@ impl MergeFn {
                     .iter()
                     .for_each(|item| item.fill_deps(egraph, read_deps, write_deps));
             }
-            AssertEq | Old | New | Const(..) => {}
+            Tuple(items) => {
+                items
+                    .iter()
+                    .for_each(|item| item.fill_deps(egraph, read_deps, write_deps));
+            }
+            AssertEq | Old | New | OldCol(_) | NewCol(_) | Const(..) => {}
         }
     }
 
@@ -1107,34 +1122,44 @@ impl MergeFn {
 
         Box::new(move |state, cur, new, out| {
             let timestamp = new[schema_math.ts_col()];
+            let vcols = schema_math.value_cols();
+            let cur_vals = &cur[vcols.clone()];
+            let new_vals = &new[vcols.clone()];
 
             let mut changed = false;
 
-            let ret_val = {
-                let cur = cur[schema_math.ret_val_col()];
-                let new = new[schema_math.ret_val_col()];
-                let out = resolved.run(state, cur, new, timestamp);
-                changed |= cur != out;
-                out
+            // Compute the merged value column(s). A `Tuple` merge produces one
+            // value per column (each may read any old/new column); any other
+            // merge is single-valued.
+            let merged: SmallVec<[Value; 2]> = match &resolved {
+                ResolvedMergeFn::Tuple(items) => items
+                    .iter()
+                    .map(|m| m.run(state, cur_vals, new_vals, timestamp))
+                    .collect(),
+                single => {
+                    SmallVec::from_elem(single.run(state, cur_vals, new_vals, timestamp), 1)
+                }
             };
+            for (k, v) in merged.iter().enumerate() {
+                changed |= cur_vals[k] != *v;
+            }
 
             let subsume = schema_math.subsume.then(|| {
                 let cur = cur[schema_math.subsume_col()];
                 let new = new[schema_math.subsume_col()];
-                let out = combine_subsumed(cur, new);
-                changed |= cur != out;
-                out
+                let out_s = combine_subsumed(cur, new);
+                changed |= cur != out_s;
+                out_s
             });
             if changed {
                 out.extend_from_slice(new);
-                schema_math.write_table_row(
-                    out,
-                    RowVals {
-                        timestamp,
-                        subsume,
-                        ret_val: Some(ret_val),
-                    },
-                );
+                for (k, col) in vcols.enumerate() {
+                    out[col] = merged[k];
+                }
+                out[schema_math.ts_col()] = timestamp;
+                if let Some(subsume) = subsume {
+                    out[schema_math.subsume_col()] = subsume;
+                }
             }
 
             changed
@@ -1144,8 +1169,16 @@ impl MergeFn {
     fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> ResolvedMergeFn {
         match self {
             MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
-            MergeFn::Old => ResolvedMergeFn::Old,
-            MergeFn::New => ResolvedMergeFn::New,
+            MergeFn::Old => ResolvedMergeFn::OldCol(0),
+            MergeFn::New => ResolvedMergeFn::NewCol(0),
+            MergeFn::OldCol(i) => ResolvedMergeFn::OldCol(*i),
+            MergeFn::NewCol(i) => ResolvedMergeFn::NewCol(*i),
+            MergeFn::Tuple(items) => ResolvedMergeFn::Tuple(
+                items
+                    .iter()
+                    .map(|item| item.resolve(function_name, egraph))
+                    .collect(),
+            ),
             MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
                 panic: egraph.new_panic(format!(
                     "Illegal merge attempted for function {function_name}"
@@ -1211,8 +1244,12 @@ impl MergeFn {
 /// holding onto any references, so it can be `move`d inside the `core_relations::MergeFn`.
 enum ResolvedMergeFn {
     Const(Value),
-    Old,
-    New,
+    /// Old value of value column `i`.
+    OldCol(usize),
+    /// New value of value column `i`.
+    NewCol(usize),
+    /// Per-value-column merges (top-level for multi-value functions).
+    Tuple(Vec<ResolvedMergeFn>),
     AssertEq {
         panic: ExternalFunctionId,
     },
@@ -1237,26 +1274,33 @@ enum ResolvedMergeFn {
 }
 
 impl ResolvedMergeFn {
-    fn run(&self, state: &mut ExecutionState, cur: Value, new: Value, ts: Value) -> Value {
+    /// Evaluate one value column's merge. `cur`/`new` are the old/new *value
+    /// tuples* (the value columns of the conflicting rows); single-value
+    /// functions pass a one-element slice, so `OldCol(0)`/`NewCol(0)` recover
+    /// the classic `old`/`new`.
+    fn run(&self, state: &mut ExecutionState, cur: &[Value], new: &[Value], ts: Value) -> Value {
         match self {
             ResolvedMergeFn::Const(v) => *v,
-            ResolvedMergeFn::Old => cur,
-            ResolvedMergeFn::New => new,
+            ResolvedMergeFn::OldCol(i) => cur[*i],
+            ResolvedMergeFn::NewCol(i) => new[*i],
+            ResolvedMergeFn::Tuple(_) => {
+                unreachable!("a Tuple merge is handled by to_callback, never nested/run directly")
+            }
             ResolvedMergeFn::AssertEq { panic } => {
                 if cur != new {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
                 }
-                cur
+                cur[0]
             }
             ResolvedMergeFn::UnionId { uf_table } => {
-                if cur != new {
-                    state.stage_insert(*uf_table, &[cur, new, ts]);
+                if cur[0] != new[0] {
+                    state.stage_insert(*uf_table, &[cur[0], new[0], ts]);
                     // We pick the minimum when unioning. This matches the original egglog
                     // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
-                    std::cmp::min(cur, new)
+                    std::cmp::min(cur[0], new[0])
                 } else {
-                    cur
+                    cur[0]
                 }
             }
             // NB: The primitive and function-based merge functions heap allocate a single callback
@@ -1274,14 +1318,14 @@ impl ResolvedMergeFn {
                     None => {
                         let res = state.call_external_func(*panic, &[]);
                         assert_eq!(res, None);
-                        cur
+                        cur[0]
                     }
                 }
             }
             ResolvedMergeFn::Function { func, args, panic } => {
                 // see github.com/egraphs-good/egglog/pull/287
                 if cur == new {
-                    return cur;
+                    return cur[0];
                 }
 
                 let args = args
@@ -1297,7 +1341,7 @@ impl ResolvedMergeFn {
                 func.lookup_or_insert(state, &args).unwrap_or_else(|| {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
-                    cur
+                    cur[0]
                 })
             }
             ResolvedMergeFn::TableInsert { table, args } => {
@@ -1309,10 +1353,10 @@ impl ResolvedMergeFn {
                 // column is appended by `TableAction::insert`.
                 table.insert(state, row.into_iter());
                 // Return value is discarded by the enclosing `Seq`.
-                cur
+                cur[0]
             }
             ResolvedMergeFn::Seq(items) => {
-                let mut result = cur;
+                let mut result = cur[0];
                 for item in items {
                     result = item.run(state, cur, new, ts);
                 }
