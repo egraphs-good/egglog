@@ -400,19 +400,29 @@ impl<'a> ProofInstrumentor<'a> {
         // so the backend declares the write-dependency); then the value is the
         // smaller representative.
         if self.egraph.proof_state.proofs_enabled {
-            // The view value is the output (an eclass id) directly; `old`/`new`
-            // are the two colliding outputs (both reps of the same f(children),
-            // since they collided on the view key). Their existence proofs live
-            // in `term_proof`, keyed by the output, so we look them up by value
-            // (no pair, no select-eq needed): `term_proof(o)` proves
-            // `o = f(children)`, and transitivity proves `larger = smaller`.
+            // The view value is a `(pair output proof)` (two value columns);
+            // `old`/`new` are the two colliding pairs (both reps of the same
+            // f(children), since they collided on the view key). The proof in
+            // each pair proves `output = f(children)`. We orient them by the
+            // ordering of the outputs and build the congruence union proof
+            // `Trans(p_large, Sym(p_small))` proving `larger = smaller`.
             let trans = self.proof_names().eq_trans_constructor.clone();
             let sym = self.proof_names().eq_sym_constructor.clone();
-            let tp = self.term_proof_name(out_type);
-            let larger = "(ordering-max old new)";
-            let smaller = "(ordering-min old new)";
-            let union_proof = format!("({trans} ({tp} {larger}) ({sym} ({tp} {smaller})))");
-            format!("((set ({uf} {larger} {smaller}) {union_proof}) {smaller})")
+            let oo = "(pair-first old)";
+            let on = "(pair-first new)";
+            let po = "(pair-second old)";
+            let pn = "(pair-second new)";
+            let larger = format!("(ordering-max {oo} {on})");
+            let smaller = format!("(ordering-min {oo} {on})");
+            // p_large proves `larger = f(children)`, p_small proves
+            // `smaller = f(children)`. select-eq picks the proof of whichever
+            // output equals larger/smaller. On a tie (oo == on) both pick the
+            // OLD proof `po`, so the surviving value is unchanged and the merge
+            // does not re-fire forever.
+            let p_large = format!("(select-eq {larger} {oo} {po} {pn})");
+            let p_small = format!("(select-eq {smaller} {oo} {po} {pn})");
+            let union_proof = format!("({trans} {p_large} ({sym} {p_small}))");
+            format!("((set ({uf} {larger} {smaller}) {union_proof}) (pair {smaller} {p_small}))")
         } else {
             // Term-encoding mode (no proofs): the view value is the output (an
             // eclass id) directly, and the UF proof column is Unit.
@@ -484,15 +494,21 @@ impl<'a> ProofInstrumentor<'a> {
             view_flags.push_str(" :internal-let");
         }
         let view_decl = if fdecl.subtype == FunctionSubtype::Constructor {
-            // FD view: key is the children only, value is the output (the
-            // eclass representative) — in both term and proof mode. The proof
-            // of `output = f(children)` lives in `term_proof` (keyed by the
-            // output), so it is NOT bundled here; keeping the value a plain
-            // eq-sort keeps it indexable for cheap rebuild canonicalization.
-            // Congruence is handled by `:merge`.
+            // FD view: key is the children only. In term mode the value is the
+            // output (the eclass representative), a plain eq-sort kept indexable
+            // for cheap rebuild canonicalization. In proof mode the value is a
+            // `(pair output proof)` (two value columns): the output stays a real
+            // eq-sort column (fast rebuild) while the per-row existence proof
+            // rides alongside it. Congruence is handled by `:merge`, which reads
+            // both rows' proofs from the pair.
             let ctor_merge = self.constructor_view_merge(&out_type);
+            let view_value_sort = if self.egraph.proof_state.proofs_enabled {
+                self.uf_pair_sort_name(&out_type)
+            } else {
+                out_type.clone()
+            };
             format!(
-                "(function {view_name} ({in_sorts}) {out_type} :merge {ctor_merge} :internal-term-constructor {name}{view_flags})"
+                "(function {view_name} ({in_sorts}) {view_value_sort} :merge {ctor_merge} :internal-term-constructor {name}{view_flags})"
             )
         } else {
             // Custom functions keep the old shape (output in key, proof as the
@@ -883,14 +899,15 @@ impl<'a> ProofInstrumentor<'a> {
                         let view_name = self.view_name(&func_type.name);
                         let args_str = ListDisplay(new_args, " ");
 
-                        // FD view: key is the children, value is the output.
-                        // Bind the output from the view; the proof of
-                        // `output = f(children)` comes from `term_proof`.
+                        // FD view: key is the children, value is a
+                        // `(pair output proof)` in proof mode (output only in
+                        // term mode). Bind the output (pair-first) and source
+                        // the existence proof from pair-second.
                         let proof = if self.proofs_enabled() {
-                            res.push(format!("(= {fv} ({view_name} {args_str}))"));
-                            let tp = self.term_proof_name(func_type.output.name());
-                            let tp_var = self.fresh_var();
-                            res.push(format!("(= {tp_var} ({tp} {fv}))"));
+                            let pair_var = self.fresh_var();
+                            res.push(format!("(= {pair_var} ({view_name} {args_str}))"));
+                            res.push(format!("(= {fv} (pair-first {pair_var}))"));
+                            let tp_var = format!("(pair-second {pair_var})");
                             let mut proof = tp_var;
                             for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                                 if let Some(arg_proof) = arg_proof {
@@ -1042,8 +1059,16 @@ impl<'a> ProofInstrumentor<'a> {
             let (output, key) = args.split_last().expect("constructor view needs an output");
             let key = ListDisplay(key, " ");
             if self.egraph.proof_state.proofs_enabled {
+                // The FD view value is a `(pair output proof)` (two value
+                // columns): the output (eclass rep) and its existence proof.
+                // We ALSO record `term_proof(output) = proof` (an arbitrary
+                // existence proof for the eclass), used for the existence proof
+                // of bare eq-sort variables in facts — NOT for the congruence
+                // merge, which reads the per-row proof from the pair value.
                 let tp = self.term_proof_name(out_sort);
-                format!("(set ({view_name} {key}) {output})\n(set ({tp} {output}) {proof})")
+                format!(
+                    "(set ({view_name} {key}) (pair {output} {proof}))\n(set ({tp} {output}) {proof})"
+                )
             } else {
                 format!("(set ({view_name} {key}) {output})")
             }
@@ -1152,20 +1177,22 @@ impl<'a> ProofInstrumentor<'a> {
         is_constructor: bool,
         out_sort: &str,
     ) -> (String, String) {
+        let _ = out_sort;
         let view_name = self.view_name(fname);
         if is_constructor {
             let (output, key) = args.split_last().expect("constructor view needs an output");
             let key = ListDisplay(key, " ");
-            // FD view value is the output directly; bind it (no pair). The
-            // existence proof comes from `term_proof`, keyed by the output —
-            // bound as a query atom (a bare `(term_proof ..)` lookup is
-            // disallowed in a rule for a non-constructor function).
-            let query = format!("(= {output} ({view_name} {key}))");
             if self.egraph.proof_state.proofs_enabled {
-                let tp = self.term_proof_name(out_sort);
-                let pf_var = self.fresh_var();
-                (format!("{query}\n(= {pf_var} ({tp} {output}))"), pf_var)
+                // The FD view value is a `(pair output proof)`; bind the pair,
+                // then project the output and proof out of it.
+                let pair_var = self.fresh_var();
+                let pf_var = format!("(pair-second {pair_var})");
+                let query = format!(
+                    "(= {pair_var} ({view_name} {key}))\n(= {output} (pair-first {pair_var}))"
+                );
+                (query, pf_var)
             } else {
+                let query = format!("(= {output} ({view_name} {key}))");
                 (query, "()".to_string())
             }
         } else {

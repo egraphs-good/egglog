@@ -882,7 +882,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
 }
 
 #[derive(Debug)]
-struct ContainerSortImpl<T: ContainerSort>(T);
+pub(crate) struct ContainerSortImpl<T: ContainerSort>(pub(crate) T);
 
 impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     fn name(&self) -> &str {

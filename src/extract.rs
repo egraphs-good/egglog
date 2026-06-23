@@ -231,7 +231,8 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input column
-                let output_sort_name = func.1.extraction_output_sort(egraph).name();
+                let output_sort = func.1.extraction_output_sort(egraph);
+                let output_sort_name = output_sort.name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
                 } else {
@@ -293,7 +294,8 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            let output_sort_name = func.extraction_output_sort(egraph).name();
+            let output_sort = func.extraction_output_sort(egraph);
+            let output_sort_name = output_sort.name();
             if !costs.contains_key(output_sort_name) {
                 costs.insert(output_sort_name.to_owned(), Default::default());
                 topo_rnk.insert(output_sort_name.to_owned(), Default::default());
@@ -789,11 +791,16 @@ impl Function {
     /// The sort this table produces values for during extraction.
     /// For legacy view tables this is the last input column (the e-class);
     /// otherwise it is the output sort.
-    pub(crate) fn extraction_output_sort(&self, egraph: &EGraph) -> &ArcSort {
+    pub(crate) fn extraction_output_sort(&self, egraph: &EGraph) -> ArcSort {
         if self.is_legacy_view(egraph) {
-            self.schema.input.last().unwrap()
+            self.schema.input.last().unwrap().clone()
+        } else if let Some((first, _second)) = EGraph::pair_components(&self.schema.output) {
+            // A pair-valued FD view stores `[children..., output, proof]`; the
+            // extracted value (at `extraction_output_index`) is the output, so
+            // its sort is the pair's first component, not the pair sort itself.
+            first
         } else {
-            &self.schema.output
+            self.schema.output.clone()
         }
     }
 

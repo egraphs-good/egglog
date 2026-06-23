@@ -1056,12 +1056,152 @@ impl EGraph {
         }
     }
 
+    /// Lower a (possibly block-form) merge for a PAIR-valued function. The
+    /// merge is written in terms of boxed pairs, but the backend stores two
+    /// value columns, so the merged value `(pair a b)` becomes a top-level
+    /// `Tuple([lower(a), lower(b)])` and `pair-first/second old/new` map to the
+    /// corresponding `OldCol/NewCol`.
+    fn translate_pair_merge_to_mergefn(
+        &self,
+        actions: &crate::ast::ResolvedActions,
+        value: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        use egglog_bridge::MergeFn;
+        // The merged value of a pair-valued function is two columns, so the
+        // top-level merge MUST be a `Tuple` (the backend only special-cases a
+        // top-level `Tuple`). The two per-column merges:
+        let (mut col0, col1) = self.translate_pair_value_cols(value)?;
+        if !actions.0.is_empty() {
+            // Run the block's effect actions (e.g. the UF `set`) exactly once,
+            // as a prelude to computing column 0, by wrapping it in a `Seq`
+            // that returns the column-0 value after the effects.
+            let mut items = Vec::with_capacity(actions.0.len() + 1);
+            for action in &actions.0 {
+                items.push(self.translate_pair_action_to_mergefn(action)?);
+            }
+            items.push(col0);
+            col0 = MergeFn::Seq(items);
+        }
+        Ok(MergeFn::Tuple(vec![col0, col1]))
+    }
+
+    /// Lower a pair-typed merge value expression into its two per-column
+    /// merges `(col0, col1)`.
+    fn translate_pair_value_cols(
+        &self,
+        value: &ResolvedExpr,
+    ) -> Result<(egglog_bridge::MergeFn, egglog_bridge::MergeFn), Error> {
+        use egglog_bridge::MergeFn;
+        match value {
+            GenericExpr::Var(_, v) if v.name.as_str() == "old" => {
+                Ok((MergeFn::OldCol(0), MergeFn::OldCol(1)))
+            }
+            GenericExpr::Var(_, v) if v.name.as_str() == "new" => {
+                Ok((MergeFn::NewCol(0), MergeFn::NewCol(1)))
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) if p.name() == "pair" => {
+                let a = self.translate_pair_scalar_to_mergefn(&args[0])?;
+                let b = self.translate_pair_scalar_to_mergefn(&args[1])?;
+                Ok((a, b))
+            }
+            _ => Err(Error::BackendError(
+                "the value of a `:merge` on a Pair-valued function must be `old`, `new`, \
+                 or a `(pair a b)` expression"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Lower a scalar (single-column) sub-expression of a pair-valued merge.
+    /// `(pair-first old)`/`(pair-second old)` (and `new`) become column reads;
+    /// everything else recurses generically.
+    fn translate_pair_scalar_to_mergefn(
+        &self,
+        expr: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        use egglog_bridge::MergeFn;
+        if let GenericExpr::Call(_, ResolvedCall::Primitive(p), args) = expr {
+            let proj = match p.name() {
+                "pair-first" => Some(0usize),
+                "pair-second" => Some(1usize),
+                _ => None,
+            };
+            if let (Some(col), GenericExpr::Var(_, v)) = (proj, &args[0]) {
+                match v.name.as_str() {
+                    "old" => return Ok(MergeFn::OldCol(col)),
+                    "new" => return Ok(MergeFn::NewCol(col)),
+                    _ => {}
+                }
+            }
+        }
+        match expr {
+            GenericExpr::Lit(_, literal) => {
+                Ok(MergeFn::Const(literal_to_value(&self.backend, literal)))
+            }
+            GenericExpr::Var(span, v) => {
+                // A bare `old`/`new` here would be a pair used as a scalar,
+                // which is unsupported; other vars are unbound.
+                Err(TypeError::Unbound(v.name.clone(), span.clone()).into())
+            }
+            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+                let translated = args
+                    .iter()
+                    .map(|a| self.translate_pair_scalar_to_mergefn(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MergeFn::Function(
+                    self.functions[&f.name].backend_id,
+                    translated,
+                ))
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                let translated = args
+                    .iter()
+                    .map(|a| self.translate_pair_scalar_to_mergefn(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MergeFn::Primitive(
+                    p.external_id(crate::Context::Write),
+                    translated,
+                ))
+            }
+        }
+    }
+
+    /// Lower a single effect action inside a pair-valued merge block. Only
+    /// `(set (f ...) v)` is supported; its arguments are scalar projections.
+    fn translate_pair_action_to_mergefn(
+        &self,
+        action: &crate::ast::ResolvedAction,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        match action {
+            GenericAction::Set(_, ResolvedCall::Func(f), args, rhs) => {
+                let mut row = args
+                    .iter()
+                    .map(|arg| self.translate_pair_scalar_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                row.push(self.translate_pair_scalar_to_mergefn(rhs)?);
+                Ok(egglog_bridge::MergeFn::TableInsert(
+                    self.functions[&f.name].backend_id,
+                    row,
+                ))
+            }
+            _ => Err(Error::BackendError(
+                "only `(set (f ...) v)` actions are supported inside a `:merge` block".into(),
+            )),
+        }
+    }
+
     /// If `sort` is a `Pair` container sort, return its two component sorts.
     /// A function whose output is a `Pair` is stored with TWO value columns
     /// (one per component) instead of a single boxed container value.
-    fn pair_components(sort: &ArcSort) -> Option<(ArcSort, ArcSort)> {
-        let pair = sort.clone().as_arc_any().downcast::<PairSort>().ok()?;
-        Some((pair.first(), pair.second()))
+    pub(crate) fn pair_components(sort: &ArcSort) -> Option<(ArcSort, ArcSort)> {
+        // A `PairSort` is wrapped in a `ContainerSortImpl<PairSort>` when turned
+        // into an `ArcSort`, so downcast to the wrapper and read its inner sort.
+        let pair = sort
+            .clone()
+            .as_arc_any()
+            .downcast::<crate::prelude::ContainerSortImpl<PairSort>>()
+            .ok()?;
+        Some((pair.0.first(), pair.0.second()))
     }
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
@@ -1123,7 +1263,19 @@ impl EGraph {
                     FunctionSubtype::Constructor => default_multi(|| MergeFn::UnionId),
                     FunctionSubtype::Custom => match &decl.merge {
                         None => default_multi(|| MergeFn::AssertEq),
-                        Some(expr) => self.translate_merge_to_mergefn(&decl.merge_action, expr)?,
+                        Some(expr) => {
+                            if pair_output.is_some() {
+                                // Pair-valued function: the merge is written
+                                // over boxed pairs (`old`/`new`/`pair`/
+                                // `pair-first`/`pair-second`) but the backend
+                                // stores two columns, so lower it pair-aware
+                                // (the value becomes a `Tuple` of per-column
+                                // merges).
+                                self.translate_pair_merge_to_mergefn(&decl.merge_action, expr)?
+                            } else {
+                                self.translate_merge_to_mergefn(&decl.merge_action, expr)?
+                            }
+                        }
                     },
                 }
             },
@@ -2692,9 +2844,25 @@ fn resolve_function_container_target_with_context(
     })
 }
 
+/// The two value-column entries bound for a pair-valued function call's
+/// result, plus the component sorts (for lazily boxing on a wholesale use).
+#[derive(Clone)]
+struct PairProjection {
+    col0: QueryEntry,
+    col1: QueryEntry,
+    first: ArcSort,
+    second: ArcSort,
+    pair_sort: ArcSort,
+}
+
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
+    /// For a query result var of a pair-valued function, the two value-column
+    /// entries it was bound to. Lets `pair-first`/`pair-second` of such a var
+    /// fuse to a direct column read (no box/unbox roundtrip) — important for
+    /// the rebuild rules, which canonicalize the output column.
+    pair_projections: HashMap<core::ResolvedAtomTerm, PairProjection>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
     /// `true` for a regular seminaive rule; `false` for any of:
@@ -2720,6 +2888,7 @@ impl<'a> BackendRule<'a> {
             type_info,
             seminaive,
             entries: Default::default(),
+            pair_projections: Default::default(),
         }
     }
 
@@ -2751,6 +2920,23 @@ impl<'a> BackendRule<'a> {
     }
 
     fn entry(&mut self, x: &core::ResolvedAtomTerm) -> QueryEntry {
+        if let Some(existing) = self.entries.get(x) {
+            return existing.clone();
+        }
+        // A wholesale use of a pair-valued function result: lazily box its two
+        // value columns into a pair value (projections are fused elsewhere, so
+        // this only fires when the whole pair is actually needed).
+        if let Some(proj) = self.pair_projections.get(x).cloned() {
+            let boxed = self.box_pair_query_value(
+                proj.col0,
+                proj.col1,
+                &proj.first,
+                &proj.second,
+                &proj.pair_sort,
+            );
+            self.entries.insert(x.clone(), boxed.clone());
+            return boxed;
+        }
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
@@ -2796,21 +2982,24 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    /// Box two value-column entries into the pair `result` entry on the query
-    /// side (via the `pair` primitive; `result` is bound to `(pair v0 v1)`).
-    fn box_pair_query(
+    /// Box two value-column entries into a fresh pair value on the query side
+    /// (via the `pair` primitive) and return the bound pair entry.
+    fn box_pair_query_value(
         &mut self,
         v0: QueryEntry,
         v1: QueryEntry,
-        result: QueryEntry,
         first: &ArcSort,
         second: &ArcSort,
         pair_sort: &ArcSort,
-    ) {
+    ) -> QueryEntry {
         let ctx = self.query_context();
         let ext = self.pair_prim_extid("pair", &[first.clone(), second.clone()], pair_sort, ctx);
         let ty = pair_sort.column_ty(self.rb.egraph());
-        self.rb.query_prim(ext, &[v0, v1, result], ty).unwrap();
+        let result: QueryEntry = self.rb.new_var(ty).into();
+        self.rb
+            .query_prim(ext, &[v0, v1, result.clone()], ty)
+            .unwrap();
+        result
     }
 
     /// Unbox a `pair` value into its two component entries on the action side.
@@ -2845,6 +3034,28 @@ impl<'a> BackendRule<'a> {
             )
             .into();
         (v0, v1)
+    }
+
+    /// If `prim` applied to `atom_args` is `pair-first`/`pair-second` of a
+    /// pair-valued function result that was recorded in `pair_projections`,
+    /// return `(value_col_index, projection, result_term)`. The primitive's
+    /// atom args are `[pair_arg, result]`.
+    fn pair_projection_fusion(
+        &self,
+        prim: &core::SpecializedPrimitive,
+        atom_args: &[core::ResolvedAtomTerm],
+    ) -> Option<(usize, PairProjection, core::ResolvedAtomTerm)> {
+        let col = match prim.name() {
+            "pair-first" => 0usize,
+            "pair-second" => 1usize,
+            _ => return None,
+        };
+        // The atom for `(pair-first p)` is `[p, result]`.
+        if atom_args.len() != 2 {
+            return None;
+        }
+        let proj = self.pair_projections.get(&atom_args[0])?.clone();
+        Some((col, proj, atom_args[1].clone()))
     }
 
     fn prim(
@@ -2901,6 +3112,32 @@ impl<'a> BackendRule<'a> {
     }
 
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+        // Pre-scan: record the value-column projection for every pair-valued
+        // function result, allocating its two column vars up front. This makes
+        // the `pair-first`/`pair-second` fusion below independent of atom order
+        // (a projection is always known before a primitive that consumes it).
+        for atom in &query.atoms {
+            if let ResolvedCall::Func(f) = &atom.head
+                && let Some((first, second, pair_sort)) = self.pair_info(f)
+            {
+                let result_term = atom
+                    .args
+                    .last()
+                    .expect("function atom must have a result term");
+                let v0: QueryEntry = self.rb.new_var(first.column_ty(self.rb.egraph())).into();
+                let v1: QueryEntry = self.rb.new_var(second.column_ty(self.rb.egraph())).into();
+                self.pair_projections.insert(
+                    result_term.clone(),
+                    PairProjection {
+                        col0: v0,
+                        col1: v1,
+                        first,
+                        second,
+                        pair_sort,
+                    },
+                );
+            }
+        }
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
@@ -2908,26 +3145,22 @@ impl<'a> BackendRule<'a> {
                         true => None,
                         false => Some(false),
                     };
-                    if let Some((first, second, pair_sort)) = self.pair_info(f) {
-                        // Pair-valued function: the backend table has two value
-                        // columns. Bind both, then box them back into a pair
-                        // value for the (single) result entry of this atom.
+                    if let Some(proj) = self.pair_info(f).and(
+                        self.pair_projections
+                            .get(atom.args.last().unwrap())
+                            .cloned(),
+                    ) {
+                        // Pair-valued function: bind the two value columns
+                        // (pre-allocated in the projection) directly.
                         let backend_f = self.func(f);
-                        let (result_term, children) = atom
+                        let (_result_term, children) = atom
                             .args
                             .split_last()
                             .expect("function atom must have a result term");
                         let mut args = self.args(children);
-                        let v0: QueryEntry =
-                            self.rb.new_var(first.column_ty(self.rb.egraph())).into();
-                        let v1: QueryEntry =
-                            self.rb.new_var(second.column_ty(self.rb.egraph())).into();
-                        args.push(v0.clone());
-                        args.push(v1.clone());
+                        args.push(proj.col0.clone());
+                        args.push(proj.col1.clone());
                         self.rb.query_table(backend_f, &args, is_subsumed).unwrap();
-                        // Bind the result term to the boxed pair value.
-                        let result_entry = self.entry(result_term);
-                        self.box_pair_query(v0, v1, result_entry, &first, &second, &pair_sort);
                     } else {
                         let backend_f = self.func(f);
                         let args = self.args(&atom.args);
@@ -2935,6 +3168,26 @@ impl<'a> BackendRule<'a> {
                     }
                 }
                 ResolvedCall::Primitive(p) => {
+                    // Fuse `pair-first`/`pair-second` of a pair-valued function
+                    // result directly to its bound value column, avoiding a
+                    // box/unbox roundtrip (keeps the output an indexed column
+                    // for fast rebuild canonicalization).
+                    if let Some((col, src, result)) = self.pair_projection_fusion(p, &atom.args) {
+                        let col_entry = match col {
+                            0 => src.col0,
+                            _ => src.col1,
+                        };
+                        // Alias the projection result directly to the value
+                        // column entry (no extra var, no equality filter): every
+                        // use of `result` now reads the indexed column.
+                        if let Some(existing) = self.entries.get(&result).cloned() {
+                            // Already bound elsewhere: constrain equal.
+                            self.rb.assert_eq_entries(existing, col_entry);
+                        } else {
+                            self.entries.insert(result, col_entry);
+                        }
+                        continue;
+                    }
                     let ctx = self.query_context();
                     let (p, args, ty) = self.prim(p, &atom.args, ctx);
                     self.rb.query_prim(p, &args, ty).unwrap()
@@ -3024,8 +3277,7 @@ impl<'a> BackendRule<'a> {
                             let backend_f = self.func(f);
                             let mut args = self.args(xs.iter());
                             let yv = self.entry(y);
-                            let (v0, v1) =
-                                self.unbox_pair_action(yv, &first, &second, &pair_sort);
+                            let (v0, v1) = self.unbox_pair_action(yv, &first, &second, &pair_sort);
                             args.push(v0);
                             args.push(v1);
                             self.rb.set(backend_f, &args)

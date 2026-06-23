@@ -171,6 +171,16 @@ impl RuleBuilder<'_> {
         self.egraph
     }
 
+    /// Constrain two query entries to be equal.
+    pub fn assert_eq_entries(&mut self, l: QueryEntry, r: QueryEntry) {
+        self.add_callback(move |inner, rb| {
+            let l = inner.convert(&l);
+            let r = inner.convert(&r);
+            rb.assert_eq(l, r);
+            Ok(())
+        });
+    }
+
     /// Register a runtime panic with a custom message and return its
     /// id. When called via [`call_external_func`], the panic writes
     /// the message to the egraph's panic side channel and triggers
@@ -475,6 +485,18 @@ impl RuleBuilder<'_> {
     ///
     /// `entries` should match the number of keys to the function.
     pub fn subsume(&mut self, func: FunctionId, entries: &[QueryEntry]) {
+        let info = &self.egraph.funcs[func];
+        assert!(info.can_subsume);
+        if info.num_values == 1 {
+            self.subsume_single_value(func, entries);
+        } else {
+            self.subsume_multi_value(func, entries);
+        }
+    }
+
+    /// Single-value subsume: insert a subsumed row if the tuple is new (via
+    /// `lookup_with_subsumed` with `SUBSUMED`), then re-insert it subsumed.
+    fn subsume_single_value(&mut self, func: FunctionId, entries: &[QueryEntry]) {
         // First, insert a subsumed value if the tuple is new.
         let ret = self.lookup_with_subsumed(
             func,
@@ -491,15 +513,11 @@ impl RuleBuilder<'_> {
             func_cols: info.schema.len(),
             num_values: info.num_values,
         };
-        assert!(info.can_subsume);
         assert_eq!(entries.len() + 1, info.schema.len());
         let entries = entries.to_vec();
         let table = info.table;
-
         let ret: QueryEntry = ret.into();
         self.add_callback(move |inner, rb| {
-            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
-            // Look up the current subsume value.
             let mut dst_entries = inner.convert_all(&entries);
             let cur_subsume_val = rb.lookup(
                 table,
@@ -512,6 +530,71 @@ impl RuleBuilder<'_> {
                     timestamp: inner.next_ts(),
                     subsume: Some(SUBSUMED.into()),
                     ret_val: Some(inner.convert(&ret)),
+                },
+            );
+            rb.insert_if_eq(
+                table,
+                cur_subsume_val.into(),
+                NOT_SUBSUMED.into(),
+                &dst_entries,
+            )?;
+            Ok(())
+        });
+    }
+
+    /// Multi-value subsume: read each value column (inserting a subsumed
+    /// default row if the tuple is new), then re-insert the row subsumed.
+    fn subsume_multi_value(&mut self, func: FunctionId, entries: &[QueryEntry]) {
+        let info = &self.egraph.funcs[func];
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+            num_values: info.num_values,
+        };
+        assert_eq!(
+            entries.len(),
+            schema_math.num_keys(),
+            "subsume expects the key columns of {func:?}"
+        );
+        // Read back each value column, inserting a SUBSUMED default row if the
+        // tuple is new so that a fresh subsume is honored.
+        let value_vals: Vec<QueryEntry> = (0..info.num_values)
+            .map(|i| {
+                self.lookup_value_col_with_subsumed(
+                    func,
+                    entries,
+                    i,
+                    QueryEntry::Const {
+                        val: SUBSUMED,
+                        ty: ColumnTy::Id,
+                    },
+                    || "subsumed a nonexistent row!".to_string(),
+                )
+                .into()
+            })
+            .collect();
+        let table = self.egraph.funcs[func].table;
+        let entries = entries.to_vec();
+
+        self.add_callback(move |inner, rb| {
+            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
+            // Look up the current subsume value.
+            let mut dst_entries = inner.convert_all(&entries);
+            let cur_subsume_val = rb.lookup(
+                table,
+                &dst_entries,
+                ColumnId::from_usize(schema_math.subsume_col()),
+            )?;
+            // Append the value columns, then timestamp + subsume flag.
+            for v in &value_vals {
+                dst_entries.push(inner.convert(v));
+            }
+            schema_math.write_table_row(
+                &mut dst_entries,
+                RowVals {
+                    timestamp: inner.next_ts(),
+                    subsume: Some(SUBSUMED.into()),
+                    ret_val: None,
                 },
             );
             rb.insert_if_eq(
@@ -636,10 +719,28 @@ impl RuleBuilder<'_> {
         value_col: usize,
         panic_msg: impl FnOnce() -> String + Send + 'static,
     ) -> Variable {
-        let subsumed = QueryEntry::Const {
-            val: NOT_SUBSUMED,
-            ty: ColumnTy::Id,
-        };
+        self.lookup_value_col_with_subsumed(
+            func,
+            entries,
+            value_col,
+            QueryEntry::Const {
+                val: NOT_SUBSUMED,
+                ty: ColumnTy::Id,
+            },
+            panic_msg,
+        )
+    }
+
+    /// Like [`Self::lookup_value_col`] but uses `subsumed` for the subsume
+    /// column when inserting a default row for a missing tuple.
+    pub(crate) fn lookup_value_col_with_subsumed(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        value_col: usize,
+        subsumed: QueryEntry,
+        panic_msg: impl FnOnce() -> String + Send + 'static,
+    ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
         let schema_math = SchemaMath {

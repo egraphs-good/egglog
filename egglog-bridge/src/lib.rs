@@ -1136,9 +1136,7 @@ impl MergeFn {
                     .iter()
                     .map(|m| m.run(state, cur_vals, new_vals, timestamp))
                     .collect(),
-                single => {
-                    SmallVec::from_elem(single.run(state, cur_vals, new_vals, timestamp), 1)
-                }
+                single => SmallVec::from_elem(single.run(state, cur_vals, new_vals, timestamp), 1),
             };
             for (k, v) in merged.iter().enumerate() {
                 changed |= cur_vals[k] != *v;

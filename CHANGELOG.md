@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Multi-value function results: a function whose output sort is a `Pair` container is now stored as two value columns (its component sorts) instead of one boxed container value. Reads/lookups transparently box the columns back into a `(pair ..)` value and writes unbox into the columns; `(pair-first (f k))` / `(pair-second (f k))` fuse to a direct column read. This re-encodes proof-mode constructor views as `(children) -> (output, proof)`, so the FD `:merge` builds the congruence proof from each row's own proof — fixing proof-mode const-fold/commute correctness.
+
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.
