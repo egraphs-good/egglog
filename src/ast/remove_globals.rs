@@ -78,7 +78,7 @@ fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
     }
 }
 
-fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
+pub(crate) fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
     expr.visit_exprs(&mut replace_global_vars)
 }
 
@@ -180,6 +180,7 @@ impl GlobalRemover<'_> {
                     ruleset: rule.ruleset.clone(),
                     eval_mode: rule.eval_mode,
                     no_decomp: rule.no_decomp,
+                    include_subsumed: rule.include_subsumed,
                 };
                 vec![GenericNCommand::NormRule { rule: new_rule }]
             }

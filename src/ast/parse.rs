@@ -479,6 +479,7 @@ impl Parser {
                     // exclusive; `eval_mode` is set at most once.
                     let mut eval_mode: Option<RuleEvalMode> = None;
                     let mut no_decomp = false;
+                    let mut include_subsumed = false;
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
@@ -498,6 +499,7 @@ impl Parser {
                                 eval_mode = Some(mode);
                             }
                             (":no-decomp", []) => no_decomp = true,
+                            (":internal-include-subsumed", []) => include_subsumed = true,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -511,6 +513,7 @@ impl Parser {
                             ruleset,
                             eval_mode: eval_mode.unwrap_or_default(),
                             no_decomp,
+                            include_subsumed,
                         },
                     }]
                 }

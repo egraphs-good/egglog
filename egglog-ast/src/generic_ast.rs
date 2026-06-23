@@ -151,6 +151,10 @@ where
     /// planning and evaluate rules as a single-bag (without decomposing
     /// it into smaller queries). Set via the `:no-decomp` rule option.
     pub no_decomp: bool,
+    /// If `true`, table atoms in this rule match subsumed rows as well as
+    /// live rows. This is intended for internal maintenance rules, not
+    /// ordinary user rewrites.
+    pub include_subsumed: bool,
 }
 
 /// Change a function entry.

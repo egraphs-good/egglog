@@ -1726,6 +1726,7 @@ where
                     body: rule.body,
                     eval_mode: rule.eval_mode,
                     no_decomp: rule.no_decomp,
+                    include_subsumed: rule.include_subsumed,
                 };
                 GenericCommand::Rule { rule }
             }

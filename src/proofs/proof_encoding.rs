@@ -321,7 +321,6 @@ impl<'a> ProofInstrumentor<'a> {
                        )
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")
-                
                  (rule (({cleanup_constructor} merged old)
                         ({view_name} {child_names_str} merged)
                         ({view_name} {child_names_str} old)
@@ -363,6 +362,9 @@ impl<'a> ProofInstrumentor<'a> {
             "old",
             &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))",)),
         );
+        // Action-side term construction can create a fresh visible view row for
+        // child tuples that were already subsumed. Congruence maintenance still
+        // has to see those subsumed rows so it can union the old and new outputs.
         format!(
             "(rule ({query1}
                         {query2}
@@ -370,6 +372,7 @@ impl<'a> ProofInstrumentor<'a> {
                         (= (ordering-max old new) new))
                        ({union_code})
                         :ruleset {rebuilding_ruleset}
+                        :internal-include-subsumed
                         :name \"{fresh_name}\")"
         )
     }
@@ -604,7 +607,85 @@ impl<'a> ProofInstrumentor<'a> {
                   {updated_view}
                   (delete ({view_name} {children}))
                  )
-                  :ruleset {} :name \"{fresh_name}\")",
+                  :ruleset {} :name \"{fresh_name}\" :internal-include-subsumed)",
+            self.proof_names().rebuilding_ruleset_name
+        );
+        self.parse_program(&rule)
+    }
+
+    /// Rules that update the to_subsume tables when children change.
+    /// copied from above and changed to remove last param since we dont deal with output value in to subsumed rows, removed proof flags since we dont need proofs for this, and changed from function returning unit to constructor for to subsume
+    fn rebuilding_subsumed_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
+        let ResolvedCall::Func(FuncType { input, .. }) = &fdecl.resolved_schema else {
+            panic!("cannot create subsumed rules for primitives")
+        };
+
+        // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
+        if !input.iter().any(|t| t.is_eq_sort()) {
+            return vec![];
+        }
+
+        let subsumed_name = self.subsumed_name(&fdecl.name);
+        let child = |i: usize| format!("c{i}_");
+        let children_vec: Vec<String> = (0..input.len()).map(child).collect();
+        let children = format!("{}", ListDisplay(&children_vec, " "));
+
+        // For each eq-sort column, look up its leader via the UF table.
+        // For non-eq-sort columns, the leader is the same as the original.
+        let mut uf_queries = vec![];
+        let mut leader_vars: Vec<String> = vec![];
+        let mut bool_neq_exprs = vec![];
+
+        for (i, ty) in input.iter().enumerate() {
+            if ty.is_eq_sort() {
+                let leader_var = format!("c{i}_leader_");
+                let uf_function_name = self.uf_function_name(ty.name());
+                let ci = child(i);
+
+                if self.egraph.proof_state.proofs_enabled {
+                    // UF function index returns a Pair(leader, proof); one lookup gives both
+                    let pair_var = self.fresh_var();
+                    uf_queries.push(format!(
+                        "(= {pair_var} ({uf_function_name} {ci}))
+                         (= {leader_var} (pair-first {pair_var}))"
+                    ));
+                } else {
+                    uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
+                }
+
+                bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
+                leader_vars.push(leader_var);
+            } else {
+                leader_vars.push(child(i));
+            }
+        }
+
+        let uf_query_str = uf_queries.join("\n       ");
+        let or_expr = format!("(or {})", bool_neq_exprs.join("\n             "));
+        let filter_query = format!("(guard {or_expr})");
+
+        // Build the updated children: use leader_var for eq-sort columns, original for others.
+        let children_updated: Vec<String> = leader_vars.clone();
+
+        let fresh_name = self
+            .egraph
+            .parser
+            .symbol_gen
+            .fresh("rebuild_to_subsume_rule");
+
+        let updated_children_view = ListDisplay(children_updated, " ");
+
+        // Make a single rule that updates the view when any child's leader differs.
+        let rule = format!(
+            "(rule (({subsumed_name} {children})
+                    {uf_query_str}
+                    {filter_query}
+                    )
+                 (
+                  ({subsumed_name} {updated_children_view})
+                  (delete ({subsumed_name} {children}))
+                 )
+                  :ruleset {} :name \"{fresh_name}\" :internal-include-subsumed)",
             self.proof_names().rebuilding_ruleset_name
         );
         self.parse_program(&rule)
@@ -621,7 +702,7 @@ impl<'a> ProofInstrumentor<'a> {
         action_lookups: &mut Vec<String>,
     ) -> String {
         match fact {
-            // In proof normal form, this is the only way that function calls apppear.
+            // In proof normal form, this is the only way that function calls appear.
             ResolvedFact::Eq(
                 _span,
                 ResolvedExpr::Call(
@@ -1185,7 +1266,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
-        log::debug!("Term encoding for {command}");
+        log::trace!("Term encoding for {command}");
         match &command {
             ResolvedNCommand::Sort {
                 span,
@@ -1213,6 +1294,7 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));
                 res.extend(self.rebuilding_rules(fdecl));
+                res.extend(self.rebuilding_subsumed_rules(fdecl));
             }
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));

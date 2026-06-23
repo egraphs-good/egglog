@@ -911,8 +911,8 @@ impl<'a> JoinState<'a> {
     ) where
         'a: 'buf,
     {
-        if log::log_enabled!(log::Level::Debug) {
-            log::debug!("Starting running query stages:\n{stages:#?}");
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("Starting running query stages:\n{stages:#?}");
         }
         for (_, node) in binding_info.subsets.iter() {
             if node.subset.is_empty() {
@@ -920,12 +920,14 @@ impl<'a> JoinState<'a> {
             }
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
-        sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
+        let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
+        sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
         self.run_plan(
             stages,
             atoms,
             action,
             &mut order,
+            &mut leaf_scans,
             0,
             binding_info,
             action_buf,
@@ -947,6 +949,7 @@ impl<'a> JoinState<'a> {
         atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
         instr_order: &mut InstrOrder,
+        leaf_scans: &mut LeafScans,
         cur: usize,
         binding_info: &mut BindingInfo,
         action_buf: &mut BUF,
@@ -971,7 +974,7 @@ impl<'a> JoinState<'a> {
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // If we have a reasonable number of tuples to process, adjust the variable order every
             // 3 rounds, but always make sure to readjust on the second roung.
-            sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
+            sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 
@@ -1014,6 +1017,7 @@ impl<'a> JoinState<'a> {
                                     atoms,
                                     action,
                                     instr_order,
+                                    leaf_scans,
                                     cur + 1,
                                     binding_info,
                                     action_buf,
@@ -1036,12 +1040,14 @@ impl<'a> JoinState<'a> {
                     BorrowedLocalState {
                         binding_info,
                         instr_order,
+                        leaf_scans,
                         updates: &mut $updates,
                     },
                     move || exec_state_for_factory.clone(),
                     move |BorrowedLocalState {
                               binding_info,
                               instr_order,
+                              leaf_scans,
                               updates,
                           },
                           buf| {
@@ -1069,6 +1075,7 @@ impl<'a> JoinState<'a> {
                                     atoms,
                                     action,
                                     instr_order,
+                                    leaf_scans,
                                     cur + 1,
                                     binding_info,
                                     buf,
@@ -1370,92 +1377,86 @@ impl<'a> JoinState<'a> {
                 cover,
                 bind,
                 to_intersect,
-                is_leaf_scan: true,
             } if to_intersect.is_empty() => {
+                let is_leaf_scan = leaf_scans[cur];
                 let cover_atom = cover.to_index.atom;
                 if binding_info.has_empty_subset(cover_atom) {
                     return;
                 }
-                let table = self.db.tables[atoms[cover_atom].table].table.as_ref();
-                let cover_node = binding_info.unwrap_val(cover_atom);
-                let cover_subset = cover_node.subset.as_ref();
+                if is_leaf_scan {
+                    let table = self.db.tables[atoms[cover_atom].table].table.as_ref();
+                    let cover_node = binding_info.unwrap_val(cover_atom);
+                    let cover_subset = cover_node.subset.as_ref();
 
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
-                let vars = bind.iter().map(|(_, var)| *var).collect();
-                let mut buf = TaggedRowBuffer::new_inline(bind.len());
-                table.scan_project(
-                    cover_subset,
-                    &proj,
-                    Offset::new(0),
-                    usize::MAX,
-                    &cover.constraints,
-                    &mut buf,
-                );
-
-                if buf.is_empty() {
-                    return;
-                }
-
-                binding_info.binding_sets.push((vars, Arc::new(buf)));
-                let mut updates = FrameUpdates::with_capacity(1);
-                updates.finish_frame();
-                drain_updates!(updates);
-                binding_info.binding_sets.pop();
-                binding_info.move_back_node(cover_atom, cover_node);
-            }
-            JoinStage::FusedIntersect {
-                cover,
-                bind,
-                to_intersect,
-                is_leaf_scan: false,
-            } if to_intersect.is_empty() => {
-                let cover_atom = cover.to_index.atom;
-                if binding_info.has_empty_subset(cover_atom) {
-                    return;
-                }
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
-                let cover_node = binding_info.unwrap_val(cover_atom);
-                let cover_subset = cover_node.subset.as_ref();
-                let mut cur = Offset::new(0);
-                let mut buffer = TaggedRowBuffer::new(bind.len());
-                let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                loop {
-                    buffer.clear();
-                    let table = &self.db.tables[atoms[cover_atom].table].table;
-                    let next = table.scan_project(
+                    let proj =
+                        SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                    let vars = bind.iter().map(|(_, var)| *var).collect();
+                    let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                    table.scan_project(
                         cover_subset,
                         &proj,
-                        cur,
-                        chunk_size,
+                        Offset::new(0),
+                        usize::MAX,
                         &cover.constraints,
-                        &mut buffer,
+                        &mut buf,
                     );
-                    for (row, key) in buffer.iter() {
-                        updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
-                        // bind the values
-                        for (i, (_, var)) in bind.iter().enumerate() {
-                            updates.push_binding(*var, key[i]);
-                        }
-                        updates.finish_frame();
-                        if updates.frames() >= chunk_size {
-                            drain_updates!(updates);
-                        }
+
+                    if buf.is_empty() {
+                        binding_info.move_back_node(cover_atom, cover_node);
+                        return;
                     }
-                    if let Some(next) = next {
-                        cur = next;
-                        continue;
+
+                    binding_info.binding_sets.push((vars, Arc::new(buf)));
+                    let mut updates = FrameUpdates::with_capacity(1);
+                    updates.finish_frame();
+                    drain_updates!(updates);
+                    binding_info.binding_sets.pop();
+                    binding_info.move_back_node(cover_atom, cover_node);
+                } else {
+                    let proj =
+                        SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                    let cover_node = binding_info.unwrap_val(cover_atom);
+                    let cover_subset = cover_node.subset.as_ref();
+                    let mut offset = Offset::new(0);
+                    let mut buffer = TaggedRowBuffer::new(bind.len());
+                    let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    loop {
+                        buffer.clear();
+                        let table = &self.db.tables[atoms[cover_atom].table].table;
+                        let next = table.scan_project(
+                            cover_subset,
+                            &proj,
+                            offset,
+                            chunk_size,
+                            &cover.constraints,
+                            &mut buffer,
+                        );
+                        for (row, key) in buffer.iter() {
+                            updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
+                            // bind the values
+                            for (i, (_, var)) in bind.iter().enumerate() {
+                                updates.push_binding(*var, key[i]);
+                            }
+                            updates.finish_frame();
+                            if updates.frames() >= chunk_size {
+                                drain_updates!(updates);
+                            }
+                        }
+                        if let Some(next) = next {
+                            offset = next;
+                            continue;
+                        }
+                        break;
                     }
-                    break;
+                    drain_updates!(updates);
+                    // Restore the subsets we swapped out.
+                    binding_info.move_back_node(cover_atom, cover_node);
                 }
-                drain_updates!(updates);
-                // Restore the subsets we swapped out.
-                binding_info.move_back_node(cover_atom, cover_node);
             }
             JoinStage::FusedIntersect {
                 cover,
                 bind,
                 to_intersect,
-                is_leaf_scan: _,
             } => {
                 let cover_atom = cover.to_index.atom;
                 if binding_info.has_empty_subset(cover_atom) {
@@ -1565,6 +1566,81 @@ impl<'a> JoinState<'a> {
                 for (_, atom, prober) in index_probers {
                     binding_info.move_back(atom, prober);
                 }
+            }
+            JoinStage::FusedIntersectMat {
+                cover,
+                mode,
+                bind,
+                to_intersect,
+            } if leaf_scans[cur]
+                && to_intersect.is_empty()
+                && matches!(
+                    mode,
+                    MatScanMode::Full | MatScanMode::KeyOnly | MatScanMode::Value(_)
+                ) =>
+            {
+                // Leaf-scan factorization for FusedIntersectMat: flatten the materialization into
+                // one `TaggedRowBuffer`, push it onto `binding_sets`, and recurse to the leaf once.
+                let cover_mat = binding_info.materializations[*cover].clone();
+                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
+                let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                let mut row_scratch: SmallVec<[Value; 8]> = SmallVec::new();
+                match mode {
+                    MatScanMode::Full => {
+                        for group in cover_mat.iter() {
+                            let group_key = group.0;
+                            let group_key_len = group_key.len();
+                            for non_keys in group.1.iter() {
+                                row_scratch.clear();
+                                for (col, _) in bind.iter() {
+                                    let val = if col.index() < group_key_len {
+                                        group_key[col.index()]
+                                    } else {
+                                        non_keys[col.index() - group_key_len]
+                                    };
+                                    row_scratch.push(val);
+                                }
+                                buf.add_row(RowId::new(0), &row_scratch);
+                            }
+                        }
+                    }
+                    MatScanMode::KeyOnly => {
+                        for group in cover_mat.iter() {
+                            let group_key = group.0;
+                            row_scratch.clear();
+                            for (col, _) in bind.iter() {
+                                debug_assert!(col.index() < group_key.len());
+                                row_scratch.push(group_key[col.index()]);
+                            }
+                            buf.add_row(RowId::new(0), &row_scratch);
+                        }
+                    }
+                    MatScanMode::Value(index_vars) => {
+                        let keys: Vec<Value> = index_vars
+                            .iter()
+                            .map(|var| binding_info.bindings[*var])
+                            .collect();
+                        if let Some(group) = cover_mat.get(&keys) {
+                            for vals in group.iter() {
+                                debug_assert!(vals.len() == bind.len());
+                                row_scratch.clear();
+                                for (col, _) in bind.iter() {
+                                    row_scratch.push(vals[col.index()]);
+                                }
+                                buf.add_row(RowId::new(0), &row_scratch);
+                            }
+                        }
+                    }
+                    MatScanMode::Lookup(_) => unreachable!("guarded above"),
+                }
+                if buf.is_empty() {
+                    return;
+                }
+                binding_info.binding_sets.push((vars, Arc::new(buf)));
+                let mut updates = FrameUpdates::with_capacity(1);
+                updates.finish_frame();
+                drain_updates!(updates);
+                binding_info.binding_sets.pop();
             }
             JoinStage::FusedIntersectMat {
                 cover,
@@ -2209,6 +2285,7 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
 
 fn sort_plan_by_size(
     order: &mut InstrOrder,
+    leaf_scans: &mut LeafScans,
     start: usize,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo,
@@ -2228,6 +2305,95 @@ fn sort_plan_by_size(
         }
     }
     sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
+    recompute_leaf_scans(order, leaf_scans, instrs, start);
+}
+
+/// Recompute `leaf_scans[i]` for every position `i` in `[start, order.len())` against the
+/// current order. A position is a leaf scan iff its stage is either a `FusedIntersect` or a
+/// `FusedIntersectMat { mode: Full | KeyOnly | Value }`, both with empty `to_intersect`, AND no
+/// later stage either (a) for `FusedIntersect`, references the same cover atom, or (b) reads
+/// any of the bound variables as a scalar via `FusedIntersectMat { mode: Value | Lookup }`.
+/// `FusedIntersectMat::Lookup` itself binds nothing, so it is never marked a leaf scan.
+fn recompute_leaf_scans(
+    order: &InstrOrder,
+    leaf_scans: &mut LeafScans,
+    instrs: &[JoinStage],
+    start: usize,
+) {
+    for i in start..order.len() {
+        let stage_idx = order.get(i);
+        let (cover_atom, bind_vars) = match &instrs[stage_idx] {
+            JoinStage::FusedIntersect {
+                cover,
+                bind,
+                to_intersect,
+            } if to_intersect.is_empty() => {
+                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
+                (Some(cover.to_index.atom), vars)
+            }
+            JoinStage::FusedIntersectMat {
+                mode,
+                bind,
+                to_intersect,
+                ..
+            } if to_intersect.is_empty()
+                && matches!(
+                    mode,
+                    MatScanMode::Full | MatScanMode::KeyOnly | MatScanMode::Value(_)
+                ) =>
+            {
+                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
+                (None, vars)
+            }
+            _ => {
+                leaf_scans[i] = false;
+                continue;
+            }
+        };
+        let mut blocked = false;
+        for j in (i + 1)..order.len() {
+            match &instrs[order.get(j)] {
+                JoinStage::Intersect { scans, .. } => {
+                    if let Some(ca) = cover_atom
+                        && scans.iter().any(|scan| scan.atom == ca)
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+                JoinStage::FusedIntersect {
+                    cover,
+                    to_intersect,
+                    ..
+                } => {
+                    if let Some(ca) = cover_atom
+                        && (cover.to_index.atom == ca
+                            || to_intersect.iter().any(|(s, _)| s.to_index.atom == ca))
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+                JoinStage::FusedIntersectMat {
+                    mode, to_intersect, ..
+                } => {
+                    if let Some(ca) = cover_atom
+                        && to_intersect.iter().any(|(s, _)| s.to_index.atom == ca)
+                    {
+                        blocked = true;
+                        break;
+                    }
+                    if let MatScanMode::Value(vars) | MatScanMode::Lookup(vars) = mode
+                        && vars.iter().any(|v| bind_vars.contains(v))
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+            }
+        }
+        leaf_scans[i] = !blocked;
+    }
 }
 
 fn sort_plan_by_size_inner(
@@ -2365,8 +2531,14 @@ impl InstrOrder {
     }
 }
 
+/// Per-position leaf-scan flags. `leaf_scans[i] == true` means the stage currently scheduled at
+/// position `i` (i.e. `instrs[instr_order.get(i)]`) can take the factorized-binding fast path.
+/// Recomputed by [`sort_plan_by_size`] whenever the order changes.
+type LeafScans = SmallVec<[bool; 8]>;
+
 struct BorrowedLocalState<'a> {
     instr_order: &'a mut InstrOrder,
+    leaf_scans: &'a mut LeafScans,
     binding_info: &'a mut BindingInfo,
     updates: &'a mut FrameUpdates,
 }
@@ -2375,6 +2547,7 @@ impl BorrowedLocalState<'_> {
     fn clone_state(&mut self) -> LocalState {
         LocalState {
             instr_order: self.instr_order.clone(),
+            leaf_scans: self.leaf_scans.clone(),
             binding_info: self.binding_info.clone(),
             updates: std::mem::take(self.updates),
         }
@@ -2383,6 +2556,7 @@ impl BorrowedLocalState<'_> {
 
 struct LocalState {
     instr_order: InstrOrder,
+    leaf_scans: LeafScans,
     binding_info: BindingInfo,
     updates: FrameUpdates,
 }
@@ -2391,6 +2565,7 @@ impl LocalState {
     fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a> {
         BorrowedLocalState {
             instr_order: &mut self.instr_order,
+            leaf_scans: &mut self.leaf_scans,
             binding_info: &mut self.binding_info,
             updates: &mut self.updates,
         }
