@@ -83,6 +83,10 @@ impl ProofStore {
         let proof_id = self.map_child_proofs(proof_id, |store, pid| store.simplify(pid));
 
         // Apply local optimizations until fixed point
+        self.simplify_local(proof_id)
+    }
+
+    fn simplify_local(&mut self, proof_id: ProofId) -> ProofId {
         let mut current_id = proof_id;
         loop {
             let new_id = self.apply_local_optimizations(current_id);
@@ -215,6 +219,7 @@ impl ProofStore {
                     justification: Justification::Sym(right_id),
                 };
                 let sym_right_id = self.add_proof(sym_right);
+                let sym_right_id = self.simplify_local(sym_right_id);
 
                 // Create Sym(p1): b = a
                 let sym_left = Proof {
@@ -222,6 +227,7 @@ impl ProofStore {
                     justification: Justification::Sym(left_id),
                 };
                 let sym_left_id = self.add_proof(sym_left);
+                let sym_left_id = self.simplify_local(sym_left_id);
 
                 // Create Trans(Sym(p2), Sym(p1)): c = a
                 let new_trans = Proof {

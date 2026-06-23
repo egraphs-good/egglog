@@ -49,7 +49,14 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
         .map(|path| {
             let filename = path.to_string_lossy().to_string();
             let program = std::fs::read_to_string(&filename).unwrap();
-            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            // CodSpeed filters by substring, so the normal web-demo math shard
+            // needs a name that does not also match proof_testing_math or
+            // math-microbenchmark.
+            let name = if path.ends_with("tests/web-demo/math.egg") {
+                "math_normal".to_string()
+            } else {
+                path.file_stem().unwrap().to_string_lossy().to_string()
+            };
 
             BenchCase {
                 name,
@@ -80,7 +87,7 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
         .unwrap()
         .filter_map(Result::ok)
         .filter(|path| !path.to_string_lossy().contains("fail-typecheck"))
-        .filter(|path| egglog::file_supports_proofs(path))
+        .filter(|path| proof_benchmark_supported(path))
         .filter(|path| !PROOF_UNSUPPORTED_FILES.iter().any(|f| path.ends_with(f)))
         .map(|path| {
             let filename = path.to_string_lossy().to_string();
@@ -96,6 +103,12 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
             }
         })
         .collect()
+}
+
+fn proof_benchmark_supported(path: &std::path::Path) -> bool {
+    // `math.egg` runs in release proof-testing mode, which is what CodSpeed uses,
+    // even though the conservative support probe rejects it.
+    path.ends_with("tests/web-demo/math.egg") || egglog::file_supports_proofs(path)
 }
 
 pub fn bench_case(case: &BenchCase) {

@@ -5,7 +5,9 @@ use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
-use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
+use ast::{
+    MappedExprExt, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule,
+};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use egglog_bridge::ActionRegistry;
@@ -185,6 +187,11 @@ impl PrimitiveWithId {
             range: HashSet::default(),
         };
         problem.solve(|sort| sort.name()).is_ok()
+    }
+
+    /// Returns whether this primitive has a runtime entrypoint for `context`.
+    pub fn is_valid_in_context(&self, context: Context) -> bool {
+        self.context_ids[context].is_some()
     }
 }
 
@@ -842,6 +849,7 @@ impl TypeInfo {
             ruleset,
             naive,
             no_decomp,
+            include_subsumed,
         } = rule;
         let mut constraints = vec![];
 
@@ -898,6 +906,7 @@ impl TypeInfo {
             ruleset: ruleset.clone(),
             naive: *naive,
             no_decomp: *no_decomp,
+            include_subsumed: *include_subsumed,
         })
     }
 
@@ -999,6 +1008,54 @@ impl TypeInfo {
             self.typecheck_standalone_action(symbol_gen, &action, binding, context)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn typecheck_expr_with_output(
+        &self,
+        symbol_gen: &mut SymbolGen,
+        expr: &Expr,
+        binding: &IndexMap<&str, (Span, ArcSort)>,
+        output_sort: ArcSort,
+        context: Context,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let action = Action::Expr(expr.span(), expr.clone());
+        let mut binding_set: IndexSet<String> =
+            binding.keys().copied().map(str::to_string).collect();
+        let mut ctx = CoreActionContext::new(self, &mut binding_set, symbol_gen, false);
+        let (actions, mapped_action) = Actions::singleton(action).to_core_actions(&mut ctx)?;
+        let mut problem = Problem::default();
+
+        problem.add_actions(&actions, self, symbol_gen, context)?;
+
+        for (var, (span, sort)) in binding {
+            problem.assign_local_var_type(var, span.clone(), sort.clone())?;
+        }
+
+        let [GenericAction::Expr(_, mapped_expr)] = mapped_action.0.as_slice() else {
+            unreachable!("typechecking an expression should produce one expression action")
+        };
+        let output_atom = mapped_expr.get_corresponding_var_or_lit(self);
+        problem.add_binding(output_atom, output_sort.clone());
+
+        let assignment = problem
+            .solve(|sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self, context)?;
+        match annotated_actions.0.into_iter().next().unwrap() {
+            ResolvedAction::Expr(_, resolved_expr) => {
+                let actual = resolved_expr.output_type();
+                if actual.name() != output_sort.name() {
+                    return Err(TypeError::Mismatch {
+                        expr: expr.clone(),
+                        expected: output_sort,
+                        actual,
+                    });
+                }
+                Ok(resolved_expr)
+            }
             _ => unreachable!(),
         }
     }

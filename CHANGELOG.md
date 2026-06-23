@@ -9,6 +9,7 @@
 - Add a BigRat to-i64 primitive for integral rationals.
 - Add f64 exp, log, and sqrt primitives.
 - Add `RunReport::can_stop` so scheduler progress can be reported separately from database updates.
+- Add `EGraph::typecheck_expr_with_bindings_and_output`, `Core::eval_resolved_expr`, and `Core::apply_primitive` for body-defined primitive support, including normal command-path global rewrites for expressions typechecked through the helper.
 - Allow `unstable-fn` function containers to target primitive overloads.
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.

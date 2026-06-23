@@ -72,7 +72,15 @@ where
         };
         let naive = if self.naive { " :naive" } else { "" };
         let no_decomp = if self.no_decomp { " :no-decomp" } else { "" };
-        write!(f, ")\n{indent} {ruleset} {name}{naive}{no_decomp})")
+        let include_subsumed = if self.include_subsumed {
+            " :internal-include-subsumed"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            ")\n{indent} {ruleset} {name}{naive}{no_decomp}{include_subsumed})"
+        )
     }
 }
 
@@ -191,6 +199,7 @@ where
             ruleset: self.ruleset.clone(),
             naive: self.naive,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -207,6 +216,7 @@ where
             ruleset: self.ruleset,
             naive: self.naive,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -232,6 +242,7 @@ where
             ruleset: self.ruleset,
             naive: self.naive,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
