@@ -146,9 +146,7 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
         // insert f(x) = x + 1, f(x+1) = x + 2, ..., f(x+n_ops-1) = x + n_ops in one rule run
         move |mut ctx, _values| {
             for i in 0..case.n_ops {
-                let k = ctx.base_to_value::<i64>(i as i64);
-                let y = ctx.base_to_value::<i64>(i as i64 + 1);
-                ctx.insert("f", [k, y].into_iter());
+                ctx.set("f", (i as i64,), i as i64 + 1).ok()?;
             }
             Some(())
         },
@@ -199,11 +197,9 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
         move |mut ctx, values| {
             let [x] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);
-            let k = ctx.base_to_value::<i64>(x);
-            let y = ctx.base_to_value::<i64>(x + 1);
 
             // Populate f(x)=x+1. (No lookup here; it may not be visible within the same callback.)
-            ctx.insert("f", [k, y].into_iter());
+            ctx.set("f", (x,), x + 1).ok()?;
             Some(())
         },
     )
@@ -221,15 +217,9 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
         read_ruleset,
         vars![x: i64],
         facts![(R x)],
-        move |mut ctx, values| {
+        move |ctx, values| {
             let [x] = values else { unreachable!() };
-            let x = ctx.value_to_base::<i64>(*x);
-            let k = ctx.base_to_value::<i64>(x);
-            let y = ctx.base_to_value::<i64>(x + 1);
-
-            // lookup should succeed because we pre-filled the table.
-            let out = ctx.lookup("f", &[k]).expect("f(x) should exist");
-            ctx.union(out, y);
+            let _ = ctx.lookup("f", *x).ok().flatten()?;
             Some(())
         },
     )
@@ -250,7 +240,12 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
 // which is more representative of real-world Rust rule usage patterns than insert_loop_setup.
 #[divan::bench(
     args = [
+        // Sweep n_dummy_funcs to gauge how the per-call ActionRegistry
+        // HashMap lookup scales with table count. Both `fs.set` (fill)
+        // and `fs.lookup` (read) hit the registry per match.
+        RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 0 },
         RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 200 },
+        RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 2_000 },
     ],
     sample_count = 10
 )]
@@ -266,7 +261,17 @@ fn rust_rule_tableaction_hot_path(bencher: divan::Bencher, case: RustRuleTableAc
 
 #[divan::bench(
     args = [
+        // Sweep n_dummy_funcs to isolate per-call HashMap-lookup cost in
+        // the rust_rule action surface. The action does 1_000 `ctx.set`
+        // calls per rule fire — each call resolves "f" by name through
+        // the ActionRegistry's HashMap. If string lookups are O(1)
+        // bounded, these three cases should be ~identical.
+        RustRuleInsertLoopBenchCase { n_ops: 1_000, n_dummy_funcs: 0 },
         RustRuleInsertLoopBenchCase { n_ops: 1_000, n_dummy_funcs: 200 },
+        RustRuleInsertLoopBenchCase { n_ops: 1_000, n_dummy_funcs: 2_000 },
+        RustRuleInsertLoopBenchCase { n_ops: 100_000, n_dummy_funcs: 0 },
+        RustRuleInsertLoopBenchCase { n_ops: 100_000, n_dummy_funcs: 200 },
+        RustRuleInsertLoopBenchCase { n_ops: 100_000, n_dummy_funcs: 2_000 },
     ],
     sample_count = 10
 )]
@@ -277,6 +282,55 @@ fn rust_rule_insert_loop(bencher: divan::Bencher, case: RustRuleInsertLoopBenchC
         .with_inputs(|| insert_loop_setup(case))
         .bench_local_refs(|input| {
             run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+        });
+}
+
+#[derive(Clone, Copy)]
+struct ReadScanBenchCase {
+    n_enodes: usize,
+}
+
+impl std::fmt::Display for ReadScanBenchCase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "enodes{}", self.n_enodes)
+    }
+}
+
+fn read_scan_setup(case: ReadScanBenchCase) -> egglog::EGraph {
+    use std::fmt::Write;
+
+    common::configure_rayon_once();
+
+    let mut program = String::from("(sort Math)\n(constructor Add (i64 i64) Math)\n");
+    for i in 0..case.n_enodes {
+        let _ = writeln!(&mut program, "(Add {} {})", i as i64, (i + 1) as i64);
+    }
+
+    let mut egraph = egglog::EGraph::default();
+    egraph.parse_and_run_program(None, &program).unwrap();
+    egraph
+}
+
+// Read-path bench: scan every enode of a constructor table through the
+// name-indexed `Read` API via `EGraph::constructor_enodes`.
+#[divan::bench(
+    args = [
+        ReadScanBenchCase { n_enodes: 50_000 },
+    ],
+    sample_count = 20
+)]
+fn rust_read_constructor_enodes(bencher: divan::Bencher, case: ReadScanBenchCase) {
+    bencher
+        .with_inputs(|| read_scan_setup(case))
+        .bench_local_refs(|egraph| {
+            let mut n = 0usize;
+            egraph
+                .constructor_enodes("Add", |enode| {
+                    divan::black_box(&enode);
+                    n += 1;
+                })
+                .unwrap();
+            n
         });
 }
 
@@ -312,9 +366,7 @@ fn fib_setup() -> RustRuleBenchInput {
             let f0 = ctx.value_to_base::<i64>(*f0);
             let f1 = ctx.value_to_base::<i64>(*f1);
 
-            let y = ctx.base_to_value::<i64>(x + 2);
-            let f2 = ctx.base_to_value::<i64>(f0 + f1);
-            ctx.insert("fib", [y, f2].into_iter());
+            ctx.set("fib", (x + 2,), f0 + f1).ok()?;
 
             Some(())
         },
@@ -339,14 +391,12 @@ fn fib_setup() -> RustRuleBenchInput {
 fn rust_rule_fib(bencher: divan::Bencher, case: RustRuleBenchCase) {
     use egglog::prelude::run_ruleset;
 
-    bencher
-        .with_inputs(|| fib_setup())
-        .bench_local_refs(|input| {
-            for _ in 0..case.n_rule_run_estimated.unwrap() {
-                run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
-            }
-            input.egraph.serialize(egglog::SerializeConfig::default());
-            // let mut f = std::fs::File::create("./fib.dot").unwrap();
-            // f.write_all(output.egraph.to_dot().as_bytes()).unwrap();
-        });
+    bencher.with_inputs(fib_setup).bench_local_refs(|input| {
+        for _ in 0..case.n_rule_run_estimated.unwrap() {
+            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+        }
+        input.egraph.serialize(egglog::SerializeConfig::default());
+        // let mut f = std::fs::File::create("./fib.dot").unwrap();
+        // f.write_all(output.egraph.to_dot().as_bytes()).unwrap();
+    });
 }
