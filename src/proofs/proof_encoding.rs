@@ -877,6 +877,11 @@ impl<'a> ProofInstrumentor<'a> {
                         (fv, proof)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
+                        if specialized_primitive.output().is_eq_sort() {
+                            panic!(
+                                "Term encoding does not support eq-sort primitive expressions in facts"
+                            );
+                        }
                         let fv = self.fresh_var();
                         res.push(format!(
                             "(= {fv} ({} {}))",
@@ -884,15 +889,7 @@ impl<'a> ProofInstrumentor<'a> {
                             ListDisplay(new_args, " ")
                         ));
 
-                        let proof = if !self.proofs_enabled() {
-                            "()".to_string()
-                        } else if specialized_primitive.output().is_eq_sort() {
-                            let term_proof_name =
-                                self.term_proof_name(specialized_primitive.output().name());
-                            let fresh_proof = self.fresh_var();
-                            res.push(format!("(= {fresh_proof} ({term_proof_name} {fv}))"));
-                            fresh_proof
-                        } else {
+                        let proof = if self.proofs_enabled() {
                             let fiat_constructor = &self.proof_names().fiat_constructor;
                             let to_ast = self
                                 .proof_names()
@@ -900,6 +897,8 @@ impl<'a> ProofInstrumentor<'a> {
                                 .get(specialized_primitive.output().name())
                                 .unwrap();
                             format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
+                        } else {
+                            "()".to_string()
                         };
 
                         (fv.clone(), proof)

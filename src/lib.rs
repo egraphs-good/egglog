@@ -2022,12 +2022,12 @@ impl EGraph {
                 .proof_state
                 .original_typechecking
                 .as_ref()
-                .map(|egraph| egraph.type_info.clone())
-                .unwrap_or_else(|| self.type_info.clone());
+                .map(|egraph| &egraph.type_info)
+                .unwrap_or(&self.type_info);
             let macro_expanded = self.command_macros.apply(
                 before_expanded_command,
                 &mut self.parser.symbol_gen,
-                &macro_type_info,
+                macro_type_info,
             )?;
 
             for command in macro_expanded {
@@ -2815,41 +2815,6 @@ mod tests {
                 (let b (vec-of 6 5 4 3 2 1))
                 (check (= (inner-product a b) 56))
             ",
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn proof_mode_allows_eq_sort_primitive_results_in_facts() {
-        let mut egraph = EGraph::default();
-        let validator =
-            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
-        add_primitive_with_validator!(
-            &mut egraph,
-            "proof-id" = |x: #| -> # { x },
-            validator
-        );
-        let mut egraph = egraph.with_proofs_enabled();
-
-        egraph
-            .parse_and_run_program(
-                None,
-                r#"
-                (datatype Math
-                  (Done)
-                  (Num i64))
-                (relation Seed (Math))
-
-                (Seed (Num 1))
-
-                (rule ((Seed y)
-                       (= x (proof-id y)))
-                      ((Done))
-                      :name "use-proof-id")
-
-                (run 1)
-                (prove (Done))
-                "#,
             )
             .unwrap();
     }
