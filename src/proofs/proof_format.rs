@@ -2,7 +2,7 @@ use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::{
-        proof_checker::{gather_globals, run_merge},
+        proof_checker::{gather_globals, run_merge_subexpr},
         proof_encoding_helpers::EncodingNames,
     },
     typechecking::FuncType,
@@ -61,11 +61,14 @@ enum RawProof {
     /// of t = t.
     /// The term t is either f(c1, c2, ..., merge_fn) or some subexpression of the merge function. Here the merge function is evaluted on the terms old and new.
     MergeFn(String, RawProofId, RawProofId, TermId),
-    /// Like [`RawProof::MergeFn`] but term-free: the conclusion term is NOT embedded.
-    /// It is reconstructed during conversion from the two premise proofs (which give the
-    /// children and outputs) plus running the merge function. Used by the FD custom-function
-    /// view merge, which runs without access to the children.
-    MergeFnFree(String, RawProofId, RawProofId),
+    /// Like [`RawProof::MergeFn`] but term-free, with an index: the conclusion term is
+    /// NOT embedded. Instead the index `idx` identifies WHICH subexpression of the merge
+    /// body this proof justifies (a deterministic pre-order index over the merge-body
+    /// expression tree). The conclusion is reconstructed during conversion by evaluating
+    /// subexpression `idx` of the merge body on the premise outputs. The index makes
+    /// nested merge-body subexpressions (which share the same premises) distinguishable.
+    /// Used by the FD custom-function view merge, which runs without access to children.
+    MergeFnIdx(String, RawProofId, RawProofId, usize),
     Trans(RawProofId, RawProofId),
     Sym(RawProofId),
     /// given a proof that t1 = f(..., ci, ...)
@@ -222,12 +225,13 @@ impl RawProofStore {
             let name = self.parse_string(args[0]);
             let premises = self.parse_proof_list(args[1]);
             RawProof::Rule(name, premises, args[2], args[3])
-        } else if head.contains("MergeFree") {
-            assert!(args.len() == 3, "merge-free constructor should have 3 args");
+        } else if head.contains("MergeIdx") {
+            assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
             let old_proof = self.parse_proof(args[1]);
             let new_proof = self.parse_proof(args[2]);
-            RawProof::MergeFnFree(function, old_proof, new_proof)
+            let idx = self.parse_index(args[3]);
+            RawProof::MergeFnIdx(function, old_proof, new_proof, idx)
         } else if head.contains("Merge") {
             assert!(args.len() == 4, "merge constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -425,13 +429,19 @@ impl ProofStore {
                     },
                 }
             }
-            RawProof::MergeFnFree(function, old_raw, new_raw) => {
+            RawProof::MergeFnIdx(function, old_raw, new_raw, idx) => {
                 let old_proof_id = self.convert_raw_proof(prog, globals, raw_store, *old_raw);
                 let new_proof_id = self.convert_raw_proof(prog, globals, raw_store, *new_raw);
                 // The two premise proofs are reflexive proofs of the colliding view terms
-                // `f(c..., old_output)` and `f(c..., new_output)`. Reconstruct the conclusion
-                // term `f(c..., merged)` by running the merge function on the two outputs,
-                // mirroring the proof checker's MergeFn reconstruction.
+                // `f(c..., old_output)` and `f(c..., new_output)`. We extract the two outputs
+                // and reconstruct the conclusion term by evaluating subexpression `idx` of
+                // `function`'s merge body on those outputs (`old`/`new` bound accordingly).
+                //
+                // For idx == 0 (the merge body root) the conclusion is the merged child;
+                // for the top-level view-row proof we wrap it as `f(inputs..., merged)`.
+                // For nested subexpressions (idx > 0) the conclusion is the minted nested
+                // term itself (e.g. `(C1 old_out new_out)`), which is exactly the existence
+                // proof of that minted enode in its FD view.
                 let old_view = self.id_to_proof[old_proof_id].rhs();
                 let new_view = self.id_to_proof[new_proof_id].rhs();
                 let (view_head, input_args, old_output, new_output) = match (
@@ -446,17 +456,32 @@ impl ProofStore {
                         (head, inputs, old_output, new_output)
                     }
                     _ => panic!(
-                        "MergeFnFree premise proofs should prove function application terms, got {:?} and {:?}",
+                        "MergeFnIdx premise proofs should prove function application terms, got {:?} and {:?}",
                         self.term_dag.get(old_view),
                         self.term_dag.get(new_view)
                     ),
                 };
-                let (merged_child, _props) =
-                    run_merge(&mut self.term_dag, function, prog, old_output, new_output)
-                        .unwrap_or_else(|e| panic!("failed to run merge for {function}: {e}"));
-                let mut merged_args = input_args;
-                merged_args.push(merged_child);
-                let to_prove = self.term_dag.app(view_head, merged_args);
+                let (subexpr_term, _props) = run_merge_subexpr(
+                    &mut self.term_dag,
+                    function,
+                    prog,
+                    old_output,
+                    new_output,
+                    *idx,
+                )
+                .unwrap_or_else(|e| {
+                    panic!("failed to run merge subexpr {idx} for {function}: {e}")
+                });
+                let to_prove = if *idx == 0 {
+                    // The merge-body root: the conclusion is the whole view row
+                    // `f(inputs..., merged)`.
+                    let mut merged_args = input_args;
+                    merged_args.push(subexpr_term);
+                    self.term_dag.app(view_head, merged_args)
+                } else {
+                    // A nested subexpression: its own minted term is the conclusion.
+                    subexpr_term
+                };
                 Proof {
                     proposition: Proposition::new(to_prove, to_prove),
                     justification: Justification::MergeFn {
