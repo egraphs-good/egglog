@@ -801,7 +801,9 @@ impl<'a> ProofInstrumentor<'a> {
                     resolved_var.name.clone(),
                     if !self.egraph.proof_state.proofs_enabled {
                         "()".to_string()
-                    } else if resolved_var.sort.is_eq_sort() {
+                    } else if resolved_var.sort.is_eq_sort()
+                        || resolved_var.sort.is_eq_container_sort()
+                    {
                         let term_proof_name = self.term_proof_name(resolved_var.sort.name());
                         let fresh_proof = self.fresh_var();
                         // Every eq-sort term has its term_proof set at
