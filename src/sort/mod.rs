@@ -14,6 +14,31 @@ pub use egglog_bridge::ColumnTy;
 
 use crate::*;
 
+/// Read-only access to the backend for use in [`Sort::column_ty`].
+pub struct SortBackend<'a>(pub(crate) &'a egglog_bridge::EGraph);
+
+/// Write access to the backend for use in [`Sort::register_type`].
+pub struct SortBackendMut<'a>(pub(crate) &'a mut egglog_bridge::EGraph);
+
+impl SortBackend<'_> {
+    /// Returns the [`ColumnTy`] for a base value type `T`.
+    pub fn base_column_ty<T: BaseValue + 'static>(&self) -> ColumnTy {
+        ColumnTy::Base(self.0.base_values().get_ty::<T>())
+    }
+}
+
+impl SortBackendMut<'_> {
+    /// Register a base value type with the backend.
+    pub fn register_base_type<T: BaseValue + 'static>(&mut self) {
+        self.0.base_values_mut().register_type::<T>();
+    }
+
+    /// Register a container type with the backend.
+    pub fn register_container_type<T: ContainerValue + 'static>(&mut self) {
+        self.0.register_container_ty::<T>();
+    }
+}
+
 pub type Z = core_relations::Boxed<BigInt>;
 pub type Q = core_relations::Boxed<BigRational>;
 pub type F = core_relations::Boxed<OrderedFloat<f64>>;
@@ -52,7 +77,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> &str;
 
     /// Returns the backend-specific column type. See [`ColumnTy`].
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
+    fn column_ty(&self, backend: &SortBackend<'_>) -> ColumnTy;
 
     /// return the inner sorts if a container sort
     /// remember that containers can contain containers
@@ -65,7 +90,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         }
     }
 
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph);
+    fn register_type(&self, backend: &mut SortBackendMut<'_>);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -168,11 +193,11 @@ impl Sort for EqSort {
         &self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+    fn column_ty(&self, _backend: &SortBackend<'_>) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
+    fn register_type(&self, _backend: &mut SortBackendMut<'_>) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self

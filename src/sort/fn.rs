@@ -152,15 +152,13 @@ impl Sort for FunctionSort {
         &self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+    fn column_ty(&self, _backend: &SortBackend<'_>) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<FunctionContainer>();
-        backend
-            .base_values_mut()
-            .register_type::<ResolvedFunction>();
+    fn register_type(&self, backend: &mut SortBackendMut<'_>) {
+        backend.register_container_type::<FunctionContainer>();
+        backend.register_base_type::<ResolvedFunction>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

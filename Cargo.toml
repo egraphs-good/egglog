@@ -150,7 +150,10 @@ mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
 egglog-core-relations = { workspace = true }
 egglog-ast = { workspace = true }
-egglog-bridge = { workspace = true }
+# public = false: egglog-bridge is an internal crate; its types should not appear
+# in egglog's public API. Enforcement requires `-Zpublic-dependency` (nightly Cargo)
+# and will kick in automatically once that feature stabilizes.
+egglog-bridge = { workspace = true, public = false }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
 egglog-reports = { workspace = true }

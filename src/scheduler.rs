@@ -333,7 +333,7 @@ impl SchedulerRuleInfo {
             .register_external_func(Box::new(CollectMatches::new(matches.clone())));
         let schema = free_vars
             .iter()
-            .map(|v| v.sort.column_ty(&egraph.backend))
+            .map(|v| v.sort.column_ty(&SortBackend(&egraph.backend)))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
         let decided = egraph.backend.add_table(FunctionConfig {

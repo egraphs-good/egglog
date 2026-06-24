@@ -3,6 +3,7 @@
 ## [Unreleased] - ReleaseDate
 
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
+- **`Sort::column_ty` and `Sort::register_type` now take `SortBackend`/`SortBackendMut` instead of `&egglog_bridge::EGraph`.** Custom sort implementations should call `backend.base_column_ty::<T>()`, `backend.register_base_type::<T>()`, and `backend.register_container_type::<T>()` instead of reaching into the bridge directly.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.
 - Render nullary AST calls without a trailing space, e.g. (foo) instead of (foo ).

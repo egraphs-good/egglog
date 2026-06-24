@@ -836,7 +836,7 @@ impl EGraph {
             schema: input
                 .iter()
                 .chain([&output])
-                .map(|sort| sort.column_ty(&self.backend))
+                .map(|sort| sort.column_ty(&SortBackend(&self.backend)))
                 .collect(),
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
@@ -2285,7 +2285,7 @@ impl EGraph {
     /// Get the canonical representation for `val` based on type.
     pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
-            .get_canon_repr(val, sort.column_ty(&self.backend))
+            .get_canon_repr(val, sort.column_ty(&SortBackend(&self.backend)))
     }
 
     /// Create a new union action that can be used to union two values.
@@ -2481,7 +2481,7 @@ impl<'a> BackendRule<'a> {
             .or_insert_with(|| match x {
                 core::GenericAtomTerm::Var(_, v) => self
                     .rb
-                    .new_var_named(v.sort.column_ty(self.rb.egraph()), &v.name),
+                    .new_var_named(v.sort.column_ty(&SortBackend(self.rb.egraph())), &v.name),
                 core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
@@ -2536,7 +2536,7 @@ impl<'a> BackendRule<'a> {
         (
             resolved_id,
             qe_args,
-            prim.output().column_ty(self.rb.egraph()),
+            prim.output().column_ty(&SortBackend(self.rb.egraph())),
         )
     }
 

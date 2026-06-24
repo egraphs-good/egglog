@@ -241,7 +241,7 @@ impl EGraph {
         // Canonicalize the value first so that we always use the canonical e-class ID
         let value = self
             .backend
-            .get_canon_repr(value, sort.column_ty(&self.backend));
+            .get_canon_repr(value, sort.column_ty(&SortBackend(&self.backend)));
         assert!(
             !sort.name().to_string().contains('-'),
             "Tag cannot contain '-' when serializing"
