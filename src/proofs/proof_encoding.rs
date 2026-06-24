@@ -84,32 +84,25 @@ impl<'a> ProofInstrumentor<'a> {
     /// (minted via the `fd-mint` Construct surface form) and primitives; calls to
     /// non-constructor user functions are NOT supported here (those stay legacy).
     ///
-    /// Unlike the primitive-bodied case, the OUTPUT may be an eq-sort (the merge
-    /// builds eq-sort terms via constructor FD views).
+    /// The INPUTS and OUTPUT may both be eq-sorts: the merge builds eq-sort terms
+    /// via constructor FD views, and eq-sort inputs verify thanks to Phase C's
+    /// `reflexivize_premise` (proof_format.rs), which handles the rebuild-rewritten
+    /// congruence premise.
     ///
-    /// Inputs must be non-eq-sorts. The reflexivity wall itself is lifted in Phase C
-    /// (`reflexivize_premise` in proof_format.rs handles the rebuild-rewritten
-    /// congruence premise), so eq-sort inputs verify. But a SEPARATE blocker remains
-    /// for constructor-bodied merges: the merge body MINTS constructor enodes into
-    /// their own FD views, and a rebuild-triggered merge therefore materializes those
-    /// merge intermediates as persistent view rows. In normal mode the native merge
-    /// unions the result away, leaving 0 such rows, so `(print-size)` diverges between
-    /// normal and proof/term modes (e.g. rw-analysis `merge-val`: 0 vs 4). The
-    /// analysis result and proof checking are correct either way, but the divergence
-    /// breaks the across-treatments snapshot, so eq-sort-input constructor-bodied
-    /// customs stay on the legacy `handle_merge_fn` path for now.
+    /// MATERIALIZATION (the eq-sort-input divergence, fixed): a constructor-bodied
+    /// merge MINTS constructor enodes (e.g. rw-analysis `merge-val`). In a fixpoint
+    /// analysis almost all collisions are no-ops (the merged output equals the
+    /// existing one). Normal egglog short-circuits such a collision via its
+    /// `cur == new` check, so it mints nothing. The FD view's value carries an extra
+    /// proof column (proof mode) or runs a minting body (term mode), so without help
+    /// the merge body would run for an equal-output collision and mint a spurious
+    /// `merge-val(out, out)`, diverging the across-treatments `(print-size)` (0 normal
+    /// vs 4 FD). The fix is the backend identity-column short-circuit
+    /// (`FunctionConfig::identity_values = Some(1)`, egglog-bridge): a collision with
+    /// an unchanged OUTPUT keeps the existing row (proof included) and does not run the
+    /// minting body, restoring normal mode's behavior.
     fn is_constructor_bodied_fd_custom(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         if fdecl.subtype != FunctionSubtype::Custom {
-            return false;
-        }
-        let has_eq_sort_input = fdecl.schema.input.iter().any(|s| {
-            self.egraph
-                .type_info
-                .get_sort_by_name(s)
-                .map(|sort| sort.is_eq_sort())
-                .unwrap_or(false)
-        });
-        if has_eq_sort_input {
             return false;
         }
         match &fdecl.merge {

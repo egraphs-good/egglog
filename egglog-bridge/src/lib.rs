@@ -196,6 +196,25 @@ pub struct FunctionConfig {
     /// Number of value (non-key) columns. Defaults conceptually to 1; set
     /// higher for functions whose value compiles to multiple columns.
     pub num_values: usize,
+    /// Optional merge short-circuit on row IDENTITY. When `Some(k)`, a key
+    /// collision whose leading `k` value columns are unchanged is treated as a
+    /// no-op: the existing row is kept verbatim and the merge body is NOT
+    /// evaluated, so no side effects (table inserts, fresh constructor mints,
+    /// etc.) run. Any trailing value columns beyond the first `k` are
+    /// "passengers" carried along from the surviving row.
+    ///
+    /// `None` (the default) means no early short-circuit — the merge body always
+    /// runs, then the `changed` flag is computed from the result (the classic
+    /// behavior; preserved exactly for ordinary functions, including `Const`
+    /// merges where running the body on `cur == new` can still change the row).
+    ///
+    /// The motivating case is the proof-encoding FD view, whose merge body MINTS
+    /// proof/term nodes as a side effect. Normal egglog short-circuits a merge
+    /// when `cur == new` (so a no-op collision mints nothing); the FD view must
+    /// match that even though its value carries an extra proof column (proof
+    /// mode: value `(output, proof)`, `Some(1)`) or runs a minting body for an
+    /// already-equal output (term mode: value `output`, `Some(1)`).
+    pub identity_values: Option<usize>,
     /// The behavior of the function when lookups are made on keys not currently present.
     pub default: DefaultVal,
     /// How to resolve FD conflicts for the function.
@@ -340,6 +359,7 @@ impl EGraph {
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
                 num_values: table_info.num_values,
+                identity_values: table_info.identity_values,
             };
             let table_id = table_info.table;
             extended_row.extend_from_slice(&row);
@@ -371,6 +391,7 @@ impl EGraph {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
             num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
@@ -398,6 +419,7 @@ impl EGraph {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
             num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let table_id = info.table;
         let table = self.db.get_table(table_id);
@@ -449,6 +471,7 @@ impl EGraph {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
             num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let imp = self.db.get_table(table);
         let all = imp.all();
@@ -516,6 +539,7 @@ impl EGraph {
         let FunctionConfig {
             schema,
             num_values,
+            identity_values,
             default,
             merge,
             name,
@@ -525,6 +549,12 @@ impl EGraph {
             num_values >= 1 && num_values <= schema.len(),
             "num_values must be >=1 and not exceed the column count"
         );
+        if let Some(k) = identity_values {
+            assert!(
+                k >= 1 && k <= num_values,
+                "identity_values must be >=1 and not exceed num_values"
+            );
+        }
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -539,6 +569,7 @@ impl EGraph {
             subsume: can_subsume,
             func_cols: schema.len(),
             num_values,
+            identity_values,
         };
         let n_args = schema_math.num_keys();
         let n_cols = schema_math.table_columns();
@@ -566,6 +597,7 @@ impl EGraph {
             table: table_id,
             schema: schema.clone(),
             num_values,
+            identity_values,
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
@@ -1001,6 +1033,9 @@ struct FunctionInfo {
     /// Number of value (non-key) columns; the last `num_values` columns of
     /// `schema` are the function's value. Usually 1.
     num_values: usize,
+    /// Optional merge short-circuit on row identity (see
+    /// [`FunctionConfig::identity_values`]).
+    identity_values: Option<usize>,
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
@@ -1143,6 +1178,41 @@ impl MergeFn {
             let new_vals = &new[vcols.clone()];
 
             let mut changed = false;
+
+            // Identity-column short-circuit. When the function opts in
+            // (`identity_values == Some(k)`), a collision that leaves the
+            // leading `k` value columns unchanged is a no-op: keep the existing
+            // row's value columns verbatim and do NOT evaluate the merge body,
+            // so no side effects (table inserts, fresh mints) run. This mirrors
+            // normal egglog's `cur == new` short-circuit, but on the identity
+            // columns alone — the proof-encoding FD view sets `Some(1)` so a
+            // collision with an unchanged output keeps the existing proof
+            // (proof mode) / does not re-mint (term mode) rather than re-running
+            // the minting merge body. Ordinary functions leave this `None` and
+            // run the body unconditionally (the classic behavior).
+            //
+            // Subsumption (if any) is still combined, since it is independent of
+            // the value columns and must not be dropped.
+            let identity_unchanged = schema_math
+                .identity_values
+                .is_some_and(|k| cur_vals[..k] == new_vals[..k]);
+            if identity_unchanged {
+                let subsume = schema_math.subsume.then(|| {
+                    let cur_s = cur[schema_math.subsume_col()];
+                    let new_s = new[schema_math.subsume_col()];
+                    let out_s = combine_subsumed(cur_s, new_s);
+                    changed |= cur_s != out_s;
+                    out_s
+                });
+                if changed {
+                    out.extend_from_slice(cur);
+                    out[schema_math.ts_col()] = timestamp;
+                    if let Some(subsume) = subsume {
+                        out[schema_math.subsume_col()] = subsume;
+                    }
+                }
+                return changed;
+            }
 
             // Compute the merged value column(s). A `Tuple` merge produces one
             // value per column (each may read any old/new column); any other
@@ -1452,6 +1522,7 @@ impl TableAction {
                 func_cols: func_info.schema.len(),
                 subsume: func_info.can_subsume,
                 num_values: func_info.num_values,
+                identity_values: func_info.identity_values,
             },
             default: match &func_info.default_val {
                 DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
@@ -1782,6 +1853,9 @@ struct SchemaMath {
     /// The number of value (non-key) columns. Almost always 1; functions whose
     /// value is compiled to multiple columns (e.g. an unboxed pair) have more.
     num_values: usize,
+    /// Optional merge short-circuit on row identity (see
+    /// [`FunctionConfig::identity_values`]). `None` for ordinary functions.
+    identity_values: Option<usize>,
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with

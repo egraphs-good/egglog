@@ -1299,6 +1299,17 @@ impl EGraph {
         };
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             num_values,
+            // Only the OUTPUT column (value column 0) determines row identity:
+            // a collision with an unchanged output is a no-op merge that must
+            // not run the (possibly minting) merge body. This matches normal
+            // egglog's `cur == new` short-circuit and is required for the
+            // proof-encoding FD view, whose body mints proof/term nodes — in
+            // proof mode the value is `(output, proof)` (the proof is a
+            // passenger) and in term mode the body still mints for an
+            // already-equal output. Ordinary user functions are unaffected: the
+            // default merges (UnionId/AssertEq) already no-op on an unchanged
+            // output, and custom merges are idempotent on equal inputs.
+            identity_values: Some(1),
             schema: input
                 .iter()
                 .chain(value_col_sorts)

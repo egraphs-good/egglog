@@ -22,6 +22,7 @@ fn main() {
         let diff = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "diff".into(),
@@ -30,6 +31,7 @@ fn main() {
         let integral = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "integral".into(),
@@ -39,6 +41,7 @@ fn main() {
         let add = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "add".into(),
@@ -47,6 +50,7 @@ fn main() {
         let sub = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "sub".into(),
@@ -56,6 +60,7 @@ fn main() {
         let mul = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "mul".into(),
@@ -65,6 +70,7 @@ fn main() {
         let div = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "div".into(),
@@ -74,6 +80,7 @@ fn main() {
         let pow = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "pow".into(),
@@ -83,6 +90,7 @@ fn main() {
         let ln = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "ln".into(),
@@ -92,6 +100,7 @@ fn main() {
         let sqrt = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "sqrt".into(),
@@ -101,6 +110,7 @@ fn main() {
         let sin = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "sin".into(),
@@ -110,6 +120,7 @@ fn main() {
         let cos = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "cos".into(),
@@ -119,6 +130,7 @@ fn main() {
         let rat = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "rat".into(),
@@ -128,6 +140,7 @@ fn main() {
         let var = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
             num_values: 1,
+            identity_values: None,
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "var".into(),
