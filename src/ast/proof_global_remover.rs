@@ -42,6 +42,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         subtype: FunctionSubtype::Constructor,
         input: vec![],
         output: var.sort.clone(),
+        internal_hidden: false,
     })
 }
 
@@ -80,6 +81,7 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                     subtype: FunctionSubtype::Constructor,
                     input: vec![],
                     output: ty.clone(),
+                    internal_hidden: false,
                 });
                 let func_decl = ResolvedFunctionDecl {
                     name: name.name,

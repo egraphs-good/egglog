@@ -62,6 +62,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
+        internal_hidden: false,
     })
 }
 
@@ -98,6 +99,7 @@ impl GlobalRemover<'_> {
                         subtype: FunctionSubtype::Custom,
                         input: vec![],
                         output: ty.clone(),
+                        internal_hidden: false,
                     });
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,

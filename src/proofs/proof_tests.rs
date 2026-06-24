@@ -1,7 +1,11 @@
 #[cfg(test)]
 mod tests {
     use crate::CommandOutput;
-    use crate::ast::{ResolvedCommand, RuleEvalMode, sanitize_internal_names};
+    use crate::ast::{
+        FunctionSubtype, GenericAction, GenericExpr, ResolvedCommand, RuleEvalMode,
+        sanitize_internal_names,
+    };
+    use crate::core::ResolvedCall;
 
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
@@ -96,6 +100,70 @@ mod tests {
                 "proof encoding did not preserve :naive for:\n{source}"
             );
         }
+    }
+
+    #[test]
+    fn generated_proof_rhs_lookups_are_allowed() {
+        let source = r#"
+            (sort Math)
+            (constructor Neg (Math) Math)
+            (relation seen (Math))
+            (rule ((= m (Neg n))) ((seen m)) :name "uses-proof-read")
+        "#;
+
+        let mut egraph = crate::EGraph::new_with_proofs();
+        let resolved = egraph.resolve_program(None, source).unwrap();
+        let rule = resolved
+            .iter()
+            .find_map(|command| match command {
+                ResolvedCommand::Rule { rule } if rule.name == "uses-proof-read" => Some(rule),
+                _ => None,
+            })
+            .expect("proof-instrumented rule not found");
+
+        assert_eq!(rule.eval_mode, RuleEvalMode::UnsafeSeminaive);
+
+        let mut found_internal_hidden_lookup = false;
+        for action in rule.head.0.iter() {
+            let GenericAction::Let(_, _, rhs) = action else {
+                continue;
+            };
+            let GenericExpr::Call(_, ResolvedCall::Func(func_type), _) = rhs else {
+                continue;
+            };
+            if func_type.subtype == FunctionSubtype::Custom && func_type.internal_hidden {
+                found_internal_hidden_lookup = true;
+                assert!(
+                    egraph.type_info.expr_has_function_lookup(rhs).is_none(),
+                    "internal-hidden proof lookup was treated as a user RHS function lookup"
+                );
+            }
+        }
+
+        assert!(
+            found_internal_hidden_lookup,
+            "expected proof instrumentation to emit an internal-hidden RHS lookup"
+        );
+    }
+
+    #[test]
+    fn user_rhs_function_lookup_still_rejected() {
+        let source = r#"
+            (function input (i64) i64 :merge old)
+            (function output (i64) i64 :merge old)
+            (relation trigger ())
+            (rule ((trigger)) ((set (output 0) (input 0))))
+        "#;
+
+        let mut egraph = crate::EGraph::default();
+        let err = egraph
+            .resolve_program(None, source)
+            .expect_err("user RHS function lookup should be rejected")
+            .to_string();
+        assert!(
+            err.contains("Value lookup of non-constructor function function in rule is disallowed"),
+            "unexpected error for user RHS function lookup: {err}"
+        );
     }
 
     #[test]
