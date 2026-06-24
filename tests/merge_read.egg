@@ -1,7 +1,0 @@
-(function foo () i64 :no-merge)
-
-(function bar () i64 :merge (foo))
-
-(set (bar) 0)
-
-(fail (set (bar) 1))

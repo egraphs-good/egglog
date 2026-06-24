@@ -755,31 +755,47 @@ impl TypeInfo {
         bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
         bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));
 
+        // Merge expressions run as part of action-side table updates: writes
+        // are allowed, but live DB reads would be untracked by seminaive rule
+        // execution. A merge must be a PURE WRITE (use old/new, call
+        // primitives, or mint constructor terms), so reading a non-constructor
+        // function in a merge is disallowed in ALL modes.
+        let merge = match &fdecl.merge {
+            Some(merge) => Some(self.typecheck_standalone_expr(
+                symbol_gen,
+                merge,
+                &bound_vars,
+                Context::Write,
+            )?),
+            None => None,
+        };
+        // Effect actions of a block-form merge: resolved + typechecked via
+        // the same pipeline as rule actions, with `old`/`new` bound.
+        let merge_action = self.typecheck_standalone_actions(
+            symbol_gen,
+            &fdecl.merge_action,
+            &bound_vars,
+            Context::Write,
+        )?;
+
+        // Reject reading a non-constructor function in either the merge value
+        // expression or any action of a block-form merge. This flags only
+        // `ResolvedCall::Func` with `subtype == Custom && !is_global`, so
+        // constructor-bodied (`:merge (Ctor old new)`), primitive-bodied
+        // (`:merge (min old new)`), and trivial (`:merge old`) merges are NOT
+        // flagged.
+        if let Some(merge) = &merge {
+            self.check_merge_lookup_expr(merge)?;
+        }
+        self.check_no_function_lookups_in_merge_actions(&merge_action)?;
+
         Ok(ResolvedFunctionDecl {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
             resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
-            merge: match &fdecl.merge {
-                // Merge expressions run as part of action-side table updates:
-                // writes are allowed, but live DB reads would be untracked by
-                // seminaive rule execution.
-                Some(merge) => Some(self.typecheck_standalone_expr(
-                    symbol_gen,
-                    merge,
-                    &bound_vars,
-                    Context::Write,
-                )?),
-                None => None,
-            },
-            // Effect actions of a block-form merge: resolved + typechecked via
-            // the same pipeline as rule actions, with `old`/`new` bound.
-            merge_action: self.typecheck_standalone_actions(
-                symbol_gen,
-                &fdecl.merge_action,
-                &bound_vars,
-                Context::Write,
-            )?,
+            merge,
+            merge_action,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
             internal_hidden: fdecl.internal_hidden,
@@ -916,6 +932,42 @@ impl TypeInfo {
                 "function".to_string(),
                 span,
             ));
+        }
+        Ok(())
+    }
+
+    fn check_merge_lookup_expr(&self, expr: &ResolvedExpr) -> Result<(), TypeError> {
+        if let Some((name, span)) = self.expr_function_lookup(expr) {
+            return Err(TypeError::LookupInMergeDisallowed(name, span));
+        }
+        Ok(())
+    }
+
+    fn check_no_function_lookups_in_merge_actions(
+        &self,
+        actions: &ResolvedActions,
+    ) -> Result<(), TypeError> {
+        for action in actions.iter() {
+            match action {
+                GenericAction::Let(_, _, rhs) => self.check_merge_lookup_expr(rhs)?,
+                GenericAction::Set(_, _, args, rhs) => {
+                    for arg in args.iter() {
+                        self.check_merge_lookup_expr(arg)?;
+                    }
+                    self.check_merge_lookup_expr(rhs)?;
+                }
+                GenericAction::Union(_, lhs, rhs) => {
+                    self.check_merge_lookup_expr(lhs)?;
+                    self.check_merge_lookup_expr(rhs)?;
+                }
+                GenericAction::Change(_, _, _, args) => {
+                    for arg in args.iter() {
+                        self.check_merge_lookup_expr(arg)?;
+                    }
+                }
+                GenericAction::Panic(..) => {}
+                GenericAction::Expr(_, expr) => self.check_merge_lookup_expr(expr)?,
+            }
         }
         Ok(())
     }
@@ -1123,6 +1175,12 @@ impl TypeInfo {
     /// Global function calls are allowed since they get desugared to constructors.
     /// Returns Some(span) if a lookup is found, None otherwise.
     pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
+        self.expr_function_lookup(expr).map(|(_, span)| span)
+    }
+
+    /// Like [`Self::expr_has_function_lookup`], but also returns the name of the
+    /// offending non-constructor function (for error messages).
+    fn expr_function_lookup(&self, expr: &ResolvedExpr) -> Option<(String, Span)> {
         use ast::GenericExpr;
 
         expr.find(&mut |e| {
@@ -1130,7 +1188,7 @@ impl TypeInfo {
                 && func_type.subtype == FunctionSubtype::Custom
                 && !self.is_global(&func_type.name)
             {
-                return Some(span.clone());
+                return Some((func_type.name.to_string(), span.clone()));
             }
             None
         })
@@ -1180,6 +1238,10 @@ pub enum TypeError {
     ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
     LookupInRuleDisallowed(String, Span),
+    #[error(
+        "{1}\nValue lookup of non-constructor function {0} in a merge is disallowed; a merge must be a pure write (it may use old/new, call primitives, or build constructors, but not read another function)."
+    )]
+    LookupInMergeDisallowed(String, Span),
     #[error("{1}\nCannot set constructor {0}. Use `union` instead or declare {0} as a function.")]
     SetConstructorDisallowed(String, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]

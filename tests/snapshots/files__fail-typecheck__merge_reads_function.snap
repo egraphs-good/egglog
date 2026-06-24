@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 10:29-33 of merge_reads_function.egg: (foo)
+Value lookup of non-constructor function foo in a merge is disallowed; a merge must be a pure write (it may use old/new, call primitives, or build constructors, but not read another function).

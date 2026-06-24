@@ -35,7 +35,6 @@ looking_up_nonconstructor_in_rewrite_good.egg
 luminal-llama.egg
 map.egg
 math.egg
-merge_read.egg
 multiset.egg
 naive-action-lookup.egg
 nested-container-dirty-propagation.egg

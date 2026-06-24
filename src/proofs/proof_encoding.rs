@@ -470,13 +470,14 @@ impl<'a> ProofInstrumentor<'a> {
     /// (congruence for constructors; value-replacement / primitive / constructor-
     /// bodied for customs), so this emits no extra rule. A custom function whose
     /// `:merge` reads the live DB (e.g. `:merge (foo)` for a non-constructor `foo`)
-    /// is rejected at the file level by `command_supports_proof_encoding`
-    /// (`FunctionLookupInAction`), and a non-global `:no-merge` custom function is
-    /// rejected as `NoMergeOnNonGlobalFunction` (#774), so neither reaches here.
+    /// is rejected at typecheck time (in ALL modes) by the
+    /// `LookupInMergeDisallowed` error (see `typechecking.rs`), which runs before
+    /// proof encoding, and a non-global `:no-merge` custom function is rejected as
+    /// `NoMergeOnNonGlobalFunction` (#774), so neither reaches here.
     fn handle_merge_or_congruence(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         if fdecl.subtype == FunctionSubtype::Custom && !self.is_fd_pair_view(fdecl) {
             unreachable!(
-                "custom merge in a proof-supported program must be FD; function-reading merges are rejected by command_supports_proof_encoding"
+                "custom merge in a proof-supported program must be FD; function-reading merges are rejected by the LookupInMergeDisallowed typecheck error"
             )
         }
         String::new()
