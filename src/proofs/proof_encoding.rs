@@ -85,10 +85,19 @@ impl<'a> ProofInstrumentor<'a> {
     /// non-constructor user functions are NOT supported here (those stay legacy).
     ///
     /// Unlike the primitive-bodied case, the OUTPUT may be an eq-sort (the merge
-    /// builds eq-sort terms via constructor FD views). Inputs must still be non-eq
-    /// sorts: an eq-sort input is canonicalized during rebuild, which re-keys the row
-    /// and rewrites its proof to a non-reflexive congruence proof, breaking the
-    /// `MergeRow`/`MergeIdx` reflexive-premise requirement.
+    /// builds eq-sort terms via constructor FD views).
+    ///
+    /// Inputs must be non-eq-sorts. The reflexivity wall itself is lifted in Phase C
+    /// (`reflexivize_premise` in proof_format.rs handles the rebuild-rewritten
+    /// congruence premise), so eq-sort inputs verify. But a SEPARATE blocker remains
+    /// for constructor-bodied merges: the merge body MINTS constructor enodes into
+    /// their own FD views, and a rebuild-triggered merge therefore materializes those
+    /// merge intermediates as persistent view rows. In normal mode the native merge
+    /// unions the result away, leaving 0 such rows, so `(print-size)` diverges between
+    /// normal and proof/term modes (e.g. rw-analysis `merge-val`: 0 vs 4). The
+    /// analysis result and proof checking are correct either way, but the divergence
+    /// breaks the across-treatments snapshot, so eq-sort-input constructor-bodied
+    /// customs stay on the legacy `handle_merge_fn` path for now.
     fn is_constructor_bodied_fd_custom(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         if fdecl.subtype != FunctionSubtype::Custom {
             return false;

@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Proof/term encoding (Phase C): primitive-bodied custom-merge functions with eq-sort INPUTS (e.g. `(function distance (N N) i64 :merge (min old new))`) now use the functional-dependency view instead of the legacy per-rule merge proof. A rebuild canonicalizes an eq-sort input and rewrites the row's per-row proof into a non-reflexive congruence proof; the FD merge's `MergeFn` justification requires reflexive premises, so at resugaring time each such premise `p : A = B` is reflexivized to `Trans(Sym(p), p) : B = B` (landing on the canonical view row). Constructor-bodied customs with eq-sort inputs stay on the legacy path for now (their merge materializes constructor intermediates that diverge from normal-mode `(print-size)`).
+
 - Proof/term encoding (Phase B): function-bodied custom-merge functions whose `:merge` builds constructor terms (e.g. `(function f (i64) Tree :merge (C2 (C1 old new) (C2 old new)))`) now use the functional-dependency pair-valued view like constructors and primitive-bodied customs, via an internal `fd-mint` merge form that mints each nested constructor's e-class plus its view/UF/term-proof rows inside the `:merge`. This folds the per-merge congruence work into the view's own `:merge`.
 
 - Proof/term encoding: fold the single-parent union-find invariant into the UF function index's own `:merge` instead of a separate `single_parent` ruleset. A key collision on the index (one source term with two parents) unions the two parents back into the UF table and keeps the smaller leader; path compression then removes the redundant edge. This is the same separate-rule-to-`:merge` consolidation that sped up constructor congruence.
