@@ -160,6 +160,28 @@ pub enum CommandOutput {
     UserDefined(Arc<dyn UserDefinedCommandOutput>),
 }
 
+impl CommandOutput {
+    /// Render command outputs to a string that is identical whether the program
+    /// ran normally or under proof encoding (`--proofs`). Drops outputs that
+    /// legitimately differ or are non-deterministic (timing, `PrintFunction`
+    /// per #793, extraction variants) and reduces `ExtractBest` to its cost.
+    pub fn snapshot_stable_under_proof_encoding(outputs: &[CommandOutput]) -> String {
+        outputs
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::OverallStatistics(_) => None,
+                CommandOutput::PrintFunction(..) => None,
+                CommandOutput::ExtractBest(_, cost, _) => {
+                    Some(format!("(extraction-costs {cost})\n"))
+                }
+                CommandOutput::ExtractVariants(..) => None,
+                other => Some(other.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
+
 impl std::fmt::Display for CommandOutput {
     /// Format the command output for display, ending with a newline.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -970,11 +992,22 @@ impl EGraph {
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
+                let mut i = 0usize;
                 loop {
+                    i += 1;
+                    log::debug!(
+                        "Saturate iteration {i} start: {}",
+                        Self::schedule_for_log(sched)
+                    );
                     let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
+                    log::debug!(
+                        "Saturate iteration {i} end: {}",
+                        Self::run_report_debug_summary(&rec)
+                    );
                     report.union(rec);
                     if !updated {
+                        log::debug!("Saturate reached fixpoint after {i} iteration(s)");
                         break;
                     }
                 }
@@ -1014,10 +1047,53 @@ impl EGraph {
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
-            log::debug!("database size: {}", self.num_tuples());
+            log::debug!(
+                "Finished ruleset {ruleset}: database size {}, {}",
+                self.num_tuples(),
+                Self::run_report_debug_summary(&report)
+            );
         }
 
         Ok(report)
+    }
+
+    fn run_report_debug_summary(report: &RunReport) -> String {
+        let mut rules = report
+            .num_matches_per_rule
+            .iter()
+            .filter(|(_, matches)| **matches > 0)
+            .collect::<Vec<_>>();
+        rules.sort_by(|(_, left), (_, right)| right.cmp(left));
+
+        let top_rules = rules
+            .into_iter()
+            .take(5)
+            .map(|(rule, matches)| {
+                format!("{}={matches}", Self::truncate_for_log(rule.as_ref(), 80))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            "updated={}, can_stop={}, iterations={}, top_matches=[{}]",
+            report.updated,
+            report.can_stop,
+            report.iterations.len(),
+            top_rules
+        )
+    }
+
+    fn schedule_for_log(sched: &ResolvedSchedule) -> String {
+        Self::truncate_for_log(&sched.to_string(), 160)
+    }
+
+    fn truncate_for_log(s: &str, limit: usize) -> String {
+        let mut s = s.replace('\n', " ");
+        if s.len() > limit {
+            s.truncate(limit);
+            s.push_str("...");
+        }
+        s
     }
 
     /// Runs a ruleset for an iteration.
@@ -1071,17 +1147,23 @@ impl EGraph {
         // evaluation. This widens primitive-context selection from
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
-        let seminaive = self.seminaive && !rule.naive;
+        let seminaive = self.seminaive && !rule.eval_mode.is_naive();
         // The `:no-decomp` rule option (and the global `--no-decomp`
         // flag) skips tree-decomposition in query planning, forcing
         // the single-bag fast path.
         let no_decomp = self.no_decomp || rule.no_decomp;
+        let requires_read_context = !seminaive
+            || matches!(
+                rule.eval_mode,
+                RuleEvalMode::Naive | RuleEvalMode::UnsafeSeminaive
+            );
 
         let rule_id = {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
-            let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
-            translator.query(query, false);
+            let mut translator =
+                BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
+            translator.query(query, rule.include_subsumed);
             translator.actions(actions)?;
             translator.build()
         };
@@ -1119,7 +1201,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -1383,7 +1465,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
 
         let result_var = ResolvedVar {
@@ -1449,8 +1531,9 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
-            naive: false,
+            eval_mode: RuleEvalMode::default(),
             no_decomp: false,
+            include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1472,7 +1555,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
-            false, // global query context
+            true, // global query: Read context (may read the DB)
         );
         translator.query(&query, true);
         translator
@@ -1923,7 +2006,7 @@ impl EGraph {
                 let desugared =
                     desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
                 for cmd in &desugared {
-                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                    log::trace!("Desugared term encoding: {}", cmd.to_command());
                 }
 
                 // Now typecheck using self, adding term type information.
@@ -2456,14 +2539,11 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// `true` for a regular seminaive rule; `false` for any of:
-    /// (a) global one-shots (`eval`, `check`, top-level actions),
-    /// (b) rules with the `:naive` option,
-    /// (c) `EGraph::seminaive == false` (the global opt-out).
-    /// Combined with whether we're in the query or action phase, this
-    /// picks the [`crate::Context`] used to select a primitive's
-    /// context-specific runtime id at each call site.
-    seminaive: bool,
+    /// Whether primitives may read the database. When true the per-phase
+    /// [`crate::Context`] widens from `Pure`/`Write` to `Read`/`Full` (query
+    /// gains reads, action gains reads on top of writes). True for `:naive` /
+    /// `:unsafe-seminaive` rules and a non-seminaive EGraph.
+    requires_read_context: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -2471,13 +2551,13 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
-        seminaive: bool,
+        requires_read_context: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
-            seminaive,
+            requires_read_context,
             entries: Default::default(),
         }
     }
@@ -2489,10 +2569,10 @@ impl<'a> BackendRule<'a> {
     /// this to [`Context::Read`] so reads from primitives are
     /// admissible.
     fn query_context(&self) -> crate::Context {
-        if self.seminaive {
-            crate::Context::Pure
-        } else {
+        if self.requires_read_context {
             crate::Context::Read
+        } else {
+            crate::Context::Pure
         }
     }
 
@@ -2502,10 +2582,10 @@ impl<'a> BackendRule<'a> {
     /// widens to [`Context::Full`] so writes and reads are both
     /// admissible.
     fn action_context(&self) -> crate::Context {
-        if self.seminaive {
-            crate::Context::Write
-        } else {
+        if self.requires_read_context {
             crate::Context::Full
+        } else {
+            crate::Context::Write
         }
     }
 
