@@ -518,8 +518,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// The FD view maps `(children) -> output`, so when two terms with the
     /// same children have different outputs (i.e. they are congruent) the
     /// key collides and this merge runs. It unions the two outputs by writing
-    /// the union-find parent edge on the side with `uf-set`, then keeps the
-    /// smaller representative as the surviving output.
+    /// the union-find parent edge on the side with a block-merge `set`, then
+    /// keeps the smaller representative as the surviving output.
     fn constructor_view_merge(&mut self, out_type: &str) -> String {
         let uf = self.uf_name(out_type);
         // Block-form merge: as an effect, record the congruence union edge in
