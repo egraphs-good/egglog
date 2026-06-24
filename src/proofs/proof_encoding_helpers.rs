@@ -24,6 +24,11 @@ pub(crate) struct EncodingNames {
     pub(crate) fiat_constructor: String,
     pub(crate) rule_constructor: String,
     pub(crate) merge_fn_constructor: String,
+    /// Term-free merge justification `(name p_old p_new)`. The conclusion term is
+    /// reconstructed during proof conversion from the two premise proofs + running
+    /// the merge. Used by the FD custom-function view merge, which runs without the
+    /// children (so it cannot embed the conclusion term).
+    pub(crate) merge_fn_free_constructor: String,
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
@@ -65,6 +70,7 @@ impl EncodingNames {
             fiat_constructor: symbol_gen.fresh("Fiat"),
             rule_constructor: symbol_gen.fresh("Rule"),
             merge_fn_constructor: symbol_gen.fresh("Merge"),
+            merge_fn_free_constructor: symbol_gen.fresh("MergeFree"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
@@ -370,6 +376,7 @@ impl ProofInstrumentor<'_> {
             ref fiat_constructor,
             ref rule_constructor,
             ref merge_fn_constructor,
+            ref merge_fn_free_constructor,
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
@@ -397,6 +404,11 @@ impl ProofInstrumentor<'_> {
 ;; merge function justification- name of function and two proofs for the two terms being merged,
 ;; and the proposition being justified t = t
 (constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype} {ast_sort}) {proof_datatype} :internal-hidden)
+
+;; term-free merge function justification- name of function and two premise proofs.
+;; The conclusion term is reconstructed during proof conversion (from the premises + the merge),
+;; so it is not stored here. Used by the FD custom-function view merge.
+(constructor {merge_fn_free_constructor} (String {proof_datatype} {proof_datatype}) {proof_datatype} :internal-hidden)
 
 ;; transitivity of equality proofs
 (constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype} :internal-hidden)

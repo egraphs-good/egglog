@@ -1,7 +1,10 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
-    proofs::{proof_checker::gather_globals, proof_encoding_helpers::EncodingNames},
+    proofs::{
+        proof_checker::{gather_globals, run_merge},
+        proof_encoding_helpers::EncodingNames,
+    },
     typechecking::FuncType,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
@@ -58,6 +61,11 @@ enum RawProof {
     /// of t = t.
     /// The term t is either f(c1, c2, ..., merge_fn) or some subexpression of the merge function. Here the merge function is evaluted on the terms old and new.
     MergeFn(String, RawProofId, RawProofId, TermId),
+    /// Like [`RawProof::MergeFn`] but term-free: the conclusion term is NOT embedded.
+    /// It is reconstructed during conversion from the two premise proofs (which give the
+    /// children and outputs) plus running the merge function. Used by the FD custom-function
+    /// view merge, which runs without access to the children.
+    MergeFnFree(String, RawProofId, RawProofId),
     Trans(RawProofId, RawProofId),
     Sym(RawProofId),
     /// given a proof that t1 = f(..., ci, ...)
@@ -214,6 +222,12 @@ impl RawProofStore {
             let name = self.parse_string(args[0]);
             let premises = self.parse_proof_list(args[1]);
             RawProof::Rule(name, premises, args[2], args[3])
+        } else if head.contains("MergeFree") {
+            assert!(args.len() == 3, "merge-free constructor should have 3 args");
+            let function = self.parse_string(args[0]);
+            let old_proof = self.parse_proof(args[1]);
+            let new_proof = self.parse_proof(args[2]);
+            RawProof::MergeFnFree(function, old_proof, new_proof)
         } else if head.contains("Merge") {
             assert!(args.len() == 4, "merge constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -402,6 +416,47 @@ impl ProofStore {
                 let old_proof_id = self.convert_raw_proof(prog, globals, raw_store, *old_raw);
                 let new_proof_id = self.convert_raw_proof(prog, globals, raw_store, *new_raw);
                 let to_prove = raw_store.unwrap_ast(*to_prove);
+                Proof {
+                    proposition: Proposition::new(to_prove, to_prove),
+                    justification: Justification::MergeFn {
+                        function: function.clone(),
+                        old_proof: old_proof_id,
+                        new_proof: new_proof_id,
+                    },
+                }
+            }
+            RawProof::MergeFnFree(function, old_raw, new_raw) => {
+                let old_proof_id = self.convert_raw_proof(prog, globals, raw_store, *old_raw);
+                let new_proof_id = self.convert_raw_proof(prog, globals, raw_store, *new_raw);
+                // The two premise proofs are reflexive proofs of the colliding view terms
+                // `f(c..., old_output)` and `f(c..., new_output)`. Reconstruct the conclusion
+                // term `f(c..., merged)` by running the merge function on the two outputs,
+                // mirroring the proof checker's MergeFn reconstruction.
+                let old_view = self.id_to_proof[old_proof_id].rhs();
+                let new_view = self.id_to_proof[new_proof_id].rhs();
+                let (view_head, input_args, old_output, new_output) = match (
+                    self.term_dag.get(old_view),
+                    self.term_dag.get(new_view),
+                ) {
+                    (Term::App(old_head, old_args), Term::App(_new_head, new_args)) => {
+                        let head = old_head.clone();
+                        let old_output = *old_args.last().expect("merge view term has no args");
+                        let new_output = *new_args.last().expect("merge view term has no args");
+                        let inputs = old_args[..old_args.len() - 1].to_vec();
+                        (head, inputs, old_output, new_output)
+                    }
+                    _ => panic!(
+                        "MergeFnFree premise proofs should prove function application terms, got {:?} and {:?}",
+                        self.term_dag.get(old_view),
+                        self.term_dag.get(new_view)
+                    ),
+                };
+                let (merged_child, _props) =
+                    run_merge(&mut self.term_dag, function, prog, old_output, new_output)
+                        .unwrap_or_else(|e| panic!("failed to run merge for {function}: {e}"));
+                let mut merged_args = input_args;
+                merged_args.push(merged_child);
+                let to_prove = self.term_dag.app(view_head, merged_args);
                 Proof {
                     proposition: Proposition::new(to_prove, to_prove),
                     justification: Justification::MergeFn {
