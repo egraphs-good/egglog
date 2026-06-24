@@ -59,15 +59,22 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Whether `fdecl` uses the FD pair-valued view (`(children) -> (pair output proof)`,
-    /// keyed on children only) rather than the legacy custom shape (output-in-key,
-    /// proof-as-value).
+    /// keyed on children only).
     ///
-    /// Constructors always use the FD view. A custom (non-constructor) function uses
-    /// the FD view iff its `:merge` body is a PRIMITIVE-bodied expression (every call
-    /// in the body is a primitive — e.g. `min`/`max`/`or`/`set-union`) AND its output
-    /// sort is NOT an eq-sort. Function/constructor-bodied merges (those whose merge
-    /// body calls a user function) and eq-sort-output customs stay on the legacy
-    /// `handle_merge_fn` shape. Custom functions with no `:merge` also stay legacy.
+    /// EVERY merge in a proof-supported program is now handled in the FD view's own
+    /// `:merge`; there is no separate legacy merge-rule path anymore. Constructors
+    /// always use the FD view. A custom (non-constructor) function uses it iff its
+    /// `:merge` body is either:
+    ///   - a PRIMITIVE-bodied expression (every call is a primitive — e.g.
+    ///     `min`/`max`/`or`/`set-union`), for any non-eq-sort output, OR a TRIVIAL
+    ///     value-replacement (bare `old`/`new`, or a literal) when the output is an
+    ///     eq-sort (it just keeps one colliding output — no new term, no union); or
+    ///   - a CONSTRUCTOR-bodied expression (calls only user constructors, minted via
+    ///     `fd-mint`).
+    ///
+    /// Merges that read the live DB (`:merge (foo)` for a non-constructor `foo`) and
+    /// non-global `:no-merge` customs are rejected at the file level by
+    /// `command_supports_proof_encoding`, so they never reach the encoder.
     pub(crate) fn is_fd_pair_view(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         match fdecl.subtype {
             FunctionSubtype::Constructor => true,
@@ -142,8 +149,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// True iff `fdecl` is a custom function with a primitive-bodied `:merge` and a
-    /// non-eq-sort output, making it eligible for the FD pair-valued view.
+    /// True iff `fdecl` is a custom function with a primitive-bodied `:merge` that is
+    /// eligible for the FD pair-valued view.
     fn is_primitive_bodied_fd_custom(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         if fdecl.subtype != FunctionSubtype::Custom {
             return false;
@@ -155,9 +162,20 @@ impl<'a> ProofInstrumentor<'a> {
         // (`convert_raw_proof`) each such congruence premise `p : orig = canon` is
         // replaced with `Trans(Sym(p), p) : canon = canon` (reflexive, landing on
         // the canonical view row). See `reflexivize_premise` in proof_format.rs.
-        // Output must not be an eq-sort: the FD view's output column is carried as a
-        // plain value (no union-find canonicalization). Primitive merges produce
-        // value/lattice sorts (i64, Set, Vec, ...), not eq-sort terms.
+        let merge = match &fdecl.merge {
+            None => return false,
+            Some(merge) => merge,
+        };
+        // For a NON-eq-sort output any primitive-bodied merge works: the output
+        // column is carried as a plain value (no union-find canonicalization) and
+        // primitive merges produce value/lattice sorts (i64, Set, Vec, ...).
+        //
+        // For an EQ-SORT output we restrict to a TRIVIAL value-replacement body — a
+        // bare `old`/`new` (or a literal, though eq-sorts have no literals): the merge
+        // simply keeps one of the two colliding eq-sort outputs (no new eq-sort term
+        // is computed, so no union / congruence is needed). A primitive CALL with
+        // eq-sort output could synthesize a fresh eq-sort value that would need to be
+        // minted/unioned, which the custom FD path does NOT do, so it stays legacy.
         let output_is_eq_sort = self
             .egraph
             .type_info
@@ -165,12 +183,17 @@ impl<'a> ProofInstrumentor<'a> {
             .map(|s| s.is_eq_sort())
             .unwrap_or(true);
         if output_is_eq_sort {
-            return false;
+            return Self::merge_body_is_trivial(merge);
         }
-        match &fdecl.merge {
-            None => false,
-            Some(merge) => Self::merge_body_is_all_primitive(merge),
-        }
+        Self::merge_body_is_all_primitive(merge)
+    }
+
+    /// Whether a (resolved) merge body is a trivial value-replacement: a bare variable
+    /// (`old`/`new`) or a literal. Such a merge keeps one of the two colliding outputs
+    /// verbatim without computing a new value, so it is safe even for an eq-sort output
+    /// (no new eq-sort term is minted and no union is needed).
+    fn merge_body_is_trivial(expr: &ResolvedExpr) -> bool {
+        matches!(expr, ResolvedExpr::Lit(..) | ResolvedExpr::Var(..))
     }
 
     /// Whether every call in a (resolved) merge body is a primitive call (no calls
@@ -233,9 +256,6 @@ impl<'a> ProofInstrumentor<'a> {
                 ),
                 Justification::Fiat => format!(
                     "({fiat_constructor} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
-                ),
-                Justification::Merge(_func_name, _proof1, _proof2) => panic!(
-                    "Merge functions do not include union actions, so proof should not be by merge"
                 ),
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             }
@@ -439,135 +459,22 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Generate rules that run a merge function for a custom function.
-    /// One rule runs the merge function when two different values are present for the same children.
-    /// Another rule cleans up old values, necessary because the newly merged value may be equal to one of the old values.
-    fn handle_merge_fn(
-        &mut self,
-        fdecl: &ResolvedFunctionDecl,
-        child_names: &[String],
-        child_names_str: &str,
-        _view_name: &str,
-        rebuilding_ruleset: &str,
-    ) -> String {
-        let name = &fdecl.name;
-
-        let merge_fn = &fdecl
-            .merge
-            .as_ref()
-            .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
-
-        let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
-        let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
-
-        let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
-        let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-        let view_name = self.view_name(&fdecl.name);
-        let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
-        let proof_query = if self.egraph.proof_state.proofs_enabled {
-            // View is a function with proof output; bind proof variables
-            format!(
-                "(= {p1_fresh} ({view_name} {child_names_str} old))
-                     (= {p2_fresh} ({view_name} {child_names_str} new))
-                    "
-            )
-        } else {
-            // View is a function with Unit output; no need to bind the output
-            "".to_string()
-        };
-        let proof_var = if self.egraph.proof_state.proofs_enabled {
-            self.fresh_var()
-        } else {
-            "()".to_string()
-        };
-        let mut merge_fn_code = vec![];
-        let merge_fn_var = self.instrument_action_expr(
-            merge_fn,
-            &mut merge_fn_code,
-            &Justification::Merge(name.clone(), p1_fresh.clone(), p2_fresh.clone()),
-        );
-        let merge_fn_code_str = merge_fn_code.join("\n");
-        let mut updated = child_names.to_vec();
-        updated.push(merge_fn_var.clone());
-        let term = format!("({name} {child_names_str} {merge_fn_var})");
-
-        let rule_proof = if self.egraph.proof_state.proofs_enabled {
-            let to_ast = self.fname_to_ast_name(name);
-            let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
-            format!(
-                "(let {proof_var}
-                            ({merge_fn_constructor} \"{name}\"
-                                  {p1_fresh}
-                                  {p2_fresh}
-                                  ({to_ast} {term})))"
-            )
-        } else {
-            "".to_string()
-        };
-        let term_and_proof = self.update_view(name, &updated, &proof_var, false, "");
-        let cleanup_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
-        let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
-        let output_sort = fdecl.schema.output.clone();
-
-        // The first runs the merge function adding a new row.
-        // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
-        format!(
-            "(sort {fresh_sort})
-                 (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort} :internal-hidden)
-                 (rule (({view_name} {child_names_str} old)
-                        ({view_name} {child_names_str} new)
-                        (!= old new)
-                        (= (ordering-max old new) new)
-                        {proof_query})
-                       (
-                        {merge_fn_code_str}
-                        {rule_proof}
-                        {term_and_proof}
-                        ({cleanup_constructor} {merge_fn_var} old)
-                        ({cleanup_constructor} {merge_fn_var} new)
-                       )
-                        :ruleset {rebuilding_ruleset}
-                        :name \"{fresh_name}\")
-                 (rule (({cleanup_constructor} merged old)
-                        ({view_name} {child_names_str} merged)
-                        ({view_name} {child_names_str} old)
-                        (!= merged old))
-                       ((delete ({view_name} {child_names_str} old)))
-                        :ruleset {rebuilding_cleanup_ruleset}
-                        :name \"{cleanup_name}\")
-                ",
-        )
-    }
-
-    /// Generate rules that handle merge functions or congruence.
-    /// For custom functions, we generate rules that run the merge function.
-    /// For constructors, we generate congruence rules.
+    /// Generate the rules (if any) that handle a function's merge or congruence.
+    ///
+    /// All proof-supported merges are now handled in the FD view's own `:merge`
+    /// (congruence for constructors; value-replacement / primitive / constructor-
+    /// bodied for customs), so this emits no extra rule. A custom function whose
+    /// `:merge` reads the live DB (e.g. `:merge (foo)` for a non-constructor `foo`)
+    /// is rejected at the file level by `command_supports_proof_encoding`
+    /// (`FunctionLookupInAction`), and a non-global `:no-merge` custom function is
+    /// rejected as `NoMergeOnNonGlobalFunction` (#774), so neither reaches here.
     fn handle_merge_or_congruence(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
-        let child_names = fdecl
-            .schema
-            .input
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("c{i}_"))
-            .collect::<Vec<_>>();
-        let child_names_str = child_names.join(" ");
-        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
-        let view_name = self.view_name(&fdecl.name);
-        // Legacy custom functions (function/constructor-bodied or no-merge) get a
-        // separate merge rule. FD functions (constructors and primitive-bodied
-        // customs) handle the merge in the FD view's `:merge` instead, so no rule.
         if fdecl.subtype == FunctionSubtype::Custom && !self.is_fd_pair_view(fdecl) {
-            self.handle_merge_fn(
-                fdecl,
-                &child_names,
-                &child_names_str,
-                &view_name,
-                &rebuilding_ruleset,
+            unreachable!(
+                "custom merge in a proof-supported program must be FD; function-reading merges are rejected by command_supports_proof_encoding"
             )
-        } else {
-            let _ = (&child_names, &rebuilding_ruleset);
-            String::new()
         }
+        String::new()
     }
 
     /// The `:merge` expression for a constructor's FD view table.
@@ -849,7 +756,8 @@ impl<'a> ProofInstrumentor<'a> {
         if let Some(cost) = fdecl.cost {
             term_flags.push_str(&format!(" :cost {cost}"));
         }
-        // View is always a function (returning Proof or Unit), with :merge old
+        // The view is always a function; its `:merge` does congruence (constructors)
+        // or value-replacement / primitive / constructor-bodied merging (customs).
         let proof_type = self.proof_type_str().to_string();
         let mut view_flags = String::new();
         if fdecl.unextractable {
@@ -924,10 +832,13 @@ impl<'a> ProofInstrumentor<'a> {
                 "(function {view_name} ({in_sorts}) {view_value_sort} :merge {custom_merge} :internal-term-constructor {name} :identity-values 1{view_flags})"
             )
         } else {
-            // Function/constructor-bodied (or no-merge) custom functions keep the old
-            // shape (output in key, proof as the value) and use `handle_merge_fn`.
-            format!(
-                "(function {view_name} ({view_sorts}) {proof_type} :merge old :internal-term-constructor {name}{view_flags})"
+            // A custom function that is neither a constructor nor FD would have
+            // already tripped the `unreachable!` in `handle_merge_or_congruence`
+            // above (called before this `view_decl` is built), so this branch is
+            // dead: every proof-supported custom merge is FD.
+            let _ = (&view_sorts, &proof_type);
+            unreachable!(
+                "non-FD custom merge in a proof-supported program (see handle_merge_or_congruence)"
             )
         };
         self.parse_program(&format!(
@@ -1573,10 +1484,6 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 Justification::Fiat => {
                     format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))",)
-                }
-                Justification::Merge(fn_name, p1, p2) => {
-                    let merge_constructor = &self.proof_names().merge_fn_constructor;
-                    format!("({merge_constructor} \"{fn_name}\" {p1} {p2} ({to_ast} {fv}))",)
                 }
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             };

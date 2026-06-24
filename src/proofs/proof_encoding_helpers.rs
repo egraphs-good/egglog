@@ -67,8 +67,7 @@ pub(crate) struct EncodingNames {
 pub(crate) enum Justification {
     Rule(String, String), // rule name and proof list
     Fiat,
-    Proof(String),                 // existing proof
-    Merge(String, String, String), // function name, proof1, proof2
+    Proof(String), // existing proof
 }
 
 impl EncodingNames {
