@@ -2814,6 +2814,41 @@ mod tests {
     }
 
     #[test]
+    fn proof_mode_allows_eq_sort_primitive_results_in_facts() {
+        let mut egraph = EGraph::default();
+        let validator =
+            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
+        add_primitive_with_validator!(
+            &mut egraph,
+            "proof-id" = |x: #| -> # { x },
+            validator
+        );
+        let mut egraph = egraph.with_proofs_enabled();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math
+                  (Done)
+                  (Num i64))
+                (relation Seed (Math))
+
+                (Seed (Num 1))
+
+                (rule ((Seed y)
+                       (= x (proof-id y)))
+                      ((Done))
+                      :name "use-proof-id")
+
+                (run 1)
+                (prove (Done))
+                "#,
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn test_typecheck_expr_with_bindings_and_output_rejects_mismatch() {
         let mut egraph = EGraph::default();
         let mut parser = crate::ast::Parser::default();
