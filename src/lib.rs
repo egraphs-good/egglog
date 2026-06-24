@@ -1161,17 +1161,17 @@ impl EGraph {
         // flag) skips tree-decomposition in query planning, forcing
         // the single-bag fast path.
         let no_decomp = self.no_decomp || rule.no_decomp;
-        // `:naive` (or `eg.seminaive == false`) and `:unsafe-seminaive` both
-        // compile the query/action with Read/Full contexts so the RHS can
-        // read the database. `:unsafe-seminaive` still evaluates seminaively
-        // (`new_rule(seminaive)`). See `RuleEvalMode`.
-        let context_seminaive = seminaive && !rule.eval_mode.uses_read_contexts();
+        let requires_read_context = !seminaive
+            || matches!(
+                rule.eval_mode,
+                RuleEvalMode::Naive | RuleEvalMode::UnsafeSeminaive
+            );
 
         let rule_id = {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
             let mut translator =
-                BackendRule::new(rb, &self.functions, &self.type_info, context_seminaive);
+                BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
             translator.query(query, rule.include_subsumed);
             translator.actions(actions)?;
             translator.build()
@@ -1210,7 +1210,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -1443,7 +1443,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
 
         let result_var = ResolvedVar {
@@ -1533,7 +1533,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
-            false, // global query context
+            true, // global query: Read context (may read the DB)
         );
         translator.query(&query, true);
         translator
@@ -2425,15 +2425,11 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// Selects the primitive [`crate::Context`] for this rule (combined
-    /// with the query/action phase). `true` picks the seminaive-safe
-    /// `Pure`/`Write` contexts; `false` widens to `Read`/`Full` so
-    /// primitives may read the database. It is named after the *context*,
-    /// not the evaluation strategy: it is `false` for global one-shots
-    /// (`eval`, `check`), `:naive` rules, `EGraph::seminaive == false`,
-    /// and `:unsafe-seminaive` rules — the last of which still evaluate
-    /// seminaive-ly but want the permissive contexts.
-    context_seminaive: bool,
+    /// Whether primitives may read the database. When true the per-phase
+    /// [`crate::Context`] widens from `Pure`/`Write` to `Read`/`Full` (query
+    /// gains reads, action gains reads on top of writes). True for `:naive` /
+    /// `:unsafe-seminaive` rules and a non-seminaive EGraph.
+    requires_read_context: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -2441,13 +2437,13 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
-        context_seminaive: bool,
+        requires_read_context: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
-            context_seminaive,
+            requires_read_context,
             entries: Default::default(),
         }
     }
@@ -2459,10 +2455,10 @@ impl<'a> BackendRule<'a> {
     /// this to [`Context::Read`] so reads from primitives are
     /// admissible.
     fn query_context(&self) -> crate::Context {
-        if self.context_seminaive {
-            crate::Context::Pure
-        } else {
+        if self.requires_read_context {
             crate::Context::Read
+        } else {
+            crate::Context::Pure
         }
     }
 
@@ -2472,10 +2468,10 @@ impl<'a> BackendRule<'a> {
     /// widens to [`Context::Full`] so writes and reads are both
     /// admissible.
     fn action_context(&self) -> crate::Context {
-        if self.context_seminaive {
-            crate::Context::Write
-        } else {
+        if self.requires_read_context {
             crate::Context::Full
+        } else {
+            crate::Context::Write
         }
     }
 

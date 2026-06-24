@@ -102,12 +102,6 @@ impl RuleEvalMode {
     pub fn is_naive(self) -> bool {
         matches!(self, RuleEvalMode::Naive)
     }
-
-    /// Uses the permissive `Read`/`Full` contexts: true for `:naive` and
-    /// `:unsafe-seminaive`.
-    pub fn uses_read_contexts(self) -> bool {
-        !matches!(self, RuleEvalMode::Seminaive)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
