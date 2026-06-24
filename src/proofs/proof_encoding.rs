@@ -199,7 +199,6 @@ impl<'a> ProofInstrumentor<'a> {
         let uf_function_index_name = self.egraph.parser.symbol_gen.fresh("uf_function_index");
 
         let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
-        let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
         let uf_function_index_ruleset_name =
             self.proof_names().uf_function_index_ruleset_name.clone();
 
@@ -207,81 +206,111 @@ impl<'a> ProofInstrumentor<'a> {
 
         // In proof mode, path compression composes proofs via Trans/Sym.
         // In term mode, the proof output is Unit and we just write ().
-        let (path_compress_query, path_compress_action, single_parent_query, single_parent_action) =
-            if self.egraph.proof_state.proofs_enabled {
-                let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
-                let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-                let trans = self.proof_names().eq_trans_constructor.clone();
-                let sym = self.proof_names().eq_sym_constructor.clone();
-                (
-                    format!(
-                        "(= {p1_fresh} ({pname} a b))
+        let (path_compress_query, path_compress_action) = if self.egraph.proof_state.proofs_enabled
+        {
+            let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+            let trans = self.proof_names().eq_trans_constructor.clone();
+            (
+                format!(
+                    "(= {p1_fresh} ({pname} a b))
                         (= {p2_fresh} ({pname} b c))"
-                    ),
-                    format!(
-                        "(delete ({pname} a b))
+                ),
+                format!(
+                    "(delete ({pname} a b))
                        (set ({pname} a c) ({trans} {p1_fresh} {p2_fresh}))"
-                    ),
-                    format!(
-                        "(= {p1_fresh} ({pname} a b))
-                        (= {p2_fresh} ({pname} a c))"
-                    ),
-                    format!(
-                        "(delete ({pname} a b))
-                       (set ({pname} b c) ({trans} ({sym} {p1_fresh}) {p2_fresh}))"
-                    ),
-                )
-            } else {
-                (
-                    format!("({pname} a b)\n                        ({pname} b c)"),
-                    format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} a c) ())"
-                    ),
-                    format!("({pname} a b)\n                        ({pname} a c)"),
-                    format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} b c) ())"
-                    ),
-                )
-            };
+                ),
+            )
+        } else {
+            (
+                format!("({pname} a b)\n                        ({pname} b c)"),
+                format!("(delete ({pname} a b))\n                       (set ({pname} a c) ())"),
+            )
+        };
 
+        // The UF function index stores, per source term, the current leader (and,
+        // in proof mode, a proof that the source equals the leader). It is the only
+        // writer of `(UF_<sort>f a)`, so a key collision means a single source `a`
+        // has two parents `b` and `c` (the SINGLE-PARENT situation). The index's
+        // `:merge` resolves that collision: it picks the smaller leader (closer to
+        // the root) as the surviving value AND writes the union edge between the two
+        // parents back into the constructor UF table (the source of truth). Path
+        // compression then chases `a -> larger -> smaller` and deletes the redundant
+        // `(UF a larger)` row, so the UF table converges to a single parent per
+        // source — exactly the work the old `single_parent` rule did, now folded into
+        // the merge.
+        //
         // In proof mode, UF function index stores (leader, proof) pairs.
         // In term mode, it just stores the leader.
-        let (uf_function_output_type, uf_pair_sort_decl, uf_index_query, uf_index_action) =
-            if self.egraph.proof_state.proofs_enabled {
-                let pair_sort = self.uf_pair_sort_name(sort_name);
-                let proof_fresh = self.egraph.parser.symbol_gen.fresh("uf_idx_proof");
-                (
-                    pair_sort.clone(),
-                    format!("(sort {pair_sort} (Pair {sort_name} {proof_type}))"),
-                    format!("(= {proof_fresh} ({pname} a b))"),
-                    format!("(set ({uf_function_name} a) (pair b {proof_fresh}))"),
-                )
-            } else {
-                (
-                    sort_name.to_string(),
-                    "".to_string(),
-                    format!("({pname} a b)"),
-                    format!("(set ({uf_function_name} a) b)"),
-                )
-            };
+        let (
+            uf_function_output_type,
+            uf_pair_sort_decl,
+            uf_index_query,
+            uf_index_action,
+            uf_index_merge,
+        ) = if self.egraph.proof_state.proofs_enabled {
+            let pair_sort = self.uf_pair_sort_name(sort_name);
+            let proof_fresh = self.egraph.parser.symbol_gen.fresh("uf_idx_proof");
+            let trans = self.proof_names().eq_trans_constructor.clone();
+            let sym = self.proof_names().eq_sym_constructor.clone();
+            // old = (pair leader_o p_o), p_o proves a = leader_o.
+            // new = (pair leader_n p_n), p_n proves a = leader_n.
+            let lo = "(pair-first old)";
+            let po = "(pair-second old)";
+            let ln = "(pair-first new)";
+            let pn = "(pair-second new)";
+            let larger = format!("(ordering-max {lo} {ln})");
+            let smaller = format!("(ordering-min {lo} {ln})");
+            // Proof that larger = smaller, oriented by which leader is larger.
+            // If leader_o is the larger one: leader_o = leader_n via Trans(Sym p_o, p_n).
+            // Otherwise leader_n is larger: leader_n = leader_o via Trans(Sym p_n, p_o).
+            let union_proof = format!(
+                "(select-eq {larger} {lo} ({trans} ({sym} {po}) {pn}) ({trans} ({sym} {pn}) {po}))"
+            );
+            // The surviving index proof must prove a = smaller; keep the existing
+            // premise proof for whichever leader is the smaller one (value-stable,
+            // so the row saturates instead of minting a fresh proof each iteration).
+            let surviving_proof = format!("(select-eq {smaller} {lo} {po} {pn})");
+            // Block-form merge: write the parent-union edge into the UF table,
+            // then return the surviving (leader, proof) pair.
+            let merge = format!(
+                "((set ({pname} {larger} {smaller}) {union_proof}) (pair {smaller} {surviving_proof}))"
+            );
+            (
+                pair_sort.clone(),
+                format!("(sort {pair_sort} (Pair {sort_name} {proof_type}))"),
+                format!("(= {proof_fresh} ({pname} a b))"),
+                format!("(set ({uf_function_name} a) (pair b {proof_fresh}))"),
+                merge,
+            )
+        } else {
+            // Term mode: index value is just the leader. The merge writes the
+            // parent-union edge and keeps the smaller leader.
+            let merge = format!(
+                "((set ({pname} (ordering-max old new) (ordering-min old new)) ()) (ordering-min old new))"
+            );
+            (
+                sort_name.to_string(),
+                "".to_string(),
+                format!("({pname} a b)"),
+                format!("(set ({uf_function_name} a) b)"),
+                merge,
+            )
+        };
 
         let mut code = format!(
             "{uf_pair_sort_decl}
              (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
-             (function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge new :unextractable :internal-hidden)
+             ;; The index's :merge folds in the single-parent invariant: a key
+             ;; collision (one source with two parents) unions the parents back into
+             ;; the UF table and keeps the smaller leader.
+             (function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge {uf_index_merge} :unextractable :internal-hidden)
              ;; performs path compression, ensuring each term points to the representative
              (rule ({path_compress_query}
                     (!= b c))
                   ({path_compress_action})
                    :ruleset {path_compress_ruleset_name}
                    :name \"{fresh_name}\")
-             ;; ensures each term has only one parent
-             (rule ({single_parent_query}
-                    (!= b c)
-                    (= (ordering-max b c) b))
-                  ({single_parent_action})
-                   :ruleset {single_parent_ruleset_name}
-                   :name \"singleparent{fresh_name}\")
              ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
              (rule ({uf_index_query})
                    ({uf_index_action})
@@ -1562,16 +1591,17 @@ impl<'a> ProofInstrumentor<'a> {
     /// Any schedule should be sound as long as we saturate.
     fn rebuild(&mut self) -> Schedule {
         let path_compress_ruleset = self.proof_names().path_compress_ruleset_name.clone();
-        let single_parent = self.proof_names().single_parent_ruleset_name.clone();
         let uf_function_index = self.proof_names().uf_function_index_ruleset_name.clone();
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
         let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let delete_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
+        // The single-parent invariant is now maintained by the UF function index's
+        // `:merge` (a source with two parents collides on the index key), so there is
+        // no separate `single_parent` ruleset to saturate here.
         self.parse_schedule(format!(
             "(seq
               (saturate
                   {rebuilding_cleanup_ruleset}
-                  (saturate {single_parent})
                   (saturate {path_compress_ruleset})
                   (saturate {uf_function_index})
                   {rebuilding_ruleset})

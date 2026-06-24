@@ -38,7 +38,6 @@ pub(crate) struct EncodingNames {
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
-    pub(crate) single_parent_ruleset_name: String,
     pub(crate) uf_function_index_ruleset_name: String,
     pub(crate) pcons: String,
     pub(crate) pnil: String,
@@ -79,7 +78,6 @@ impl EncodingNames {
             congr_constructor: symbol_gen.fresh("Congr"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
-            single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
             uf_function_index_ruleset_name: symbol_gen.fresh("uf_function_index"),
             pcons: symbol_gen.fresh("PCons"),
             pnil: symbol_gen.fresh("PNil"),
@@ -167,10 +165,8 @@ impl ProofInstrumentor<'_> {
              (ruleset {})
              (ruleset {})
              (ruleset {})
-             (ruleset {})
              (ruleset {})",
             self.proof_names().path_compress_ruleset_name,
-            self.proof_names().single_parent_ruleset_name,
             self.proof_names().uf_function_index_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,

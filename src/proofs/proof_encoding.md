@@ -40,22 +40,22 @@ Lowering the program with the term encoding expands to a bunch of new egglog, wh
 
 ```text
 (ruleset parent)
-(ruleset single_parent)
 (ruleset uf_function_index)
 (ruleset rebuilding)
 (ruleset rebuilding_cleanup)
 (ruleset delete_subsume_ruleset)
 ```
 
-*The new rulesets* orchestrate new rules for per-sort union-find tables (`parent` and `single_parent`),
+*The new rulesets* orchestrate new rules for the per-sort union-find table (`parent`),
 building a fast function index over UF (`uf_function_index`),
 rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred deletions/subsumptions (`delete_subsume_ruleset`).
+The single-parent invariant (each term points to a single parent) is no longer a
+separate ruleset: it is maintained by the UF function index's own `:merge` (see below).
 
 ```text
 (run-schedule
     (saturate
        rebuilding_cleanup ;; cleanup merged rows
-       (saturate single_parent) ;; ensure each term points to single parent
        (saturate parent) ;; transitively close parent links
        (saturate uf_function_index) ;; mirror UF constructor rows into UF function index
        rebuilding) ;; find new equalities via congruence
@@ -68,7 +68,9 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
 ```text
 (sort Math)
 (function UF_Math (Math Math) Unit :merge old :internal-hidden)
-(function UF_Mathf (Math) Math :merge new)
+(function UF_Mathf (Math) Math
+  :merge ((set (UF_Math (ordering-max old new) (ordering-min old new)) ())
+          (ordering-min old new)))
 ```
 
 *The union-find* tables for each sort store the equivalence
@@ -88,26 +90,32 @@ When proof tracking is enabled, proofs are stored directly in the UF table
      ((delete (UF_Math a b))
       (set (UF_Math a c) ()))
        :ruleset parent :name "uf_update")
-(rule ((UF_Math a b)
-      (UF_Math a c)
-      (!= b c)
-      (= (ordering-max b c) b))
-     ((delete (UF_Math a b))
-      (set (UF_Math b c) ()))
-       :ruleset single_parent :name "singleparentuf_update")
 (rule ((UF_Math a b))
       ((set (UF_Mathf a) b))
        :ruleset uf_function_index :name "uf_function_index_update")
 ```
 
 *Union-find rules:*
-A couple rules ensure the UF function is kept up to date as
-  equalities are added, and the indexing ruleset mirrors those rows
-  into the function UF.
+The `parent` ruleset performs path compression (chasing `a -> b -> c` to point `a`
+  straight at the representative), and the `uf_function_index` ruleset mirrors UF
+  rows into the function index `UF_<Sort>f`.
 We use the `ordering-max` and `ordering-min` egglog primitives
   to define an arbitrary ordering on terms based on insertion order,
   so that we can deterministically choose which term becomes the parent
   in the union-find structure.
+
+*The single-parent invariant* (each source term has at most one parent) is
+  maintained by the `UF_<Sort>f` index's `:merge` rather than a separate rule.
+The index rule is the only writer of `(UF_<Sort>f a)`, so a key collision means
+  source `a` has two parents `b` and `c`. The merge then unions those two parents
+  by writing the edge `(UF_<Sort> (ordering-max b c) (ordering-min b c))` back into
+  the UF table and keeping `(ordering-min b c)` as `a`'s surviving leader. Path
+  compression subsequently chases `a -> max -> min` and deletes the now-redundant
+  `(UF_<Sort> a max)` row, so the UF table converges to one parent per source.
+With proof tracking, the index value is a `(Pair leader proof)` (the proof proves
+  `a = leader`); the merge composes the union proof via `Trans`/`Sym`, orienting it
+  with `select-eq` so the surviving row keeps an existing premise proof verbatim
+  (which keeps the value stable so the merge saturates).
 
 **Important invariant:** every representative term must have a self-loop
   entry in the constructor union-find table (e.g., `(UF_Math v v)`).

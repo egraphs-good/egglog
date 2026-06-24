@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Proof/term encoding: fold the single-parent union-find invariant into the UF function index's own `:merge` instead of a separate `single_parent` ruleset. A key collision on the index (one source term with two parents) unions the two parents back into the UF table and keeps the smaller leader; path compression then removes the redundant edge. This is the same separate-rule-to-`:merge` consolidation that sped up constructor congruence.
 - Multi-value function results: a function whose output sort is a `Pair` container is now stored as two value columns (its component sorts) instead of one boxed container value. Reads/lookups transparently box the columns back into a `(pair ..)` value and writes unbox into the columns; `(pair-first (f k))` / `(pair-second (f k))` fuse to a direct column read. This re-encodes proof-mode constructor views as `(children) -> (output, proof)`, so the FD `:merge` builds the congruence proof from each row's own proof — fixing proof-mode const-fold/commute correctness.
 
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
