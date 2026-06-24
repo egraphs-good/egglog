@@ -1904,9 +1904,10 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if let Err(reason) =
-                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
-                {
+                if let Err(reason) = command_supports_proof_encoding(
+                    &command.to_command(),
+                    &original_typechecking.type_info,
+                ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
@@ -2786,6 +2787,47 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn proof_support_accepts_containers_but_not_unstable_fn() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XPair (Pair X i64))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XFn (UnstableFn (X) X))")
+            .unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_accepts_set_primitive_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (function Shared () ISet :merge (set-intersect old new))
+
+                (check (= (set-get (set-of 1 2) 0) 1))
+                (check (= (set-insert (set-empty) 1) (set-of 1)))
+                (check (= (set-remove (set-of 1 2) 2) (set-of 1)))
+                (check (= (set-length (set-of 1 2)) 2))
+                (check (set-contains (set-of 1 2) 1))
+                (check (set-not-contains (set-of 1 2) 3))
+                (check (= (set-union (set-of 1) (set-of 2)) (set-of 1 2)))
+                (check (= (set-diff (set-of 1 2) (set-of 2)) (set-of 1)))
+                (check (= (set-intersect (set-of 1 2) (set-of 2 3)) (set-of 2)))
+                "#,
+            )
+            .unwrap();
+
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
     }
 
     #[test]

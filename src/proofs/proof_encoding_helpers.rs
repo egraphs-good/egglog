@@ -542,17 +542,14 @@ pub(crate) fn command_supports_proof_encoding(
     // Now check command-specific constraints
     match command {
         GenericCommand::Sort {
-            presort_and_args: Some((presort, _)),
+            name,
+            presort_and_args: Some(_),
             ..
-        } => match presort.as_str() {
-            // Built-in container sorts participate in proof/term encoding;
-            // their contents are canonicalized via the container rebuild path
-            // (see `rebuilding_rules`), which recurses through nested
-            // containers. Other presorts (e.g. `UnstableFn`) and unknown custom
-            // presorts stay unsupported.
-            "Pair" | "Vec" | "Set" | "Map" | "MultiSet" => Ok(()),
-            _ => Err(ProofEncodingUnsupportedReason::SortWithPresort),
-        },
+        } => type_info
+            .get_sort_by_name(name)
+            .filter(|sort| sort.supports_proof_encoding())
+            .map(|_| ())
+            .ok_or(ProofEncodingUnsupportedReason::SortWithPresort),
         GenericCommand::Sort { uf: Some(_), .. } => {
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }

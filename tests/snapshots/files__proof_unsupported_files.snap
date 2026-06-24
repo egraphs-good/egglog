@@ -41,12 +41,10 @@ prims.egg
 print-function.egg
 python_array_optimize.egg
 rat-pow-eval.egg
-repro-665-set-union.egg
 repro-738-fn-sort.egg
 repro-desugar-143.egg
 repro-herbie-vanilla.egg
 repro-new-backend-python-vec.egg
-repro-querybug3.egg
 repro-unsound.egg
 repro-vec-unequal.egg
 set.egg
