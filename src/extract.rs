@@ -18,7 +18,7 @@ pub trait CostModel<C: Cost> {
     fn fold(&self, head: &str, children_cost: &[C], head_cost: C) -> C;
 
     /// The cost of an enode (without the cost of children)
-    fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::ScanEntry) -> C;
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, enode: &Enode<'_>) -> C;
 
     /// The cost of a container value given the costs of its elements.
     ///
@@ -113,12 +113,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
         children_cost.iter().fold(head_cost, |s, c| s.combine(c))
     }
 
-    fn enode_cost(
-        &self,
-        egraph: &EGraph,
-        func: &Function,
-        _row: &egglog_bridge::ScanEntry,
-    ) -> DefaultCost {
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, _enode: &Enode<'_>) -> DefaultCost {
         func.extraction_head_cost(egraph)
     }
 }
@@ -352,10 +347,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
         let head_name = func.extraction_term_name();
+        let output_idx = func.extraction_output_index();
+        let enode = Enode {
+            children: &row.vals[..output_idx],
+            eclass: row.vals[output_idx],
+            subsumed: row.subsumed,
+        };
         Some(self.cost_model.fold(
             head_name,
             &ch_costs,
-            self.cost_model.enode_cost(egraph, func, row),
+            self.cost_model.enode_cost(egraph, func, &enode),
         ))
     }
 
