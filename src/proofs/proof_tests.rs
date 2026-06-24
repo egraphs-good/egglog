@@ -47,6 +47,32 @@ mod tests {
         );
     }
 
+    /// A `:merge` that READS a non-constructor function (e.g. `:merge (foo)`) is a
+    /// live-DB read — merges are pure writes — so it is proof-UNSUPPORTED and must be
+    /// rejected cleanly, never reaching the `handle_merge_or_congruence` `unreachable!`.
+    /// (Before the gate covered merge bodies, this panicked at the unreachable.)
+    #[test]
+    fn function_reading_merge_is_proof_unsupported() {
+        let source = r#"
+            (function foo () i64 :merge (min old new))
+            (function bar () i64 :merge (foo))
+        "#;
+        // File-level classification excludes it.
+        let mut e = crate::EGraph::default();
+        let resolved = e.resolve_program(None, source).unwrap();
+        assert!(
+            !crate::program_supports_proofs(&resolved, &e.type_info),
+            "function-reading merge must be proof-unsupported"
+        );
+        // The real `--proofs` path returns a graceful error, NOT a panic.
+        let mut pe = crate::EGraph::new_with_proofs();
+        let err = pe.parse_and_run_program(None, source);
+        assert!(
+            matches!(err, Err(crate::Error::UnsupportedProofCommand { .. })),
+            "expected UnsupportedProofCommand, got {err:?}"
+        );
+    }
+
     /// The proof encoder reads body variables' `term_proof`s from the RHS via
     /// `:unsafe-seminaive` lookups. Assert this produces the same database as
     /// the safe baseline (the same rules annotated `:naive`), for a hardcoded

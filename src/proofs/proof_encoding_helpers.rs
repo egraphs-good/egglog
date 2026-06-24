@@ -581,6 +581,35 @@ pub(crate) fn command_supports_proof_encoding(
         return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
     }
 
+    // `visit_actions` does NOT descend into a `Function` decl's `:merge` body, but a
+    // merge that READS a non-constructor function (e.g. `:merge (foo)` for a custom
+    // `foo`) is a live-DB read: merges must be pure writes (they may use old/new,
+    // call primitives, or MINT constructor terms, but not look up another function's
+    // value). Such a merge is not FD-encodable and would otherwise reach the
+    // `unreachable!` in `handle_merge_or_congruence`. Reject it here so it's cleanly
+    // proof-unsupported. `expr_has_function_lookup` only flags Custom, non-global
+    // calls, so constructor-bodied (`:merge (Ctor old new)`), primitive-bodied, and
+    // trivial (`:merge old`) merges are unaffected.
+    if let GenericCommand::Function {
+        merge,
+        merge_action,
+        ..
+    } = command
+    {
+        let mut merge_reads_function = merge
+            .as_ref()
+            .is_some_and(|m| type_info.expr_has_function_lookup(m).is_some());
+        merge_action.clone().visit_exprs(&mut |e| {
+            if type_info.expr_has_function_lookup(&e).is_some() {
+                merge_reads_function = true;
+            }
+            e
+        });
+        if merge_reads_function {
+            return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
+        }
+    }
+
     // Now check command-specific constraints
     match command {
         GenericCommand::Sort {
