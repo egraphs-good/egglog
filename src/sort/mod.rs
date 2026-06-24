@@ -84,15 +84,6 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
-    /// Returns true if proof encoding supports this sort declaration.
-    ///
-    /// This is intentionally narrower than [`Sort::is_container_sort`]: some
-    /// value-level containers, such as `UnstableFn`, do not yet have proof
-    /// support.
-    fn supports_proof_encoding(&self) -> bool {
-        false
-    }
-
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name

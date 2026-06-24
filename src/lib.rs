@@ -2790,7 +2790,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_support_accepts_containers_but_not_unstable_fn() {
+    fn proof_support_accepts_container_sort_declarations() {
         let mut egraph = EGraph::default();
         let resolved = egraph
             .resolve_program(None, "(datatype X (x))\n(sort XPair (Pair X i64))")
@@ -2800,6 +2800,23 @@ mod tests {
         let mut egraph = EGraph::default();
         let resolved = egraph
             .resolve_program(None, "(datatype X (x))\n(sort XFn (UnstableFn (X) X))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_rejects_unstable_fn_primitives_without_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype X (x))
+                (sort XFn (UnstableFn (X) X))
+                (function id (X) X :merge old)
+                (let f (unstable-fn "id"))
+                "#,
+            )
             .unwrap();
         assert!(!program_supports_proofs(&resolved, &egraph.type_info));
     }

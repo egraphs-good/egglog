@@ -547,7 +547,7 @@ pub(crate) fn command_supports_proof_encoding(
             ..
         } => type_info
             .get_sort_by_name(name)
-            .filter(|sort| sort.supports_proof_encoding())
+            .filter(|sort| sort.is_container_sort())
             .map(|_| ())
             .ok_or(ProofEncodingUnsupportedReason::SortWithPresort),
         GenericCommand::Sort { uf: Some(_), .. } => {

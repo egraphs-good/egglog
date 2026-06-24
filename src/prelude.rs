@@ -925,10 +925,6 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.is_eq_container_sort()
     }
 
-    fn supports_proof_encoding(&self) -> bool {
-        true
-    }
-
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {
         self.0.serialized_name(container_values, value)
     }
