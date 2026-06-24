@@ -21,6 +21,7 @@ extract-vec-bench.egg
 factoring-multisets.egg
 fibonacci.egg
 fusion.egg
+greedy-dag-taylor.egg
 greedy-dag-vec-extract.egg
 hardboiled_conv1d_128.egg
 hardboiled_conv1d_32.egg

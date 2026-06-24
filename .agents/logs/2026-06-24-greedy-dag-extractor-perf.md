@@ -1094,3 +1094,29 @@
     public multi-root extraction APIs.
   - Greedy-DAG remains materially faster on these workloads, but this
     experiment is specifically about eliminating the incidental tree slowdown.
+
+## Experiment 37: checked-in Taylor greedy-DAG benchmark
+
+- Status: accepted
+- Question: can the Taylor greedy-DAG comparison be reproduced from checked-in
+  test files rather than the temporary Taylor copies used during optimization?
+- Change tested:
+  - Added `tests/greedy-dag-taylor.egg` as a copy of `tests/taylor51.egg` with
+    only the 324 `(extract ...)` commands changed to use
+    `:extractor greedy-dag`.
+  - Added `greedy-dag-taylor` to the CodSpeed benchmark matrix. The file is not
+    named `taylor51-greedy-dag.egg` because CodSpeed filters by substring, and
+    that name would make the existing `taylor51` matrix entry run both files.
+- Validation before timing:
+  - `cargo test --test files greedy_dag_taylor`
+  - `cargo test --test files proof_support_snapshot`
+  - `cargo build --release --bin egglog`
+- Exact command:
+  - `hyperfine --warmup 3 --runs 10 --export-json .tmp/taylor-greedy-dag-hyperfine.json --command-name 'taylor51 tree' './target/release/egglog tests/taylor51.egg > /dev/null' --command-name 'greedy-dag-taylor' './target/release/egglog tests/greedy-dag-taylor.egg > /dev/null'`
+- Observed result:
+  - Taylor 51 tree: `747.0 ms ± 4.8 ms`.
+  - Taylor greedy-DAG: `166.0 ms ± 4.7 ms`.
+  - Hyperfine summary: greedy-DAG ran `4.50 ± 0.13` times faster.
+- Decision:
+  - Keep the checked-in greedy-DAG Taylor copy and use these numbers in the PR
+    performance section.
