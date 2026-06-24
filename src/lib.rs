@@ -39,13 +39,12 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
-    Context, Core, FullState, PureState, Read, ReadState, TableRows, Write, WriteState,
+    Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
@@ -1144,30 +1143,52 @@ impl EGraph {
         self.functions.iter()
     }
 
-    /// Iterate every `(inputs, output)` entry of a function table.
-    /// Iterate the returned [`TableRows`] with [`TableRows::iter`], or
-    /// [`TableRows::iter_with_subsumption`] to also see which rows are
-    /// subsumed.
-    ///
-    /// This is the top-level form of [`Read::function_entries`] — the
-    /// same scan available from inside a rule callback or [`EGraph::update`].
-    /// Errors if `name` is a constructor (use [`EGraph::constructor_enodes`])
-    /// or is not registered.
-    pub fn function_entries(&mut self, name: &str) -> Result<TableRows, Error> {
-        self.update_unchecked(|fs| fs.function_entries(name))
+    /// Run a read-only closure against the e-graph. The closure receives
+    /// a [`ReadState`], so it can read but not write. Because this
+    /// borrows `&self`, the closure and its callbacks may also call other
+    /// `&self` methods such as [`EGraph::value_to_base`].
+    pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        self.backend
+            .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
+            .0
     }
 
-    /// Iterate every enode `(inputs, eclass)` of a constructor / relation
-    /// table. Iterate the returned [`TableRows`] with [`TableRows::iter`], or
-    /// [`TableRows::iter_with_subsumption`] to also see which rows are
-    /// subsumed.
-    ///
-    /// This is the top-level form of [`Read::constructor_enodes`] — the
-    /// same scan available from inside a rule callback or [`EGraph::update`].
-    /// Errors if `name` is a function table (use [`EGraph::function_entries`])
-    /// or is not registered.
-    pub fn constructor_enodes(&mut self, name: &str) -> Result<TableRows, Error> {
-        self.update_unchecked(|fs| fs.constructor_enodes(name))
+    /// Call `f` on each [`FunctionEntry`] of a function table. Top-level
+    /// form of [`Read::function_entries`]; errors if `name` is a
+    /// constructor or unregistered.
+    pub fn function_entries(
+        &self,
+        name: &str,
+        f: impl FnMut(FunctionEntry<'_>),
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.function_entries(name, f))
+    }
+
+    /// Like [`EGraph::function_entries`], but stops when `f` returns `false`.
+    pub fn function_entries_while(
+        &self,
+        name: &str,
+        f: impl FnMut(FunctionEntry<'_>) -> bool,
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.function_entries_while(name, f))
+    }
+
+    /// Call `f` on each [`Enode`] of a constructor / relation table.
+    /// Top-level form of [`Read::constructor_enodes`]; errors if `name`
+    /// is a function or unregistered.
+    pub fn constructor_enodes(&self, name: &str, f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
+        self.read(|rs| rs.constructor_enodes(name, f))
+    }
+
+    /// Like [`EGraph::constructor_enodes`], but stops when `f` returns `false`.
+    pub fn constructor_enodes_while(
+        &self,
+        name: &str,
+        f: impl FnMut(Enode<'_>) -> bool,
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.constructor_enodes_while(name, f))
     }
 
     /// Remove every row from the named function in bulk.

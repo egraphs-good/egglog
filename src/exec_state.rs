@@ -44,7 +44,7 @@ use crate::{
     sort::{F, S},
     typechecking::FuncType,
 };
-use egglog_bridge::{ActionRegistry, RowScan, TableAction, TableKind};
+use egglog_bridge::{ActionRegistry, TableAction, TableKind};
 use smallvec::SmallVec;
 
 /// Inline scratch for a row of column values. Matches the
@@ -362,83 +362,99 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         self.registry().table_sizes(self.es())
     }
 
-    /// Iterate every enode in a constructor / relation table. Each
-    /// returned row is `(inputs, eclass)` where `inputs` is the
-    /// constructor's input columns as raw `Value`s and `eclass` is
-    /// the eclass id the constructor minted for that row.
-    ///
-    /// Errors with `WrongSubtype` if `name` is a function table —
-    /// use [`Read::function_entries`] for those. Convert individual
-    /// input columns to typed Rust values with [`Core::value_to_base`]
-    /// or [`Core::value_to_container`].
-    fn constructor_enodes(&self, name: &str) -> Result<TableRows, Error> {
+    /// Call `f` on each [`Enode`] of a constructor / relation table.
+    /// Errors with `WrongSubtype` if `name` is a function. To stop
+    /// early, use [`Read::constructor_enodes_while`].
+    fn constructor_enodes(&self, name: &str, mut f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
+        self.constructor_enodes_while(name, |enode| {
+            f(enode);
+            true
+        })
+    }
+
+    /// Like [`Read::constructor_enodes`], but stops as soon as `f`
+    /// returns `false`.
+    fn constructor_enodes_while(
+        &self,
+        name: &str,
+        mut f: impl FnMut(Enode<'_>) -> bool,
+    ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
-        Ok(TableRows {
-            scan: action.scan_all(self.es()),
+        action.for_each_while(self.es(), |row| {
+            let (eclass, children) = row
+                .vals
+                .split_last()
+                .expect("constructor row has at least an eclass column");
+            f(Enode {
+                children,
+                eclass: *eclass,
+                subsumed: row.subsumed,
+            })
+        });
+        Ok(())
+    }
+
+    /// Call `f` on each [`FunctionEntry`] of a function table. Errors
+    /// with `WrongSubtype` if `name` is a constructor. To stop early,
+    /// use [`Read::function_entries_while`].
+    fn function_entries(
+        &self,
+        name: &str,
+        mut f: impl FnMut(FunctionEntry<'_>),
+    ) -> Result<(), Error> {
+        self.function_entries_while(name, |entry| {
+            f(entry);
+            true
         })
     }
 
-    /// Iterate every `(inputs, output)` entry of a function table.
-    /// `inputs` is the key columns; `output` is the value the
-    /// function maps to for that key. Both are raw `Value`s.
-    ///
-    /// Errors with `WrongSubtype` if `name` is a constructor — use
-    /// [`Read::constructor_enodes`] for those.
-    fn function_entries(&self, name: &str) -> Result<TableRows, Error> {
+    /// Like [`Read::function_entries`], but stops as soon as `f`
+    /// returns `false`.
+    fn function_entries_while(
+        &self,
+        name: &str,
+        mut f: impl FnMut(FunctionEntry<'_>) -> bool,
+    ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Function, "function")?;
-        Ok(TableRows {
-            scan: action.scan_all(self.es()),
-        })
-    }
-}
-
-/// A read-only snapshot of a table's rows, backed by a single buffer.
-///
-/// Returned by [`Read::constructor_enodes`] and [`Read::function_entries`].
-/// Iterate it with [`TableRows::iter`]; each item is `(inputs, output)` as raw
-/// [`Value`]s. `output` is the trailing column — the
-/// eclass id for a constructor, the mapped value for a function. Convert
-/// individual columns with [`Core::value_to_base`] / [`Core::value_to_container`].
-pub struct TableRows {
-    scan: RowScan,
-}
-
-impl TableRows {
-    /// The number of rows.
-    pub fn len(&self) -> usize {
-        self.scan.len()
-    }
-
-    /// Whether the table had no rows.
-    pub fn is_empty(&self) -> bool {
-        self.scan.is_empty()
-    }
-
-    /// Iterate `(inputs, output)` pairs from rows.
-    pub fn iter(&self) -> impl Iterator<Item = (&[Value], Value)> + '_ {
-        self.iter_with_subsumption()
-            .map(|(inputs, output, _)| (inputs, output))
-    }
-
-    /// Like [`TableRows::iter`], but each item also carries whether the
-    /// row has been subsumed.
-    pub fn iter_with_subsumption(&self) -> impl Iterator<Item = (&[Value], Value, bool)> + '_ {
-        self.scan.iter().map(|row| {
+        action.for_each_while(self.es(), |row| {
             let (output, inputs) = row
                 .vals
                 .split_last()
-                .expect("table row has at least an output column");
-            (inputs, *output, row.subsumed)
-        })
+                .expect("function row has at least an output column");
+            f(FunctionEntry {
+                inputs,
+                output: *output,
+                subsumed: row.subsumed,
+            })
+        });
+        Ok(())
     }
 }
 
-impl std::fmt::Debug for TableRows {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.iter()).finish()
-    }
+/// One enode from [`Read::constructor_enodes`]. Columns are raw
+/// [`Value`]s; convert with [`Core::value_to_base`] / [`Core::value_to_container`].
+#[derive(Clone, Copy, Debug)]
+pub struct Enode<'a> {
+    /// The constructor's input columns.
+    pub children: &'a [Value],
+    /// The eclass id this enode belongs to.
+    pub eclass: Value,
+    /// Whether this enode has been subsumed.
+    pub subsumed: bool,
+}
+
+/// One entry from [`Read::function_entries`]. Columns are raw
+/// [`Value`]s; convert with [`Core::value_to_base`] / [`Core::value_to_container`].
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionEntry<'a> {
+    /// The function's key (input) columns.
+    pub inputs: &'a [Value],
+    /// The value the function maps the key to.
+    pub output: Value,
+    /// Whether this entry has been subsumed.
+    pub subsumed: bool,
 }
 
 /// Action-side write methods — name-indexed inserts/removes/subsumes

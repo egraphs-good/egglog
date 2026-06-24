@@ -59,34 +59,35 @@ Two guardrails:
 Before:
 
 ```rust
-/// A read-only snapshot of a table's rows, backed by a single buffer.
-/// Iterate it with [`TableRows::iter`]; each item is `(inputs, output)`
-/// as raw [`Value`]s borrowed from the buffer, so there is no per-row
-/// allocation.
+/// Call `f` on each [`Enode`] of a constructor / relation table. Rows
+/// stream in batches, so there is no whole-table copy and no per-row
+/// allocation — it is as cheap as a direct streaming backend scan.
+/// Errors with `WrongSubtype` if `name` is a function table. To stop
+/// part way through, use [`Read::constructor_enodes_while`].
 ```
 
 After:
 
 ```rust
-/// A read-only snapshot of a table's rows.
-/// Iterate it with [`TableRows::iter`]; each item is `(inputs, output)`
-/// as raw [`Value`]s.
+/// Call `f` on each [`Enode`] of a constructor / relation table.
+/// Errors with `WrongSubtype` if `name` is a function. To stop early,
+/// use [`Read::constructor_enodes_while`].
 ```
 
 Before:
 
 ```rust
-/// Iterate `(inputs, output)` pairs, borrowing from the backing buffer
-/// (no per-row allocation).
-///
-/// This is the monomorphized fast path — as cheap as a direct streaming
-/// backend scan. (We deliberately do *not* implement `IntoIterator for
-/// &TableRows`: expressing its associated `IntoIter` type would force a
-/// boxed `dyn Iterator`, whose per-row virtual dispatch slows the scan.)
+/// One enode from [`Read::constructor_enodes`]. Columns are raw
+/// [`Value`]s borrowed from the streaming scan buffer, so there is no
+/// per-row allocation. (We deliberately do *not* implement
+/// `IntoIterator`: expressing its associated `IntoIter` type would
+/// force a boxed `dyn Iterator`, whose per-row virtual dispatch slows
+/// the scan.)
 ```
 
 After:
 
 ```rust
-/// Iterate `(inputs, output)` pairs from rows.
+/// One enode from [`Read::constructor_enodes`]. Columns are raw
+/// [`Value`]s; convert with [`Core::value_to_base`].
 ```

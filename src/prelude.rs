@@ -72,10 +72,10 @@
 //!
 //! ## Iterating and querying
 //!
-//! - [`crate::Read::function_entries`] iterates a function table.
-//!   Each entry is `(inputs, output)` as raw `Value`s.
-//! - [`crate::Read::constructor_enodes`] iterates a constructor /
-//!   relation table. Each enode is `(inputs, eclass_id)`.
+//! - [`crate::Read::function_entries`] visits each entry of a function
+//!   table via a callback, exposing `inputs` / `output` as raw `Value`s.
+//! - [`crate::Read::constructor_enodes`] visits each enode of a
+//!   constructor / relation table, exposing `children` / `eclass`.
 //! - [`crate::EGraph::query`] runs a one-shot pattern query and
 //!   returns one `HashMap<String, Value>` per match, keyed by
 //!   variable name. Useful for extracting bindings without compiling

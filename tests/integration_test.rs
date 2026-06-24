@@ -1153,10 +1153,10 @@ fn clear_function_lifecycle() {
                 .is_some()
         );
 
-        let seen = egraph
-            .update(|fs| fs.constructor_enodes("Num"))
-            .unwrap()
-            .len();
+        let mut seen = 0;
+        egraph
+            .update(|fs| fs.constructor_enodes("Num", |_| seen += 1))
+            .unwrap();
         assert_eq!(seen, 3);
 
         // Now clear and re-read through every access path: each must
@@ -1170,10 +1170,10 @@ fn clear_function_lifecycle() {
                 .unwrap()
                 .is_none()
         );
-        let seen_after = egraph
-            .update(|fs| fs.constructor_enodes("Num"))
-            .unwrap()
-            .len();
+        let mut seen_after = 0;
+        egraph
+            .update(|fs| fs.constructor_enodes("Num", |_| seen_after += 1))
+            .unwrap();
         assert_eq!(seen_after, 0);
         let check_old = egraph.parse_and_run_program(None, &format!("(check (Num {a}))"));
         assert!(

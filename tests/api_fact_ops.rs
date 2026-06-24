@@ -242,12 +242,13 @@ fn test_union_same_value_is_noop() -> Result<(), Error> {
 
 #[test]
 fn test_constructor_enodes_on_empty_table() -> Result<(), Error> {
-    // Iterating an empty constructor table should return an empty Vec,
-    // not error.
+    // Iterating an empty constructor table should never call the
+    // callback, not error.
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
-    let enodes = eg.update(|fs| fs.constructor_enodes("Cons"))?;
-    assert!(enodes.is_empty());
+    let mut count = 0;
+    eg.update(|fs| fs.constructor_enodes("Cons", |_| count += 1))?;
+    assert_eq!(count, 0);
     Ok(())
 }
 

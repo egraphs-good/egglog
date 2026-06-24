@@ -4,8 +4,8 @@
 use egglog::prelude::*;
 use egglog::{Error, Value};
 
-/// `function_entries` returns one `(inputs, output)` pair per entry
-/// of a function table.
+/// `function_entries` calls the callback once per entry of a function
+/// table with its `inputs` and `output`.
 #[test]
 fn function_entries_i64_to_i64() -> Result<(), Error> {
     let mut egraph = EGraph::default();
@@ -19,16 +19,15 @@ fn function_entries_i64_to_i64() -> Result<(), Error> {
 ",
     )?;
 
-    let entries = egraph.function_entries("f")?;
-    let mut rows: Vec<(i64, i64)> = entries
-        .iter()
-        .map(|(inputs, output)| {
-            (
-                egraph.value_to_base::<i64>(inputs[0]),
-                egraph.value_to_base::<i64>(output),
-            )
-        })
-        .collect();
+    // `function_entries` takes `&self`, so the callback may call other
+    // `&self` methods like `value_to_base` directly on `egraph`.
+    let mut rows: Vec<(i64, i64)> = Vec::new();
+    egraph.function_entries("f", |entry| {
+        rows.push((
+            egraph.value_to_base::<i64>(entry.inputs[0]),
+            egraph.value_to_base::<i64>(entry.output),
+        ));
+    })?;
     rows.sort();
     assert_eq!(rows, vec![(1, 42), (2, 43), (7, 100)]);
     Ok(())
@@ -39,7 +38,10 @@ fn function_entries_i64_to_i64() -> Result<(), Error> {
 fn function_entries_on_constructor_errors() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;
-    let err = egraph.function_entries("Cons").unwrap_err().to_string();
+    let err = egraph
+        .function_entries("Cons", |_| {})
+        .unwrap_err()
+        .to_string();
     assert!(
         err.contains("Cons") && err.contains("constructor"),
         "got: {err}"
@@ -98,8 +100,8 @@ fn query_pattern_zero_vars_match() -> Result<(), Error> {
     Ok(())
 }
 
-/// `constructor_enodes` on a constructor returns one
-/// `(inputs, eclass)` per enode.
+/// `constructor_enodes` calls the callback once per enode with its
+/// `children` and `eclass`.
 #[test]
 fn constructor_enodes_basic() -> Result<(), Error> {
     let mut egraph = EGraph::default();
@@ -113,21 +115,20 @@ fn constructor_enodes_basic() -> Result<(), Error> {
 ",
     )?;
 
-    let enodes = egraph.constructor_enodes("Add")?;
-    assert_eq!(enodes.len(), 2);
-    for (inputs, _eclass) in enodes.iter() {
+    let mut children: Vec<Vec<Value>> = Vec::new();
+    egraph.constructor_enodes("Add", |enode| {
         // Two i64 inputs.
-        assert_eq!(inputs.len(), 2);
-        let _x = egraph.value_to_base::<i64>(inputs[0]);
-        let _y = egraph.value_to_base::<i64>(inputs[1]);
-    }
+        assert_eq!(enode.children.len(), 2);
+        children.push(enode.children.to_vec());
+    })?;
+    assert_eq!(children.len(), 2);
 
-    let mut input_pairs: Vec<(i64, i64)> = enodes
+    let mut input_pairs: Vec<(i64, i64)> = children
         .iter()
-        .map(|(inputs, _)| {
+        .map(|c| {
             (
-                egraph.value_to_base::<i64>(inputs[0]),
-                egraph.value_to_base::<i64>(inputs[1]),
+                egraph.value_to_base::<i64>(c[0]),
+                egraph.value_to_base::<i64>(c[1]),
             )
         })
         .collect();
@@ -151,11 +152,12 @@ fn constructor_enodes_relation() -> Result<(), Error> {
 ",
     )?;
 
-    let enodes = egraph.constructor_enodes("R")?;
-    assert_eq!(enodes.len(), 2);
-    for (inputs, _eclass) in enodes.iter() {
-        assert_eq!(inputs.len(), 1, "relation enode: one input");
-    }
+    let mut count = 0;
+    egraph.constructor_enodes("R", |enode| {
+        assert_eq!(enode.children.len(), 1, "relation enode: one input");
+        count += 1;
+    })?;
+    assert_eq!(count, 2);
 
     // To get just the inputs, use the pattern-query form.
     let mut inputs: Vec<i64> = egraph
@@ -197,21 +199,22 @@ fn query_pattern_two_vars() -> Result<(), Error> {
     Ok(())
 }
 
-/// Iterating an empty function returns an empty Vec.
+/// Iterating an empty function never calls the callback.
 #[test]
 fn function_entries_empty() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, "(function h (i64) i64 :no-merge)")?;
-    let entries = egraph.function_entries("h")?;
-    assert!(entries.is_empty());
+    let mut count = 0;
+    egraph.function_entries("h", |_| count += 1)?;
+    assert_eq!(count, 0);
     Ok(())
 }
 
 /// `function_entries` on a missing table returns a MissingTable error.
 #[test]
 fn function_entries_missing_table_errors() {
-    let mut egraph = EGraph::default();
-    let err = egraph.function_entries("nonexistent").unwrap_err();
+    let egraph = EGraph::default();
+    let err = egraph.function_entries("nonexistent", |_| {}).unwrap_err();
     let msg = format!("{err}");
     assert!(
         msg.contains("nonexistent") || msg.contains("Unbound"),
@@ -219,10 +222,10 @@ fn function_entries_missing_table_errors() {
     );
 }
 
-/// `iter_with_subsumption` reports which rows have been subsumed; `iter`
-/// drops the flag but still yields every row.
+/// The `subsumed` field reports which enodes have been subsumed;
+/// subsumed enodes are still visited.
 #[test]
-fn iter_with_subsumption_reports_subsumed_rows() -> Result<(), Error> {
+fn constructor_enodes_reports_subsumed() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -234,13 +237,14 @@ fn iter_with_subsumption_reports_subsumed_rows() -> Result<(), Error> {
 ",
     )?;
 
-    let enodes = egraph.constructor_enodes("Num")?;
-    assert_eq!(enodes.len(), 2, "subsumed rows still appear in the scan");
-
-    let mut rows: Vec<(i64, bool)> = enodes
-        .iter_with_subsumption()
-        .map(|(inputs, _eclass, subsumed)| (egraph.value_to_base::<i64>(inputs[0]), subsumed))
-        .collect();
+    let mut rows: Vec<(i64, bool)> = Vec::new();
+    egraph.constructor_enodes("Num", |enode| {
+        rows.push((
+            egraph.value_to_base::<i64>(enode.children[0]),
+            enode.subsumed,
+        ));
+    })?;
+    assert_eq!(rows.len(), 2, "subsumed enodes are still visited");
     rows.sort();
     assert_eq!(rows, vec![(1, true), (2, false)]);
     Ok(())

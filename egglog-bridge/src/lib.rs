@@ -426,7 +426,7 @@ impl EGraph {
     /// Read the contents of the given function.
     ///
     /// The callback `f` is called with each row and its subsumption status.
-    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
+    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(ScanEntry<'_>)) {
         self.for_each_while(table, |row| {
             f(row);
             true
@@ -435,7 +435,7 @@ impl EGraph {
 
     /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
     /// the function returns early and stops reading rows from the table.
-    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>) -> bool) {
+    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -455,7 +455,7 @@ impl EGraph {
                 for (_, row) in $buf.non_stale() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                    if !f(FunctionRow {
+                    if !f(ScanEntry {
                         vals: &row[0..schema_math.func_cols],
                         subsumed,
                     }) {
@@ -1338,7 +1338,7 @@ impl TableAction {
     /// Mirrors [`EGraph::for_each`] but reaches the table through an
     /// [`ExecutionState`] — so it's callable from primitive bodies via
     /// the typed `Read`-style API.
-    pub fn for_each(&self, state: &ExecutionState, mut f: impl FnMut(FunctionRow<'_>)) {
+    pub fn for_each(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>)) {
         self.for_each_while(state, |row| {
             f(row);
             true
@@ -1347,11 +1347,7 @@ impl TableAction {
 
     /// Like [`TableAction::for_each`], but stops as soon as `f`
     /// returns `false`.
-    pub fn for_each_while(
-        &self,
-        state: &ExecutionState,
-        mut f: impl FnMut(FunctionRow<'_>) -> bool,
-    ) {
+    pub fn for_each_while(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
         let schema_math = self.table_math;
         let imp = state.get_table(self.table);
         let all = imp.all();
@@ -1362,7 +1358,7 @@ impl TableAction {
                 for (_, row) in $buf.non_stale() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                    if !f(FunctionRow {
+                    if !f(ScanEntry {
                         vals: &row[0..schema_math.func_cols],
                         subsumed,
                     }) {
@@ -1377,19 +1373,6 @@ impl TableAction {
             cur = next;
         }
         drain_buf!(buf);
-    }
-
-    /// Scan every row of this table into a single [`RowScan`].
-    ///
-    /// Unlike [`TableAction::for_each`], the rows materialize into one
-    /// buffer.
-    pub fn scan_all(&self, state: &ExecutionState) -> RowScan {
-        let imp = state.get_table(self.table);
-        let all = imp.all();
-        RowScan {
-            buf: imp.scan(all.as_ref()),
-            math: self.table_math,
-        }
     }
 
     /// Look up a row, inserting the configured default value if absent.
@@ -1649,7 +1632,8 @@ struct SchemaMath {
 /// A struct containing possible non-key portions of a table row. To be used with
 /// [`SchemaMath::write_table_row`].
 ///
-/// This is not to be confused with [`FunctionRow`], which is higher-level and for public uses.
+/// This is the write side (building a row); [`ScanEntry`] is the
+/// read side (a row yielded by a table scan).
 struct RowVals<T> {
     /// The timestamp for the row.
     timestamp: T,
@@ -1660,43 +1644,16 @@ struct RowVals<T> {
     ret_val: Option<T>,
 }
 
-/// A struct representing the content of a row in a function table
+/// A raw row yielded by a table scan; `vals` includes the trailing
+/// output/eclass column.
+///
+/// Public so the `egglog` crate can consume it, but **do not re-export
+/// it from `egglog`'s public API** — the user-facing row types are
+/// `egglog::FunctionEntry` and `egglog::Enode`.
 #[derive(Clone, Debug)]
-pub struct FunctionRow<'a> {
+pub struct ScanEntry<'a> {
     pub vals: &'a [Value],
     pub subsumed: bool,
-}
-
-/// Every row of a table scanned into a single buffer, produced by
-/// [`TableAction::scan_all`].
-///
-/// Owns its backing storage, so it can outlive the [`ExecutionState`] it was
-/// scanned from.
-pub struct RowScan {
-    buf: TaggedRowBuffer,
-    math: SchemaMath,
-}
-
-impl RowScan {
-    /// The number of (live) rows in the scan.
-    pub fn len(&self) -> usize {
-        self.buf.non_stale().count()
-    }
-
-    /// Whether the scan produced no live rows.
-    pub fn is_empty(&self) -> bool {
-        self.buf.non_stale().next().is_none()
-    }
-
-    /// Iterate the rows as [`FunctionRow`]s, each borrowing from the
-    /// backing buffer.
-    pub fn iter(&self) -> impl Iterator<Item = FunctionRow<'_>> + '_ {
-        let math = self.math;
-        self.buf.non_stale().map(move |(_, row)| FunctionRow {
-            vals: &row[0..math.func_cols],
-            subsumed: math.subsume && row[math.subsume_col()] == SUBSUMED,
-        })
-    }
 }
 
 impl SchemaMath {

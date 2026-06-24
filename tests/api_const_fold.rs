@@ -90,17 +90,20 @@ fn const_fold_collapses_addition_chain() -> Result<(), Error> {
     let nine = eg.update(|fs| fs.eclass_of("Num", 9_i64))?;
     assert_eq!(nine, Some(root), "(Num 9) should be unioned with root");
 
-    // (b) — walk every Num enode looking for one whose eclass equals
-    //     `root` and whose i64 input is `9`.
+    // (b) — walk Num enodes looking for one whose eclass equals `root`
+    //     and whose i64 input is `9`, stopping at the first match.
     let mut found_num_nine = false;
     let nine_value = eg.base_to_value::<i64>(9);
-    let nums = eg.update(|fs| fs.constructor_enodes("Num"))?;
-    for (inputs, eclass) in nums.iter() {
-        if eclass == root && inputs[0] == nine_value {
-            found_num_nine = true;
-            break;
-        }
-    }
+    eg.update(|fs| {
+        fs.constructor_enodes_while("Num", |enode| {
+            if enode.eclass == root && enode.children[0] == nine_value {
+                found_num_nine = true;
+                false
+            } else {
+                true
+            }
+        })
+    })?;
     assert!(
         found_num_nine,
         "root eclass should contain a (Num 9) representative"
