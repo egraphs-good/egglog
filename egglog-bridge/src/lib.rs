@@ -1065,6 +1065,14 @@ pub enum MergeFn {
     /// value of the last one. Models an action-block merge: the leading entries
     /// are effects (e.g. [`MergeFn::TableInsert`]) and the last is the value.
     Seq(Vec<MergeFn>),
+    /// Mint a pair-valued constructor inside a merge and return its output
+    /// e-class. `args` evaluate to the key (children); `value_args` evaluate to
+    /// the non-minted value columns (e.g. the proof). The first value column
+    /// (the output) is minted (`FreshId`); the rest are written from
+    /// `value_args`. Used by the FD proof encoding to create a nested
+    /// constructor term inside a custom function's `:merge` and use its e-class
+    /// as a child of the merged value. See [`TableAction::lookup_or_insert_multi`].
+    Construct(FunctionId, Vec<MergeFn>, Vec<MergeFn>),
 }
 
 impl MergeFn {
@@ -1107,6 +1115,13 @@ impl MergeFn {
                 items
                     .iter()
                     .for_each(|item| item.fill_deps(egraph, read_deps, write_deps));
+            }
+            Construct(func, args, value_args) => {
+                read_deps.insert(egraph.funcs[*func].table);
+                write_deps.insert(egraph.funcs[*func].table);
+                args.iter()
+                    .chain(value_args.iter())
+                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
             AssertEq | Old | New | OldCol(_) | NewCol(_) | Const(..) => {}
         }
@@ -1232,6 +1247,33 @@ impl MergeFn {
                     .map(|item| item.resolve(function_name, egraph))
                     .collect::<Vec<_>>(),
             ),
+            MergeFn::Construct(func, args, value_args) => {
+                let func_info = &egraph.funcs[*func];
+                debug_assert_eq!(
+                    func_info.schema.len(),
+                    args.len() + func_info.num_values,
+                    "Construct for {function_name}: key arity must be schema minus value columns for {}",
+                    func_info.name
+                );
+                debug_assert_eq!(
+                    value_args.len() + 1,
+                    func_info.num_values,
+                    "Construct for {function_name}: value_args must fill every value column \
+                     except the minted output for {}",
+                    func_info.name
+                );
+                ResolvedMergeFn::Construct {
+                    table: TableAction::new(egraph, *func),
+                    args: args
+                        .iter()
+                        .map(|arg| arg.resolve(function_name, egraph))
+                        .collect::<Vec<_>>(),
+                    value_args: value_args
+                        .iter()
+                        .map(|arg| arg.resolve(function_name, egraph))
+                        .collect::<Vec<_>>(),
+                }
+            }
         }
     }
 }
@@ -1269,6 +1311,11 @@ enum ResolvedMergeFn {
         args: Vec<ResolvedMergeFn>,
     },
     Seq(Vec<ResolvedMergeFn>),
+    Construct {
+        table: TableAction,
+        args: Vec<ResolvedMergeFn>,
+        value_args: Vec<ResolvedMergeFn>,
+    },
 }
 
 impl ResolvedMergeFn {
@@ -1360,6 +1407,24 @@ impl ResolvedMergeFn {
                 }
                 result
             }
+            ResolvedMergeFn::Construct {
+                table,
+                args,
+                value_args,
+            } => {
+                let key = args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<SmallVec<[Value; 4]>>();
+                let vals = value_args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<SmallVec<[Value; 4]>>();
+                // Constructor: always mints on miss, so this is `Some`.
+                table
+                    .lookup_or_insert_multi(state, &key, &vals)
+                    .unwrap_or(cur[0])
+            }
         }
     }
 }
@@ -1445,6 +1510,53 @@ impl TableAction {
                 Some(
                     state.predict_val(self.table, key, merge_vals.iter().copied())
                         [self.table_math.ret_val_col()],
+                )
+            }
+            None => self.lookup(state, key),
+        }
+    }
+
+    /// Multi-value variant of [`TableAction::lookup_or_insert`] for a
+    /// pair-valued constructor `(children) -> (output, extra...)`: the FIRST
+    /// value column (`output`) is MINTED (the configured `FreshId` default),
+    /// and the remaining value columns are written from `provided_vals` (e.g.
+    /// the proof column). Returns the minted `output` (the first value column).
+    ///
+    /// Idempotent: if the key is already present, returns its existing `output`
+    /// and writes nothing — so it can be evaluated more than once (e.g. once in
+    /// the value position and once in a proof position) and yield the same id.
+    /// Because the minted columns and `provided_vals` are independent of the
+    /// minted id, there is no circularity (cf. the FD-merge `Construct`).
+    ///
+    /// This is a write operation — only safe in action/merge contexts.
+    pub fn lookup_or_insert_multi(
+        &self,
+        state: &mut ExecutionState,
+        key: &[Value],
+        provided_vals: &[Value],
+    ) -> Option<Value> {
+        match self.default {
+            Some(default) => {
+                debug_assert_eq!(
+                    self.table_math.num_values,
+                    1 + provided_vals.len(),
+                    "lookup_or_insert_multi: provided_vals must fill every value \
+                     column except the minted first one"
+                );
+                let timestamp =
+                    MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
+                // Non-key columns, in order: [output (minted), provided.., ts, subsume?].
+                let mut merge_vals = SmallVec::<[MergeVal; 4]>::new();
+                merge_vals.push(default);
+                merge_vals.extend(provided_vals.iter().map(|v| MergeVal::Constant(*v)));
+                merge_vals.push(timestamp);
+                if self.table_math.subsume {
+                    merge_vals.push(MergeVal::Constant(NOT_SUBSUMED));
+                }
+                // The first value column is at `num_keys()`.
+                Some(
+                    state.predict_val(self.table, key, merge_vals.iter().copied())
+                        [self.table_math.num_keys()],
                 )
             }
             None => self.lookup(state, key),
