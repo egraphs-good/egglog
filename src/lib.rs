@@ -470,6 +470,22 @@ impl Default for EGraph {
             None,
         );
 
+        // `(fd-mint (C children...) proof)` mints the pair-valued FD constructor
+        // `C` inside a `:merge`, returning C's output e-class so it can be used as
+        // a child of the merged value. The first argument is the constructor
+        // application (its sort is the result sort), the second is the existence
+        // proof written into C's view proof column. It only ever appears in
+        // encoder-generated merges (`Context::Write`); the lowering in
+        // `translate_pair_scalar_to_mergefn` intercepts it and emits
+        // `MergeFn::Construct`, so its runtime `apply` (returning the constructed
+        // value unchanged) is never reached during normal evaluation.
+        eg.add_pure_primitive(
+            FdMint {
+                name: "fd-mint".to_string(),
+            },
+            None,
+        );
+
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
 
@@ -537,6 +553,73 @@ impl TypeConstraint for SelectEqTypeConstraint {
             constraint::eq(arguments[0].clone(), arguments[1].clone()),
             constraint::eq(arguments[2].clone(), arguments[3].clone()),
             constraint::eq(arguments[3].clone(), arguments[4].clone()),
+        ]
+    }
+}
+
+/// `fd-mint` primitive: `(fd-mint (C children...) proof)` mints the pair-valued
+/// FD constructor `C` inside a merge and returns its output e-class. See the
+/// registration site in `EGraph::default` for the full contract.
+#[derive(Clone)]
+struct FdMint {
+    name: String,
+}
+
+impl Primitive for FdMint {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(FdMintTypeConstraint {
+            name: self.name.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl PurePrim for FdMint {
+    fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        // Never reached during normal evaluation (lowering intercepts it). If it
+        // were, the constructed value is the first argument.
+        Some(args[0])
+    }
+}
+
+/// Type constraint for `fd-mint`: `[constructed, proof, output]` with
+/// `constructed == output` (the result is C's output sort). The proof argument's
+/// sort is left free (it is the generated proof datatype).
+struct FdMintTypeConstraint {
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for FdMintTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // `[viewname:String, constructed, proof?, output]`. The first argument is the
+        // FD view's name (a string literal), then the constructor application, then
+        // (proof mode only) the proof; the result sort equals the constructed value's
+        // sort (arg 1 == last). Arity 3 (term mode) or 4 (proof mode).
+        if arguments.len() != 3 && arguments.len() != 4 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 4,
+                },
+            )];
+        }
+        let last = arguments.len() - 1;
+        vec![
+            constraint::assign(arguments[0].clone(), StringSort.to_arcsort()),
+            constraint::eq(arguments[1].clone(), arguments[last].clone()),
         ]
     }
 }
@@ -801,6 +884,123 @@ impl EGraph {
         }
     }
 
+    /// Lower a `(fd-mint (C children...) [proof])` form (the Phase B constructor-
+    /// minting surface form) into a `MergeFn`.
+    ///
+    /// The minted e-class lives in `C`'s FD VIEW table (`(children) -> (output[,
+    /// proof])`), which is what all fact/check lookups consult — so we target the VIEW
+    /// table's backend id. The minted e-class itself comes from the single-value
+    /// term-constructor `C` (which has the `FreshId` default), and the view row +
+    /// per-sort UF self-loop are written as side effects so the e-class is properly
+    /// registered (mirroring `add_term_and_view`). Returns the minted output e-class
+    /// for use as a child of the merged value.
+    ///
+    /// `pair_mode` selects how sub-arguments are lowered: pair-scalar projections in
+    /// proof mode (where the merge value is a pair), plain expressions in term mode.
+    fn fd_mint_to_mergefn(
+        &self,
+        args: &[ResolvedExpr],
+        pair_mode: bool,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        use egglog_bridge::MergeFn;
+        // `(fd-mint "viewname" (C children...) [proof])`.
+        let GenericExpr::Lit(_, Literal::String(view_name)) = &args[0] else {
+            return Err(Error::BackendError(
+                "fd-mint's first argument must be the FD view name (a string literal)".into(),
+            ));
+        };
+        let GenericExpr::Call(_, ResolvedCall::Func(c), child_args) = &args[1] else {
+            return Err(Error::BackendError(
+                "fd-mint's second argument must be a constructor application".into(),
+            ));
+        };
+        // The term constructor `C` (FreshId default) mints the e-class; the FD view
+        // table (named by the string literal, so this is self-contained on re-parse)
+        // records the children->output row that all lookups consult.
+        let term_backend_id = self
+            .functions
+            .get(&c.name)
+            .ok_or_else(|| {
+                Error::BackendError(format!("fd-mint: constructor `{}` not declared", c.name))
+            })?
+            .backend_id;
+        let view_backend_id = self
+            .functions
+            .get(view_name.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!("fd-mint: FD view `{view_name}` not declared"))
+            })?
+            .backend_id;
+        let lower = |a: &ResolvedExpr| {
+            if pair_mode {
+                self.translate_pair_scalar_to_mergefn(a)
+            } else {
+                self.translate_expr_to_mergefn(a)
+            }
+        };
+        let key = child_args
+            .iter()
+            .map(lower)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Extra value columns written into the view besides the minted output: the
+        // proof in proof mode (`(fd-mint "v" (C ..) proof)`), none in term mode.
+        let value_args = args[2..].iter().map(lower).collect::<Result<Vec<_>, _>>()?;
+        // The minted e-class. `Function` runs the term constructor's lookup_or_insert
+        // (FreshId), idempotent per children, so we can re-evaluate it for each use.
+        let minted = || MergeFn::Function(term_backend_id, key.clone());
+        // The view row: key children, then the minted output, then any extra columns.
+        let mut view_row = key.clone();
+        view_row.push(minted());
+        view_row.extend(value_args.iter().cloned());
+        // A normally-created constructor self-loops its output e-class into the
+        // per-sort UF table (`add_term_and_view`'s `(union out out proof)`), which
+        // `__uf_function_index` reads to canonicalize children during rebuild.
+        // Replicate that. The self-loop proof is the view's existence proof (the last
+        // value arg) in proof mode, or Unit in term mode.
+        let uf_table = self
+            .proof_state
+            .uf_parent
+            .get(c.output.name())
+            .and_then(|uf_name| self.functions.get(uf_name))
+            .map(|f| f.backend_id);
+        let self_loop_proof = match value_args.last() {
+            Some(p) => p.clone(),
+            None => MergeFn::Const(self.backend.base_values().get(())),
+        };
+        let mut effects = vec![MergeFn::TableInsert(view_backend_id, view_row)];
+        if let Some(uf_backend_id) = uf_table {
+            effects.push(MergeFn::TableInsert(
+                uf_backend_id,
+                vec![minted(), minted(), self_loop_proof.clone()],
+            ));
+        }
+        // In proof mode, `add_term_and_view` also records `term_proof(output) = proof`
+        // (the existence proof for the e-class), consulted for bare eq-sort variables
+        // in facts and by prove-exists. Replicate it here so the minted e-class is
+        // queryable. (Only eq-sort outputs have a `term_proof` table, and only proof
+        // mode has a proof to store — `value_args` is empty in term mode.)
+        //
+        // Source the term-proof table from `proof_func_parent` (the sort's
+        // `:internal-proof-func`), NOT `proof_names.term_proof_name`: the former is
+        // re-populated from the sort declaration whenever the program is parsed (so it
+        // survives the desugar-then-rerun round-trip), whereas the latter is only filled
+        // during on-the-fly proof instrumentation. Both name the SAME table for any
+        // eq-sort (proof encoding sets `:internal-proof-func` = `term_proof_name`).
+        if !value_args.is_empty()
+            && let Some(tp_name) = self.proof_state.proof_func_parent.get(c.output.name())
+            && let Some(tp) = self.functions.get(tp_name)
+        {
+            effects.push(MergeFn::TableInsert(
+                tp.backend_id,
+                vec![minted(), self_loop_proof],
+            ));
+        }
+        // Run the effects (write view row + UF self-loop + term_proof), then return
+        // the minted e-class.
+        effects.push(minted());
+        Ok(MergeFn::Seq(effects))
+    }
+
     fn translate_expr_to_mergefn(
         &self,
         expr: &ResolvedExpr,
@@ -827,6 +1027,13 @@ impl EGraph {
                 ))
             }
             GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                // Term-mode constructor minting inside a Phase B FD merge: the view is
+                // single-valued (no proof column), but the constructor STILL must be
+                // minted into its view (a plain `(C a b)` call would create only the
+                // term, not the view row that lookups consult).
+                if p.name() == "fd-mint" {
+                    return self.fd_mint_to_mergefn(args, false);
+                }
                 let mut translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
@@ -983,6 +1190,9 @@ impl EGraph {
                     "new" => return Ok(MergeFn::NewCol(col)),
                     _ => {}
                 }
+            }
+            if p.name() == "fd-mint" {
+                return self.fd_mint_to_mergefn(args, true);
             }
         }
         match expr {

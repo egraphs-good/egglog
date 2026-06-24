@@ -1026,6 +1026,7 @@ pub enum DefaultVal {
 }
 
 /// How to resolve FD conflicts for a table.
+#[derive(Clone)]
 pub enum MergeFn {
     /// Panic if the old and new values don't match.
     AssertEq,

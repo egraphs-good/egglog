@@ -184,6 +184,85 @@ fn ac_fail() {
     assert_ne!(canon_left, canon_right);
 }
 
+/// Minting a 2-value (output + extra) constructor view inside a custom
+/// function's `:merge` via [`MergeFn::Construct`] must write the view row (so it
+/// is queryable) and return the minted output e-class. Mirrors the Phase B FD
+/// proof encoding's `fd-mint`.
+#[test]
+fn construct_in_merge_writes_view() {
+    let mut egraph = EGraph::default();
+    let int_base = egraph.base_values_mut().register_type::<i64>();
+    // The constructor view: (child_a child_b) -> (output, extra). Two value
+    // columns; the output is the minted (FreshId) first value column.
+    let view_table = egraph.add_table(FunctionConfig {
+        schema: vec![
+            ColumnTy::Id,
+            ColumnTy::Id,
+            ColumnTy::Id,
+            ColumnTy::Base(int_base),
+        ],
+        num_values: 2,
+        default: DefaultVal::FreshId,
+        merge: MergeFn::Tuple(vec![MergeFn::Old, MergeFn::OldCol(1)]),
+        name: "view".into(),
+        can_subsume: false,
+    });
+    // A separate single-value "UF" table, mirroring the per-sort UF the real
+    // encoder self-loops into: (output output) -> Unit-ish value.
+    let uf_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Base(int_base)],
+        num_values: 1,
+        default: DefaultVal::Fail,
+        merge: MergeFn::Old,
+        name: "uf".into(),
+        can_subsume: false,
+    });
+    // The custom function f: (i64) -> Id. On a key collision its merge mints the
+    // view over (old, new) (self-looping the minted output into `uf`) and returns
+    // the minted output. Mirrors `fd_mint_to_mergefn`'s `Seq([TableInsert, mint])`.
+    let marker = egraph.base_values_mut().get(7i64);
+    let mint = || {
+        MergeFn::Construct(
+            view_table,
+            vec![MergeFn::Old, MergeFn::New],
+            vec![MergeFn::Const(marker)],
+        )
+    };
+    let f_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        num_values: 1,
+        default: DefaultVal::Fail,
+        merge: MergeFn::Seq(vec![
+            MergeFn::TableInsert(uf_table, vec![mint(), mint(), MergeFn::Const(marker)]),
+            mint(),
+        ]),
+        name: "f".into(),
+        can_subsume: false,
+    });
+
+    let key0 = egraph.base_values_mut().get(0i64);
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    // f(0) = a, then f(0) = b -> collision -> merge mints view(a, b).
+    egraph.add_values(vec![(f_table, vec![key0, a])]);
+    egraph.add_values(vec![(f_table, vec![key0, b])]);
+    egraph.flush_updates();
+
+    // The view should now have exactly one row keyed (a, b) with the marker in
+    // its second value column.
+    let mut rows = Vec::new();
+    egraph.for_each(view_table, |row| rows.push(row.vals.to_vec()));
+    assert_eq!(rows.len(), 1, "expected exactly one minted view row");
+    let row = &rows[0];
+    assert_eq!(row[0], a, "view key child a");
+    assert_eq!(row[1], b, "view key child b");
+    // row[2] is the minted output; row[3] is the extra value column.
+    assert_eq!(
+        row[3], marker,
+        "view extra value column should be the marker"
+    );
+}
+
 #[test]
 fn math() {
     let handles =
