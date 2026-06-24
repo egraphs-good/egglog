@@ -351,7 +351,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, true),
             &egraph.functions,
             &egraph.type_info,
-            true, // seminaive rule context
+            false, // seminaive query: Pure/Write contexts
         );
         qrule_builder.query(&rule.body, true);
         let entries = free_vars
@@ -371,7 +371,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
-            false, // seminaive off for scheduler action rule
+            true, // action rule reads the DB: Read/Full contexts
         );
         let mut entries = free_vars
             .iter()

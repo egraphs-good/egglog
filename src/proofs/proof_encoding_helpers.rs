@@ -494,6 +494,10 @@ pub enum ProofEncodingUnsupportedReason {
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
     LetBindingWithNonEqSort,
+    #[error(
+        "rule uses `:unsafe-seminaive`. Arbitrary RHS database reads are not representable by the term/proof encoding."
+    )]
+    UnsafeSeminaive,
 }
 
 /// Checks whether a desugared program supports proof encoding.
@@ -543,6 +547,14 @@ pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
+    // `:unsafe-seminaive` rules perform arbitrary reads against the live
+    // database; the term/proof encoding can't represent that.
+    if let crate::ast::GenericCommand::Rule { rule } = command
+        && rule.eval_mode == crate::ast::RuleEvalMode::UnsafeSeminaive
+    {
+        return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
+    }
+
     // Check all expressions for primitives without validators
     let mut all_primitives_have_validators = true;
     command.clone().visit_exprs(&mut |expr| {
