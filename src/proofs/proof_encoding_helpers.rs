@@ -25,20 +25,16 @@ pub(crate) struct EncodingNames {
     pub(crate) rule_constructor: String,
     pub(crate) merge_fn_constructor: String,
     /// Index-carrying term-free merge justification `(name p_old p_new idx)`. The
-    /// conclusion term is reconstructed during proof conversion from the two premise
-    /// proofs + evaluating subexpression `idx` of the merge body. `idx` is a
-    /// deterministic pre-order index identifying WHICH subexpression of the merge
-    /// body this proof is for, so nested merge-body subexpressions (which share the
-    /// same premises) are distinguishable. Used by the FD custom-function view merge,
-    /// which runs without the children (so it cannot embed the conclusion term).
+    /// conclusion is reconstructed during proof conversion from the two premise proofs
+    /// and subexpression `idx` of the merge body (a pre-order index distinguishing
+    /// nested subexpressions that share the same premises). Used by the FD
+    /// custom-function view merge, which runs without the children.
     pub(crate) merge_fn_idx_constructor: String,
-    /// Term-free merge justification `(name p_old p_new)` for the FD VIEW ROW
-    /// `f(children) = eval(whole merge body)`. The conclusion is reconstructed
-    /// during proof conversion from the two premise proofs (the colliding view
-    /// rows) + running the WHOLE merge body on their outputs. Unlike
-    /// `merge_fn_idx_constructor` (which proves a particular nested merge-body
-    /// SUBTERM exists), this proves the function's own view row, so it carries no
-    /// index. Emitted as the proof column of every FD pair-valued view's `:merge`.
+    /// Term-free merge justification `(name p_old p_new)` for the FD view row
+    /// `f(children) = eval(whole merge body)`. Unlike `merge_fn_idx_constructor`
+    /// (which proves a particular nested subterm), this proves the function's own view
+    /// row, so it carries no index. Emitted as the proof column of every FD view's
+    /// `:merge`.
     pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,

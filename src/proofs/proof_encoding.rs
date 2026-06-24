@@ -64,21 +64,14 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Whether `fdecl` uses the FD pair-valued view (`(children) -> (pair output proof)`,
-    /// keyed on children only).
+    /// keyed on children only). Constructors always do; a custom function does iff its
+    /// `:merge` body is:
+    ///   - primitive-bodied (every call a primitive, e.g. `min`/`max`), for any
+    ///     non-eq-sort output, or a trivial value-replacement (bare `old`/`new` or a
+    ///     literal) for an eq-sort output; or
+    ///   - constructor-bodied (calls only user constructors, minted via `fd-mint`).
     ///
-    /// EVERY merge in a proof-supported program is now handled in the FD view's own
-    /// `:merge`; there is no separate legacy merge-rule path anymore. Constructors
-    /// always use the FD view. A custom (non-constructor) function uses it iff its
-    /// `:merge` body is either:
-    ///   - a PRIMITIVE-bodied expression (every call is a primitive — e.g.
-    ///     `min`/`max`/`or`/`set-union`), for any non-eq-sort output, OR a TRIVIAL
-    ///     value-replacement (bare `old`/`new`, or a literal) when the output is an
-    ///     eq-sort (it just keeps one colliding output — no new term, no union); or
-    ///   - a CONSTRUCTOR-bodied expression (calls only user constructors, minted via
-    ///     `fd-mint`).
-    ///
-    /// Merges that read the live DB (`:merge (foo)` for a non-constructor `foo`) and
-    /// non-global `:no-merge` customs are rejected at the file level by
+    /// Live-DB-reading and non-global `:no-merge` customs are rejected earlier by
     /// `command_supports_proof_encoding`, so they never reach the encoder.
     pub(crate) fn is_fd_pair_view(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         match fdecl.subtype {
@@ -90,29 +83,17 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// True iff `fdecl` is a custom function whose `:merge` body mints CONSTRUCTORS
-    /// (function-bodied) and whose INPUTS are non-eq-sort, making it eligible for the
-    /// FD pair-valued view (Phase B). The merge body is allowed to call constructors
-    /// (minted via the `fd-mint` Construct surface form) and primitives; calls to
-    /// non-constructor user functions are NOT supported here (those stay legacy).
+    /// True iff `fdecl` is a custom function whose `:merge` body mints constructors
+    /// (and may call primitives), making it eligible for the FD pair-valued view
+    /// (Phase B). Calls to non-constructor user functions are not supported here.
+    /// Inputs and output may both be eq-sorts: eq-sort inputs verify via Phase C's
+    /// `reflexivize_premise` (proof_format.rs).
     ///
-    /// The INPUTS and OUTPUT may both be eq-sorts: the merge builds eq-sort terms
-    /// via constructor FD views, and eq-sort inputs verify thanks to Phase C's
-    /// `reflexivize_premise` (proof_format.rs), which handles the rebuild-rewritten
-    /// congruence premise.
-    ///
-    /// MATERIALIZATION (the eq-sort-input divergence, fixed): a constructor-bodied
-    /// merge MINTS constructor enodes (e.g. rw-analysis `merge-val`). In a fixpoint
-    /// analysis almost all collisions are no-ops (the merged output equals the
-    /// existing one). Normal egglog short-circuits such a collision via its
-    /// `cur == new` check, so it mints nothing. The FD view's value carries an extra
-    /// proof column (proof mode) or runs a minting body (term mode), so without help
-    /// the merge body would run for an equal-output collision and mint a spurious
-    /// `merge-val(out, out)`, diverging the across-treatments `(print-size)` (0 normal
-    /// vs 4 FD). The fix is the backend identity-column short-circuit
-    /// (`FunctionConfig::identity_values = Some(1)`, egglog-bridge): a collision with
-    /// an unchanged OUTPUT keeps the existing row (proof included) and does not run the
-    /// minting body, restoring normal mode's behavior.
+    /// Such a merge mints constructor enodes, but in a fixpoint analysis most
+    /// collisions are no-ops (merged output equals the existing one). The backend
+    /// identity-column short-circuit (`FunctionConfig::identity_values = Some(1)`)
+    /// keeps the existing row on an unchanged output and skips the minting body, so
+    /// we don't mint spurious nodes and diverge from normal mode.
     fn is_constructor_bodied_fd_custom(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         if fdecl.subtype != FunctionSubtype::Custom {
             return false;
@@ -120,9 +101,8 @@ impl<'a> ProofInstrumentor<'a> {
         match &fdecl.merge {
             None => false,
             Some(merge) => {
-                // Must actually call a user constructor (otherwise it is primitive-
-                // bodied, handled by the other predicate), and EVERY user-function
-                // call must be a constructor (so `fd-mint`/Construct can mint it).
+                // Must call a user constructor (else it is primitive-bodied), and
+                // every user-function call must be a constructor (so it can be minted).
                 Self::merge_body_calls_constructor(merge)
                     && Self::merge_body_funcs_all_constructors(merge)
             }
@@ -160,27 +140,20 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.subtype != FunctionSubtype::Custom {
             return false;
         }
-        // Eq-sort INPUTS are allowed (Phase C): rebuild canonicalizes an eq-sort
-        // input, re-keys the view row, and rewrites its per-row proof into a
-        // non-reflexive CONGRUENCE proof. The FD merge's `MergeRow`/`MergeIdx`
-        // justification requires REFLEXIVE premise proofs, so at resugaring time
-        // (`convert_raw_proof`) each such congruence premise `p : orig = canon` is
-        // replaced with `Trans(Sym(p), p) : canon = canon` (reflexive, landing on
-        // the canonical view row). See `reflexivize_premise` in proof_format.rs.
+        // Eq-sort inputs are allowed (Phase C): rebuild re-keys the view row and
+        // rewrites its proof into a congruence proof. The FD merge's `MergeRow`/
+        // `MergeIdx` justification needs reflexive premises, so at resugaring time
+        // each congruence premise is reflexivized. See `reflexivize_premise` in
+        // proof_format.rs.
         let merge = match &fdecl.merge {
             None => return false,
             Some(merge) => merge,
         };
-        // For a NON-eq-sort output any primitive-bodied merge works: the output
-        // column is carried as a plain value (no union-find canonicalization) and
-        // primitive merges produce value/lattice sorts (i64, Set, Vec, ...).
-        //
-        // For an EQ-SORT output we restrict to a TRIVIAL value-replacement body — a
-        // bare `old`/`new` (or a literal, though eq-sorts have no literals): the merge
-        // simply keeps one of the two colliding eq-sort outputs (no new eq-sort term
-        // is computed, so no union / congruence is needed). A primitive CALL with
-        // eq-sort output could synthesize a fresh eq-sort value that would need to be
-        // minted/unioned, which the custom FD path does NOT do, so it stays legacy.
+        // For a non-eq-sort output any primitive-bodied merge works (the output is a
+        // plain value/lattice sort, no union-find). For an eq-sort output we allow
+        // only a trivial value-replacement body (bare `old`/`new`), which keeps one
+        // colliding output without computing a new term; a primitive call could
+        // synthesize a fresh eq-sort value needing a union, which this path can't do.
         let output_is_eq_sort = self
             .egraph
             .type_info
@@ -218,12 +191,11 @@ impl<'a> ProofInstrumentor<'a> {
     /// later action/rebuild sites (which only have the function name / [`FuncType`])
     /// can route consistently. Constructors are always FD even before being recorded.
     pub(crate) fn name_is_fd_pair_view(&self, name: &str) -> bool {
-        // Rely solely on the recorded set: `term_and_view` records EVERY FD function
-        // (constructors and primitive-bodied customs) when it declares the view. We
-        // must NOT fall back to `get_func_type(name)` here, because by the time this
-        // runs the encoder has redeclared the original function name as the hidden
-        // inner term constructor, so `get_func_type` would report `Constructor` for a
-        // legacy custom function.
+        // Rely solely on the recorded set: `term_and_view` records every FD function
+        // when it declares the view. Don't fall back to `get_func_type(name)` — by
+        // now the encoder has redeclared the original name as the hidden inner term
+        // constructor, so `get_func_type` would misreport a legacy custom as a
+        // constructor.
         self.egraph.proof_state.fd_view_funcs.contains(name)
     }
 
@@ -310,20 +282,12 @@ impl<'a> ProofInstrumentor<'a> {
             )
         };
 
-        // The UF function index stores, per source term, the current leader (and,
-        // in proof mode, a proof that the source equals the leader). It is the only
-        // writer of `(UF_<sort>f a)`, so a key collision means a single source `a`
-        // has two parents `b` and `c` (the SINGLE-PARENT situation). The index's
-        // `:merge` resolves that collision: it picks the smaller leader (closer to
-        // the root) as the surviving value AND writes the union edge between the two
-        // parents back into the constructor UF table (the source of truth). Path
-        // compression then chases `a -> larger -> smaller` and deletes the redundant
-        // `(UF a larger)` row, so the UF table converges to a single parent per
-        // source — exactly the work the old `single_parent` rule did, now folded into
-        // the merge.
-        //
-        // In proof mode, UF function index stores (leader, proof) pairs.
-        // In term mode, it just stores the leader.
+        // The UF function index stores, per source term, the current leader (plus a
+        // proof in proof mode). A key collision means one source `a` has two parents,
+        // and its `:merge` resolves it: keep the smaller leader and write the union
+        // edge between the parents back into the constructor UF table. Path
+        // compression then converges the table to a single parent per source — the
+        // work the old `single_parent` rule did, now folded into the merge.
         let (
             uf_function_output_type,
             uf_pair_sort_decl,
@@ -466,14 +430,10 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Generate the rules (if any) that handle a function's merge or congruence.
     ///
-    /// All proof-supported merges are now handled in the FD view's own `:merge`
-    /// (congruence for constructors; value-replacement / primitive / constructor-
-    /// bodied for customs), so this emits no extra rule. A custom function whose
-    /// `:merge` reads the live DB (e.g. `:merge (foo)` for a non-constructor `foo`)
-    /// is rejected at typecheck time (in ALL modes) by the
-    /// `LookupInMergeDisallowed` error (see `typechecking.rs`), which runs before
-    /// proof encoding, and a non-global `:no-merge` custom function is rejected as
-    /// `NoMergeOnNonGlobalFunction` (#774), so neither reaches here.
+    /// All proof-supported merges are handled in the FD view's own `:merge`, so this
+    /// emits no extra rule. Live-DB-reading merges (`LookupInMergeDisallowed`) and
+    /// non-global `:no-merge` customs (`NoMergeOnNonGlobalFunction`, #774) are
+    /// rejected at typecheck, before encoding, so neither reaches here.
     fn handle_merge_or_congruence(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         if fdecl.subtype == FunctionSubtype::Custom && !self.is_fd_pair_view(fdecl) {
             unreachable!(
@@ -529,34 +489,22 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// The `:merge` expression for a primitive-bodied custom function's FD view.
-    ///
-    /// The FD view maps `(children) -> (pair output proof)`. When two rows collide on
-    /// the children key (the same `f(children)` derived with two different output
-    /// values) the merge runs the user's primitive merge body on the two OUTPUT
-    /// columns and produces a `MergeIdx` justification for the merged row. Unlike a
-    /// constructor, there is NO union: the output is a merged value, not an eclass
-    /// collision.
-    ///
-    /// In term mode (no proofs) the view value is the output directly and the merge is
-    /// simply the (rewritten) primitive merge body.
+    /// The `:merge` expression for a primitive-bodied custom function's FD view
+    /// (`(children) -> (pair output proof)`). On a children-key collision the merge
+    /// runs the user's primitive body on the two output columns and produces a
+    /// `MergeIdx` justification — unlike a constructor, there is no union. In term
+    /// mode the view value is the output directly and the merge is just that body.
     fn custom_fd_view_merge(&mut self, fname: &str, merge: &ResolvedExpr) -> String {
         if self.egraph.proof_state.proofs_enabled {
-            // `old`/`new` in the user merge body refer to the OUTPUT value, which in
+            // `old`/`new` in the user merge body refer to the output value, which in
             // the pair-view lives in `(pair-first old)`/`(pair-first new)`.
             let body = Self::render_merge_on_pair_first(merge);
             let merge_row = self.proof_names().merge_fn_row_constructor.clone();
-            // The proof column. `MergeRow` reconstructs the top view row
-            // `f(inputs..., merged)` by evaluating the WHOLE merge body on the premise
-            // outputs.
-            //
-            // STABILITY: when the merged output equals one of the premise outputs
-            // (the common case for `min`/`max`/`or`/lattice ops) we keep that
-            // premise's existing proof verbatim, so the resulting pair is identical to
-            // the surviving row and the merge does not re-fire forever. Using
-            // `select-eq` keeps the OLD pair when `merged == (pair-first old)`, the NEW
-            // pair's proof when `merged == (pair-first new)`, and otherwise (a value
-            // distinct from both premises) mints a fresh `MergeRow` justification.
+            // The proof column. `MergeRow` reconstructs the top view row by evaluating
+            // the merge body on the premise outputs. For stability, when the merged
+            // output equals a premise output (common for `min`/`max`/lattice ops) the
+            // `select-eq` keeps that premise's existing proof, so the surviving row is
+            // identical and the merge saturates; otherwise it mints a fresh `MergeRow`.
             let fresh = format!("({merge_row} \"{fname}\" (pair-second old) (pair-second new))");
             let proof = format!(
                 "(select-eq {body} (pair-first old) (pair-second old) \
@@ -568,13 +516,11 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// The `:merge` expression for a CONSTRUCTOR-bodied custom function's FD view
-    /// (Phase B). Like [`Self::custom_fd_view_merge`], but the merge body mints
-    /// constructors. Each constructor node `(C a b)` is rendered as a `fd-mint` over
-    /// `C`'s pair-valued FD view, carrying a `MergeIdx(f, p_old, p_new, idx)` proof of
-    /// that node's existence (idx = the node's pre-order position over ALL body nodes).
-    /// The output column is the resulting nested tree of `fd-mint`s; the f-view proof
-    /// column is `MergeRow(f, p_old, p_new)` (with the saturation select-eq guard).
+    /// The `:merge` expression for a constructor-bodied custom function's FD view
+    /// (Phase B). Like [`Self::custom_fd_view_merge`], but each constructor node
+    /// `(C a b)` is rendered as a `fd-mint` carrying a `MergeIdx(f, p_old, p_new, idx)`
+    /// existence proof (idx = pre-order position over body nodes). The output column
+    /// is the nested tree of `fd-mint`s; the f-view proof column is `MergeRow(...)`.
     fn constructor_bodied_fd_view_merge(&mut self, fname: &str, merge: &ResolvedExpr) -> String {
         if self.egraph.proof_state.proofs_enabled {
             let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
@@ -585,13 +531,10 @@ impl<'a> ProofInstrumentor<'a> {
             let mut idx = 0usize;
             let body = self.render_construct_body(merge, true, fname, &merge_idx, &mut idx);
             // Proof column for f's view row. `MergeRow` reconstructs `f(inputs...,
-            // merged)` by running the WHOLE merge body on the premise outputs.
-            //
-            // STABILITY: if the merged value equals a premise output, keep that
-            // premise's existing proof so the pair is identical to the surviving row
-            // (the merge then saturates). For a value distinct from both premises mint
-            // a fresh `MergeRow`. (The constructor-bodied output is built from
-            // `pair-first old`/`new`, so the comparison is over the output column.)
+            // merged)` by running the whole merge body on the premise outputs.
+            // For saturation: if the merged value equals a premise output, keep that
+            // premise's existing proof (so the surviving row is identical); otherwise
+            // mint a fresh `MergeRow`. Comparison is over the output column.
             let out_value = Self::render_merge_on_pair_first(merge);
             let fresh = format!("({merge_row} \"{fname}\" (pair-second old) (pair-second new))");
             let proof = format!(
@@ -601,24 +544,22 @@ impl<'a> ProofInstrumentor<'a> {
             format!("(pair {body} {proof})")
         } else {
             // Term mode (no proofs): the view value is the output directly, but the
-            // constructor nodes must STILL be minted into their FD views (a plain
-            // `(C a b)` call would create the term but not its view row, which all
-            // lookups consult). So wrap each constructor in `fd-mint` with no proof.
+            // constructors must still be minted into their FD views (a plain `(C a b)`
+            // call creates the term but not the view row lookups consult), so wrap
+            // each in `fd-mint` with no proof.
             let mut idx = 0usize;
             self.render_construct_body(merge, false, fname, "", &mut idx)
         }
     }
 
-    /// Render a constructor-bodied merge body for the OUTPUT column of a Phase B FD
-    /// view's `:merge`. Constructor calls are wrapped in `(fd-mint (C ...) [proof])`,
-    /// which mints `C` into its FD view (so the e-class is queryable) and returns the
-    /// output e-class.
+    /// Render a constructor-bodied merge body for the output column of a Phase B FD
+    /// view's `:merge`. Constructor calls become `(fd-mint (C ...) [proof])`, minting
+    /// `C` into its FD view and returning the output e-class.
     ///
-    /// In proof mode (`proofs`), each node carries `MergeIdx(fname, (pair-second old),
-    /// (pair-second new), idx)` (idx = the node's pre-order position over ALL body
-    /// nodes, matching `subexpr_at_index` in the checker) and `old`/`new` project to
-    /// the output column via `pair-first`. In term mode there is no proof arg and
-    /// `old`/`new` stay bare. `idx` is threaded so every node gets a distinct index.
+    /// In proof mode each node carries `MergeIdx(fname, (pair-second old),
+    /// (pair-second new), idx)` (idx = pre-order position, matching `subexpr_at_index`
+    /// in the checker) and `old`/`new` project via `pair-first`. In term mode there is
+    /// no proof and `old`/`new` stay bare. `idx` is threaded for distinct indices.
     fn render_construct_body(
         &mut self,
         expr: &ResolvedExpr,
@@ -776,7 +717,7 @@ impl<'a> ProofInstrumentor<'a> {
             view_flags.push_str(" :internal-let");
         }
         // For an FD custom view the output column's pair sort `(Pair output proof)`
-        // is NOT declared by `declare_sort` (the output is typically a non-eq-sort
+        // is not declared by `declare_sort` (the output is typically a non-eq-sort
         // like i64/Set, which has no UF setup), so declare it here.
         let mut extra_pair_sort_decl = String::new();
         let view_decl = if fdecl.subtype == FunctionSubtype::Constructor {
@@ -1217,13 +1158,10 @@ impl<'a> ProofInstrumentor<'a> {
                     } else if resolved_var.sort.is_eq_sort() {
                         let term_proof_name = self.term_proof_name(resolved_var.sort.name());
                         let fresh_proof = self.fresh_var();
-                        // Every eq-sort term has its term_proof set at
-                        // constructor-creation time, so this proof is guaranteed
-                        // present when the rule fires. Fetch it directly in the
-                        // action (the rule is then `:unsafe-seminaive`, see
-                        // instrument_rule) instead of as a body join — one fewer
-                        // join per eq-sort body variable. Callers that don't
-                        // build a proof (run :until, check) discard these.
+                        // An eq-sort term's term_proof is always present when the rule
+                        // fires, so fetch it in the action (making the rule
+                        // `:unsafe-seminaive`, see instrument_rule) rather than as a
+                        // body join — one fewer join per eq-sort body variable.
                         action_lookups
                             .push(format!("(let {fresh_proof} ({term_proof_name} {var}))"));
                         fresh_proof
@@ -1323,13 +1261,11 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Return the instrumented query and a proof that it matched.
-    /// Returns `(body_facts, action_lookups, proof)`. Eq-sort variables'
-    /// `term_proof` fetches are emitted into `action_lookups` as
-    /// `(let p (term_proof v))` lines for the caller to splice into the
-    /// rule's actions (the rule is then `:unsafe-seminaive`). Callers
-    /// that don't build a proof (`run :until`, `check`) discard the
-    /// lookups and the proof.
+    /// Return the instrumented query and a proof that it matched, as
+    /// `(body_facts, action_lookups, proof)`. Eq-sort variables' `term_proof`
+    /// fetches go into `action_lookups` for the caller to splice into the rule's
+    /// actions (making the rule `:unsafe-seminaive`); callers that don't build a
+    /// proof (`run :until`, `check`) discard them.
     fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, Vec<String>, String) {
         let mut res = vec![];
         let mut action_lookups = vec![];
@@ -1411,14 +1347,10 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Update the view with the given arguments.
     ///
-    /// For legacy custom functions (old shape) the view key is `args` (children +
-    /// output) and the value is the `proof`.
-    ///
-    /// For FD views (constructors + primitive-bodied customs) the view key is the
-    /// children (all but the last arg) and the value is `(pair output proof)`. For an
-    /// eq-sort output (constructors) we ALSO record `term_proof(output) = proof` (an
-    /// existence proof for the eclass, used for bare eq-sort vars in facts). For a
-    /// non-eq-sort output (FD customs) there is no `term_proof` table, so we skip it.
+    /// Legacy custom functions key on `args` (children + output) with value `proof`.
+    /// FD views key on the children, with value `(pair output proof)`; for an eq-sort
+    /// output we also record `term_proof(output) = proof` (the eclass's existence
+    /// proof), skipped for non-eq-sort outputs which have no `term_proof` table.
     fn update_view(
         &mut self,
         fname: &str,
@@ -1432,15 +1364,9 @@ impl<'a> ProofInstrumentor<'a> {
             let (output, key) = args.split_last().expect("FD view needs an output");
             let key = ListDisplay(key, " ");
             if self.egraph.proof_state.proofs_enabled {
-                // The FD view value is a `(pair output proof)` (two value columns):
-                // the output and its existence proof.
-                //
-                // For an eq-sort output (constructors) we ALSO record
-                // `term_proof(output) = proof`, the existence proof for the eclass,
-                // used for bare eq-sort variables in facts and by prove-exists. The
-                // `term_proof` table only exists for eq-sorts (it is created in
-                // `declare_sort`). For an FD custom function with a non-eq-sort output
-                // (i64/Set/...) there is no such table, so skip it.
+                // The value is `(pair output proof)`. For an eq-sort output also record
+                // `term_proof(output) = proof` (used for bare eq-sort vars in facts and
+                // by prove-exists); non-eq-sort outputs have no `term_proof` table.
                 if self.sort_has_term_proof(out_sort) {
                     let tp = self.term_proof_name(out_sort);
                     format!(
@@ -1554,13 +1480,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// Returns a query binding the view's value and a variable for the proof
     /// (or Unit) output.
     ///
-    /// For custom functions (old shape) `args` is the full key (children +
-    /// output) and the value is the proof.
-    ///
-    /// For constructors (FD shape) the last element of `args` is the output
-    /// variable to bind from the view value; the rest is the key. In proof
-    /// mode the value is a `(pair output proof)`, so we bind the output via
-    /// `pair-first` and return `(pair-second ...)` as the proof.
+    /// Legacy custom functions take the full key in `args` with the proof as value.
+    /// FD-shape constructors take the output as the last `args` element (bound from
+    /// the view value) and the rest as key; in proof mode the value is a
+    /// `(pair output proof)`, so bind via `pair-first` and return `pair-second`.
     fn query_view_and_get_proof(
         &mut self,
         fname: &str,

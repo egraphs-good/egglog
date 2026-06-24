@@ -755,11 +755,10 @@ impl TypeInfo {
         bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
         bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));
 
-        // Merge expressions run as part of action-side table updates: writes
-        // are allowed, but live DB reads would be untracked by seminaive rule
-        // execution. A merge must be a PURE WRITE (use old/new, call
-        // primitives, or mint constructor terms), so reading a non-constructor
-        // function in a merge is disallowed in ALL modes.
+        // A merge runs as an action-side write and must be a pure write (use
+        // old/new, call primitives, or mint constructor terms): live DB reads
+        // would be untracked by seminaive execution, so reading a non-constructor
+        // function in a merge is disallowed in all modes.
         let merge = match &fdecl.merge {
             Some(merge) => Some(self.typecheck_standalone_expr(
                 symbol_gen,
@@ -778,12 +777,10 @@ impl TypeInfo {
             Context::Write,
         )?;
 
-        // Reject reading a non-constructor function in either the merge value
-        // expression or any action of a block-form merge. This flags only
-        // `ResolvedCall::Func` with `subtype == Custom && !is_global`, so
-        // constructor-bodied (`:merge (Ctor old new)`), primitive-bodied
-        // (`:merge (min old new)`), and trivial (`:merge old`) merges are NOT
-        // flagged.
+        // Reject reading a non-constructor function in the merge value or any
+        // block-form action. Flags only `Func` with `subtype == Custom &&
+        // !is_global`, so constructor-, primitive-, and trivial-bodied merges
+        // are not flagged.
         if let Some(merge) = &merge {
             self.check_merge_lookup_expr(merge)?;
         }

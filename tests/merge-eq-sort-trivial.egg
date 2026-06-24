@@ -1,16 +1,13 @@
-;; Trivial eq-sort-output custom merges (`:merge old` / `:merge new`).
-;;
-;; These are value-replacement merges (keep one of the two colliding outputs)
-;; whose OUTPUT sort is an eq-sort datatype. They route onto the FD pair-valued
-;; view (no union, no congruence), exercising the trivial-eq-sort-output FD path
-;; in proof mode. There are no function lookups in actions, so the file supports
-;; proofs and runs in every treatment (term/proofs/proof_testing/desugar).
+;; Trivial eq-sort-output custom merges (`:merge old` / `:merge new`):
+;; value-replacement merges over an eq-sort output that route onto the FD
+;; pair-valued view (no union, no congruence). No action lookups, so the file
+;; supports proofs and runs in every treatment.
 
 (datatype T (A) (B))
 
-;; `:merge old`: on a key collision keep the FIRST value set.
+;; `:merge old`: on a key collision keep the first value set.
 (function keep-old (i64) T :merge old)
-;; `:merge new`: on a key collision keep the LAST value set.
+;; `:merge new`: on a key collision keep the last value set.
 (function keep-new (i64) T :merge new)
 
 ;; Collide on the same key (0) with two different eq-sort values A and B.

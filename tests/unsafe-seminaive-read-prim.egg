@@ -1,10 +1,7 @@
-; `:unsafe-seminaive` also widens a rule's primitive contexts to
-; Read/Full, so the RHS can call primitives that read the database — not
-; just function-table lookups. `unstable-multiset-fill-index` is a
-; FullPrim (it reads a multiset and writes an index function), which the
-; default seminaive action context (Write) does not admit — without
-; `:unsafe-seminaive` the call doesn't even resolve. With it, the rule
-; keeps delta evaluation but the FullPrim is available in the RHS.
+; `:unsafe-seminaive` also widens a rule's primitive contexts to Read/Full, so
+; the RHS can call database-reading primitives. `unstable-multiset-fill-index`
+; is a FullPrim that the default seminaive action context (Write) doesn't admit;
+; without `:unsafe-seminaive` it wouldn't even resolve.
 
 (datatype Math (Num i64))
 (sort Maths (MultiSet Math))

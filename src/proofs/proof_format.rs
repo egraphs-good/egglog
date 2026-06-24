@@ -61,18 +61,17 @@ enum RawProof {
     /// of t = t.
     /// The term t is either f(c1, c2, ..., merge_fn) or some subexpression of the merge function. Here the merge function is evaluted on the terms old and new.
     MergeFn(String, RawProofId, RawProofId, TermId),
-    /// Like [`RawProof::MergeFn`] but term-free, with an index: the conclusion term is
-    /// NOT embedded. Instead the index `idx` identifies WHICH subexpression of the merge
-    /// body this proof justifies (a deterministic pre-order index over the merge-body
-    /// expression tree). The conclusion is reconstructed during conversion by evaluating
-    /// subexpression `idx` of the merge body on the premise outputs. The index makes
-    /// nested merge-body subexpressions (which share the same premises) distinguishable.
-    /// Used by the FD custom-function view merge, which runs without access to children.
+    /// Like [`RawProof::MergeFn`] but term-free: instead of an embedded conclusion, the
+    /// index `idx` identifies which subexpression of the merge body this justifies (a
+    /// pre-order index over the body tree). The conclusion is reconstructed during
+    /// conversion by evaluating subexpression `idx` on the premise outputs; the index
+    /// distinguishes nested subexpressions that share the same premises. Used by the
+    /// FD custom-function view merge, which runs without access to children.
     MergeFnIdx(String, RawProofId, RawProofId, usize),
-    /// Like [`RawProof::MergeFnIdx`] but for the FD VIEW ROW (no index). The conclusion
-    /// is `f(children) = eval(whole merge body)`, reconstructed during conversion by
-    /// running the WHOLE merge body on the two premise outputs. Used as the proof column
-    /// of every FD pair-valued view's `:merge`.
+    /// Like [`RawProof::MergeFnIdx`] but for the FD view row (no index). The conclusion
+    /// `f(children) = eval(whole merge body)` is reconstructed during conversion by
+    /// running the whole body on the two premise outputs. Used as the proof column of
+    /// every FD pair-valued view's `:merge`.
     MergeFnRow(String, RawProofId, RawProofId),
     Trans(RawProofId, RawProofId),
     Sym(RawProofId),
@@ -381,20 +380,14 @@ impl ProofStore {
     }
 
     /// Reflexivize a (possibly non-reflexive) proof so it can serve as a `MergeFn`
-    /// premise (which the checker requires to be reflexive, `lhs == rhs`).
+    /// premise (the checker requires premises to be reflexive, `lhs == rhs`). For
+    /// `p : A = B` returns a proof of `B = B` as `Trans(Sym(p), p)`; an already-
+    /// reflexive `p` is returned unchanged.
     ///
-    /// For a proof `p : A = B`, returns a proof of `B = B` built as
-    /// `Trans(Sym(p), p)` (`Sym(p) : B = A`, then `Trans(B=A, A=B) : B = B`).
-    /// If `p` is already reflexive it is returned unchanged (no proof bloat for
-    /// the common non-eq-sort-input case, whose premises are already reflexive).
-    ///
-    /// This handles eq-sort INPUTS to FD custom functions: rebuild canonicalizes
-    /// an eq-sort input, re-keys the view row, and rewrites its stored proof into a
-    /// non-reflexive CONGRUENCE proof `f(orig_inputs, out) = f(canon_inputs, out)`
-    /// (canonical-on-right, per the rebuild rule's `Congr(view_prf, i, uf_prf)`
-    /// orientation). `Trans(Sym(p), p)` reflexivizes to that proof's RHS, i.e. the
-    /// CANONICAL view row, so both premises land on the same canonical inputs and
-    /// the checker's input-match (a `TermId` equality) succeeds.
+    /// This handles eq-sort inputs to FD custom functions: rebuild rewrites the
+    /// view row's proof into a congruence proof `f(orig) = f(canon)`, and
+    /// reflexivizing to its RHS lands both premises on the same canonical view row
+    /// so the checker's input-match succeeds.
     fn reflexivize_premise(&mut self, premise_id: ProofId) -> ProofId {
         let prop = self.id_to_proof[premise_id].proposition.clone();
         if prop.lhs == prop.rhs {
@@ -480,10 +473,9 @@ impl ProofStore {
                 // and reconstruct the conclusion term by evaluating subexpression `idx` of
                 // `function`'s merge body on those outputs (`old`/`new` bound accordingly).
                 //
-                // `idx` indexes ALL body nodes (pre-order, including the top node as a bare
-                // term). The conclusion is that node's own minted term (e.g. `(C1 old_out
-                // new_out)`), which is exactly the existence proof of that minted enode in
-                // its FD view. The whole-view-row conclusion is produced by `MergeFnRow`.
+                // `idx` indexes all body nodes (pre-order, top node included). The
+                // conclusion is that node's own minted term, i.e. its existence proof in
+                // its FD view. The whole-view-row conclusion comes from `MergeFnRow`.
                 let old_view = self.id_to_proof[old_proof_id].rhs();
                 let new_view = self.id_to_proof[new_proof_id].rhs();
                 let (old_output, new_output) = match (
@@ -512,10 +504,8 @@ impl ProofStore {
                 .unwrap_or_else(|e| {
                     panic!("failed to run merge subexpr {idx} for {function}: {e}")
                 });
-                // `idx` indexes ALL body nodes (pre-order), INCLUDING the top node as
-                // a bare term. The conclusion is that node's own minted term (its
-                // existence proof in its FD view). The whole-view-row conclusion is
-                // produced by `MergeFnRow`, not `idx == 0`.
+                // The conclusion is that node's own minted term (its existence proof
+                // in its FD view); the whole-view-row conclusion comes from `MergeFnRow`.
                 let to_prove = subexpr_term;
                 // Reflexivize premises in case rebuild rewrote them into congruence
                 // proofs (eq-sort inputs); reflexive premises pass through unchanged.
@@ -536,7 +526,7 @@ impl ProofStore {
                 // The two premise proofs are reflexive proofs of the colliding view
                 // rows `f(c..., old_output)` and `f(c..., new_output)`. The conclusion
                 // is the whole view row `f(inputs..., merged)`, where `merged` is the
-                // WHOLE merge body evaluated on the two premise outputs.
+                // whole merge body evaluated on the two premise outputs.
                 let old_view = self.id_to_proof[old_proof_id].rhs();
                 let new_view = self.id_to_proof[new_proof_id].rhs();
                 let (view_head, input_args, old_output, new_output) = match (

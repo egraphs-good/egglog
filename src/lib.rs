@@ -492,15 +492,10 @@ impl Default for EGraph {
             None,
         );
 
-        // `(fd-mint (C children...) proof)` mints the pair-valued FD constructor
-        // `C` inside a `:merge`, returning C's output e-class so it can be used as
-        // a child of the merged value. The first argument is the constructor
-        // application (its sort is the result sort), the second is the existence
-        // proof written into C's view proof column. It only ever appears in
-        // encoder-generated merges (`Context::Write`); the lowering in
-        // `translate_pair_scalar_to_mergefn` intercepts it and emits
-        // `MergeFn::Construct`, so its runtime `apply` (returning the constructed
-        // value unchanged) is never reached during normal evaluation.
+        // `(fd-mint (C children...) proof)` mints the pair-valued FD constructor `C`
+        // inside a `:merge` and returns C's output e-class. Only appears in encoder-
+        // generated merges; the lowering intercepts it (so its runtime `apply` is
+        // never reached) and the proof is written into C's view proof column.
         eg.add_pure_primitive(
             FdMint {
                 name: "fd-mint".to_string(),
@@ -906,16 +901,12 @@ impl EGraph {
         }
     }
 
-    /// Lower a `(fd-mint (C children...) [proof])` form (the Phase B constructor-
-    /// minting surface form) into a `MergeFn`.
+    /// Lower a `(fd-mint (C children...) [proof])` form into a `MergeFn` that mints
+    /// `C`'s e-class and returns it for use as a child of the merged value.
     ///
-    /// The minted e-class lives in `C`'s FD VIEW table (`(children) -> (output[,
-    /// proof])`), which is what all fact/check lookups consult — so we target the VIEW
-    /// table's backend id. The minted e-class itself comes from the single-value
-    /// term-constructor `C` (which has the `FreshId` default), and the view row +
-    /// per-sort UF self-loop are written as side effects so the e-class is properly
-    /// registered (mirroring `add_term_and_view`). Returns the minted output e-class
-    /// for use as a child of the merged value.
+    /// The term constructor `C` (a `FreshId` default) mints the e-class; the view row,
+    /// per-sort UF self-loop, and `term_proof` are written as side effects so the
+    /// e-class is registered exactly as `add_term_and_view` would.
     ///
     /// `pair_mode` selects how sub-arguments are lowered: pair-scalar projections in
     /// proof mode (where the merge value is a pair), plain expressions in term mode.
@@ -936,9 +927,8 @@ impl EGraph {
                 "fd-mint's second argument must be a constructor application".into(),
             ));
         };
-        // The term constructor `C` (FreshId default) mints the e-class; the FD view
-        // table (named by the string literal, so this is self-contained on re-parse)
-        // records the children->output row that all lookups consult.
+        // The view table is named by the string literal, so this is self-contained
+        // on re-parse; it records the children->output row that all lookups consult.
         let term_backend_id = self
             .functions
             .get(&c.name)
@@ -967,18 +957,16 @@ impl EGraph {
         // Extra value columns written into the view besides the minted output: the
         // proof in proof mode (`(fd-mint "v" (C ..) proof)`), none in term mode.
         let value_args = args[2..].iter().map(lower).collect::<Result<Vec<_>, _>>()?;
-        // The minted e-class. `Function` runs the term constructor's lookup_or_insert
-        // (FreshId), idempotent per children, so we can re-evaluate it for each use.
+        // The minted e-class. `Function` runs the constructor's lookup_or_insert,
+        // idempotent per children, so we can re-evaluate it for each use.
         let minted = || MergeFn::Function(term_backend_id, key.clone());
         // The view row: key children, then the minted output, then any extra columns.
         let mut view_row = key.clone();
         view_row.push(minted());
         view_row.extend(value_args.iter().cloned());
-        // A normally-created constructor self-loops its output e-class into the
-        // per-sort UF table (`add_term_and_view`'s `(union out out proof)`), which
-        // `__uf_function_index` reads to canonicalize children during rebuild.
-        // Replicate that. The self-loop proof is the view's existence proof (the last
-        // value arg) in proof mode, or Unit in term mode.
+        // Replicate the per-sort UF self-loop a normal constructor would write
+        // (`add_term_and_view`'s `(union out out proof)`), read during rebuild to
+        // canonicalize children. The proof is the view's existence proof, or Unit.
         let uf_table = self
             .proof_state
             .uf_parent
@@ -996,18 +984,13 @@ impl EGraph {
                 vec![minted(), minted(), self_loop_proof.clone()],
             ));
         }
-        // In proof mode, `add_term_and_view` also records `term_proof(output) = proof`
-        // (the existence proof for the e-class), consulted for bare eq-sort variables
-        // in facts and by prove-exists. Replicate it here so the minted e-class is
-        // queryable. (Only eq-sort outputs have a `term_proof` table, and only proof
-        // mode has a proof to store — `value_args` is empty in term mode.)
+        // In proof mode, replicate `add_term_and_view`'s `term_proof(output) = proof`
+        // record so the minted e-class is queryable (only eq-sort outputs have a
+        // `term_proof` table, and only proof mode has a proof to store).
         //
-        // Source the term-proof table from `proof_func_parent` (the sort's
-        // `:internal-proof-func`), NOT `proof_names.term_proof_name`: the former is
-        // re-populated from the sort declaration whenever the program is parsed (so it
-        // survives the desugar-then-rerun round-trip), whereas the latter is only filled
-        // during on-the-fly proof instrumentation. Both name the SAME table for any
-        // eq-sort (proof encoding sets `:internal-proof-func` = `term_proof_name`).
+        // Source the table from `proof_func_parent` (the sort's `:internal-proof-func`),
+        // not `proof_names.term_proof_name`: the former is re-populated on every parse
+        // (surviving the desugar-then-rerun round-trip); both name the same table.
         if !value_args.is_empty()
             && let Some(tp_name) = self.proof_state.proof_func_parent.get(c.output.name())
             && let Some(tp) = self.functions.get(tp_name)
@@ -1049,10 +1032,9 @@ impl EGraph {
                 ))
             }
             GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
-                // Term-mode constructor minting inside a Phase B FD merge: the view is
-                // single-valued (no proof column), but the constructor STILL must be
-                // minted into its view (a plain `(C a b)` call would create only the
-                // term, not the view row that lookups consult).
+                // Term-mode constructor minting inside an FD merge: mint into the
+                // view (a plain `(C a b)` call would create the term but not the
+                // view row that lookups consult).
                 if p.name() == "fd-mint" {
                     return self.fd_mint_to_mergefn(args, false);
                 }
@@ -1136,20 +1118,18 @@ impl EGraph {
         }
     }
 
-    /// Lower a (possibly block-form) merge for a PAIR-valued function. The
-    /// merge is written in terms of boxed pairs, but the backend stores two
-    /// value columns, so the merged value `(pair a b)` becomes a top-level
-    /// `Tuple([lower(a), lower(b)])` and `pair-first/second old/new` map to the
-    /// corresponding `OldCol/NewCol`.
+    /// Lower a (possibly block-form) merge for a pair-valued function. The merge
+    /// is written over boxed pairs, but the backend stores two value columns, so
+    /// `(pair a b)` becomes a top-level `Tuple` and `pair-first/second old/new`
+    /// map to the corresponding `OldCol`/`NewCol`.
     fn translate_pair_merge_to_mergefn(
         &self,
         actions: &crate::ast::ResolvedActions,
         value: &ResolvedExpr,
     ) -> Result<egglog_bridge::MergeFn, Error> {
         use egglog_bridge::MergeFn;
-        // The merged value of a pair-valued function is two columns, so the
-        // top-level merge MUST be a `Tuple` (the backend only special-cases a
-        // top-level `Tuple`). The two per-column merges:
+        // The merged value is two columns, so the top-level merge must be a
+        // `Tuple` (the backend only special-cases a top-level `Tuple`):
         let (mut col0, col1) = self.translate_pair_value_cols(value)?;
         if !actions.0.is_empty() {
             // Run the block's effect actions (e.g. the UF `set`) exactly once,
@@ -1321,14 +1301,10 @@ impl EGraph {
         };
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             num_values,
-            // Identity-column merge short-circuit. Only the proof-encoding FD
-            // view tables opt in (via the internal `:identity-values <n>`
-            // annotation, stamped during proof instrumentation): when `Some(k)`,
-            // a collision that leaves the leading `k` value columns unchanged is
-            // a no-op that must NOT run the (possibly minting) merge body. User
-            // functions carry no annotation and keep `None` — classic merge
-            // semantics, so a `:merge <literal>` (a `MergeFn::Const`) is never
-            // short-circuited.
+            // Identity-column merge short-circuit, opted into only by proof-encoding
+            // FD views via the internal `:identity-values <n>` annotation: when
+            // `Some(k)`, a collision leaving the leading `k` value columns unchanged
+            // skips the merge body. User functions keep `None` (classic semantics).
             identity_values: decl.identity_values,
             schema: input
                 .iter()
@@ -3272,16 +3248,11 @@ impl<'a> BackendRule<'a> {
                             0 => src.col0,
                             _ => src.col1,
                         };
-                        // Alias the projection result directly to the value
-                        // column entry (no extra var, no equality filter): every
-                        // use of `result` now reads the indexed column.
-                        //
-                        // A literal result (e.g. `(= n 5)` substituted `n := 5` so the
-                        // projection's result term is `5`) must NOT be aliased — that
-                        // would make the literal read the column value and silently drop
-                        // the equality constraint. Instead constrain the column equal to
-                        // the literal's constant. Likewise an already-bound var is
-                        // constrained equal rather than re-aliased.
+                        // Alias the projection result directly to the value column
+                        // entry so every use of `result` reads the indexed column.
+                        // But a literal or already-bound result can't be aliased
+                        // (that would drop its equality constraint) — constrain the
+                        // column equal to it instead.
                         match &result {
                             core::GenericAtomTerm::Literal(..) => {
                                 let lit_entry = self.entry(&result);
@@ -3707,9 +3678,8 @@ mod tests {
         }
     }
 
-    /// A merge runs in `Context::Write`, so a primitive that READS the database (a
-    /// `Read`/`Full`-context primitive) has no `Write` entrypoint and using it in a
-    /// `:merge` is rejected by the context-id filtering — merges are pure writes.
+    /// A primitive that reads the database can't be used in a `:merge` (a merge is a
+    /// pure write): it has no `Write`-context entrypoint, so it resolves as unbound.
     #[test]
     fn read_primitive_in_merge_is_rejected() {
         let mut egraph = EGraph::default();
@@ -3919,13 +3889,10 @@ mod tests {
 
     #[test]
     fn test_user_merge_not_identity_short_circuited() {
-        // A user function whose `:merge` body changes the value even when the
-        // new value equals the old one. The proof-encoding FD views opt into a
-        // backend identity-column short-circuit via the internal
-        // `:identity-values` annotation; ORDINARY user functions must NOT get
-        // that annotation (`identity_values == None`), so their merge body always
-        // runs. Here re-setting the SAME value must still increment via the
-        // merge, proving the merge was not short-circuited.
+        // A user function whose `:merge` body changes the value even when the new
+        // value equals the old one. Ordinary user functions get no `:identity-values`
+        // annotation (only proof-encoding FD views do), so their merge body always
+        // runs: re-setting the same value here must still increment.
         let mut egraph = EGraph::default();
         egraph
             .parse_and_run_program(

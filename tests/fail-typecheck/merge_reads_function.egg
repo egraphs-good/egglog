@@ -1,10 +1,10 @@
-; A `:merge` body must be a pure write: it may use `old`/`new`, call
-; primitives, or mint constructor terms, but it must NOT read the live value
-; of another (non-constructor) function. Reading `foo` in `bar`'s merge is a
-; live-DB read, which seminaive rule execution cannot track, so it is rejected
-; at typecheck time in ALL modes (LookupInMergeDisallowed). Previously this was
-; silently accepted in normal mode and panicked at the proof encoder's
-; `unreachable!`.
+; A `:merge` body must be a pure write, so reading another
+; (non-constructor) function in it is a live-DB read that
+; seminaive execution can't track. It is rejected at
+; typecheck in all modes (LookupInMergeDisallowed).
+;
+; Reading `foo` in `bar`'s merge below is such a read.
+
 (function foo () i64 :no-merge)
 
 (function bar () i64 :merge (foo))

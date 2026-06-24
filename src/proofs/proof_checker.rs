@@ -73,11 +73,9 @@ pub(crate) fn run_merge(
     .into())
 }
 
-/// Find the subexpression at pre-order position `idx` in `expr`'s tree.
-///
-/// The traversal visits a node, then recurses left-to-right into its children
-/// (for `Call` arguments). Index 0 is `expr` itself. This MUST mirror the index
-/// scheme used by the proof encoder when it tags `MergeFnIdx` proofs.
+/// Find the subexpression at pre-order position `idx` in `expr`'s tree (index 0 is
+/// `expr` itself). Must mirror the indexing the proof encoder uses to tag
+/// `MergeFnIdx` proofs.
 fn subexpr_at_index(expr: &ResolvedExpr, idx: usize) -> Option<&ResolvedExpr> {
     let mut counter = 0;
     fn walk<'a>(

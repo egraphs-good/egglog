@@ -18,11 +18,9 @@ mod tests {
             .join("\n")
     }
 
-    /// A trivial eq-sort-output custom merge (`:merge old`) is value-replacement
-    /// and routes onto the FD pair-valued view (no legacy `handle_merge_fn`
-    /// merge rule). The FD view declaration carries the `:identity-values`
-    /// stamp; its `:merge` builds a `(pair ...)` value. This is what makes the
-    /// `unreachable!` at the `handle_merge_or_congruence` else branch safe.
+    /// A trivial eq-sort-output custom merge (`:merge old`) routes onto the FD
+    /// pair-valued view: the view carries the `:identity-values` stamp and its
+    /// `:merge` builds a `(pair ...)` value (no legacy `handle_merge_fn` rule).
     #[test]
     fn trivial_eq_sort_output_merge_is_fd() {
         let encoding = proof_encode(
@@ -47,11 +45,8 @@ mod tests {
         );
     }
 
-    /// A `:merge` that READS a non-constructor function (e.g. `:merge (foo)`) is a
-    /// live-DB read — merges are pure writes — so it is rejected at TYPECHECK time in
-    /// ALL modes (the `LookupInMergeDisallowed` error), not just under `--proofs`.
-    /// (Before this typecheck error, normal mode silently accepted the read and the
-    /// proof path panicked at the `handle_merge_or_congruence` `unreachable!`.)
+    /// Reading a function in a `:merge` body is rejected at typecheck
+    /// (`LookupInMergeDisallowed`) in all modes — a merge must be a pure write.
     #[test]
     fn function_reading_merge_is_rejected() {
         let source = r#"
@@ -72,10 +67,9 @@ mod tests {
         );
     }
 
-    /// The proof encoder reads body variables' `term_proof`s from the RHS via
-    /// `:unsafe-seminaive` lookups. Assert this produces the same database as
-    /// the safe baseline (the same rules annotated `:naive`), for a hardcoded
-    /// handful of files (running it across all tests would be too slow).
+    /// The proof encoder reads body variables' `term_proof`s via
+    /// `:unsafe-seminaive` lookups; check this matches the `:naive` baseline
+    /// database, on a hardcoded handful of files (all tests would be too slow).
     #[test]
     fn unsafe_seminaive_matches_naive() {
         let files = [

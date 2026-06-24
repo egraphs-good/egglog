@@ -196,24 +196,18 @@ pub struct FunctionConfig {
     /// Number of value (non-key) columns. Defaults conceptually to 1; set
     /// higher for functions whose value compiles to multiple columns.
     pub num_values: usize,
-    /// Optional merge short-circuit on row IDENTITY. When `Some(k)`, a key
-    /// collision whose leading `k` value columns are unchanged is treated as a
-    /// no-op: the existing row is kept verbatim and the merge body is NOT
-    /// evaluated, so no side effects (table inserts, fresh constructor mints,
-    /// etc.) run. Any trailing value columns beyond the first `k` are
-    /// "passengers" carried along from the surviving row.
+    /// Optional merge short-circuit on row identity. When `Some(k)`, a key collision
+    /// whose leading `k` value columns are unchanged is a no-op: the existing row is
+    /// kept verbatim and the merge body (and its side effects) does not run. Trailing
+    /// value columns beyond the first `k` ride along from the surviving row.
     ///
-    /// `None` (the default) means no early short-circuit — the merge body always
-    /// runs, then the `changed` flag is computed from the result (the classic
-    /// behavior; preserved exactly for ordinary functions, including `Const`
-    /// merges where running the body on `cur == new` can still change the row).
+    /// `None` (the default) keeps the classic behavior: the merge body always runs and
+    /// `changed` is computed from the result (preserved exactly for ordinary functions,
+    /// including `Const` merges that can change the row even when `cur == new`).
     ///
-    /// The motivating case is the proof-encoding FD view, whose merge body MINTS
-    /// proof/term nodes as a side effect. Normal egglog short-circuits a merge
-    /// when `cur == new` (so a no-op collision mints nothing); the FD view must
-    /// match that even though its value carries an extra proof column (proof
-    /// mode: value `(output, proof)`, `Some(1)`) or runs a minting body for an
-    /// already-equal output (term mode: value `output`, `Some(1)`).
+    /// The motivating case is the proof-encoding FD view, whose merge body mints
+    /// proof/term nodes as a side effect; `Some(1)` lets it match normal egglog's
+    /// `cur == new` short-circuit despite carrying an extra proof column or minting body.
     pub identity_values: Option<usize>,
     /// The behavior of the function when lookups are made on keys not currently present.
     pub default: DefaultVal,
@@ -1101,13 +1095,10 @@ pub enum MergeFn {
     /// value of the last one. Models an action-block merge: the leading entries
     /// are effects (e.g. [`MergeFn::TableInsert`]) and the last is the value.
     Seq(Vec<MergeFn>),
-    /// Mint a pair-valued constructor inside a merge and return its output
-    /// e-class. `args` evaluate to the key (children); `value_args` evaluate to
-    /// the non-minted value columns (e.g. the proof). The first value column
-    /// (the output) is minted (`FreshId`); the rest are written from
-    /// `value_args`. Used by the FD proof encoding to create a nested
-    /// constructor term inside a custom function's `:merge` and use its e-class
-    /// as a child of the merged value. See [`TableAction::lookup_or_insert_multi`].
+    /// Mint a pair-valued constructor inside a merge and return its output e-class.
+    /// `args` evaluate to the key (children); the first value column (the output) is
+    /// minted (`FreshId`) and the rest are written from `value_args` (e.g. the proof).
+    /// Used by the FD proof encoding. See [`TableAction::lookup_or_insert_multi`].
     Construct(FunctionId, Vec<MergeFn>, Vec<MergeFn>),
 }
 
@@ -1179,20 +1170,14 @@ impl MergeFn {
 
             let mut changed = false;
 
-            // Identity-column short-circuit. When the function opts in
-            // (`identity_values == Some(k)`), a collision that leaves the
-            // leading `k` value columns unchanged is a no-op: keep the existing
-            // row's value columns verbatim and do NOT evaluate the merge body,
-            // so no side effects (table inserts, fresh mints) run. This mirrors
-            // normal egglog's `cur == new` short-circuit, but on the identity
-            // columns alone — the proof-encoding FD view sets `Some(1)` so a
-            // collision with an unchanged output keeps the existing proof
-            // (proof mode) / does not re-mint (term mode) rather than re-running
-            // the minting merge body. Ordinary functions leave this `None` and
-            // run the body unconditionally (the classic behavior).
+            // Identity-column short-circuit (`identity_values == Some(k)`): a collision
+            // leaving the leading `k` value columns unchanged keeps the existing row
+            // verbatim and skips the merge body, mirroring normal egglog's `cur == new`
+            // short-circuit on the identity columns alone. Ordinary functions use `None`
+            // and run the body unconditionally.
             //
-            // Subsumption (if any) is still combined, since it is independent of
-            // the value columns and must not be dropped.
+            // Subsumption is still combined here, since it is independent of the value
+            // columns.
             let identity_unchanged = schema_math
                 .identity_values
                 .is_some_and(|k| cur_vals[..k] == new_vals[..k]);
@@ -1412,8 +1397,8 @@ impl ResolvedMergeFn {
             ResolvedMergeFn::UnionId { uf_table } => {
                 if cur[0] != new[0] {
                     state.stage_insert(*uf_table, &[cur[0], new[0], ts]);
-                    // We pick the minimum when unioning. This matches the original egglog
-                    // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
+                    // Pick the minimum when unioning; this must match the original
+                    // egglog behavior and the union-find implementation.
                     std::cmp::min(cur[0], new[0])
                 } else {
                     cur[0]
@@ -1588,19 +1573,14 @@ impl TableAction {
         }
     }
 
-    /// Multi-value variant of [`TableAction::lookup_or_insert`] for a
-    /// pair-valued constructor `(children) -> (output, extra...)`: the FIRST
-    /// value column (`output`) is MINTED (the configured `FreshId` default),
-    /// and the remaining value columns are written from `provided_vals` (e.g.
-    /// the proof column). Returns the minted `output` (the first value column).
+    /// Multi-value variant of [`TableAction::lookup_or_insert`] for a pair-valued
+    /// constructor `(children) -> (output, extra...)`: the first value column
+    /// (`output`) is minted (the configured `FreshId` default) and the rest are written
+    /// from `provided_vals` (e.g. the proof). Returns the minted `output`.
     ///
-    /// Idempotent: if the key is already present, returns its existing `output`
-    /// and writes nothing — so it can be evaluated more than once (e.g. once in
-    /// the value position and once in a proof position) and yield the same id.
-    /// Because the minted columns and `provided_vals` are independent of the
-    /// minted id, there is no circularity (cf. the FD-merge `Construct`).
-    ///
-    /// This is a write operation — only safe in action/merge contexts.
+    /// Idempotent: an already-present key returns its existing `output` and writes
+    /// nothing, so it can be evaluated more than once and yield the same id. This is a
+    /// write operation, only safe in action/merge contexts.
     pub fn lookup_or_insert_multi(
         &self,
         state: &mut ExecutionState,
@@ -1913,7 +1893,6 @@ impl SchemaMath {
     }
 
     /// The column indices of the value (non-key) columns: `num_keys..func_cols`.
-    /// Used by the multi-value merge path (wired up next).
     #[allow(dead_code)]
     fn value_cols(&self) -> std::ops::Range<usize> {
         self.num_keys()..self.func_cols

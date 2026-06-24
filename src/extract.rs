@@ -773,11 +773,10 @@ impl Function {
         }
     }
 
-    /// Whether this is a "legacy" view table whose e-class lives in the last
-    /// input column (the old custom-function view shape). FD views — those whose
-    /// `term_constructor` refers to a constructor OR a primitive-bodied custom
-    /// function — keep the output in the value column and so behave like a regular
-    /// table for extraction.
+    /// Whether this is a "legacy" view table whose e-class lives in the last input
+    /// column (the old custom-function view shape). FD views — whose `term_constructor`
+    /// is a constructor or a primitive-bodied custom — keep the output in the value
+    /// column and behave like a regular table for extraction.
     fn is_legacy_view(&self, egraph: &EGraph) -> bool {
         match &self.decl.term_constructor {
             Some(tc) => {

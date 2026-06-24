@@ -1,9 +1,7 @@
 ; `:naive` widens a rule's contexts to Read/Full and skips the "no function
-; lookups in actions" check, so the RHS may read the database — including
-; function-table lookups. Unlike `:unsafe-seminaive` it re-matches the whole
-; database every iteration, so the read is safe. Function lookups in actions
-; aren't representable in the term/proof encoding, so this only runs on the
-; default backend.
+; lookups in actions" check, so the RHS may read the database. It re-matches the
+; whole database each iteration, so the read is safe. Action lookups aren't
+; representable in the term/proof encoding, so this only runs on the default backend.
 
 (function f (i64) i64 :merge (max old new))
 (set (f 1) 100)
