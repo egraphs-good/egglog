@@ -3180,11 +3180,26 @@ impl<'a> BackendRule<'a> {
                         // Alias the projection result directly to the value
                         // column entry (no extra var, no equality filter): every
                         // use of `result` now reads the indexed column.
-                        if let Some(existing) = self.entries.get(&result).cloned() {
-                            // Already bound elsewhere: constrain equal.
-                            self.rb.assert_eq_entries(existing, col_entry);
-                        } else {
-                            self.entries.insert(result, col_entry);
+                        //
+                        // A literal result (e.g. `(= n 5)` substituted `n := 5` so the
+                        // projection's result term is `5`) must NOT be aliased — that
+                        // would make the literal read the column value and silently drop
+                        // the equality constraint. Instead constrain the column equal to
+                        // the literal's constant. Likewise an already-bound var is
+                        // constrained equal rather than re-aliased.
+                        match &result {
+                            core::GenericAtomTerm::Literal(..) => {
+                                let lit_entry = self.entry(&result);
+                                self.rb.assert_eq_entries(lit_entry, col_entry);
+                            }
+                            _ => {
+                                if let Some(existing) = self.entries.get(&result).cloned() {
+                                    // Already bound elsewhere: constrain equal.
+                                    self.rb.assert_eq_entries(existing, col_entry);
+                                } else {
+                                    self.entries.insert(result, col_entry);
+                                }
+                            }
                         }
                         continue;
                     }

@@ -774,16 +774,24 @@ impl Function {
     }
 
     /// Whether this is a "legacy" view table whose e-class lives in the last
-    /// input column (the old custom-function view shape). FD views — those
-    /// whose `term_constructor` refers to a constructor — keep the e-class in
-    /// the value column and so behave like a regular table for extraction.
+    /// input column (the old custom-function view shape). FD views — those whose
+    /// `term_constructor` refers to a constructor OR a primitive-bodied custom
+    /// function — keep the output in the value column and so behave like a regular
+    /// table for extraction.
     fn is_legacy_view(&self, egraph: &EGraph) -> bool {
         match &self.decl.term_constructor {
-            Some(tc) => egraph
-                .functions
-                .get(tc)
-                .map(|f| f.decl.subtype != FunctionSubtype::Constructor)
-                .unwrap_or(false),
+            Some(tc) => {
+                // FD views (constructors + primitive-bodied customs recorded by the
+                // proof encoder) are not legacy.
+                if egraph.proof_state.fd_view_funcs.contains(tc) {
+                    return false;
+                }
+                egraph
+                    .functions
+                    .get(tc)
+                    .map(|f| f.decl.subtype != FunctionSubtype::Constructor)
+                    .unwrap_or(false)
+            }
             None => false,
         }
     }
