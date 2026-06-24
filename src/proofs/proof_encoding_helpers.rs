@@ -24,13 +24,28 @@ pub(crate) struct EncodingNames {
     pub(crate) fiat_constructor: String,
     pub(crate) rule_constructor: String,
     pub(crate) merge_fn_constructor: String,
+    /// Index-carrying term-free merge justification `(name p_old p_new idx)`. The
+    /// conclusion term is reconstructed during proof conversion from the two premise
+    /// proofs + evaluating subexpression `idx` of the merge body. `idx` is a
+    /// deterministic pre-order index identifying WHICH subexpression of the merge
+    /// body this proof is for, so nested merge-body subexpressions (which share the
+    /// same premises) are distinguishable. Used by the FD custom-function view merge,
+    /// which runs without the children (so it cannot embed the conclusion term).
+    pub(crate) merge_fn_idx_constructor: String,
+    /// Term-free merge justification `(name p_old p_new)` for the FD VIEW ROW
+    /// `f(children) = eval(whole merge body)`. The conclusion is reconstructed
+    /// during proof conversion from the two premise proofs (the colliding view
+    /// rows) + running the WHOLE merge body on their outputs. Unlike
+    /// `merge_fn_idx_constructor` (which proves a particular nested merge-body
+    /// SUBTERM exists), this proves the function's own view row, so it carries no
+    /// index. Emitted as the proof column of every FD pair-valued view's `:merge`.
+    pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
-    pub(crate) single_parent_ruleset_name: String,
     pub(crate) uf_function_index_ruleset_name: String,
     pub(crate) pcons: String,
     pub(crate) pnil: String,
@@ -52,8 +67,7 @@ pub(crate) struct EncodingNames {
 pub(crate) enum Justification {
     Rule(String, String), // rule name and proof list
     Fiat,
-    Proof(String),                 // existing proof
-    Merge(String, String, String), // function name, proof1, proof2
+    Proof(String), // existing proof
 }
 
 impl EncodingNames {
@@ -65,12 +79,13 @@ impl EncodingNames {
             fiat_constructor: symbol_gen.fresh("Fiat"),
             rule_constructor: symbol_gen.fresh("Rule"),
             merge_fn_constructor: symbol_gen.fresh("Merge"),
+            merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
+            merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
-            single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
             uf_function_index_ruleset_name: symbol_gen.fresh("uf_function_index"),
             pcons: symbol_gen.fresh("PCons"),
             pnil: symbol_gen.fresh("PNil"),
@@ -116,10 +131,20 @@ impl ProofInstrumentor<'_> {
     /// Returns the name of the Pair sort used to bundle (leader, proof) in the UF function index.
     /// Only used in proof mode.
     pub(crate) fn uf_pair_sort_name(&mut self, sort: &str) -> String {
-        self.egraph
-            .parser
-            .symbol_gen
-            .fresh(&format!("UFPair_{sort}"))
+        if let Some(name) = self.egraph.proof_state.uf_pair_sort.get(sort) {
+            name.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("UFPair_{sort}"));
+            self.egraph
+                .proof_state
+                .uf_pair_sort
+                .insert(sort.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
@@ -148,10 +173,8 @@ impl ProofInstrumentor<'_> {
              (ruleset {})
              (ruleset {})
              (ruleset {})
-             (ruleset {})
              (ruleset {})",
             self.proof_names().path_compress_ruleset_name,
-            self.proof_names().single_parent_ruleset_name,
             self.proof_names().uf_function_index_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,
@@ -360,6 +383,8 @@ impl ProofInstrumentor<'_> {
             ref fiat_constructor,
             ref rule_constructor,
             ref merge_fn_constructor,
+            ref merge_fn_idx_constructor,
+            ref merge_fn_row_constructor,
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
@@ -387,6 +412,19 @@ impl ProofInstrumentor<'_> {
 ;; merge function justification- name of function and two proofs for the two terms being merged,
 ;; and the proposition being justified t = t
 (constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype} {ast_sort}) {proof_datatype} :internal-hidden)
+
+;; index-carrying term-free merge function justification- name of function, two premise
+;; proofs, and a pre-order index identifying which subexpression of the merge body this
+;; proof is for. The conclusion term is reconstructed during proof conversion (from the
+;; premises + evaluating subexpression idx of the merge body), so it is not stored here.
+;; Used by the FD custom-function view merge.
+(constructor {merge_fn_idx_constructor} (String {proof_datatype} {proof_datatype} i64) {proof_datatype} :internal-hidden)
+
+;; term-free merge function justification for the FD VIEW ROW- name of function and the
+;; two premise proofs (the colliding view rows). The conclusion `f(children) = eval(body)`
+;; is reconstructed during proof conversion by running the WHOLE merge body on the premise
+;; outputs. Used as the proof column of every FD pair-valued view's :merge.
+(constructor {merge_fn_row_constructor} (String {proof_datatype} {proof_datatype}) {proof_datatype} :internal-hidden)
 
 ;; transitivity of equality proofs
 (constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype} :internal-hidden)

@@ -733,9 +733,11 @@ pub fn add_function(
         name: name.to_owned(),
         schema,
         merge,
+        merge_action: Default::default(),
         hidden: false,
         let_binding: false,
         term_constructor: None,
+        identity_values: None,
         unextractable: false,
     }])
 }
@@ -881,7 +883,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
 }
 
 #[derive(Debug)]
-struct ContainerSortImpl<T: ContainerSort>(T);
+pub(crate) struct ContainerSortImpl<T: ContainerSort>(pub(crate) T);
 
 impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     fn name(&self) -> &str {

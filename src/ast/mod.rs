@@ -141,9 +141,11 @@ where
                     schema: f.schema.clone(),
                     name: f.name.clone(),
                     merge: f.merge.clone(),
+                    merge_action: f.merge_action.clone(),
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
                     term_constructor: f.term_constructor.clone(),
+                    identity_values: f.identity_values,
                     unextractable: f.unextractable,
                 },
             },
@@ -700,9 +702,14 @@ where
         name: String,
         schema: Schema,
         merge: Option<GenericExpr<Head, Leaf>>,
+        /// Effect actions run before computing the merge value (block-form
+        /// `:merge`). Empty for the common single-expression merge.
+        merge_action: GenericActions<Head, Leaf>,
         hidden: bool,
         let_binding: bool,
         term_constructor: Option<String>,
+        /// Internal `:identity-values <n>` annotation (proof-encoding FD views).
+        identity_values: Option<usize>,
         unextractable: bool,
     },
 
@@ -979,14 +986,25 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => {
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
-                    write!(f, " :merge {merge}")?;
+                    if merge_action.0.is_empty() {
+                        write!(f, " :merge {merge}")?;
+                    } else {
+                        // block-form merge: an action sequence then the value
+                        write!(f, " :merge (")?;
+                        for action in &merge_action.0 {
+                            write!(f, "{action} ")?;
+                        }
+                        write!(f, "{merge})")?;
+                    }
                 } else {
                     write!(f, " :no-merge")?;
                 }
@@ -1001,6 +1019,9 @@ where
                 }
                 if let Some(tc) = term_constructor {
                     write!(f, " :internal-term-constructor {tc}")?;
+                }
+                if let Some(n) = identity_values {
+                    write!(f, " :identity-values {n}")?;
                 }
                 write!(f, ")")
             }
@@ -1250,6 +1271,9 @@ where
     /// Resolved schema after typechecking is stored here, otherwise "".
     pub resolved_schema: Head,
     pub merge: Option<GenericExpr<Head, Leaf>>,
+    /// Effect actions run before computing the merge value (block-form
+    /// `:merge`). Empty for the common single-expression merge.
+    pub merge_action: GenericActions<Head, Leaf>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
     /// Hidden functions are excluded from print-size output.
@@ -1262,6 +1286,12 @@ where
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
     pub term_constructor: Option<String>,
+    /// Internal annotation (`:identity-values <n>`) used only by proof-encoding
+    /// FD view tables. When `Some(k)`, a merge collision that leaves the leading
+    /// `k` value columns unchanged is treated as a no-op (the side-effecting
+    /// merge body is skipped). `None` (the default for all user functions) keeps
+    /// classic merge semantics: the merge body always runs.
+    pub identity_values: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1318,12 +1348,14 @@ impl FunctionDecl {
             schema,
             resolved_schema: String::new(),
             merge,
+            merge_action: Default::default(),
             cost: None,
             unextractable: true,
             internal_hidden: false,
             internal_let: false,
             span,
             term_constructor: None,
+            identity_values: None,
         }
     }
 
@@ -1342,12 +1374,14 @@ impl FunctionDecl {
             resolved_schema: String::new(),
             schema,
             merge: None,
+            merge_action: Default::default(),
             cost,
             unextractable,
             internal_hidden: hidden,
             internal_let: false,
             span,
             term_constructor: None,
+            identity_values: None,
         }
     }
 }
@@ -1367,12 +1401,14 @@ where
             schema: self.schema,
             resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
+            merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
             unextractable: self.unextractable,
             internal_hidden: self.internal_hidden,
             internal_let: self.internal_let,
             span: self.span,
             term_constructor: self.term_constructor,
+            identity_values: self.identity_values,
         }
     }
 }
@@ -1692,9 +1728,11 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => GenericCommand::Function {
                 span,
@@ -1704,9 +1742,11 @@ where
                     output: fun(schema.output),
                 },
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor: term_constructor.map(&mut *fun),
+                identity_values,
                 unextractable,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, fun(name)),
@@ -1786,18 +1826,22 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => GenericCommand::Function {
                 span,
                 name,
                 schema,
                 merge: merge.map(|e| e.visit_exprs(f)),
+                merge_action: merge_action.visit_exprs(f),
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             },
             GenericCommand::Rule { rule } => GenericCommand::Rule {
@@ -1925,18 +1969,22 @@ where
                 name,
                 schema,
                 merge,
+                merge_action,
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => GenericCommand::Function {
                 span,
                 name,
                 schema,
                 merge: merge.map(|expr| expr.map_symbols(head, leaf)),
+                merge_action: merge_action.map_symbols(head, leaf),
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),

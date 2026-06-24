@@ -190,8 +190,31 @@ impl Default for EGraph {
 
 /// Properties of a function added to an [`EGraph`].
 pub struct FunctionConfig {
-    /// The function's schema. The last column in the schema is the return type.
+    /// The function's schema. The last `num_values` columns are the value
+    /// (return) columns; the rest are keys.
     pub schema: Vec<ColumnTy>,
+    /// Number of value (non-key) columns. Defaults conceptually to 1; set
+    /// higher for functions whose value compiles to multiple columns.
+    pub num_values: usize,
+    /// Optional merge short-circuit on row IDENTITY. When `Some(k)`, a key
+    /// collision whose leading `k` value columns are unchanged is treated as a
+    /// no-op: the existing row is kept verbatim and the merge body is NOT
+    /// evaluated, so no side effects (table inserts, fresh constructor mints,
+    /// etc.) run. Any trailing value columns beyond the first `k` are
+    /// "passengers" carried along from the surviving row.
+    ///
+    /// `None` (the default) means no early short-circuit — the merge body always
+    /// runs, then the `changed` flag is computed from the result (the classic
+    /// behavior; preserved exactly for ordinary functions, including `Const`
+    /// merges where running the body on `cur == new` can still change the row).
+    ///
+    /// The motivating case is the proof-encoding FD view, whose merge body MINTS
+    /// proof/term nodes as a side effect. Normal egglog short-circuits a merge
+    /// when `cur == new` (so a no-op collision mints nothing); the FD view must
+    /// match that even though its value carries an extra proof column (proof
+    /// mode: value `(output, proof)`, `Some(1)`) or runs a minting body for an
+    /// already-equal output (term mode: value `output`, `Some(1)`).
+    pub identity_values: Option<usize>,
     /// The behavior of the function when lookups are made on keys not currently present.
     pub default: DefaultVal,
     /// How to resolve FD conflicts for the function.
@@ -335,6 +358,8 @@ impl EGraph {
             let schema_math = SchemaMath {
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
+                num_values: table_info.num_values,
+                identity_values: table_info.identity_values,
             };
             let table_id = table_info.table;
             extended_row.extend_from_slice(&row);
@@ -365,6 +390,8 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
@@ -391,6 +418,8 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let table_id = info.table;
         let table = self.db.get_table(table_id);
@@ -441,6 +470,8 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let imp = self.db.get_table(table);
         let all = imp.all();
@@ -507,11 +538,23 @@ impl EGraph {
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
         let FunctionConfig {
             schema,
+            num_values,
+            identity_values,
             default,
             merge,
             name,
             can_subsume,
         } = config;
+        assert!(
+            num_values >= 1 && num_values <= schema.len(),
+            "num_values must be >=1 and not exceed the column count"
+        );
+        if let Some(k) = identity_values {
+            assert!(
+                k >= 1 && k <= num_values,
+                "identity_values must be >=1 and not exceed num_values"
+            );
+        }
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -525,6 +568,8 @@ impl EGraph {
         let schema_math = SchemaMath {
             subsume: can_subsume,
             func_cols: schema.len(),
+            num_values,
+            identity_values,
         };
         let n_args = schema_math.num_keys();
         let n_cols = schema_math.table_columns();
@@ -551,6 +596,8 @@ impl EGraph {
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
+            num_values,
+            identity_values,
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
@@ -983,6 +1030,12 @@ struct CachedPlanInfo {
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
+    /// Number of value (non-key) columns; the last `num_values` columns of
+    /// `schema` are the function's value. Usually 1.
+    num_values: usize,
+    /// Optional merge short-circuit on row identity (see
+    /// [`FunctionConfig::identity_values`]).
+    identity_values: Option<usize>,
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
@@ -1008,6 +1061,7 @@ pub enum DefaultVal {
 }
 
 /// How to resolve FD conflicts for a table.
+#[derive(Clone)]
 pub enum MergeFn {
     /// Panic if the old and new values don't match.
     AssertEq,
@@ -1019,14 +1073,42 @@ pub enum MergeFn {
     /// The output of a merge is determined by looking up the value for the given function and the
     /// given arguments in the egraph.
     Function(FunctionId, Vec<MergeFn>),
-    /// Always return the old value for the given function.
+    /// Always return the old value for the given function (value column 0).
     Old,
-    /// Always return the new value for the given function.
+    /// Always return the new value for the given function (value column 0).
     New,
+    /// The old value of value column `i` (for multi-value functions). `Old` is
+    /// `OldCol(0)`.
+    OldCol(usize),
+    /// The new value of value column `i` (for multi-value functions). `New` is
+    /// `NewCol(0)`.
+    NewCol(usize),
+    /// A multi-value result: one merge function per value column. Used as the
+    /// top-level merge of a function with more than one value column; each
+    /// element may read any column via `OldCol`/`NewCol`. Not nested.
+    Tuple(Vec<MergeFn>),
     /// Always overwrite the new value for the given function with a constant. This is more useful
     /// as a "base case" in a more complicated merge function (e.g. one that clamps a value between
     /// 1 and 100) than it is as a standalone merge function.
     Const(Value),
+    /// Insert a row into the given function's table (the args evaluate to the
+    /// full row), respecting that table's own merge. Returns the old value
+    /// (its return is meant to be discarded inside a [`MergeFn::Seq`]). Used to
+    /// model a `(set (f ...) v)` action inside a merge; declares `f`'s table as
+    /// a write-dependency so the side write is safe during batched merges.
+    TableInsert(FunctionId, Vec<MergeFn>),
+    /// Evaluate each merge function in order (for their effects) and return the
+    /// value of the last one. Models an action-block merge: the leading entries
+    /// are effects (e.g. [`MergeFn::TableInsert`]) and the last is the value.
+    Seq(Vec<MergeFn>),
+    /// Mint a pair-valued constructor inside a merge and return its output
+    /// e-class. `args` evaluate to the key (children); `value_args` evaluate to
+    /// the non-minted value columns (e.g. the proof). The first value column
+    /// (the output) is minted (`FreshId`); the rest are written from
+    /// `value_args`. Used by the FD proof encoding to create a nested
+    /// constructor term inside a custom function's `:merge` and use its e-class
+    /// as a child of the merged value. See [`TableAction::lookup_or_insert_multi`].
+    Construct(FunctionId, Vec<MergeFn>, Vec<MergeFn>),
 }
 
 impl MergeFn {
@@ -1052,7 +1134,32 @@ impl MergeFn {
             UnionId => {
                 write_deps.insert(egraph.uf_table);
             }
-            AssertEq | Old | New | Const(..) => {}
+            TableInsert(func, args) => {
+                // The side write makes the target table a write-dependency, so
+                // its buffer is pre-allocated during batched merges (the whole
+                // reason this exists rather than a by-name primitive insert).
+                write_deps.insert(egraph.funcs[*func].table);
+                args.iter()
+                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
+            }
+            Seq(items) => {
+                items
+                    .iter()
+                    .for_each(|item| item.fill_deps(egraph, read_deps, write_deps));
+            }
+            Tuple(items) => {
+                items
+                    .iter()
+                    .for_each(|item| item.fill_deps(egraph, read_deps, write_deps));
+            }
+            Construct(func, args, value_args) => {
+                read_deps.insert(egraph.funcs[*func].table);
+                write_deps.insert(egraph.funcs[*func].table);
+                args.iter()
+                    .chain(value_args.iter())
+                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
+            }
+            AssertEq | Old | New | OldCol(_) | NewCol(_) | Const(..) => {}
         }
     }
 
@@ -1066,34 +1173,77 @@ impl MergeFn {
 
         Box::new(move |state, cur, new, out| {
             let timestamp = new[schema_math.ts_col()];
+            let vcols = schema_math.value_cols();
+            let cur_vals = &cur[vcols.clone()];
+            let new_vals = &new[vcols.clone()];
 
             let mut changed = false;
 
-            let ret_val = {
-                let cur = cur[schema_math.ret_val_col()];
-                let new = new[schema_math.ret_val_col()];
-                let out = resolved.run(state, cur, new, timestamp);
-                changed |= cur != out;
-                out
+            // Identity-column short-circuit. When the function opts in
+            // (`identity_values == Some(k)`), a collision that leaves the
+            // leading `k` value columns unchanged is a no-op: keep the existing
+            // row's value columns verbatim and do NOT evaluate the merge body,
+            // so no side effects (table inserts, fresh mints) run. This mirrors
+            // normal egglog's `cur == new` short-circuit, but on the identity
+            // columns alone — the proof-encoding FD view sets `Some(1)` so a
+            // collision with an unchanged output keeps the existing proof
+            // (proof mode) / does not re-mint (term mode) rather than re-running
+            // the minting merge body. Ordinary functions leave this `None` and
+            // run the body unconditionally (the classic behavior).
+            //
+            // Subsumption (if any) is still combined, since it is independent of
+            // the value columns and must not be dropped.
+            let identity_unchanged = schema_math
+                .identity_values
+                .is_some_and(|k| cur_vals[..k] == new_vals[..k]);
+            if identity_unchanged {
+                let subsume = schema_math.subsume.then(|| {
+                    let cur_s = cur[schema_math.subsume_col()];
+                    let new_s = new[schema_math.subsume_col()];
+                    let out_s = combine_subsumed(cur_s, new_s);
+                    changed |= cur_s != out_s;
+                    out_s
+                });
+                if changed {
+                    out.extend_from_slice(cur);
+                    out[schema_math.ts_col()] = timestamp;
+                    if let Some(subsume) = subsume {
+                        out[schema_math.subsume_col()] = subsume;
+                    }
+                }
+                return changed;
+            }
+
+            // Compute the merged value column(s). A `Tuple` merge produces one
+            // value per column (each may read any old/new column); any other
+            // merge is single-valued.
+            let merged: SmallVec<[Value; 2]> = match &resolved {
+                ResolvedMergeFn::Tuple(items) => items
+                    .iter()
+                    .map(|m| m.run(state, cur_vals, new_vals, timestamp))
+                    .collect(),
+                single => SmallVec::from_elem(single.run(state, cur_vals, new_vals, timestamp), 1),
             };
+            for (k, v) in merged.iter().enumerate() {
+                changed |= cur_vals[k] != *v;
+            }
 
             let subsume = schema_math.subsume.then(|| {
                 let cur = cur[schema_math.subsume_col()];
                 let new = new[schema_math.subsume_col()];
-                let out = combine_subsumed(cur, new);
-                changed |= cur != out;
-                out
+                let out_s = combine_subsumed(cur, new);
+                changed |= cur != out_s;
+                out_s
             });
             if changed {
                 out.extend_from_slice(new);
-                schema_math.write_table_row(
-                    out,
-                    RowVals {
-                        timestamp,
-                        subsume,
-                        ret_val: Some(ret_val),
-                    },
-                );
+                for (k, col) in vcols.enumerate() {
+                    out[col] = merged[k];
+                }
+                out[schema_math.ts_col()] = timestamp;
+                if let Some(subsume) = subsume {
+                    out[schema_math.subsume_col()] = subsume;
+                }
             }
 
             changed
@@ -1103,8 +1253,16 @@ impl MergeFn {
     fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> ResolvedMergeFn {
         match self {
             MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
-            MergeFn::Old => ResolvedMergeFn::Old,
-            MergeFn::New => ResolvedMergeFn::New,
+            MergeFn::Old => ResolvedMergeFn::OldCol(0),
+            MergeFn::New => ResolvedMergeFn::NewCol(0),
+            MergeFn::OldCol(i) => ResolvedMergeFn::OldCol(*i),
+            MergeFn::NewCol(i) => ResolvedMergeFn::NewCol(*i),
+            MergeFn::Tuple(items) => ResolvedMergeFn::Tuple(
+                items
+                    .iter()
+                    .map(|item| item.resolve(function_name, egraph))
+                    .collect(),
+            ),
             MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
                 panic: egraph.new_panic(format!(
                     "Illegal merge attempted for function {function_name}"
@@ -1147,6 +1305,46 @@ impl MergeFn {
                         .collect::<Vec<_>>(),
                 }
             }
+            MergeFn::TableInsert(func, args) => ResolvedMergeFn::TableInsert {
+                table: TableAction::new(egraph, *func),
+                args: args
+                    .iter()
+                    .map(|arg| arg.resolve(function_name, egraph))
+                    .collect::<Vec<_>>(),
+            },
+            MergeFn::Seq(items) => ResolvedMergeFn::Seq(
+                items
+                    .iter()
+                    .map(|item| item.resolve(function_name, egraph))
+                    .collect::<Vec<_>>(),
+            ),
+            MergeFn::Construct(func, args, value_args) => {
+                let func_info = &egraph.funcs[*func];
+                debug_assert_eq!(
+                    func_info.schema.len(),
+                    args.len() + func_info.num_values,
+                    "Construct for {function_name}: key arity must be schema minus value columns for {}",
+                    func_info.name
+                );
+                debug_assert_eq!(
+                    value_args.len() + 1,
+                    func_info.num_values,
+                    "Construct for {function_name}: value_args must fill every value column \
+                     except the minted output for {}",
+                    func_info.name
+                );
+                ResolvedMergeFn::Construct {
+                    table: TableAction::new(egraph, *func),
+                    args: args
+                        .iter()
+                        .map(|arg| arg.resolve(function_name, egraph))
+                        .collect::<Vec<_>>(),
+                    value_args: value_args
+                        .iter()
+                        .map(|arg| arg.resolve(function_name, egraph))
+                        .collect::<Vec<_>>(),
+                }
+            }
         }
     }
 }
@@ -1157,8 +1355,12 @@ impl MergeFn {
 /// holding onto any references, so it can be `move`d inside the `core_relations::MergeFn`.
 enum ResolvedMergeFn {
     Const(Value),
-    Old,
-    New,
+    /// Old value of value column `i`.
+    OldCol(usize),
+    /// New value of value column `i`.
+    NewCol(usize),
+    /// Per-value-column merges (top-level for multi-value functions).
+    Tuple(Vec<ResolvedMergeFn>),
     AssertEq {
         panic: ExternalFunctionId,
     },
@@ -1175,29 +1377,46 @@ enum ResolvedMergeFn {
         args: Vec<ResolvedMergeFn>,
         panic: ExternalFunctionId,
     },
+    TableInsert {
+        table: TableAction,
+        args: Vec<ResolvedMergeFn>,
+    },
+    Seq(Vec<ResolvedMergeFn>),
+    Construct {
+        table: TableAction,
+        args: Vec<ResolvedMergeFn>,
+        value_args: Vec<ResolvedMergeFn>,
+    },
 }
 
 impl ResolvedMergeFn {
-    fn run(&self, state: &mut ExecutionState, cur: Value, new: Value, ts: Value) -> Value {
+    /// Evaluate one value column's merge. `cur`/`new` are the old/new *value
+    /// tuples* (the value columns of the conflicting rows); single-value
+    /// functions pass a one-element slice, so `OldCol(0)`/`NewCol(0)` recover
+    /// the classic `old`/`new`.
+    fn run(&self, state: &mut ExecutionState, cur: &[Value], new: &[Value], ts: Value) -> Value {
         match self {
             ResolvedMergeFn::Const(v) => *v,
-            ResolvedMergeFn::Old => cur,
-            ResolvedMergeFn::New => new,
+            ResolvedMergeFn::OldCol(i) => cur[*i],
+            ResolvedMergeFn::NewCol(i) => new[*i],
+            ResolvedMergeFn::Tuple(_) => {
+                unreachable!("a Tuple merge is handled by to_callback, never nested/run directly")
+            }
             ResolvedMergeFn::AssertEq { panic } => {
                 if cur != new {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
                 }
-                cur
+                cur[0]
             }
             ResolvedMergeFn::UnionId { uf_table } => {
-                if cur != new {
-                    state.stage_insert(*uf_table, &[cur, new, ts]);
+                if cur[0] != new[0] {
+                    state.stage_insert(*uf_table, &[cur[0], new[0], ts]);
                     // We pick the minimum when unioning. This matches the original egglog
                     // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
-                    std::cmp::min(cur, new)
+                    std::cmp::min(cur[0], new[0])
                 } else {
-                    cur
+                    cur[0]
                 }
             }
             // NB: The primitive and function-based merge functions heap allocate a single callback
@@ -1215,14 +1434,14 @@ impl ResolvedMergeFn {
                     None => {
                         let res = state.call_external_func(*panic, &[]);
                         assert_eq!(res, None);
-                        cur
+                        cur[0]
                     }
                 }
             }
             ResolvedMergeFn::Function { func, args, panic } => {
                 // see github.com/egraphs-good/egglog/pull/287
                 if cur == new {
-                    return cur;
+                    return cur[0];
                 }
 
                 let args = args
@@ -1238,8 +1457,44 @@ impl ResolvedMergeFn {
                 func.lookup_or_insert(state, &args).unwrap_or_else(|| {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
-                    cur
+                    cur[0]
                 })
+            }
+            ResolvedMergeFn::TableInsert { table, args } => {
+                let row = args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<Vec<_>>();
+                // Insert respects the target table's own merge; the timestamp
+                // column is appended by `TableAction::insert`.
+                table.insert(state, row.into_iter());
+                // Return value is discarded by the enclosing `Seq`.
+                cur[0]
+            }
+            ResolvedMergeFn::Seq(items) => {
+                let mut result = cur[0];
+                for item in items {
+                    result = item.run(state, cur, new, ts);
+                }
+                result
+            }
+            ResolvedMergeFn::Construct {
+                table,
+                args,
+                value_args,
+            } => {
+                let key = args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<SmallVec<[Value; 4]>>();
+                let vals = value_args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<SmallVec<[Value; 4]>>();
+                // Constructor: always mints on miss, so this is `Some`.
+                table
+                    .lookup_or_insert_multi(state, &key, &vals)
+                    .unwrap_or(cur[0])
             }
         }
     }
@@ -1266,6 +1521,8 @@ impl TableAction {
             table_math: SchemaMath {
                 func_cols: func_info.schema.len(),
                 subsume: func_info.can_subsume,
+                num_values: func_info.num_values,
+                identity_values: func_info.identity_values,
             },
             default: match &func_info.default_val {
                 DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
@@ -1325,6 +1582,53 @@ impl TableAction {
                 Some(
                     state.predict_val(self.table, key, merge_vals.iter().copied())
                         [self.table_math.ret_val_col()],
+                )
+            }
+            None => self.lookup(state, key),
+        }
+    }
+
+    /// Multi-value variant of [`TableAction::lookup_or_insert`] for a
+    /// pair-valued constructor `(children) -> (output, extra...)`: the FIRST
+    /// value column (`output`) is MINTED (the configured `FreshId` default),
+    /// and the remaining value columns are written from `provided_vals` (e.g.
+    /// the proof column). Returns the minted `output` (the first value column).
+    ///
+    /// Idempotent: if the key is already present, returns its existing `output`
+    /// and writes nothing — so it can be evaluated more than once (e.g. once in
+    /// the value position and once in a proof position) and yield the same id.
+    /// Because the minted columns and `provided_vals` are independent of the
+    /// minted id, there is no circularity (cf. the FD-merge `Construct`).
+    ///
+    /// This is a write operation — only safe in action/merge contexts.
+    pub fn lookup_or_insert_multi(
+        &self,
+        state: &mut ExecutionState,
+        key: &[Value],
+        provided_vals: &[Value],
+    ) -> Option<Value> {
+        match self.default {
+            Some(default) => {
+                debug_assert_eq!(
+                    self.table_math.num_values,
+                    1 + provided_vals.len(),
+                    "lookup_or_insert_multi: provided_vals must fill every value \
+                     column except the minted first one"
+                );
+                let timestamp =
+                    MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
+                // Non-key columns, in order: [output (minted), provided.., ts, subsume?].
+                let mut merge_vals = SmallVec::<[MergeVal; 4]>::new();
+                merge_vals.push(default);
+                merge_vals.extend(provided_vals.iter().map(|v| MergeVal::Constant(*v)));
+                merge_vals.push(timestamp);
+                if self.table_math.subsume {
+                    merge_vals.push(MergeVal::Constant(NOT_SUBSUMED));
+                }
+                // The first value column is at `num_keys()`.
+                Some(
+                    state.predict_val(self.table, key, merge_vals.iter().copied())
+                        [self.table_math.num_keys()],
                 )
             }
             None => self.lookup(state, key),
@@ -1544,8 +1848,14 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 struct SchemaMath {
     /// Whether or not the table is enabled for subsumption.
     subsume: bool,
-    /// The number of columns in the function (including the return value).
+    /// The number of columns in the function (keys + all value columns).
     func_cols: usize,
+    /// The number of value (non-key) columns. Almost always 1; functions whose
+    /// value is compiled to multiple columns (e.g. an unboxed pair) have more.
+    num_values: usize,
+    /// Optional merge short-circuit on row identity (see
+    /// [`FunctionConfig::identity_values`]). `None` for ordinary functions.
+    identity_values: Option<usize>,
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with
@@ -1595,14 +1905,26 @@ impl SchemaMath {
     }
 
     fn num_keys(&self) -> usize {
-        self.func_cols - 1
+        self.func_cols - self.num_values
     }
 
     fn table_columns(&self) -> usize {
         self.func_cols + 1 /* timestamp */ + if self.subsume { 1 } else { 0 }
     }
 
+    /// The column indices of the value (non-key) columns: `num_keys..func_cols`.
+    /// Used by the multi-value merge path (wired up next).
+    #[allow(dead_code)]
+    fn value_cols(&self) -> std::ops::Range<usize> {
+        self.num_keys()..self.func_cols
+    }
+
+    /// The single value column. Only valid when `num_values == 1`.
     fn ret_val_col(&self) -> usize {
+        debug_assert_eq!(
+            self.num_values, 1,
+            "ret_val_col requires a single value column"
+        );
         self.func_cols - 1
     }
 

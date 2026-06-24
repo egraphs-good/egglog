@@ -46,7 +46,7 @@ use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_add_primitive::add_primitive_with_validator;
-use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
+use egglog_ast::generic_ast::{Change, GenericAction, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
@@ -482,10 +482,167 @@ impl Default for EGraph {
             if a > b { a } else { b }
         });
 
+        // `(select-eq a b x y)` returns `x` if `a == b` else `y`. Used in
+        // the FD-merge proof encoding to pick the orientation-correct proof
+        // (since a `:merge` expression cannot branch on `ordering-max`).
+        eg.add_pure_primitive(
+            SelectEq {
+                name: "select-eq".to_string(),
+            },
+            None,
+        );
+
+        // `(fd-mint (C children...) proof)` mints the pair-valued FD constructor
+        // `C` inside a `:merge`, returning C's output e-class so it can be used as
+        // a child of the merged value. The first argument is the constructor
+        // application (its sort is the result sort), the second is the existence
+        // proof written into C's view proof column. It only ever appears in
+        // encoder-generated merges (`Context::Write`); the lowering in
+        // `translate_pair_scalar_to_mergefn` intercepts it and emits
+        // `MergeFn::Construct`, so its runtime `apply` (returning the constructed
+        // value unchanged) is never reached during normal evaluation.
+        eg.add_pure_primitive(
+            FdMint {
+                name: "fd-mint".to_string(),
+            },
+            None,
+        );
+
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
 
         eg
+    }
+}
+
+/// `select-eq` primitive: `(select-eq a b x y)` returns `x` if `a == b`
+/// (value equality) else `y`.
+#[derive(Clone)]
+struct SelectEq {
+    name: String,
+}
+
+impl Primitive for SelectEq {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(SelectEqTypeConstraint {
+            name: self.name.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl PurePrim for SelectEq {
+    fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        if args[0] == args[1] {
+            Some(args[2])
+        } else {
+            Some(args[3])
+        }
+    }
+}
+
+/// Type constraint for `select-eq`: `[a, b, x, y, output]` with `a==b` the
+/// same sort and `x==y==output` the same sort.
+struct SelectEqTypeConstraint {
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for SelectEqTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // `[a, b, x, y, output]`
+        if arguments.len() != 5 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 5,
+                },
+            )];
+        }
+        vec![
+            constraint::eq(arguments[0].clone(), arguments[1].clone()),
+            constraint::eq(arguments[2].clone(), arguments[3].clone()),
+            constraint::eq(arguments[3].clone(), arguments[4].clone()),
+        ]
+    }
+}
+
+/// `fd-mint` primitive: `(fd-mint (C children...) proof)` mints the pair-valued
+/// FD constructor `C` inside a merge and returns its output e-class. See the
+/// registration site in `EGraph::default` for the full contract.
+#[derive(Clone)]
+struct FdMint {
+    name: String,
+}
+
+impl Primitive for FdMint {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(FdMintTypeConstraint {
+            name: self.name.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl PurePrim for FdMint {
+    fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        // Never reached during normal evaluation (lowering intercepts it). If it
+        // were, the constructed value is the first argument.
+        Some(args[0])
+    }
+}
+
+/// Type constraint for `fd-mint`: `[constructed, proof, output]` with
+/// `constructed == output` (the result is C's output sort). The proof argument's
+/// sort is left free (it is the generated proof datatype).
+struct FdMintTypeConstraint {
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for FdMintTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // `[viewname:String, constructed, proof?, output]`. The first argument is the
+        // FD view's name (a string literal), then the constructor application, then
+        // (proof mode only) the proof; the result sort equals the constructed value's
+        // sort (arg 1 == last). Arity 3 (term mode) or 4 (proof mode).
+        if arguments.len() != 3 && arguments.len() != 4 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 4,
+                },
+            )];
+        }
+        let last = arguments.len() - 1;
+        vec![
+            constraint::assign(arguments[0].clone(), StringSort.to_arcsort()),
+            constraint::eq(arguments[1].clone(), arguments[last].clone()),
+        ]
     }
 }
 
@@ -749,6 +906,123 @@ impl EGraph {
         }
     }
 
+    /// Lower a `(fd-mint (C children...) [proof])` form (the Phase B constructor-
+    /// minting surface form) into a `MergeFn`.
+    ///
+    /// The minted e-class lives in `C`'s FD VIEW table (`(children) -> (output[,
+    /// proof])`), which is what all fact/check lookups consult — so we target the VIEW
+    /// table's backend id. The minted e-class itself comes from the single-value
+    /// term-constructor `C` (which has the `FreshId` default), and the view row +
+    /// per-sort UF self-loop are written as side effects so the e-class is properly
+    /// registered (mirroring `add_term_and_view`). Returns the minted output e-class
+    /// for use as a child of the merged value.
+    ///
+    /// `pair_mode` selects how sub-arguments are lowered: pair-scalar projections in
+    /// proof mode (where the merge value is a pair), plain expressions in term mode.
+    fn fd_mint_to_mergefn(
+        &self,
+        args: &[ResolvedExpr],
+        pair_mode: bool,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        use egglog_bridge::MergeFn;
+        // `(fd-mint "viewname" (C children...) [proof])`.
+        let GenericExpr::Lit(_, Literal::String(view_name)) = &args[0] else {
+            return Err(Error::BackendError(
+                "fd-mint's first argument must be the FD view name (a string literal)".into(),
+            ));
+        };
+        let GenericExpr::Call(_, ResolvedCall::Func(c), child_args) = &args[1] else {
+            return Err(Error::BackendError(
+                "fd-mint's second argument must be a constructor application".into(),
+            ));
+        };
+        // The term constructor `C` (FreshId default) mints the e-class; the FD view
+        // table (named by the string literal, so this is self-contained on re-parse)
+        // records the children->output row that all lookups consult.
+        let term_backend_id = self
+            .functions
+            .get(&c.name)
+            .ok_or_else(|| {
+                Error::BackendError(format!("fd-mint: constructor `{}` not declared", c.name))
+            })?
+            .backend_id;
+        let view_backend_id = self
+            .functions
+            .get(view_name.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!("fd-mint: FD view `{view_name}` not declared"))
+            })?
+            .backend_id;
+        let lower = |a: &ResolvedExpr| {
+            if pair_mode {
+                self.translate_pair_scalar_to_mergefn(a)
+            } else {
+                self.translate_expr_to_mergefn(a)
+            }
+        };
+        let key = child_args
+            .iter()
+            .map(lower)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Extra value columns written into the view besides the minted output: the
+        // proof in proof mode (`(fd-mint "v" (C ..) proof)`), none in term mode.
+        let value_args = args[2..].iter().map(lower).collect::<Result<Vec<_>, _>>()?;
+        // The minted e-class. `Function` runs the term constructor's lookup_or_insert
+        // (FreshId), idempotent per children, so we can re-evaluate it for each use.
+        let minted = || MergeFn::Function(term_backend_id, key.clone());
+        // The view row: key children, then the minted output, then any extra columns.
+        let mut view_row = key.clone();
+        view_row.push(minted());
+        view_row.extend(value_args.iter().cloned());
+        // A normally-created constructor self-loops its output e-class into the
+        // per-sort UF table (`add_term_and_view`'s `(union out out proof)`), which
+        // `__uf_function_index` reads to canonicalize children during rebuild.
+        // Replicate that. The self-loop proof is the view's existence proof (the last
+        // value arg) in proof mode, or Unit in term mode.
+        let uf_table = self
+            .proof_state
+            .uf_parent
+            .get(c.output.name())
+            .and_then(|uf_name| self.functions.get(uf_name))
+            .map(|f| f.backend_id);
+        let self_loop_proof = match value_args.last() {
+            Some(p) => p.clone(),
+            None => MergeFn::Const(self.backend.base_values().get(())),
+        };
+        let mut effects = vec![MergeFn::TableInsert(view_backend_id, view_row)];
+        if let Some(uf_backend_id) = uf_table {
+            effects.push(MergeFn::TableInsert(
+                uf_backend_id,
+                vec![minted(), minted(), self_loop_proof.clone()],
+            ));
+        }
+        // In proof mode, `add_term_and_view` also records `term_proof(output) = proof`
+        // (the existence proof for the e-class), consulted for bare eq-sort variables
+        // in facts and by prove-exists. Replicate it here so the minted e-class is
+        // queryable. (Only eq-sort outputs have a `term_proof` table, and only proof
+        // mode has a proof to store — `value_args` is empty in term mode.)
+        //
+        // Source the term-proof table from `proof_func_parent` (the sort's
+        // `:internal-proof-func`), NOT `proof_names.term_proof_name`: the former is
+        // re-populated from the sort declaration whenever the program is parsed (so it
+        // survives the desugar-then-rerun round-trip), whereas the latter is only filled
+        // during on-the-fly proof instrumentation. Both name the SAME table for any
+        // eq-sort (proof encoding sets `:internal-proof-func` = `term_proof_name`).
+        if !value_args.is_empty()
+            && let Some(tp_name) = self.proof_state.proof_func_parent.get(c.output.name())
+            && let Some(tp) = self.functions.get(tp_name)
+        {
+            effects.push(MergeFn::TableInsert(
+                tp.backend_id,
+                vec![minted(), self_loop_proof],
+            ));
+        }
+        // Run the effects (write view row + UF self-loop + term_proof), then return
+        // the minted e-class.
+        effects.push(minted());
+        Ok(MergeFn::Seq(effects))
+    }
+
     fn translate_expr_to_mergefn(
         &self,
         expr: &ResolvedExpr,
@@ -775,6 +1049,13 @@ impl EGraph {
                 ))
             }
             GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                // Term-mode constructor minting inside a Phase B FD merge: the view is
+                // single-valued (no proof column), but the constructor STILL must be
+                // minted into its view (a plain `(C a b)` call would create only the
+                // term, not the view row that lookups consult).
+                if p.name() == "fd-mint" {
+                    return self.fd_mint_to_mergefn(args, false);
+                }
                 let mut translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
@@ -808,6 +1089,204 @@ impl EGraph {
         }
     }
 
+    /// Lower a (possibly block-form) merge into a backend [`MergeFn`].
+    ///
+    /// With no leading effect actions this is just the value expression. With
+    /// effect actions it becomes a `Seq` of the lowered actions followed by the
+    /// value, so the effects run (and declare their write-dependencies via
+    /// `TableInsert`) before the merged value is produced.
+    fn translate_merge_to_mergefn(
+        &self,
+        actions: &crate::ast::ResolvedActions,
+        value: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        if actions.0.is_empty() {
+            return self.translate_expr_to_mergefn(value);
+        }
+        let mut items = Vec::with_capacity(actions.0.len() + 1);
+        for action in &actions.0 {
+            items.push(self.translate_action_to_mergefn(action)?);
+        }
+        items.push(self.translate_expr_to_mergefn(value)?);
+        Ok(egglog_bridge::MergeFn::Seq(items))
+    }
+
+    /// Lower a single effect action from a block-form merge. Only `(set (f
+    /// ...) v)` on a function is supported (it becomes a `TableInsert`, which
+    /// declares `f`'s table as a write-dependency of this merge).
+    fn translate_action_to_mergefn(
+        &self,
+        action: &crate::ast::ResolvedAction,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        match action {
+            GenericAction::Set(_, ResolvedCall::Func(f), args, rhs) => {
+                let mut row = args
+                    .iter()
+                    .map(|arg| self.translate_expr_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                row.push(self.translate_expr_to_mergefn(rhs)?);
+                Ok(egglog_bridge::MergeFn::TableInsert(
+                    self.functions[&f.name].backend_id,
+                    row,
+                ))
+            }
+            _ => Err(Error::BackendError(
+                "only `(set (f ...) v)` actions are supported inside a `:merge` block".into(),
+            )),
+        }
+    }
+
+    /// Lower a (possibly block-form) merge for a PAIR-valued function. The
+    /// merge is written in terms of boxed pairs, but the backend stores two
+    /// value columns, so the merged value `(pair a b)` becomes a top-level
+    /// `Tuple([lower(a), lower(b)])` and `pair-first/second old/new` map to the
+    /// corresponding `OldCol/NewCol`.
+    fn translate_pair_merge_to_mergefn(
+        &self,
+        actions: &crate::ast::ResolvedActions,
+        value: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        use egglog_bridge::MergeFn;
+        // The merged value of a pair-valued function is two columns, so the
+        // top-level merge MUST be a `Tuple` (the backend only special-cases a
+        // top-level `Tuple`). The two per-column merges:
+        let (mut col0, col1) = self.translate_pair_value_cols(value)?;
+        if !actions.0.is_empty() {
+            // Run the block's effect actions (e.g. the UF `set`) exactly once,
+            // as a prelude to computing column 0, by wrapping it in a `Seq`
+            // that returns the column-0 value after the effects.
+            let mut items = Vec::with_capacity(actions.0.len() + 1);
+            for action in &actions.0 {
+                items.push(self.translate_pair_action_to_mergefn(action)?);
+            }
+            items.push(col0);
+            col0 = MergeFn::Seq(items);
+        }
+        Ok(MergeFn::Tuple(vec![col0, col1]))
+    }
+
+    /// Lower a pair-typed merge value expression into its two per-column
+    /// merges `(col0, col1)`.
+    fn translate_pair_value_cols(
+        &self,
+        value: &ResolvedExpr,
+    ) -> Result<(egglog_bridge::MergeFn, egglog_bridge::MergeFn), Error> {
+        use egglog_bridge::MergeFn;
+        match value {
+            GenericExpr::Var(_, v) if v.name.as_str() == "old" => {
+                Ok((MergeFn::OldCol(0), MergeFn::OldCol(1)))
+            }
+            GenericExpr::Var(_, v) if v.name.as_str() == "new" => {
+                Ok((MergeFn::NewCol(0), MergeFn::NewCol(1)))
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) if p.name() == "pair" => {
+                let a = self.translate_pair_scalar_to_mergefn(&args[0])?;
+                let b = self.translate_pair_scalar_to_mergefn(&args[1])?;
+                Ok((a, b))
+            }
+            _ => Err(Error::BackendError(
+                "the value of a `:merge` on a Pair-valued function must be `old`, `new`, \
+                 or a `(pair a b)` expression"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Lower a scalar (single-column) sub-expression of a pair-valued merge.
+    /// `(pair-first old)`/`(pair-second old)` (and `new`) become column reads;
+    /// everything else recurses generically.
+    fn translate_pair_scalar_to_mergefn(
+        &self,
+        expr: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        use egglog_bridge::MergeFn;
+        if let GenericExpr::Call(_, ResolvedCall::Primitive(p), args) = expr {
+            let proj = match p.name() {
+                "pair-first" => Some(0usize),
+                "pair-second" => Some(1usize),
+                _ => None,
+            };
+            if let (Some(col), GenericExpr::Var(_, v)) = (proj, &args[0]) {
+                match v.name.as_str() {
+                    "old" => return Ok(MergeFn::OldCol(col)),
+                    "new" => return Ok(MergeFn::NewCol(col)),
+                    _ => {}
+                }
+            }
+            if p.name() == "fd-mint" {
+                return self.fd_mint_to_mergefn(args, true);
+            }
+        }
+        match expr {
+            GenericExpr::Lit(_, literal) => {
+                Ok(MergeFn::Const(literal_to_value(&self.backend, literal)))
+            }
+            GenericExpr::Var(span, v) => {
+                // A bare `old`/`new` here would be a pair used as a scalar,
+                // which is unsupported; other vars are unbound.
+                Err(TypeError::Unbound(v.name.clone(), span.clone()).into())
+            }
+            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+                let translated = args
+                    .iter()
+                    .map(|a| self.translate_pair_scalar_to_mergefn(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MergeFn::Function(
+                    self.functions[&f.name].backend_id,
+                    translated,
+                ))
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                let translated = args
+                    .iter()
+                    .map(|a| self.translate_pair_scalar_to_mergefn(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MergeFn::Primitive(
+                    p.external_id(crate::Context::Write),
+                    translated,
+                ))
+            }
+        }
+    }
+
+    /// Lower a single effect action inside a pair-valued merge block. Only
+    /// `(set (f ...) v)` is supported; its arguments are scalar projections.
+    fn translate_pair_action_to_mergefn(
+        &self,
+        action: &crate::ast::ResolvedAction,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        match action {
+            GenericAction::Set(_, ResolvedCall::Func(f), args, rhs) => {
+                let mut row = args
+                    .iter()
+                    .map(|arg| self.translate_pair_scalar_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                row.push(self.translate_pair_scalar_to_mergefn(rhs)?);
+                Ok(egglog_bridge::MergeFn::TableInsert(
+                    self.functions[&f.name].backend_id,
+                    row,
+                ))
+            }
+            _ => Err(Error::BackendError(
+                "only `(set (f ...) v)` actions are supported inside a `:merge` block".into(),
+            )),
+        }
+    }
+
+    /// If `sort` is a `Pair` container sort, return its two component sorts.
+    /// A function whose output is a `Pair` is stored with TWO value columns
+    /// (one per component) instead of a single boxed container value.
+    pub(crate) fn pair_components(sort: &ArcSort) -> Option<(ArcSort, ArcSort)> {
+        // A `PairSort` is wrapped in a `ContainerSortImpl<PairSort>` when turned
+        // into an `ArcSort`, so downcast to the wrapper and read its inner sort.
+        let pair = sort
+            .clone()
+            .as_arc_any()
+            .downcast::<crate::prelude::ContainerSortImpl<PairSort>>()
+            .ok()?;
+        Some((pair.0.first(), pair.0.second()))
+    }
+
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
         let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
             Some(sort) => Ok(sort.clone()),
@@ -832,22 +1311,65 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
+        // Multi-value output: a function whose output sort is a `Pair`
+        // container is stored as TWO value columns (its component sorts)
+        // instead of one boxed container value.
+        let pair_output = Self::pair_components(&output);
+        let (num_values, value_col_sorts): (usize, Vec<&ArcSort>) = match &pair_output {
+            Some((first, second)) => (2, vec![first, second]),
+            None => (1, vec![&output]),
+        };
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+            num_values,
+            // Identity-column merge short-circuit. Only the proof-encoding FD
+            // view tables opt in (via the internal `:identity-values <n>`
+            // annotation, stamped during proof instrumentation): when `Some(k)`,
+            // a collision that leaves the leading `k` value columns unchanged is
+            // a no-op that must NOT run the (possibly minting) merge body. User
+            // functions carry no annotation and keep `None` — classic merge
+            // semantics, so a `:merge <literal>` (a `MergeFn::Const`) is never
+            // short-circuited.
+            identity_values: decl.identity_values,
             schema: input
                 .iter()
-                .chain([&output])
+                .chain(value_col_sorts)
                 .map(|sort| sort.column_ty(&self.backend))
                 .collect(),
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
             },
-            merge: match decl.subtype {
-                FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Custom => match &decl.merge {
-                    None => MergeFn::AssertEq,
-                    Some(expr) => self.translate_expr_to_mergefn(expr)?,
-                },
+            merge: {
+                // For the default merges (UnionId / AssertEq) a multi-value
+                // function applies the same per-column merge to each value
+                // column via a `Tuple`. Custom merges build their own
+                // (possibly tuple) merge in `translate_merge_to_mergefn`.
+                let default_multi = |mk: fn() -> MergeFn| -> MergeFn {
+                    if num_values == 1 {
+                        mk()
+                    } else {
+                        MergeFn::Tuple((0..num_values).map(|_| mk()).collect())
+                    }
+                };
+                match decl.subtype {
+                    FunctionSubtype::Constructor => default_multi(|| MergeFn::UnionId),
+                    FunctionSubtype::Custom => match &decl.merge {
+                        None => default_multi(|| MergeFn::AssertEq),
+                        Some(expr) => {
+                            if pair_output.is_some() {
+                                // Pair-valued function: the merge is written
+                                // over boxed pairs (`old`/`new`/`pair`/
+                                // `pair-first`/`pair-second`) but the backend
+                                // stores two columns, so lower it pair-aware
+                                // (the value becomes a `Tuple` of per-column
+                                // merges).
+                                self.translate_pair_merge_to_mergefn(&decl.merge_action, expr)?
+                            } else {
+                                self.translate_merge_to_mergefn(&decl.merge_action, expr)?
+                            }
+                        }
+                    },
+                }
             },
             name: decl.name.to_string(),
             can_subsume,
@@ -2420,9 +2942,25 @@ fn resolve_function_container_target_with_context(
     })
 }
 
+/// The two value-column entries bound for a pair-valued function call's
+/// result, plus the component sorts (for lazily boxing on a wholesale use).
+#[derive(Clone)]
+struct PairProjection {
+    col0: QueryEntry,
+    col1: QueryEntry,
+    first: ArcSort,
+    second: ArcSort,
+    pair_sort: ArcSort,
+}
+
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
+    /// For a query result var of a pair-valued function, the two value-column
+    /// entries it was bound to. Lets `pair-first`/`pair-second` of such a var
+    /// fuse to a direct column read (no box/unbox roundtrip) — important for
+    /// the rebuild rules, which canonicalize the output column.
+    pair_projections: HashMap<core::ResolvedAtomTerm, PairProjection>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
     /// Whether primitives may read the database. When true the per-phase
@@ -2445,6 +2983,7 @@ impl<'a> BackendRule<'a> {
             type_info,
             requires_read_context,
             entries: Default::default(),
+            pair_projections: Default::default(),
         }
     }
 
@@ -2476,6 +3015,23 @@ impl<'a> BackendRule<'a> {
     }
 
     fn entry(&mut self, x: &core::ResolvedAtomTerm) -> QueryEntry {
+        if let Some(existing) = self.entries.get(x) {
+            return existing.clone();
+        }
+        // A wholesale use of a pair-valued function result: lazily box its two
+        // value columns into a pair value (projections are fused elsewhere, so
+        // this only fires when the whole pair is actually needed).
+        if let Some(proj) = self.pair_projections.get(x).cloned() {
+            let boxed = self.box_pair_query_value(
+                proj.col0,
+                proj.col1,
+                &proj.first,
+                &proj.second,
+                &proj.pair_sort,
+            );
+            self.entries.insert(x.clone(), boxed.clone());
+            return boxed;
+        }
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
@@ -2492,6 +3048,109 @@ impl<'a> BackendRule<'a> {
 
     fn func(&self, f: &typechecking::FuncType) -> egglog_bridge::FunctionId {
         self.functions[&f.name].backend_id
+    }
+
+    /// If function `f`'s output sort is a `Pair` container, return
+    /// `(first_sort, second_sort, pair_sort)`. Such functions are stored with
+    /// two value columns; reads box the two columns back into a pair value and
+    /// writes unbox a pair value into the two columns.
+    fn pair_info(&self, f: &typechecking::FuncType) -> Option<(ArcSort, ArcSort, ArcSort)> {
+        let out = &f.output;
+        EGraph::pair_components(out).map(|(a, b)| (a, b, out.clone()))
+    }
+
+    /// Resolve a specialized `pair` family primitive (`pair` / `pair-first` /
+    /// `pair-second`) and return its external function id for `ctx`.
+    /// `in_sorts` are the argument sorts and `out_sort` is the result sort.
+    fn pair_prim_extid(
+        &self,
+        name: &str,
+        in_sorts: &[ArcSort],
+        out_sort: &ArcSort,
+        ctx: crate::Context,
+    ) -> ExternalFunctionId {
+        let mut types: Vec<ArcSort> = in_sorts.to_vec();
+        types.push(out_sort.clone());
+        match ResolvedCall::from_resolution(name, &types, self.type_info, ctx) {
+            ResolvedCall::Primitive(p) => p.external_id(ctx),
+            ResolvedCall::Func(_) => panic!("expected primitive resolution for {name}"),
+        }
+    }
+
+    /// Box two value-column entries into a fresh pair value on the query side
+    /// (via the `pair` primitive) and return the bound pair entry.
+    fn box_pair_query_value(
+        &mut self,
+        v0: QueryEntry,
+        v1: QueryEntry,
+        first: &ArcSort,
+        second: &ArcSort,
+        pair_sort: &ArcSort,
+    ) -> QueryEntry {
+        let ctx = self.query_context();
+        let ext = self.pair_prim_extid("pair", &[first.clone(), second.clone()], pair_sort, ctx);
+        let ty = pair_sort.column_ty(self.rb.egraph());
+        let result: QueryEntry = self.rb.new_var(ty).into();
+        self.rb
+            .query_prim(ext, &[v0, v1, result.clone()], ty)
+            .unwrap();
+        result
+    }
+
+    /// Unbox a `pair` value into its two component entries on the action side.
+    fn unbox_pair_action(
+        &mut self,
+        pair_val: QueryEntry,
+        first: &ArcSort,
+        second: &ArcSort,
+        pair_sort: &ArcSort,
+    ) -> (QueryEntry, QueryEntry) {
+        let ctx = self.action_context();
+        let first_ext =
+            self.pair_prim_extid("pair-first", std::slice::from_ref(pair_sort), first, ctx);
+        let second_ext =
+            self.pair_prim_extid("pair-second", std::slice::from_ref(pair_sort), second, ctx);
+        let v0 = self
+            .rb
+            .call_external_func(
+                first_ext,
+                std::slice::from_ref(&pair_val),
+                first.column_ty(self.rb.egraph()),
+                || "pair-first failed".to_string(),
+            )
+            .into();
+        let v1 = self
+            .rb
+            .call_external_func(
+                second_ext,
+                &[pair_val],
+                second.column_ty(self.rb.egraph()),
+                || "pair-second failed".to_string(),
+            )
+            .into();
+        (v0, v1)
+    }
+
+    /// If `prim` applied to `atom_args` is `pair-first`/`pair-second` of a
+    /// pair-valued function result that was recorded in `pair_projections`,
+    /// return `(value_col_index, projection, result_term)`. The primitive's
+    /// atom args are `[pair_arg, result]`.
+    fn pair_projection_fusion(
+        &self,
+        prim: &core::SpecializedPrimitive,
+        atom_args: &[core::ResolvedAtomTerm],
+    ) -> Option<(usize, PairProjection, core::ResolvedAtomTerm)> {
+        let col = match prim.name() {
+            "pair-first" => 0usize,
+            "pair-second" => 1usize,
+            _ => return None,
+        };
+        // The atom for `(pair-first p)` is `[p, result]`.
+        if atom_args.len() != 2 {
+            return None;
+        }
+        let proj = self.pair_projections.get(&atom_args[0])?.clone();
+        Some((col, proj, atom_args[1].clone()))
     }
 
     fn prim(
@@ -2548,18 +3207,97 @@ impl<'a> BackendRule<'a> {
     }
 
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+        // Pre-scan: record the value-column projection for every pair-valued
+        // function result, allocating its two column vars up front. This makes
+        // the `pair-first`/`pair-second` fusion below independent of atom order
+        // (a projection is always known before a primitive that consumes it).
+        for atom in &query.atoms {
+            if let ResolvedCall::Func(f) = &atom.head
+                && let Some((first, second, pair_sort)) = self.pair_info(f)
+            {
+                let result_term = atom
+                    .args
+                    .last()
+                    .expect("function atom must have a result term");
+                let v0: QueryEntry = self.rb.new_var(first.column_ty(self.rb.egraph())).into();
+                let v1: QueryEntry = self.rb.new_var(second.column_ty(self.rb.egraph())).into();
+                self.pair_projections.insert(
+                    result_term.clone(),
+                    PairProjection {
+                        col0: v0,
+                        col1: v1,
+                        first,
+                        second,
+                        pair_sort,
+                    },
+                );
+            }
+        }
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let f = self.func(f);
-                    let args = self.args(&atom.args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap();
+                    if let Some(proj) = self.pair_info(f).and(
+                        self.pair_projections
+                            .get(atom.args.last().unwrap())
+                            .cloned(),
+                    ) {
+                        // Pair-valued function: bind the two value columns
+                        // (pre-allocated in the projection) directly.
+                        let backend_f = self.func(f);
+                        let (_result_term, children) = atom
+                            .args
+                            .split_last()
+                            .expect("function atom must have a result term");
+                        let mut args = self.args(children);
+                        args.push(proj.col0.clone());
+                        args.push(proj.col1.clone());
+                        self.rb.query_table(backend_f, &args, is_subsumed).unwrap();
+                    } else {
+                        let backend_f = self.func(f);
+                        let args = self.args(&atom.args);
+                        self.rb.query_table(backend_f, &args, is_subsumed).unwrap();
+                    }
                 }
                 ResolvedCall::Primitive(p) => {
+                    // Fuse `pair-first`/`pair-second` of a pair-valued function
+                    // result directly to its bound value column, avoiding a
+                    // box/unbox roundtrip (keeps the output an indexed column
+                    // for fast rebuild canonicalization).
+                    if let Some((col, src, result)) = self.pair_projection_fusion(p, &atom.args) {
+                        let col_entry = match col {
+                            0 => src.col0,
+                            _ => src.col1,
+                        };
+                        // Alias the projection result directly to the value
+                        // column entry (no extra var, no equality filter): every
+                        // use of `result` now reads the indexed column.
+                        //
+                        // A literal result (e.g. `(= n 5)` substituted `n := 5` so the
+                        // projection's result term is `5`) must NOT be aliased — that
+                        // would make the literal read the column value and silently drop
+                        // the equality constraint. Instead constrain the column equal to
+                        // the literal's constant. Likewise an already-bound var is
+                        // constrained equal rather than re-aliased.
+                        match &result {
+                            core::GenericAtomTerm::Literal(..) => {
+                                let lit_entry = self.entry(&result);
+                                self.rb.assert_eq_entries(lit_entry, col_entry);
+                            }
+                            _ => {
+                                if let Some(existing) = self.entries.get(&result).cloned() {
+                                    // Already bound elsewhere: constrain equal.
+                                    self.rb.assert_eq_entries(existing, col_entry);
+                                } else {
+                                    self.entries.insert(result, col_entry);
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     let ctx = self.query_context();
                     let (p, args, ty) = self.prim(p, &atom.args, ctx);
                     self.rb.query_prim(p, &args, ty).unwrap()
@@ -2573,27 +3311,67 @@ impl<'a> BackendRule<'a> {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                    let y = match f {
+                    let y: QueryEntry = match f {
+                        ResolvedCall::Func(f) if self.pair_info(f).is_some() => {
+                            // Pair-valued function lookup: read both value
+                            // columns, then box them into a pair value.
+                            let (first, second, pair_sort) = self.pair_info(f).unwrap();
+                            let name = f.name.clone();
+                            let backend_f = self.func(f);
+                            let args = self.args(args);
+                            let sp0 = span.clone();
+                            let v0: QueryEntry = self
+                                .rb
+                                .lookup_value_col(backend_f, &args, 0, move || {
+                                    format!("{sp0}: lookup of function {name} failed")
+                                })
+                                .into();
+                            let name = f.name.clone();
+                            let sp1 = span.clone();
+                            let v1: QueryEntry = self
+                                .rb
+                                .lookup_value_col(backend_f, &args, 1, move || {
+                                    format!("{sp1}: lookup of function {name} failed")
+                                })
+                                .into();
+                            let ctx = self.action_context();
+                            let ext = self.pair_prim_extid(
+                                "pair",
+                                &[first.clone(), second.clone()],
+                                &pair_sort,
+                                ctx,
+                            );
+                            let ty = pair_sort.column_ty(self.rb.egraph());
+                            self.rb
+                                .call_external_func(ext, &[v0, v1], ty, || {
+                                    "pair construction failed".to_string()
+                                })
+                                .into()
+                        }
                         ResolvedCall::Func(f) => {
                             let name = f.name.clone();
                             let f = self.func(f);
                             let args = self.args(args);
                             let span = span.clone();
-                            self.rb.lookup(f, &args, move || {
-                                format!("{span}: lookup of function {name} failed")
-                            })
+                            self.rb
+                                .lookup(f, &args, move || {
+                                    format!("{span}: lookup of function {name} failed")
+                                })
+                                .into()
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
                             let ctx = self.action_context();
                             let (p, args, ty) = self.prim(p, args, ctx);
                             let span = span.clone();
-                            self.rb.call_external_func(p, &args, ty, move || {
-                                format!("{span}: call of primitive {name} failed")
-                            })
+                            self.rb
+                                .call_external_func(p, &args, ty, move || {
+                                    format!("{span}: call of primitive {name} failed")
+                                })
+                                .into()
                         }
                     };
-                    self.entries.insert(v, y.into());
+                    self.entries.insert(v, y);
                 }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
@@ -2603,9 +3381,21 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Set(_, f, xs, y) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive set!"),
                     ResolvedCall::Func(f) => {
-                        let f = self.func(f);
-                        let args = self.args(xs.iter().chain([y]));
-                        self.rb.set(f, &args)
+                        if let Some((first, second, pair_sort)) = self.pair_info(f) {
+                            // Pair-valued function: unbox the single value `y`
+                            // into the two component value columns.
+                            let backend_f = self.func(f);
+                            let mut args = self.args(xs.iter());
+                            let yv = self.entry(y);
+                            let (v0, v1) = self.unbox_pair_action(yv, &first, &second, &pair_sort);
+                            args.push(v0);
+                            args.push(v1);
+                            self.rb.set(backend_f, &args)
+                        } else {
+                            let backend_f = self.func(f);
+                            let args = self.args(xs.iter().chain([y]));
+                            self.rb.set(backend_f, &args)
+                        }
                     }
                 },
                 core::GenericCoreAction::Change(span, change, f, args) => match f {
@@ -3109,6 +3899,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res[0].to_string(), "(expensive)\n");
+    }
+
+    #[test]
+    fn test_user_merge_not_identity_short_circuited() {
+        // A user function whose `:merge` body changes the value even when the
+        // new value equals the old one. The proof-encoding FD views opt into a
+        // backend identity-column short-circuit via the internal
+        // `:identity-values` annotation; ORDINARY user functions must NOT get
+        // that annotation (`identity_values == None`), so their merge body always
+        // runs. Here re-setting the SAME value must still increment via the
+        // merge, proving the merge was not short-circuited.
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function counter () i64 :merge (+ old 1))
+                (set (counter) 5)
+                (set (counter) 5)
+                (check (= (counter) 6))
+                "#,
+            )
+            .unwrap();
+
+        // Sanity: the same key inserted with an equal value collides and the
+        // merge runs (classic behavior). Were it short-circuited (as a universal
+        // `Some(1)` would do), `(counter)` would stay 5 and this check would fail.
+        egraph
+            .parse_and_run_program(None, "(check (!= (counter) 5))")
+            .unwrap();
     }
 
     #[test]

@@ -131,6 +131,7 @@ impl EGraph {
             &Function,
             Vec<Value>, // inputs
             Value,      // output
+            ArcSort,    // output sort (pair-first component for pair views)
             bool,       // is subsumed
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
@@ -148,8 +149,22 @@ impl EGraph {
                     truncated_functions.push(name.clone());
                     return false;
                 }
-                let (out, inps) = row.vals.split_last().unwrap();
-                let class_id = self.value_to_class_id(&function.schema.output, *out);
+                // For a pair-valued function (two value columns) the real
+                // output (eclass) is the first value column; the proof rides in
+                // the second. Serialize using the first value column and its
+                // component sort.
+                let (out, inps, out_sort) = if let Some((first, _second)) =
+                    EGraph::pair_components(&function.schema.output)
+                {
+                    let n = row.vals.len();
+                    let out = &row.vals[n - 2];
+                    let inps = &row.vals[..n - 2];
+                    (out, inps, first)
+                } else {
+                    let (out, inps) = row.vals.split_last().unwrap();
+                    (out, inps, function.schema.output.clone())
+                };
+                let class_id = self.value_to_class_id(&out_sort, *out);
                 if function.decl.internal_let {
                     let_bindings
                         .entry(class_id.clone())
@@ -160,6 +175,7 @@ impl EGraph {
                         function,
                         inps.to_vec(),
                         *out,
+                        out_sort.clone(),
                         row.subsumed,
                         class_id,
                         self.to_node_id(
@@ -185,8 +201,8 @@ impl EGraph {
         // amoung all possible options.
         let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
-            |mut acc, (func, _input, _output, _subsumed, class_id, node_id)| {
-                if func.schema.output.is_eq_sort() {
+            |mut acc, (_func, _input, _output, out_sort, _subsumed, class_id, node_id)| {
+                if out_sort.is_eq_sort() {
                     acc.entry(class_id.clone())
                         .or_default()
                         .push_back(node_id.clone());
@@ -201,8 +217,8 @@ impl EGraph {
             let_bindings,
         };
 
-        for (func, input, output, subsumed, class_id, node_id) in all_calls {
-            self.serialize_value(&mut serializer, &func.schema.output, output, &class_id);
+        for (func, input, output, out_sort, subsumed, class_id, node_id) in all_calls {
+            self.serialize_value(&mut serializer, &out_sort, output, &class_id);
 
             assert_eq!(input.len(), func.schema.input.len());
             let children: Vec<_> = input

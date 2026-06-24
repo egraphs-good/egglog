@@ -171,6 +171,16 @@ impl RuleBuilder<'_> {
         self.egraph
     }
 
+    /// Constrain two query entries to be equal.
+    pub fn assert_eq_entries(&mut self, l: QueryEntry, r: QueryEntry) {
+        self.add_callback(move |inner, rb| {
+            let l = inner.convert(&l);
+            let r = inner.convert(&r);
+            rb.assert_eq(l, r);
+            Ok(())
+        });
+    }
+
     /// Register a runtime panic with a custom message and return its
     /// id. When called via [`call_external_func`], the panic writes
     /// the message to the egraph's panic side channel and triggers
@@ -360,11 +370,15 @@ impl RuleBuilder<'_> {
             SchemaMath {
                 subsume: info.can_subsume,
                 func_cols: info.schema.len(),
+                num_values: info.num_values,
+                identity_values: info.identity_values,
             }
         } else {
             SchemaMath {
                 subsume: subsume_entry.is_some(),
                 func_cols: entries.len(),
+                num_values: 1,
+                identity_values: None,
             }
         };
         schema_math.write_table_row(
@@ -473,6 +487,18 @@ impl RuleBuilder<'_> {
     ///
     /// `entries` should match the number of keys to the function.
     pub fn subsume(&mut self, func: FunctionId, entries: &[QueryEntry]) {
+        let info = &self.egraph.funcs[func];
+        assert!(info.can_subsume);
+        if info.num_values == 1 {
+            self.subsume_single_value(func, entries);
+        } else {
+            self.subsume_multi_value(func, entries);
+        }
+    }
+
+    /// Single-value subsume: insert a subsumed row if the tuple is new (via
+    /// `lookup_with_subsumed` with `SUBSUMED`), then re-insert it subsumed.
+    fn subsume_single_value(&mut self, func: FunctionId, entries: &[QueryEntry]) {
         // First, insert a subsumed value if the tuple is new.
         let ret = self.lookup_with_subsumed(
             func,
@@ -487,16 +513,14 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
         };
-        assert!(info.can_subsume);
         assert_eq!(entries.len() + 1, info.schema.len());
         let entries = entries.to_vec();
         let table = info.table;
-
         let ret: QueryEntry = ret.into();
         self.add_callback(move |inner, rb| {
-            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
-            // Look up the current subsume value.
             let mut dst_entries = inner.convert_all(&entries);
             let cur_subsume_val = rb.lookup(
                 table,
@@ -509,6 +533,72 @@ impl RuleBuilder<'_> {
                     timestamp: inner.next_ts(),
                     subsume: Some(SUBSUMED.into()),
                     ret_val: Some(inner.convert(&ret)),
+                },
+            );
+            rb.insert_if_eq(
+                table,
+                cur_subsume_val.into(),
+                NOT_SUBSUMED.into(),
+                &dst_entries,
+            )?;
+            Ok(())
+        });
+    }
+
+    /// Multi-value subsume: read each value column (inserting a subsumed
+    /// default row if the tuple is new), then re-insert the row subsumed.
+    fn subsume_multi_value(&mut self, func: FunctionId, entries: &[QueryEntry]) {
+        let info = &self.egraph.funcs[func];
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
+        };
+        assert_eq!(
+            entries.len(),
+            schema_math.num_keys(),
+            "subsume expects the key columns of {func:?}"
+        );
+        // Read back each value column, inserting a SUBSUMED default row if the
+        // tuple is new so that a fresh subsume is honored.
+        let value_vals: Vec<QueryEntry> = (0..info.num_values)
+            .map(|i| {
+                self.lookup_value_col_with_subsumed(
+                    func,
+                    entries,
+                    i,
+                    QueryEntry::Const {
+                        val: SUBSUMED,
+                        ty: ColumnTy::Id,
+                    },
+                    || "subsumed a nonexistent row!".to_string(),
+                )
+                .into()
+            })
+            .collect();
+        let table = self.egraph.funcs[func].table;
+        let entries = entries.to_vec();
+
+        self.add_callback(move |inner, rb| {
+            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
+            // Look up the current subsume value.
+            let mut dst_entries = inner.convert_all(&entries);
+            let cur_subsume_val = rb.lookup(
+                table,
+                &dst_entries,
+                ColumnId::from_usize(schema_math.subsume_col()),
+            )?;
+            // Append the value columns, then timestamp + subsume flag.
+            for v in &value_vals {
+                dst_entries.push(inner.convert(v));
+            }
+            schema_math.write_table_row(
+                &mut dst_entries,
+                RowVals {
+                    timestamp: inner.next_ts(),
+                    subsume: Some(SUBSUMED.into()),
+                    ret_val: None,
                 },
             );
             rb.insert_if_eq(
@@ -543,6 +633,8 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         let cb: BuildRuleCallback = match info.default_val {
             DefaultVal::Const(_) | DefaultVal::FreshId => {
@@ -622,6 +714,113 @@ impl RuleBuilder<'_> {
         )
     }
 
+    /// Look up a single value column (`value_col`, 0-based among the value
+    /// columns) of a multi-value function. Like [`Self::lookup`] but selects an
+    /// arbitrary value column rather than asserting a single value column.
+    pub fn lookup_value_col(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        value_col: usize,
+        panic_msg: impl FnOnce() -> String + Send + 'static,
+    ) -> Variable {
+        self.lookup_value_col_with_subsumed(
+            func,
+            entries,
+            value_col,
+            QueryEntry::Const {
+                val: NOT_SUBSUMED,
+                ty: ColumnTy::Id,
+            },
+            panic_msg,
+        )
+    }
+
+    /// Like [`Self::lookup_value_col`] but uses `subsumed` for the subsume
+    /// column when inserting a default row for a missing tuple.
+    pub(crate) fn lookup_value_col_with_subsumed(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        value_col: usize,
+        subsumed: QueryEntry,
+        panic_msg: impl FnOnce() -> String + Send + 'static,
+    ) -> Variable {
+        let entries = entries.to_vec();
+        let info = &self.egraph.funcs[func];
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
+        };
+        let dst_col = schema_math.num_keys() + value_col;
+        let ret_ty = info.schema[dst_col];
+        let res = self
+            .query
+            .vars
+            .push(VarInfo {
+                ty: ret_ty,
+                name: None,
+            })
+            .to_var();
+        let table = info.table;
+        let id_counter = self.query.id_counter;
+        let cb: BuildRuleCallback = match info.default_val {
+            DefaultVal::Const(_) | DefaultVal::FreshId => {
+                let wv: WriteVal = match &info.default_val {
+                    DefaultVal::Const(c) => (*c).into(),
+                    DefaultVal::FreshId => WriteVal::IncCounter(id_counter),
+                    _ => unreachable!(),
+                };
+                let get_write_vals = move |inner: &mut Bindings| {
+                    let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
+                    for i in schema_math.num_keys()..schema_math.table_columns() {
+                        if i == schema_math.ts_col() {
+                            write_vals.push(inner.next_ts().into());
+                        } else if schema_math.subsume && i == schema_math.subsume_col() {
+                            write_vals.push(inner.convert(&subsumed).into());
+                        } else if schema_math.value_cols().contains(&i) {
+                            write_vals.push(wv);
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    write_vals
+                };
+                Box::new(move |inner, rb| {
+                    let write_vals = get_write_vals(inner);
+                    let dst_vars = inner.convert_all(&entries);
+                    let var = rb.lookup_or_insert(
+                        table,
+                        &dst_vars,
+                        &write_vals,
+                        ColumnId::from_usize(dst_col),
+                    )?;
+                    inner.mapping.insert(res.id, var.into());
+                    Ok(())
+                })
+            }
+            DefaultVal::Fail => {
+                let panic_func = self.egraph.new_panic_lazy(panic_msg);
+                Box::new(move |inner, rb| {
+                    let dst_vars = inner.convert_all(&entries);
+                    let var = rb.lookup_with_fallback(
+                        table,
+                        &dst_vars,
+                        ColumnId::from_usize(dst_col),
+                        panic_func,
+                        &[],
+                    )?;
+                    inner.mapping.insert(res.id, var.into());
+                    Ok(())
+                })
+            }
+        };
+        self.query.add_rule.push(cb);
+        res
+    }
+
     /// Merge the two values in the union-find.
     pub fn union(&mut self, l: QueryEntry, r: QueryEntry) {
         self.query.add_rule.push(Box::new(move |inner, rb| {
@@ -676,6 +875,8 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            num_values: info.num_values,
+            identity_values: info.identity_values,
         };
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);

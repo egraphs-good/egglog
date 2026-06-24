@@ -73,6 +73,75 @@ pub(crate) fn run_merge(
     .into())
 }
 
+/// Find the subexpression at pre-order position `idx` in `expr`'s tree.
+///
+/// The traversal visits a node, then recurses left-to-right into its children
+/// (for `Call` arguments). Index 0 is `expr` itself. This MUST mirror the index
+/// scheme used by the proof encoder when it tags `MergeFnIdx` proofs.
+fn subexpr_at_index(expr: &ResolvedExpr, idx: usize) -> Option<&ResolvedExpr> {
+    let mut counter = 0;
+    fn walk<'a>(
+        expr: &'a ResolvedExpr,
+        target: usize,
+        counter: &mut usize,
+    ) -> Option<&'a ResolvedExpr> {
+        if *counter == target {
+            return Some(expr);
+        }
+        *counter += 1;
+        if let ResolvedExpr::Call(_, _, args) = expr {
+            for arg in args {
+                if let Some(found) = walk(arg, target, counter) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+    walk(expr, idx, &mut counter)
+}
+
+/// Run subexpression `idx` of a function's merge body and return the resulting
+/// term plus propositions learned. `idx` is a pre-order index over the merge body
+/// expression tree (see [`subexpr_at_index`]); `idx == 0` is the whole body.
+///
+/// `old`/`new` are bound to `old_term`/`new_term`. Evaluating the subexpression
+/// reconstructs the term that the FD custom-function view merge minted at that
+/// position, so each nested merge-body subexpression yields its own conclusion.
+pub(crate) fn run_merge_subexpr(
+    term_dag: &mut TermDag,
+    func_name: &str,
+    prog: &[ResolvedNCommand],
+    old_term: TermId,
+    new_term: TermId,
+    idx: usize,
+) -> Result<(TermId, HashSet<Proposition>), ProofCheckError> {
+    let mut subst = HashMap::default();
+    subst.insert("old".to_string(), old_term);
+    subst.insert("new".to_string(), new_term);
+    for cmd in prog {
+        if let GenericNCommand::Function(func_decl) = cmd
+            && func_decl.name == func_name
+        {
+            let expr = func_decl.merge.as_ref().ok_or_else(|| {
+                ProofCheckError::from(ProofCheckErrorKind::FunctionNotFound {
+                    function_name: func_name.to_string(),
+                })
+            })?;
+            let subexpr = subexpr_at_index(expr, idx).ok_or_else(|| {
+                ProofCheckError::from(ProofCheckErrorKind::FunctionNotFound {
+                    function_name: format!("{func_name} (merge subexpr index {idx} out of range)"),
+                })
+            })?;
+            return eval_expr_with_subst("merge_function", subexpr, term_dag, &subst);
+        }
+    }
+    Err(ProofCheckErrorKind::FunctionNotFound {
+        function_name: func_name.to_string(),
+    }
+    .into())
+}
+
 /// Given a sequence of actions, computes:
 /// 1. All the terms bound to variables (from Let actions)
 /// 2. All the propositions implied by the actions:

@@ -90,12 +90,14 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                     },
                     resolved_schema: resolved_call.clone(),
                     merge: None,
+                    merge_action: Default::default(),
                     cost: None,
                     unextractable: true,
                     internal_hidden: false,
                     internal_let: true,
                     span: span.clone(),
                     term_constructor: None,
+                    identity_values: None,
                 };
                 vec![
                     GenericNCommand::Function(func_decl),
