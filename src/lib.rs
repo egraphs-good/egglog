@@ -3707,6 +3707,22 @@ mod tests {
         }
     }
 
+    /// A merge runs in `Context::Write`, so a primitive that READS the database (a
+    /// `Read`/`Full`-context primitive) has no `Write` entrypoint and using it in a
+    /// `:merge` is rejected by the context-id filtering — merges are pure writes.
+    #[test]
+    fn read_primitive_in_merge_is_rejected() {
+        let mut egraph = EGraph::default();
+        egraph.add_full_primitive(FullOnly, None);
+        let err = egraph
+            .resolve_program(None, "(function f () i64 :merge (full-only))")
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::TypeError(TypeError::UnboundFunction(name, _)) if name == "full-only"),
+            "a DB-reading primitive in :merge must be rejected, got {err:?}"
+        );
+    }
+
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_rejects_duplicate_bindings() {
         let mut egraph = EGraph::default();
