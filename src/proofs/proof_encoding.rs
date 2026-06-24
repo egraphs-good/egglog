@@ -575,9 +575,9 @@ impl<'a> ProofInstrumentor<'a> {
             // `old`/`new` in the user merge body refer to the OUTPUT value, which in
             // the pair-view lives in `(pair-first old)`/`(pair-first new)`.
             let body = Self::render_merge_on_pair_first(merge);
-            let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
-            // The proof column. `MergeIdx(..., 0)` reconstructs the top view row
-            // `f(inputs..., merged)` by evaluating the merge body on the premise
+            let merge_row = self.proof_names().merge_fn_row_constructor.clone();
+            // The proof column. `MergeRow` reconstructs the top view row
+            // `f(inputs..., merged)` by evaluating the WHOLE merge body on the premise
             // outputs.
             //
             // STABILITY: when the merged output equals one of the premise outputs
@@ -586,8 +586,8 @@ impl<'a> ProofInstrumentor<'a> {
             // the surviving row and the merge does not re-fire forever. Using
             // `select-eq` keeps the OLD pair when `merged == (pair-first old)`, the NEW
             // pair's proof when `merged == (pair-first new)`, and otherwise (a value
-            // distinct from both premises) mints a fresh `MergeIdx` justification.
-            let fresh = format!("({merge_idx} \"{fname}\" (pair-second old) (pair-second new) 0)");
+            // distinct from both premises) mints a fresh `MergeRow` justification.
+            let fresh = format!("({merge_row} \"{fname}\" (pair-second old) (pair-second new))");
             let proof = format!(
                 "(select-eq {body} (pair-first old) (pair-second old) \
                   (select-eq {body} (pair-first new) (pair-second new) {fresh}))"
