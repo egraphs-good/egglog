@@ -785,10 +785,10 @@ impl Database {
         col: ColumnId,
         value: Value,
         cols: &[ColumnId],
-        start: Offset,
-        n: usize,
+        window: (Offset, usize),
         out: &mut TaggedRowBuffer<V>,
     ) -> Option<Offset> {
+        let (start, n) = window;
         let constraint = Constraint::EqConst { col, val: value };
         let processed = self.process_constraints(table, &[constraint]);
         self.get_table(table).scan_project(

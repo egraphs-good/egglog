@@ -509,9 +509,9 @@ impl EGraph {
             };
         }
 
-        while let Some(next) = self
-            .db
-            .scan_matching_col_project(table, col, value, &cols, cur, 1024, &mut buf)
+        while let Some(next) =
+            self.db
+                .scan_matching_col_project(table, col, value, &cols, (cur, 1024), &mut buf)
         {
             drain_buf!(buf);
             cur = next;
