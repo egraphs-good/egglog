@@ -115,6 +115,7 @@ impl GlobalRemover<'_> {
                         internal_let: true,
                         span: span.clone(),
                         term_constructor: None,
+                        identity_values: None,
                     };
                     vec![
                         GenericNCommand::Function(func_decl),

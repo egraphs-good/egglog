@@ -785,6 +785,7 @@ impl TypeInfo {
             internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
             term_constructor: fdecl.term_constructor.clone(),
+            identity_values: fdecl.identity_values,
         })
     }
 

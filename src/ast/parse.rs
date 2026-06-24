@@ -340,6 +340,7 @@ impl Parser {
                     let mut hidden = false;
                     let mut let_binding = false;
                     let mut term_constructor = None;
+                    let mut identity_values = None;
                     let mut unextractable = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
@@ -384,6 +385,10 @@ impl Parser {
                             (":internal-term-constructor", [tc]) => {
                                 term_constructor = Some(tc.expect_atom("term constructor name")?)
                             }
+                            (":identity-values", [n]) => {
+                                identity_values =
+                                    Some(n.expect_uint::<usize>("identity-values count")?)
+                            }
                             _ => return error!(span, "could not parse function options"),
                         }
                     }
@@ -404,6 +409,7 @@ impl Parser {
                         hidden,
                         let_binding,
                         term_constructor,
+                        identity_values,
                         unextractable,
                         span,
                     }]

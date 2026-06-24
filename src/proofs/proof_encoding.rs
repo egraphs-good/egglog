@@ -880,7 +880,7 @@ impl<'a> ProofInstrumentor<'a> {
                 out_type.clone()
             };
             format!(
-                "(function {view_name} ({in_sorts}) {view_value_sort} :merge {ctor_merge} :internal-term-constructor {name}{view_flags})"
+                "(function {view_name} ({in_sorts}) {view_value_sort} :merge {ctor_merge} :internal-term-constructor {name} :identity-values 1{view_flags})"
             )
         } else if is_fd_custom {
             // Custom function on the FD pair-valued view: key is the children only,
@@ -921,7 +921,7 @@ impl<'a> ProofInstrumentor<'a> {
                 out_type.clone()
             };
             format!(
-                "(function {view_name} ({in_sorts}) {view_value_sort} :merge {custom_merge} :internal-term-constructor {name}{view_flags})"
+                "(function {view_name} ({in_sorts}) {view_value_sort} :merge {custom_merge} :internal-term-constructor {name} :identity-values 1{view_flags})"
             )
         } else {
             // Function/constructor-bodied (or no-merge) custom functions keep the old

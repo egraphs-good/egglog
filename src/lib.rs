@@ -1299,17 +1299,15 @@ impl EGraph {
         };
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             num_values,
-            // Only the OUTPUT column (value column 0) determines row identity:
-            // a collision with an unchanged output is a no-op merge that must
-            // not run the (possibly minting) merge body. This matches normal
-            // egglog's `cur == new` short-circuit and is required for the
-            // proof-encoding FD view, whose body mints proof/term nodes — in
-            // proof mode the value is `(output, proof)` (the proof is a
-            // passenger) and in term mode the body still mints for an
-            // already-equal output. Ordinary user functions are unaffected: the
-            // default merges (UnionId/AssertEq) already no-op on an unchanged
-            // output, and custom merges are idempotent on equal inputs.
-            identity_values: Some(1),
+            // Identity-column merge short-circuit. Only the proof-encoding FD
+            // view tables opt in (via the internal `:identity-values <n>`
+            // annotation, stamped during proof instrumentation): when `Some(k)`,
+            // a collision that leaves the leading `k` value columns unchanged is
+            // a no-op that must NOT run the (possibly minting) merge body. User
+            // functions carry no annotation and keep `None` — classic merge
+            // semantics, so a `:merge <literal>` (a `MergeFn::Const`) is never
+            // short-circuited.
+            identity_values: decl.identity_values,
             schema: input
                 .iter()
                 .chain(value_col_sorts)
@@ -3876,6 +3874,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res[0].to_string(), "(expensive)\n");
+    }
+
+    #[test]
+    fn test_user_merge_not_identity_short_circuited() {
+        // A user function whose `:merge` body changes the value even when the
+        // new value equals the old one. The proof-encoding FD views opt into a
+        // backend identity-column short-circuit via the internal
+        // `:identity-values` annotation; ORDINARY user functions must NOT get
+        // that annotation (`identity_values == None`), so their merge body always
+        // runs. Here re-setting the SAME value must still increment via the
+        // merge, proving the merge was not short-circuited.
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function counter () i64 :merge (+ old 1))
+                (set (counter) 5)
+                (set (counter) 5)
+                (check (= (counter) 6))
+                "#,
+            )
+            .unwrap();
+
+        // Sanity: the same key inserted with an equal value collides and the
+        // merge runs (classic behavior). Were it short-circuited (as a universal
+        // `Some(1)` would do), `(counter)` would stay 5 and this check would fail.
+        egraph
+            .parse_and_run_program(None, "(check (!= (counter) 5))")
+            .unwrap();
     }
 
     #[test]

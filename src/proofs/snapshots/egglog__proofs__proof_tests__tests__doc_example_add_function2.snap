@@ -9,7 +9,7 @@ expression: snapshot
 (ruleset __delete_subsume_ruleset)
 (sort __view)
 (constructor add (i64 i64 i64) __view :unextractable :internal-hidden)
-(function __addView (i64 i64) i64 :merge old :unextractable :internal-term-constructor add)
+(function __addView (i64 i64) i64 :merge old :unextractable :internal-term-constructor add :identity-values 1)
 (constructor __to_delete_add (i64 i64) __view :internal-hidden)
 (constructor __to_subsume_add (i64 i64) __view :internal-hidden)
 (rule ((__to_delete_add c0_ c1_)

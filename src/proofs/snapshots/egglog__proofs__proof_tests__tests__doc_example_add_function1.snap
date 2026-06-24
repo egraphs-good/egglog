@@ -21,7 +21,7 @@ expression: snapshot
         :ruleset __uf_function_index :name "__uf_function_index1")
 (sort __view)
 (constructor Add (i64 i64) Math :unextractable :internal-hidden)
-(function __AddView (i64 i64) Math :merge ((set (__UF_Math (ordering-max old new) (ordering-min old new)) ()) (ordering-min old new)) :internal-term-constructor Add)
+(function __AddView (i64 i64) Math :merge ((set (__UF_Math (ordering-max old new) (ordering-min old new)) ()) (ordering-min old new)) :internal-term-constructor Add :identity-values 1)
 (constructor __to_delete_Add (i64 i64) __view :internal-hidden)
 (constructor __to_subsume_Add (i64 i64) __view :internal-hidden)
 (rule ((__to_delete_Add c0_ c1_)

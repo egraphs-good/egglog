@@ -144,6 +144,7 @@ where
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
                     term_constructor: f.term_constructor.clone(),
+                    identity_values: f.identity_values,
                     unextractable: f.unextractable,
                 },
             },
@@ -706,6 +707,8 @@ where
         hidden: bool,
         let_binding: bool,
         term_constructor: Option<String>,
+        /// Internal `:identity-values <n>` annotation (proof-encoding FD views).
+        identity_values: Option<usize>,
         unextractable: bool,
     },
 
@@ -986,6 +989,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => {
                 write!(f, "(function {name} {schema}")?;
@@ -1014,6 +1018,9 @@ where
                 }
                 if let Some(tc) = term_constructor {
                     write!(f, " :internal-term-constructor {tc}")?;
+                }
+                if let Some(n) = identity_values {
+                    write!(f, " :identity-values {n}")?;
                 }
                 write!(f, ")")
             }
@@ -1278,6 +1285,12 @@ where
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
     pub term_constructor: Option<String>,
+    /// Internal annotation (`:identity-values <n>`) used only by proof-encoding
+    /// FD view tables. When `Some(k)`, a merge collision that leaves the leading
+    /// `k` value columns unchanged is treated as a no-op (the side-effecting
+    /// merge body is skipped). `None` (the default for all user functions) keeps
+    /// classic merge semantics: the merge body always runs.
+    pub identity_values: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1341,6 +1354,7 @@ impl FunctionDecl {
             internal_let: false,
             span,
             term_constructor: None,
+            identity_values: None,
         }
     }
 
@@ -1366,6 +1380,7 @@ impl FunctionDecl {
             internal_let: false,
             span,
             term_constructor: None,
+            identity_values: None,
         }
     }
 }
@@ -1392,6 +1407,7 @@ where
             internal_let: self.internal_let,
             span: self.span,
             term_constructor: self.term_constructor,
+            identity_values: self.identity_values,
         }
     }
 }
@@ -1715,6 +1731,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => GenericCommand::Function {
                 span,
@@ -1728,6 +1745,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor: term_constructor.map(&mut *fun),
+                identity_values,
                 unextractable,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, fun(name)),
@@ -1811,6 +1829,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => GenericCommand::Function {
                 span,
@@ -1821,6 +1840,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             },
             GenericCommand::Rule { rule } => GenericCommand::Rule {
@@ -1952,6 +1972,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             } => GenericCommand::Function {
                 span,
@@ -1962,6 +1983,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                identity_values,
                 unextractable,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),
