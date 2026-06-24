@@ -90,7 +90,7 @@
 //!   returns it as a [`crate::TermId`] in a [`crate::TermDag`].
 //! - [`crate::EGraph::extract_value_with_cost_model`] — same but with
 //!   a user-supplied cost model, an impl of
-//!   [`crate::extract::CostModel`].
+//!   [`crate::extract::TreeCostModel`].
 //! - [`crate::EGraph::extract_value_to_string`] — convenience: prints
 //!   the extracted term back as egglog-syntax text.
 //!

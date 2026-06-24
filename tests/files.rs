@@ -268,8 +268,9 @@ impl Run {
         } else {
             // Skip tests with known non-deterministic output
             let filename = self.path.file_stem().unwrap().to_string_lossy();
-            const SKIP_PATTERNS: [&str; 6] = [
+            const SKIP_PATTERNS: [&str; 7] = [
                 "extract-vec-bench",
+                "greedy-dag-vec-extract",
                 "python_array_optimize",
                 "stresstest_large_expr",
                 "towers-of-hanoi",

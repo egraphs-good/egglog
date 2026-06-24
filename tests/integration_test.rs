@@ -1,8 +1,117 @@
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
-    extract::DefaultCost,
+    extract::{
+        BaseCostModel, CommutativeMonoid, DagCostModel, DefaultCost, TreeAdditiveCostModel,
+        TreeCostModel,
+    },
     *,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct CustomCost(u128);
+
+impl CommutativeMonoid for CustomCost {
+    fn identity() -> Self {
+        Self(0)
+    }
+
+    fn combine(self, other: &Self) -> Self {
+        Self(self.0 + other.0)
+    }
+}
+
+struct CustomCostModel;
+
+impl BaseCostModel<CustomCost> for CustomCostModel {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
+        CustomCost(1)
+    }
+}
+
+impl DagCostModel<CustomCost> for CustomCostModel {
+    fn marginal_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        _func: &Function,
+        _enode: &Enode<'_>,
+        _child_costs: &[CustomCost],
+    ) -> CustomCost {
+        CustomCost(1)
+    }
+}
+
+struct RootHeavyTreeCostModel;
+
+impl BaseCostModel<DefaultCost> for RootHeavyTreeCostModel {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
+        1
+    }
+}
+
+impl TreeCostModel<DefaultCost> for RootHeavyTreeCostModel {
+    fn total_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        func: &Function,
+        _enode: &Enode<'_>,
+        child_costs: &[DefaultCost],
+    ) -> DefaultCost {
+        let children_total = child_costs
+            .iter()
+            .fold(DefaultCost::identity(), |cost, child| cost.combine(child));
+        if func.name() == "Wide" {
+            children_total.saturating_mul(10)
+        } else {
+            children_total.saturating_add(1)
+        }
+    }
+}
+
+fn daggy_root(egraph: &mut EGraph) -> (ArcSort, Value) {
+    let expr = egraph
+        .parser
+        .get_expr_from_string(None, "(Pair (Wide (Leaf 0)) (Wide (Leaf 0)))")
+        .unwrap();
+    egraph.eval_expr(&expr).unwrap()
+}
+
+fn add_daggy_example(egraph: &mut EGraph) {
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype E
+               (Pair E E)
+               (Wide E)
+               (Leaf i64)
+             )
+             (let shared (Wide (Leaf 0)))
+             (let daggy (Pair shared shared))
+             (let treeish (Pair (Leaf 1) (Leaf 2)))
+             (union daggy treeish)
+             "#,
+        )
+        .unwrap();
+}
+
+const COSTED_DAGGY_EXAMPLE: &str = r#"
+ (datatype E
+   (Pair E E :cost 1)
+   (Wide E :cost 1)
+   (Leaf i64 :cost 1)
+ )
+ (let shared (Wide (Leaf 0)))
+ (let daggy (Pair shared shared))
+ (let treeish (Pair (Leaf 1) (Leaf 2)))
+ (union daggy treeish)
+ "#;
+
+fn run_costed_daggy(commands: &str) -> Vec<CommandOutput> {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, &format!("{COSTED_DAGGY_EXAMPLE}\n{commands}"))
+        .unwrap()
+}
 
 #[test]
 fn globals_missing_prefix_errors_when_opted_in() {
@@ -463,6 +572,139 @@ fn test_extract_variants1() {
     assert_eq!(
         outputs[0].to_string(),
         "(\n   (SmallStep (SmallStep (SmallStep (SmallStep (Origin)))))\n   (BigStep (Origin))\n)\n"
+    );
+}
+
+#[test]
+fn test_greedy_dag_extract_syntax_prefers_shared_subterms() {
+    let outputs = run_costed_daggy(
+        r#"
+             (extract daggy)
+             (extract daggy :extractor greedy-dag)
+             (extract daggy 0 :extractor greedy-dag)
+             "#,
+    );
+
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(outputs[0].to_string(), "(Pair (Leaf 1) (Leaf 2))\n");
+    assert_eq!(
+        outputs[1].to_string(),
+        "(Pair (Wide (Leaf 0)) (Wide (Leaf 0)))\n"
+    );
+    assert_eq!(
+        outputs[2].to_string(),
+        "(Pair (Wide (Leaf 0)) (Wide (Leaf 0)))\n"
+    );
+
+    let CommandOutput::ExtractBest(_, tree_cost, _) = outputs[0].clone() else {
+        panic!("expected tree extract output");
+    };
+    let CommandOutput::ExtractBest(_, dag_cost, _) = outputs[1].clone() else {
+        panic!("expected greedy-dag extract output");
+    };
+    assert_eq!(tree_cost, 5);
+    assert_eq!(dag_cost, 4);
+}
+
+#[test]
+fn test_greedy_dag_extract_variants_rank_root_alternatives() {
+    let outputs = run_costed_daggy(
+        r#"
+             (extract daggy 2 :extractor greedy-dag)
+             "#,
+    );
+
+    assert_eq!(
+        outputs[0].to_string(),
+        "(\n   (Pair (Wide (Leaf 0)) (Wide (Leaf 0)))\n   (Pair (Leaf 1) (Leaf 2))\n)\n"
+    );
+}
+
+#[test]
+fn test_greedy_dag_extract_accepts_custom_cost_type() {
+    let mut egraph = EGraph::default();
+    add_daggy_example(&mut egraph);
+
+    let (sort, value) = daggy_root(&mut egraph);
+
+    let extracted = egraph
+        .extract_best_greedy_dag(vec![(sort, value)], CustomCostModel)
+        .unwrap();
+    let root = extracted.terms.into_iter().next().unwrap();
+
+    assert_eq!(root.cost, CustomCost(4));
+    assert_eq!(
+        extracted.termdag.to_string(root.term),
+        "(Pair (Wide (Leaf 0)) (Wide (Leaf 0)))"
+    );
+}
+
+#[test]
+fn test_greedy_dag_multi_root_uses_one_choice_for_shared_eclass() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype E
+              (WrapA E)
+              (WrapB E)
+              (Wide E)
+              (Alt i64)
+              (Leaf i64)
+            )
+
+            (let shared (Wide (Leaf 0)))
+            (union shared (Alt 0))
+            (let root-a (WrapA shared))
+            (let root-b (WrapB shared))
+            "#,
+        )
+        .unwrap();
+
+    let root_a_expr = egraph.parser.get_expr_from_string(None, "root-a").unwrap();
+    let root_a = egraph.eval_expr(&root_a_expr).unwrap();
+    let root_b_expr = egraph.parser.get_expr_from_string(None, "root-b").unwrap();
+    let root_b = egraph.eval_expr(&root_b_expr).unwrap();
+
+    let extracted = egraph
+        .extract_best_greedy_dag(vec![root_a, root_b], TreeAdditiveCostModel::default())
+        .unwrap();
+
+    let Term::App(head_a, children_a) = extracted.termdag.get(extracted.terms[0].term) else {
+        panic!("expected WrapA root");
+    };
+    let Term::App(head_b, children_b) = extracted.termdag.get(extracted.terms[1].term) else {
+        panic!("expected WrapB root");
+    };
+    assert_eq!(head_a, "WrapA");
+    assert_eq!(head_b, "WrapB");
+    assert_eq!(children_a.len(), 1);
+    assert_eq!(children_b.len(), 1);
+
+    // The current greedy DAG extractor stores one best producer per reachable
+    // `(sort, value)`, so both roots reconstruct the shared e-class through the
+    // same selected child term. It does not choose per-root alternatives for
+    // the same e-class.
+    assert_eq!(children_a[0], children_b[0]);
+}
+
+#[test]
+fn test_tree_extract_accepts_tree_only_cost_model() {
+    let mut egraph = EGraph::default();
+    add_daggy_example(&mut egraph);
+
+    let (sort, value) = daggy_root(&mut egraph);
+
+    let extracted = egraph
+        .extract_best(vec![(sort, value)], RootHeavyTreeCostModel)
+        .unwrap();
+    let root = extracted.terms.into_iter().next().unwrap();
+
+    assert_eq!(root.cost, 5);
+    assert_eq!(
+        extracted.termdag.to_string(root.term),
+        "(Pair (Leaf 1) (Leaf 2))"
     );
 }
 

@@ -475,6 +475,7 @@ dependencies = [
  "egraph-serialize",
  "enum-map",
  "env_logger",
+ "fixedbitset",
  "glob",
  "hashbrown 0.16.0",
  "im-rc",

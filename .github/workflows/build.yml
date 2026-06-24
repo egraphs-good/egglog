@@ -69,6 +69,7 @@ jobs:
           - cykjson
           - eggcc-extraction
           - extract-vec-bench
+          - greedy-dag-vec-extract
           - herbie
           - python_array_optimize
           - repro-665-set-union
