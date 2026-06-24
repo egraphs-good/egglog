@@ -374,7 +374,7 @@ impl IndexBase for ColumnIndex {
         // (Value, RowId)-sorted and unique without ever sorting by RowId. Halving the number of
         // runs each round makes this O(n log k) rather than the O(n*k) of a left fold (whose
         // growing accumulator is re-copied every step), which matters for wide tables.
-        let merged = merge_sorted_blocks_dedup(&pairs, &bounds);
+        let merged = merge_sorted_blocks_dedup(pairs, &bounds);
         self.build_subsets_from_sorted(&merged);
     }
 }
@@ -483,91 +483,89 @@ fn radix_sort_slice_by_value(data: &mut [(Value, RowId)], scratch: &mut [(Value,
     }
 }
 
-/// Merge two (Value, RowId)-sorted slices into `out` (cleared first), dropping any pair equal
-/// to the previously emitted one.
+/// Merge two (Value, RowId)-sorted slices, *appending* the result to `out` and dropping pairs
+/// equal to the previous one emitted *by this call*.
 ///
 /// Inputs `a` and `b` must each be sorted by (Value, RowId). Duplicates arise when one value
-/// appears in several of a row's columns; the `last`-element check removes them, so the
-/// result is sorted and duplicate-free with no further RowId sort.
-fn merge2_dedup(a: &[(Value, RowId)], b: &[(Value, RowId)], out: &mut Vec<(Value, RowId)>) {
-    out.clear();
+/// appears in several of a row's columns; the dedup check is scoped to this call's output (via
+/// `start`) so back-to-back runs packed into the same buffer are not merged into each other.
+fn merge2_into(a: &[(Value, RowId)], b: &[(Value, RowId)], out: &mut Vec<(Value, RowId)>) {
+    let start = out.len();
+    let push = |out: &mut Vec<(Value, RowId)>, next: (Value, RowId)| {
+        if out.len() == start || *out.last().unwrap() != next {
+            out.push(next);
+        }
+    };
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {
-        let next = if a[i] <= b[j] {
+        if a[i] <= b[j] {
+            push(out, a[i]);
             i += 1;
-            a[i - 1]
         } else {
+            push(out, b[j]);
             j += 1;
-            b[j - 1]
-        };
-        if out.last() != Some(&next) {
-            out.push(next);
         }
     }
     for &next in &a[i..] {
-        if out.last() != Some(&next) {
-            out.push(next);
-        }
+        push(out, next);
     }
     for &next in &b[j..] {
-        if out.last() != Some(&next) {
-            out.push(next);
-        }
+        push(out, next);
     }
 }
 
-/// Merge the `(Value, RowId)`-sorted column blocks of `pairs` into one sorted, de-duplicated
-/// vector, where block `b` is `pairs[bounds[b]..bounds[b + 1]]`.
+/// Merge the `(Value, RowId)`-sorted column blocks of `src` (block `b` is
+/// `src[bounds[b]..bounds[b + 1]]`) into one sorted, de-duplicated vector.
 ///
 /// Uses a balanced (tournament) two-way merge: adjacent runs are merged pairwise, then the
 /// results are merged pairwise, halving the run count each round. This is O(n log k) in the
 /// number of blocks `k`, versus the O(n*k) of merging a single growing accumulator against
-/// each block in turn -- the difference matters when a table has many covered columns. Each
-/// `merge2_dedup` drops duplicate pairs, and because merging two de-duplicated sorted runs
-/// leaves any shared pair adjacent, dedup composes correctly across rounds.
-fn merge_sorted_blocks_dedup(pairs: &[(Value, RowId)], bounds: &[usize]) -> Vec<(Value, RowId)> {
-    let k = bounds.len() - 1;
-    debug_assert!(k >= 1);
+/// each block in turn -- the difference matters when a table has many covered columns.
+///
+/// Each round packs its merged runs contiguously into a second buffer of the same size and the
+/// two buffers ping-pong, so the whole tournament uses just one extra allocation (`src` is
+/// reused as the other buffer) rather than a fresh `Vec` per merge. Because merging two
+/// de-duplicated sorted runs leaves any shared pair adjacent, dedup composes across rounds.
+fn merge_sorted_blocks_dedup(
+    mut src: Vec<(Value, RowId)>,
+    bounds: &[usize],
+) -> Vec<(Value, RowId)> {
+    let n = src.len();
+    debug_assert!(bounds.len() >= 2);
 
-    // Round 0: merge adjacent block pairs (reading directly from `pairs`); carry any odd
-    // trailing block forward as its own run.
-    let mut runs: Vec<Vec<(Value, RowId)>> = Vec::with_capacity(k.div_ceil(2));
-    let mut b = 0;
-    while b < k {
-        if b + 1 < k {
-            let (left, right) = (
-                &pairs[bounds[b]..bounds[b + 1]],
-                &pairs[bounds[b + 1]..bounds[b + 2]],
-            );
-            let mut run = Vec::with_capacity(left.len() + right.len());
-            merge2_dedup(left, right, &mut run);
-            runs.push(run);
-            b += 2;
-        } else {
-            runs.push(pairs[bounds[b]..bounds[b + 1]].to_vec());
-            b += 1;
-        }
-    }
+    // `src` holds the current rounds's runs, delimited by `cur`; `dst` receives the merged runs.
+    let mut dst: Vec<(Value, RowId)> = Vec::with_capacity(n);
+    let mut cur: SmallVec<[usize; 8]> = bounds.iter().copied().collect();
 
-    // Remaining rounds: merge the runs pairwise until a single run is left.
-    while runs.len() > 1 {
-        let mut next: Vec<Vec<(Value, RowId)>> = Vec::with_capacity(runs.len().div_ceil(2));
-        let mut i = 0;
-        while i < runs.len() {
-            if i + 1 < runs.len() {
-                let mut run = Vec::with_capacity(runs[i].len() + runs[i + 1].len());
-                merge2_dedup(&runs[i], &runs[i + 1], &mut run);
-                next.push(run);
-                i += 2;
+    // Each round more than halves the run count (`cur.len() - 1`); stop at a single run.
+    while cur.len() > 2 {
+        dst.clear();
+        let mut next: SmallVec<[usize; 8]> = SmallVec::new();
+        next.push(0);
+        let runs = cur.len() - 1;
+        let mut r = 0;
+        while r < runs {
+            if r + 1 < runs {
+                merge2_into(
+                    &src[cur[r]..cur[r + 1]],
+                    &src[cur[r + 1]..cur[r + 2]],
+                    &mut dst,
+                );
+                r += 2;
             } else {
-                next.push(mem::take(&mut runs[i]));
-                i += 1;
+                // Odd trailing run: already sorted and de-duplicated, so copy it forward.
+                dst.extend_from_slice(&src[cur[r]..cur[r + 1]]);
+                r += 1;
             }
+            next.push(dst.len());
         }
-        runs = next;
+        mem::swap(&mut src, &mut dst);
+        cur = next;
     }
 
-    runs.pop().unwrap_or_default()
+    // One run remains, packed at the front of `src`.
+    src.truncate(cur[1]);
+    src
 }
 
 impl ColumnIndex {
