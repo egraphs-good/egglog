@@ -380,6 +380,38 @@ impl ProofStore {
         (store, proof_id)
     }
 
+    /// Reflexivize a (possibly non-reflexive) proof so it can serve as a `MergeFn`
+    /// premise (which the checker requires to be reflexive, `lhs == rhs`).
+    ///
+    /// For a proof `p : A = B`, returns a proof of `B = B` built as
+    /// `Trans(Sym(p), p)` (`Sym(p) : B = A`, then `Trans(B=A, A=B) : B = B`).
+    /// If `p` is already reflexive it is returned unchanged (no proof bloat for
+    /// the common non-eq-sort-input case, whose premises are already reflexive).
+    ///
+    /// This handles eq-sort INPUTS to FD custom functions: rebuild canonicalizes
+    /// an eq-sort input, re-keys the view row, and rewrites its stored proof into a
+    /// non-reflexive CONGRUENCE proof `f(orig_inputs, out) = f(canon_inputs, out)`
+    /// (canonical-on-right, per the rebuild rule's `Congr(view_prf, i, uf_prf)`
+    /// orientation). `Trans(Sym(p), p)` reflexivizes to that proof's RHS, i.e. the
+    /// CANONICAL view row, so both premises land on the same canonical inputs and
+    /// the checker's input-match (a `TermId` equality) succeeds.
+    fn reflexivize_premise(&mut self, premise_id: ProofId) -> ProofId {
+        let prop = self.id_to_proof[premise_id].proposition.clone();
+        if prop.lhs == prop.rhs {
+            return premise_id;
+        }
+        // Sym(p) : rhs = lhs
+        let sym_id = self.id_to_proof.push(Proof {
+            proposition: Proposition::new(prop.rhs, prop.lhs),
+            justification: Justification::Sym(premise_id),
+        });
+        // Trans(Sym(p), p) : rhs = rhs
+        self.id_to_proof.push(Proof {
+            proposition: Proposition::new(prop.rhs, prop.rhs),
+            justification: Justification::Trans(sym_id, premise_id),
+        })
+    }
+
     /// Converts a raw proof into a user-facing proof, recursively converting sub-proofs as needed.
     /// This adds new metadata to the proof, such as the substitution for rules.
     ///
@@ -485,6 +517,10 @@ impl ProofStore {
                 // existence proof in its FD view). The whole-view-row conclusion is
                 // produced by `MergeFnRow`, not `idx == 0`.
                 let to_prove = subexpr_term;
+                // Reflexivize premises in case rebuild rewrote them into congruence
+                // proofs (eq-sort inputs); reflexive premises pass through unchanged.
+                let old_proof_id = self.reflexivize_premise(old_proof_id);
+                let new_proof_id = self.reflexivize_premise(new_proof_id);
                 Proof {
                     proposition: Proposition::new(to_prove, to_prove),
                     justification: Justification::MergeFn {
@@ -526,6 +562,10 @@ impl ProofStore {
                 let mut merged_args = input_args;
                 merged_args.push(merged_child);
                 let to_prove = self.term_dag.app(view_head, merged_args);
+                // Reflexivize premises in case rebuild rewrote them into congruence
+                // proofs (eq-sort inputs); reflexive premises pass through unchanged.
+                let old_proof_id = self.reflexivize_premise(old_proof_id);
+                let new_proof_id = self.reflexivize_premise(new_proof_id);
                 Proof {
                     proposition: Proposition::new(to_prove, to_prove),
                     justification: Justification::MergeFn {

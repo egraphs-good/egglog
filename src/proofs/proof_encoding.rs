@@ -146,23 +146,13 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.subtype != FunctionSubtype::Custom {
             return false;
         }
-        // Inputs must not be eq-sorts. An eq-sort child gets canonicalized during
-        // rebuild, which re-keys the view row and rewrites its per-row proof to a
-        // congruence (non-reflexive) proof. The FD merge's `MergeIdx` justification
-        // requires REFLEXIVE premise proofs (the two colliding rows' existence
-        // proofs), so a rebuild-triggered merge on eq-sort children would produce an
-        // unverifiable proof. Such functions stay on the legacy `handle_merge_fn`
-        // path (which re-derives the merge proof in a rule, not in the view `:merge`).
-        let has_eq_sort_input = fdecl.schema.input.iter().any(|s| {
-            self.egraph
-                .type_info
-                .get_sort_by_name(s)
-                .map(|sort| sort.is_eq_sort())
-                .unwrap_or(false)
-        });
-        if has_eq_sort_input {
-            return false;
-        }
+        // Eq-sort INPUTS are allowed (Phase C): rebuild canonicalizes an eq-sort
+        // input, re-keys the view row, and rewrites its per-row proof into a
+        // non-reflexive CONGRUENCE proof. The FD merge's `MergeRow`/`MergeIdx`
+        // justification requires REFLEXIVE premise proofs, so at resugaring time
+        // (`convert_raw_proof`) each such congruence premise `p : orig = canon` is
+        // replaced with `Trans(Sym(p), p) : canon = canon` (reflexive, landing on
+        // the canonical view row). See `reflexivize_premise` in proof_format.rs.
         // Output must not be an eq-sort: the FD view's output column is carried as a
         // plain value (no union-find canonicalization). Primitive merges produce
         // value/lattice sorts (i64, Set, Vec, ...), not eq-sort terms.
