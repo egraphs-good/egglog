@@ -890,9 +890,12 @@ impl TypeInfo {
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
-        // Function lookups in actions need a `Full` action context, which only
-        // `:naive` / `:unsafe-seminaive` provide; reject them otherwise.
-        if !eval_mode.uses_read_contexts() {
+        // Function lookups in actions need a `Full` action context; reject them
+        // only when the effective context is still `Write` (i.e. `read_contexts`
+        // is false). This matches the backend's context selection above —
+        // `:naive` / `:unsafe-seminaive` and a non-seminaive EGraph all get
+        // `Full`.
+        if !read_contexts {
             self.check_lookup_actions(&actions)?;
         }
 
