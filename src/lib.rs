@@ -2040,10 +2040,16 @@ impl EGraph {
         for before_expanded_command in program {
             // First do user-provided macro expansion for this command,
             // which may rely on type information from previous commands.
+            let macro_type_info = self
+                .proof_state
+                .original_typechecking
+                .as_ref()
+                .map(|egraph| &egraph.type_info)
+                .unwrap_or(&self.type_info);
             let macro_expanded = self.command_macros.apply(
                 before_expanded_command,
                 &mut self.parser.symbol_gen,
-                &self.type_info,
+                macro_type_info,
             )?;
 
             for command in macro_expanded {
