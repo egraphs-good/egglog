@@ -92,8 +92,11 @@ impl ProofInstrumentor<'_> {
         // Proof extraction ignores the unextractable flag since proof terms may
         // be backed by internal tables that normal user extraction hides.
         let extracted = extract_best_for_proofs(self.egraph, vec![(proof_sort, proof_value)])
-            .unwrap_or_else(|_| {
-                panic!("failed to extract proof term for constructor {}", func.name)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to extract proof term for constructor {}: {err}",
+                    func.name
+                )
             });
         let root = extracted
             .terms

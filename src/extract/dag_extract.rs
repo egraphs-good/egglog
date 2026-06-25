@@ -268,7 +268,7 @@ struct GreedyDagExtractor<C: Cost> {
 
 struct ReachableExtractionBuilder {
     /// Extractable constructor/view functions grouped by produced sort.
-    extractable_funcs_by_output_sort: HashMap<String, Vec<String>>,
+    extractable_funcs_by_output_sort: HashMap<String, Arc<[String]>>,
     /// Growable sort-name interner used while discovering reachable values.
     sort_ids: InternerBuilder<String>,
     /// Growable id-space for reachable `(sort, value)` dependencies.
@@ -396,7 +396,10 @@ impl<C: Cost> GreedyDagExtractor<C> {
         // reachable `(sort, value)` dependencies, and record producer rows with
         // their reverse dependency edges.
         let mut builder = ReachableExtractionBuilder {
-            extractable_funcs_by_output_sort: extractable_funcs_by_output_sort(egraph, false),
+            extractable_funcs_by_output_sort: extractable_funcs_by_output_sort(egraph, false)
+                .into_iter()
+                .map(|(sort, funcs)| (sort, Arc::from(funcs)))
+                .collect(),
             sort_ids: Default::default(),
             key_ids: Default::default(),
             producer_rows: Default::default(),

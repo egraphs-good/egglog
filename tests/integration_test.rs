@@ -576,6 +576,21 @@ fn test_extract_variants1() {
 }
 
 #[test]
+fn test_extract_negative_variants_returns_error() {
+    let mut egraph = EGraph::default();
+
+    let err = egraph
+        .parse_and_run_program(None, "(extract 0 -1)")
+        .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("Cannot extract negative number of variants"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_greedy_dag_extract_syntax_prefers_shared_subterms() {
     let outputs = run_costed_daggy(
         r#"

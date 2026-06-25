@@ -1690,7 +1690,9 @@ impl EGraph {
                     )])
                 } else {
                     if n < 0 {
-                        panic!("Cannot extract negative number of variants");
+                        return Err(Error::ExtractError(
+                            "Cannot extract negative number of variants".into(),
+                        ));
                     }
                     let extracted = if use_greedy_dag {
                         self.extract_variants_greedy_dag(

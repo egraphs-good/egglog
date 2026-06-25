@@ -148,11 +148,9 @@ fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
     let mut canonical = value;
     egraph
         .backend
-        .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry<'_>| {
+        .for_each_matching_col(uf_func.backend_id, 0, value, |row| {
             // UF table has (child, parent) as inputs
-            if row.vals[0] == value {
-                canonical = row.vals[1];
-            }
+            canonical = row.vals[1];
         });
 
     canonical
