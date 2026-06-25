@@ -86,6 +86,7 @@ jobs:
           - rust_rule_fib
           - rust_rule_match_overhead
           - rust_rule_match_with_serialize
+          - rust_rule_math_microbenchmark
           - rust_rule_insert_loop
           - rust_rule_tableaction_hot_path
           - factoring-multisets
