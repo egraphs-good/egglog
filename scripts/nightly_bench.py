@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""
+nightly_bench.py — egglog nightly benchmark harness
+
+Builds the release `egglog` binary, runs every benchmark `.egg` file under
+`tests/` through `hyperfine` in several configurations, and writes a
+self-contained HTML report (plus a machine-readable `results.json`) into an
+output directory.
+
+Each program is benchmarked in these configurations:
+
+  * standard    — `egglog -j 1 <file>`          (single thread, the baseline)
+  * 2 threads   — `egglog -j 2 <file>`
+  * 4 threads   — `egglog -j 4 <file>`
+  * 8 threads   — `egglog -j 8 <file>`
+  * proof       — `egglog --proof-testing <file>` (single thread), for programs
+                  that support proofs (mirrors `file_supports_proofs` minus the
+                  known-unsupported exclusion list used by tests/files.rs)
+
+The report is a single table: one row per benchmark, one column per
+configuration above.
+
+Gating:
+  * Every individual run has a 2-minute timeout. A run that exceeds it is
+    killed and reported as "timeout".
+  * A benchmark is skipped entirely if neither its standard run nor its proof
+    run reaches 50ms — too fast to measure reliably. Programs under
+    `tests/proofs/` require proofs, so only their proof run is considered.
+
+Usage:
+  nightly_bench.py [output_dir]      # default output_dir: <repo>/nightly/output
+
+This is the entry point used by `make nightly` for the nightly dashboard at
+nightly.cs.washington.edu.
+"""
+
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from html import escape
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+REPO_ROOT = SCRIPT_DIR.parent
+TEST_DIR = REPO_ROOT / "tests"
+EGGLOG = REPO_ROOT / "target" / "release" / "egglog"
+
+# Benchmarks faster than this (single-run wall clock) are skipped.
+MIN_BENCH_SECONDS = 0.050
+
+# Every individual run is capped at two minutes.
+RUN_TIMEOUT = 120
+
+# Programs that are expected to fail or are reproduction snippets are not
+# benchmarks; skip them entirely.
+EXCLUDE_SUBSTRINGS = ("fail-typecheck", "repro-", "/repro")
+
+# Programs that statically support proofs but are excluded from proof-mode
+# benchmarking (too slow, or known correctness bugs). Mirrors the
+# `proof_unsupported_file_list` in tests/files.rs.
+PROOF_UNSUPPORTED_FILES = (
+    "math-microbenchmark.egg",
+    "rectangle.egg",
+    "eggcc-2mm.egg",
+    "subsume.egg",
+    "subsume-relation.egg",
+)
+
+# Prefix used to cap each run at RUN_TIMEOUT, e.g. ["timeout", "120"]. Set by
+# calibrate_timeout(): only used when the `timeout` binary's own overhead is
+# small enough not to pollute measurements (GNU timeout is ~1ms; some
+# reimplementations add ~100ms, which would swamp sub-100ms benchmarks).
+TIMEOUT_PREFIX: list[str] = []
+
+# (key, label, threads, proof) — also the report's column order.
+CONFIGS = [
+    ("standard", "Standard", 1, False),
+    ("threads2", "2 threads", 2, False),
+    ("threads4", "4 threads", 4, False),
+    ("threads8", "8 threads", 8, False),
+    ("proof", "Proof", 1, True),
+]
+THREAD_KEYS = ("standard", "threads2", "threads4", "threads8")
+
+
+def log(msg: str = "") -> None:
+    print(msg, flush=True)
+
+
+# ── git helpers ───────────────────────────────────────────────────────────────
+
+
+def _git(*args: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(REPO_ROOT), *args], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+
+def commit_info() -> dict[str, str]:
+    return {
+        "commit": _git("rev-parse", "HEAD"),
+        "commit_short": _git("rev-parse", "--short", "HEAD"),
+        "subject": _git("log", "-1", "--format=%s"),
+        "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+    }
+
+
+# ── benchmark discovery ─────────────────────────────────────────────────────────
+
+
+def discover_benchmarks() -> list[Path]:
+    files = sorted(TEST_DIR.rglob("*.egg"))
+    return [
+        f for f in files if not any(sub in f.as_posix() for sub in EXCLUDE_SUBSTRINGS)
+    ]
+
+
+def requires_proofs(path: Path) -> bool:
+    """Programs under tests/proofs/ only make sense with proofs enabled."""
+    return path.parent.name == "proofs"
+
+
+def proof_excluded(path: Path) -> bool:
+    return path.name in PROOF_UNSUPPORTED_FILES
+
+
+def egglog_cmd(path: Path, threads: int, proof: bool) -> list[str]:
+    cmd = [str(EGGLOG), "-j", str(threads)]
+    if proof:
+        cmd.append("--proof-testing")
+    cmd.append(str(path))
+    return cmd
+
+
+# ── probing & measuring ─────────────────────────────────────────────────────────
+
+
+def probe(path: Path, threads: int, proof: bool) -> tuple[bool, float, bool]:
+    """Run a config once. Returns (ok, elapsed_seconds, timed_out).
+
+    ok is False if egglog exited non-zero (e.g. a program that does not support
+    proofs in proof-testing mode) or if the run exceeded RUN_TIMEOUT.
+    """
+    start = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            egglog_cmd(path, threads, proof),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=RUN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return False, time.perf_counter() - start, True
+    return proc.returncode == 0, time.perf_counter() - start, False
+
+
+def runs_for(probe_seconds: float) -> tuple[int, int]:
+    """Pick (warmup, runs) for hyperfine: more samples for fast benchmarks,
+    fewer for slow ones so the whole sweep stays within a reasonable budget."""
+    if probe_seconds < 0.5:
+        return 2, 10
+    if probe_seconds < 2.0:
+        return 2, 7
+    if probe_seconds < 5.0:
+        return 1, 5
+    return 1, 3
+
+
+def calibrate_timeout() -> None:
+    """Decide whether wrapping runs in `timeout` is cheap enough to use.
+
+    GNU coreutils `timeout` adds ~1ms; some reimplementations add ~100ms, which
+    would dominate fast benchmarks. We only use the wrapper when its overhead is
+    negligible; either way the per-run cap is also enforced by probe() and by a
+    subprocess-level backstop in hyperfine()."""
+    global TIMEOUT_PREFIX
+    if not shutil.which("timeout"):
+        log("Note: `timeout` not found; per-run cap enforced via probe only.")
+        return
+    best = min(_time_true() for _ in range(3))
+    if best < 0.025:
+        TIMEOUT_PREFIX = ["timeout", str(RUN_TIMEOUT)]
+    else:
+        log(f"Note: `timeout` overhead is {best * 1000:.0f}ms; not wrapping runs "
+            "with it (per-run cap still enforced via probe and backstop).")
+
+
+def _time_true() -> float:
+    start = time.perf_counter()
+    subprocess.run(["timeout", str(RUN_TIMEOUT), "true"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return time.perf_counter() - start
+
+
+def hyperfine(path: Path, threads: int, proof: bool, warmup: int, runs: int) -> dict | None:
+    # When available, wrap each run in `timeout` so no single execution exceeds
+    # RUN_TIMEOUT; hyperfine then aborts the benchmark (reported as a timeout).
+    shell_cmd = (
+        (" ".join(TIMEOUT_PREFIX) + " " if TIMEOUT_PREFIX else "")
+        + shlex.join(egglog_cmd(path, threads, proof))
+        + " >/dev/null 2>&1"
+    )
+    # Aggregate backstop: even without the per-run wrapper, never let the whole
+    # measurement run away (e.g. a non-deterministic hang in a repeat run).
+    backstop = RUN_TIMEOUT * (warmup + runs) + 30
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+        tmp_json = tf.name
+    try:
+        proc = subprocess.run(
+            [
+                "hyperfine",
+                "--warmup", str(warmup),
+                "--runs", str(runs),
+                "--export-json", tmp_json,
+                shell_cmd,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=backstop,
+        )
+        if proc.returncode != 0:
+            return None
+        with open(tmp_json) as f:
+            return json.load(f)["results"][0]
+    except subprocess.TimeoutExpired:
+        return None
+    finally:
+        os.unlink(tmp_json)
+
+
+def measure_cell(path: Path, threads: int, proof: bool,
+                 probe_result: tuple[bool, float, bool] | None = None) -> dict:
+    """Measure one (benchmark, configuration) cell. Returns a dict with either
+    a measured mean or a status: 'timeout' / 'error'."""
+    ok, elapsed, timed_out = probe_result or probe(path, threads, proof)
+    if not ok:
+        return {"status": "timeout" if timed_out else "error"}
+
+    warmup, runs = runs_for(elapsed)
+    hf = hyperfine(path, threads, proof, warmup, runs)
+    if hf is None:
+        # hyperfine aborts on a non-zero exit; with the timeout wrapper that
+        # almost always means a run was killed at RUN_TIMEOUT.
+        return {"status": "timeout"}
+    return {
+        "mean": hf["mean"],
+        "stddev": hf.get("stddev", 0.0),
+        "min": hf["min"],
+        "max": hf["max"],
+        "runs": len(hf.get("times", [])),
+    }
+
+
+# ── main sweep ──────────────────────────────────────────────────────────────────
+
+
+def build() -> None:
+    log("Building egglog (release)...")
+    subprocess.run(
+        ["cargo", "build", "--release", "--bin", "egglog",
+         "--manifest-path", str(REPO_ROOT / "Cargo.toml")],
+        check=True,
+    )
+    if not EGGLOG.exists():
+        sys.exit(f"egglog binary not found at {EGGLOG}")
+
+
+def run_sweep() -> tuple[list[dict], list[dict]]:
+    """Returns (rows, skipped). Each row is {name, cells: {config_key: cell}}."""
+    benchmarks = discover_benchmarks()
+    log(f"Discovered {len(benchmarks)} candidate program(s) under {TEST_DIR}\n")
+
+    rows: list[dict] = []
+    skipped: list[dict] = []
+
+    headers = "  ".join(f"{label:>10}" for _, label, _, _ in CONFIGS)
+    log(f"    {'Benchmark':<40} {headers}")
+    log("    " + "─" * (40 + len(CONFIGS) * 12))
+
+    for path in benchmarks:
+        name = path.relative_to(TEST_DIR).as_posix()
+        req = requires_proofs(path)
+
+        # Qualification probes: the single-thread standard run and the proof run.
+        std_probe = None if req else probe(path, 1, False)
+        proof_probe = None if proof_excluded(path) else probe(path, 1, True)
+        proof_supported = proof_probe is not None and proof_probe[0]
+
+        std_qualifies = std_probe is not None and std_probe[0] and std_probe[1] >= MIN_BENCH_SECONDS
+        proof_qualifies = proof_supported and proof_probe[1] >= MIN_BENCH_SECONDS
+
+        if not (std_qualifies or proof_qualifies):
+            reason = "errored" if (req and not proof_supported) else "too-fast"
+            skipped.append({"name": name, "reason": reason})
+            continue
+
+        cells: dict[str, dict] = {}
+        for key, _label, threads, proof in CONFIGS:
+            if proof:
+                if not proof_supported:
+                    cells[key] = {"status": "na"}  # proofs unsupported / excluded
+                else:
+                    cells[key] = measure_cell(path, threads, True, proof_probe)
+            else:
+                if req:
+                    cells[key] = {"status": "na"}  # needs proofs; no plain run
+                else:
+                    pr = std_probe if threads == 1 else None
+                    cells[key] = measure_cell(path, threads, False, pr)
+
+        # Enforce the threshold on measured data: the cold qualification probe
+        # can overshoot 50ms for a program whose warmed runs are all faster.
+        measured = [c["mean"] for c in cells.values() if "mean" in c]
+        if not measured or max(measured) < MIN_BENCH_SECONDS:
+            skipped.append({"name": name, "reason": "too-fast"})
+            continue
+
+        rows.append({"name": name, "cells": cells})
+
+        def fmt(key: str) -> str:
+            c = cells[key]
+            return f"{c['mean']:>10.3f}" if "mean" in c else f"{c.get('status', '—'):>10}"
+        log(f"    {name:<40} " + "  ".join(fmt(k) for k, *_ in CONFIGS))
+
+    rows.sort(key=lambda r: r["cells"].get("standard", {}).get("mean", 0.0)
+              or r["cells"].get("proof", {}).get("mean", 0.0), reverse=True)
+
+    n_fast = sum(s["reason"] == "too-fast" for s in skipped)
+    log(f"\n  Benchmarked {len(rows)}; skipped {n_fast} under "
+        f"{int(MIN_BENCH_SECONDS * 1000)}ms, "
+        f"{len(skipped) - n_fast} errored/proof-only-unsupported.")
+    return rows, skipped
+
+
+# ── report rendering ──────────────────────────────────────────────────────────
+
+
+def render_html(rows: list[dict], skipped: list[dict], meta: dict) -> str:
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    def cell_html(cell: dict, fastest_thread: float | None) -> str:
+        if "mean" in cell:
+            cls = "num"
+            if fastest_thread is not None and abs(cell["mean"] - fastest_thread) < 1e-9:
+                cls += " best"
+            sort = f"{cell['mean']:.6f}"
+            return (f'<td class="{cls}" data-sort="{sort}">'
+                    f'{cell["mean"]:.3f}<span class="sd">±{cell["stddev"]:.3f}</span></td>')
+        status = cell.get("status", "—")
+        label = {"na": "—", "timeout": "timeout", "error": "error"}.get(status, status)
+        # Sort blanks/errors to the bottom on ascending numeric sort.
+        return f'<td class="status {status}" data-sort="999999">{label}</td>'
+
+    body_rows = []
+    for r in rows:
+        cells = r["cells"]
+        thread_means = [cells[k]["mean"] for k in THREAD_KEYS if "mean" in cells.get(k, {})]
+        fastest = min(thread_means) if thread_means else None
+        tds = "".join(
+            cell_html(cells.get(key, {"status": "na"}),
+                      fastest if key in THREAD_KEYS else None)
+            for key, *_ in CONFIGS
+        )
+        body_rows.append(f'      <tr><td class="name">{escape(r["name"])}</td>{tds}</tr>')
+    rows_html = "\n".join(body_rows) if body_rows else (
+        f'<tr><td colspan="{len(CONFIGS) + 1}" class="empty">No benchmarks ran '
+        f'above the {int(MIN_BENCH_SECONDS * 1000)}ms threshold.</td></tr>'
+    )
+
+    too_fast = sorted({s["name"] for s in skipped if s["reason"] == "too-fast"})
+    errored = sorted({s["name"] for s in skipped if s["reason"] == "errored"})
+    skip_html = ""
+    if too_fast:
+        skip_html += (
+            f"<p><strong>{len(too_fast)}</strong> program(s) skipped (standard and "
+            f"proof runs both under {int(MIN_BENCH_SECONDS * 1000)}ms): "
+            + ", ".join(f"<code>{escape(n)}</code>" for n in too_fast) + "</p>"
+        )
+    if errored:
+        skip_html += (
+            f"<p class=\"errored\"><strong>{len(errored)}</strong> program(s) "
+            "could not be run: "
+            + ", ".join(f"<code>{escape(n)}</code>" for n in errored) + "</p>"
+        )
+
+    header_cells = "".join(
+        f'<th data-type="num" data-col="{i + 1}">{escape(label)}</th>'
+        for i, (_, label, _, _) in enumerate(CONFIGS)
+    )
+
+    commit = meta.get("commit_short") or "unknown"
+    commit_full = meta.get("commit", "")
+    commit_link = (
+        f'<a href="https://github.com/egraphs-good/egglog/commit/{escape(commit_full)}">'
+        f'{escape(commit)}</a>'
+        if commit_full else escape(commit)
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>egglog nightly benchmarks</title>
+<style>
+  :root {{ --fg: #1a1a2e; --muted: #6b7280; --accent: #6c5ce7; --bg: #fafafe; --border: #e5e7eb; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 0; background: var(--bg); color: var(--fg); line-height: 1.5; }}
+  header {{ background: linear-gradient(120deg, #6c5ce7, #8e7cf0); color: #fff; padding: 2rem 1.5rem; }}
+  header h1 {{ margin: 0 0 .25rem; font-size: 1.6rem; }}
+  header .meta {{ opacity: .9; font-size: .9rem; }}
+  header a {{ color: #fff; text-decoration: underline; }}
+  main {{ max-width: 1080px; margin: 0 auto; padding: 1.5rem; }}
+  .note {{ color: var(--muted); font-size: .9rem; margin: 0 0 1.25rem; }}
+  .table-wrap {{ overflow-x: auto; background: #fff; border: 1px solid var(--border); border-radius: 10px; }}
+  table {{ border-collapse: collapse; width: 100%; min-width: 720px; }}
+  th, td {{ padding: .55rem .75rem; border-bottom: 1px solid var(--border); }}
+  th {{ background: #f3f4fb; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em;
+       color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap; text-align: right; }}
+  th:first-child {{ text-align: left; }}
+  th:hover {{ color: var(--accent); }}
+  td.num, td.status {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  td.name {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }}
+  td .sd {{ color: var(--muted); font-size: .72rem; margin-left: .25rem; }}
+  td.best {{ color: #047857; font-weight: 600; }}
+  td.status {{ color: var(--muted); }}
+  td.status.timeout, td.status.error {{ color: #b91c1c; }}
+  td.empty {{ text-align: center; color: var(--muted); padding: 2rem; }}
+  tbody tr:hover {{ background: #faf9ff; }}
+  .skipped {{ margin-top: 1.5rem; color: var(--muted); font-size: .9rem; }}
+  .skipped code {{ background: #f0f0f8; padding: 0 .25rem; border-radius: 4px; }}
+  .skipped .errored {{ color: #b91c1c; }}
+  footer {{ max-width: 1080px; margin: 0 auto; padding: 1rem 1.5rem 3rem; color: var(--muted); font-size: .85rem; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>egglog nightly benchmarks</h1>
+  <div class="meta">
+    Commit {commit_link} &middot; branch <code>{escape(meta.get('branch', '?'))}</code><br>
+    {escape(meta.get('subject', ''))}<br>
+    Generated {generated}
+  </div>
+</header>
+<main>
+  <p class="note">
+    All times in seconds (mean ± stddev). Each run is capped at a 2-minute
+    timeout. Programs whose standard and proof runs are both under
+    {int(MIN_BENCH_SECONDS * 1000)}ms are omitted. The fastest thread count per
+    row is <span style="color:#047857;font-weight:600">highlighted</span>.
+    <code>—</code> means not applicable (e.g. a program that does not support proofs).
+  </p>
+  <div class="table-wrap">
+  <table id="bench">
+    <thead>
+      <tr><th data-type="text" data-col="0">Benchmark</th>{header_cells}</tr>
+    </thead>
+    <tbody>
+{rows_html}
+    </tbody>
+  </table>
+  </div>
+  <div class="skipped">{skip_html}</div>
+</main>
+<footer>
+  Measured with <a href="https://github.com/sharkdp/hyperfine">hyperfine</a>.
+  Raw data: <a href="results.json">results.json</a>.
+</footer>
+<script>
+  // Click a column header to sort by that column.
+  const table = document.getElementById("bench");
+  const tbody = table.tBodies[0];
+  table.querySelectorAll("th[data-type]").forEach((th, idx) => {{
+    let asc = th.dataset.type === "text";
+    th.addEventListener("click", () => {{
+      const type = th.dataset.type;
+      const rows = [...tbody.rows];
+      rows.sort((a, b) => {{
+        const ca = a.cells[idx], cb = b.cells[idx];
+        if (type === "num") {{
+          const x = parseFloat(ca.dataset.sort), y = parseFloat(cb.dataset.sort);
+          return asc ? x - y : y - x;
+        }}
+        return asc ? ca.innerText.localeCompare(cb.innerText)
+                   : cb.innerText.localeCompare(ca.innerText);
+      }});
+      rows.forEach(r => tbody.appendChild(r));
+      asc = !asc;
+    }});
+  }});
+</script>
+</body>
+</html>
+"""
+
+
+def main() -> int:
+    if not shutil.which("hyperfine"):
+        sys.exit("hyperfine not found — install with: cargo install hyperfine")
+
+    out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO_ROOT / "nightly" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    calibrate_timeout()
+    build()
+    meta = commit_info()
+    rows, skipped = run_sweep()
+
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        **meta,
+        "min_bench_seconds": MIN_BENCH_SECONDS,
+        "run_timeout_seconds": RUN_TIMEOUT,
+        "configs": [{"key": k, "label": l, "threads": t, "proof": p} for k, l, t, p in CONFIGS],
+        "rows": rows,
+        "skipped": skipped,
+    }
+    (out_dir / "results.json").write_text(json.dumps(payload, indent=2))
+    (out_dir / "index.html").write_text(render_html(rows, skipped, meta))
+    log(f"\n  Wrote report to {out_dir / 'index.html'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs doctest coverage insta-test fixnits
+.PHONY: all test nits docs graphs rm-graphs doctest coverage insta-test fixnits nightly
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -6,6 +6,12 @@ TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
 WWW=${PWD}/target/www
 
 all: test nits docs
+
+# Build egglog and benchmark every tests/*.egg file with hyperfine, writing an
+# HTML dashboard to nightly/output/ (matching `report=` in nightly-conf).
+# Run nightly on nightly.cs.washington.edu.
+nightly:
+	python3 scripts/nightly_bench.py
 
 test: doctest
 	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
