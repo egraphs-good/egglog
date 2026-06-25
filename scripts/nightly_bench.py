@@ -17,8 +17,10 @@ Each program is benchmarked in these configurations:
                   that support proofs (mirrors `file_supports_proofs` minus the
                   known-unsupported exclusion list used by tests/files.rs)
 
-The report is a single table: one row per benchmark, one column per
-configuration above.
+The report is a single table (one row per benchmark, one column per
+configuration above), rendered with eval-live (https://github.com/oflatt/eval-live)
+for in-browser filtering. eval-live is a Python dependency; see
+`scripts/requirements.txt`.
 
 Gating:
   * Every individual run has a 2-minute timeout. A run that exceeds it is
@@ -345,57 +347,36 @@ def run_sweep() -> tuple[list[dict], list[dict]]:
 
 
 def render_html(rows: list[dict], skipped: list[dict], meta: dict) -> str:
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    import eval_live
 
-    def cell_html(cell: dict, fastest_thread: float | None) -> str:
-        if "mean" in cell:
-            cls = "num"
-            if fastest_thread is not None and abs(cell["mean"] - fastest_thread) < 1e-9:
-                cls += " best"
-            sort = f"{cell['mean']:.6f}"
-            return (f'<td class="{cls}" data-sort="{sort}">'
-                    f'{cell["mean"]:.3f}<span class="sd">±{cell["stddev"]:.3f}</span></td>')
-        status = cell.get("status", "—")
-        label = {"na": "—", "timeout": "timeout", "error": "error"}.get(status, status)
-        # Sort blanks/errors to the bottom on ascending numeric sort.
-        return f'<td class="status {status}" data-sort="999999">{label}</td>'
-
-    body_rows = []
+    # Flatten the nested cells structure into eval-live row objects: one row per
+    # benchmark, one column per configuration. A measured cell becomes its mean
+    # (a number, so eval-live's column filter offers a numeric dropdown); an
+    # "na" cell becomes "—" (not applicable, e.g. a non-proof run of a
+    # proofs-only program); "timeout"/"error" cells keep their status string.
+    bench_rows = []
     for r in rows:
         cells = r["cells"]
-        thread_means = [cells[k]["mean"] for k in THREAD_KEYS if "mean" in cells.get(k, {})]
-        fastest = min(thread_means) if thread_means else None
-        tds = "".join(
-            cell_html(cells.get(key, {"status": "na"}),
-                      fastest if key in THREAD_KEYS else None)
-            for key, *_ in CONFIGS
-        )
-        body_rows.append(f'      <tr><td class="name">{escape(r["name"])}</td>{tds}</tr>')
-    rows_html = "\n".join(body_rows) if body_rows else (
-        f'<tr><td colspan="{len(CONFIGS) + 1}" class="empty">No benchmarks ran '
-        f'above the {int(MIN_BENCH_SECONDS * 1000)}ms threshold.</td></tr>'
-    )
+        entry: dict = {"name": r["name"]}
+        for key, label, _, _ in CONFIGS:
+            cell = cells.get(key, {"status": "na"})
+            if "mean" in cell:
+                entry[label] = round(cell["mean"], 4)
+            elif cell.get("status") == "na":
+                entry[label] = "—"
+            else:
+                entry[label] = cell.get("status", "error")
+        bench_rows.append(entry)
 
-    too_fast = sorted({s["name"] for s in skipped if s["reason"] == "too-fast"})
-    errored = sorted({s["name"] for s in skipped if s["reason"] == "errored"})
-    skip_html = ""
-    if too_fast:
-        skip_html += (
-            f"<p><strong>{len(too_fast)}</strong> program(s) skipped (standard and "
-            f"proof runs both under {int(MIN_BENCH_SECONDS * 1000)}ms): "
-            + ", ".join(f"<code>{escape(n)}</code>" for n in too_fast) + "</p>"
-        )
-    if errored:
-        skip_html += (
-            f"<p class=\"errored\"><strong>{len(errored)}</strong> program(s) "
-            "could not be run: "
-            + ", ".join(f"<code>{escape(n)}</code>" for n in errored) + "</p>"
-        )
+    data: dict = {"Benchmarks": bench_rows}
+    if skipped:
+        data["Skipped"] = [{"name": s["name"], "reason": s["reason"]} for s in skipped]
 
-    header_cells = "".join(
-        f'<th data-type="num" data-col="{i + 1}">{escape(label)}</th>'
-        for i, (_, label, _, _) in enumerate(CONFIGS)
-    )
+    css = eval_live.css()
+    js = eval_live.js()
+    # Embedded inside a <script> block, so neutralize any "</script>" breakout.
+    # ("<\/" is just "</" inside a JS string literal, so the JSON stays valid.)
+    data_json = json.dumps(data).replace("</", "<\\/")
 
     commit = meta.get("commit_short") or "unknown"
     commit_full = meta.get("commit", "")
@@ -404,109 +385,56 @@ def render_html(rows: list[dict], skipped: list[dict], meta: dict) -> str:
         f'{escape(commit)}</a>'
         if commit_full else escape(commit)
     )
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>egglog nightly benchmarks</title>
-<style>
-  :root {{ --fg: #1a1a2e; --muted: #6b7280; --accent: #6c5ce7; --bg: #fafafe; --border: #e5e7eb; }}
-  * {{ box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         margin: 0; background: var(--bg); color: var(--fg); line-height: 1.5; }}
-  header {{ background: linear-gradient(120deg, #6c5ce7, #8e7cf0); color: #fff; padding: 2rem 1.5rem; }}
-  header h1 {{ margin: 0 0 .25rem; font-size: 1.6rem; }}
-  header .meta {{ opacity: .9; font-size: .9rem; }}
-  header a {{ color: #fff; text-decoration: underline; }}
-  main {{ max-width: 1080px; margin: 0 auto; padding: 1.5rem; }}
-  .note {{ color: var(--muted); font-size: .9rem; margin: 0 0 1.25rem; }}
-  .table-wrap {{ overflow-x: auto; background: #fff; border: 1px solid var(--border); border-radius: 10px; }}
-  table {{ border-collapse: collapse; width: 100%; min-width: 720px; }}
-  th, td {{ padding: .55rem .75rem; border-bottom: 1px solid var(--border); }}
-  th {{ background: #f3f4fb; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em;
-       color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap; text-align: right; }}
-  th:first-child {{ text-align: left; }}
-  th:hover {{ color: var(--accent); }}
-  td.num, td.status {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
-  td.name {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }}
-  td .sd {{ color: var(--muted); font-size: .72rem; margin-left: .25rem; }}
-  td.best {{ color: #047857; font-weight: 600; }}
-  td.status {{ color: var(--muted); }}
-  td.status.timeout, td.status.error {{ color: #b91c1c; }}
-  td.empty {{ text-align: center; color: var(--muted); padding: 2rem; }}
-  tbody tr:hover {{ background: #faf9ff; }}
-  .skipped {{ margin-top: 1.5rem; color: var(--muted); font-size: .9rem; }}
-  .skipped code {{ background: #f0f0f8; padding: 0 .25rem; border-radius: 4px; }}
-  .skipped .errored {{ color: #b91c1c; }}
-  footer {{ max-width: 1080px; margin: 0 auto; padding: 1rem 1.5rem 3rem; color: var(--muted); font-size: .85rem; }}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>egglog nightly benchmarks</title>
+  <style>
+    body {{
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0; padding: 2rem 3rem;
+      background: #f5f6f8; color: #1a1a1a;
+    }}
+    {css}
+  </style>
 </head>
 <body>
-<header>
   <h1>egglog nightly benchmarks</h1>
-  <div class="meta">
-    Commit {commit_link} &middot; branch <code>{escape(meta.get('branch', '?'))}</code><br>
-    {escape(meta.get('subject', ''))}<br>
+  <p>
+    Commit {commit_link} &middot;
+    branch <code>{escape(meta.get('branch', '?'))}</code> &middot;
+    {escape(meta.get('subject', ''))} &middot;
     Generated {generated}
-  </div>
-</header>
-<main>
-  <p class="note">
-    All times in seconds (mean ± stddev). Each run is capped at a 2-minute
-    timeout. Programs whose standard and proof runs are both under
-    {int(MIN_BENCH_SECONDS * 1000)}ms are omitted. The fastest thread count per
-    row is <span style="color:#047857;font-weight:600">highlighted</span>.
-    <code>—</code> means not applicable (e.g. a program that does not support proofs).
   </p>
-  <div class="table-wrap">
-  <table id="bench">
-    <thead>
-      <tr><th data-type="text" data-col="0">Benchmark</th>{header_cells}</tr>
-    </thead>
-    <tbody>
-{rows_html}
-    </tbody>
-  </table>
-  </div>
-  <div class="skipped">{skip_html}</div>
-</main>
-<footer>
-  Measured with <a href="https://github.com/sharkdp/hyperfine">hyperfine</a>.
-  Raw data: <a href="results.json">results.json</a>.
-</footer>
-<script>
-  // Click a column header to sort by that column.
-  const table = document.getElementById("bench");
-  const tbody = table.tBodies[0];
-  table.querySelectorAll("th[data-type]").forEach((th, idx) => {{
-    let asc = th.dataset.type === "text";
-    th.addEventListener("click", () => {{
-      const type = th.dataset.type;
-      const rows = [...tbody.rows];
-      rows.sort((a, b) => {{
-        const ca = a.cells[idx], cb = b.cells[idx];
-        if (type === "num") {{
-          const x = parseFloat(ca.dataset.sort), y = parseFloat(cb.dataset.sort);
-          return asc ? x - y : y - x;
-        }}
-        return asc ? ca.innerText.localeCompare(cb.innerText)
-                   : cb.innerText.localeCompare(ca.innerText);
-      }});
-      rows.forEach(r => tbody.appendChild(r));
-      asc = !asc;
-    }});
-  }});
-</script>
+  <p>
+    All times in seconds (mean). Each run is capped at a {RUN_TIMEOUT // 60}-minute timeout.
+    Programs whose standard and proof runs are both under
+    {int(MIN_BENCH_SECONDS * 1000)}ms are omitted.
+    Raw data: <a href="results.json">results.json</a>.
+  </p>
+  <div id="tables"></div>
+  <script>
+    {js}
+    initEvalLive("tables", {data_json}, "egglog nightly");
+  </script>
 </body>
-</html>
-"""
+</html>"""
 
 
 def main() -> int:
     if not shutil.which("hyperfine"):
         sys.exit("hyperfine not found — install with: cargo install hyperfine")
+    # Fail fast: the report uses eval-live, but it is only needed at the very
+    # end, after a sweep that can take a long time. Check it up front.
+    try:
+        import eval_live  # noqa: F401
+    except ImportError:
+        sys.exit("eval-live not found — install with: "
+                 "pip install -r scripts/requirements.txt")
 
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO_ROOT / "nightly" / "output"
     out_dir.mkdir(parents=True, exist_ok=True)

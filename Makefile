@@ -11,6 +11,7 @@ all: test nits docs
 # HTML dashboard to nightly/output/ (matching `report=` in nightly-conf).
 # Run nightly on nightly.cs.washington.edu.
 nightly:
+	pip install -q -r scripts/requirements.txt
 	python3 scripts/nightly_bench.py
 
 test: doctest
