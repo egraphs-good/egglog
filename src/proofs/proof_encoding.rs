@@ -10,6 +10,11 @@ pub(crate) struct EncodingState {
     pub uf_function: HashMap<String, String>,
     /// Maps sort name -> proof function name (set from :internal-proof-func annotation).
     pub proof_func_parent: HashMap<String, String>,
+    /// Function name -> (hidden current-value function, input arity). The
+    /// current function uses the original eager backend merge, so cleanup can
+    /// discard stale proof-view candidates whenever the current value already
+    /// has a proof witness.
+    pub merge_current: HashMap<String, (String, usize)>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -30,6 +35,7 @@ impl EncodingState {
             uf_parent: HashMap::default(),
             uf_function: HashMap::default(),
             proof_func_parent: HashMap::default(),
+            merge_current: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
             proofs_enabled: false,
@@ -255,13 +261,25 @@ impl<'a> ProofInstrumentor<'a> {
             .as_ref()
             .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
 
+        let current_name = self
+            .egraph
+            .parser
+            .symbol_gen
+            .fresh(&format!("{name}Current"));
+        self.egraph
+            .proof_state
+            .merge_current
+            .insert(name.clone(), (current_name.clone(), child_names.len()));
+
         let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
         let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
+        let current_cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_current_cleanup");
 
         let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
         let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
         let view_name = self.view_name(&fdecl.name);
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
+        let input_sorts = ListDisplay(&fdecl.schema.input, " ");
         let proof_query = if self.egraph.proof_state.proofs_enabled {
             // View is a function with proof output; bind proof variables
             format!(
@@ -310,7 +328,11 @@ impl<'a> ProofInstrumentor<'a> {
         // The first runs the merge function adding a new row.
         // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
         format!(
-            "(sort {fresh_sort})
+            "(function {current_name} ({input_sorts}) {output_sort}
+                    :merge {merge_fn}
+                    :unextractable
+                    :internal-hidden)
+                 (sort {fresh_sort})
                  (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort} :internal-hidden)
                  (rule (({view_name} {child_names_str} old)
                         ({view_name} {child_names_str} new)
@@ -333,6 +355,13 @@ impl<'a> ProofInstrumentor<'a> {
                        ((delete ({view_name} {child_names_str} old)))
                         :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name}\")
+                 (rule ((= selected ({current_name} {child_names_str}))
+                        ({view_name} {child_names_str} selected)
+                        ({view_name} {child_names_str} old)
+                        (!= selected old))
+                       ((delete ({view_name} {child_names_str} old)))
+                        :ruleset {rebuilding_cleanup_ruleset}
+                        :name \"{current_cleanup_name}\")
                 ",
         )
     }
@@ -999,7 +1028,16 @@ impl<'a> ProofInstrumentor<'a> {
     /// View is always a function (returning Proof or Unit).
     fn update_view(&mut self, fname: &str, args: &[String], proof: &str) -> String {
         let view_name = self.view_name(fname);
-        format!("(set ({view_name} {}) {proof})", ListDisplay(args, " "))
+        let view_update = format!("(set ({view_name} {}) {proof})", ListDisplay(args, " "));
+        if let Some((current_name, input_arity)) =
+            self.egraph.proof_state.merge_current.get(fname).cloned()
+            && args.len() == input_arity + 1
+        {
+            let inputs = ListDisplay(&args[..input_arity], " ");
+            let output = &args[input_arity];
+            return format!("{view_update}\n(set ({current_name} {inputs}) {output})");
+        }
+        view_update
     }
 
     /// Return some code adding to the view and term tables.
