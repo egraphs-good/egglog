@@ -869,7 +869,7 @@ impl EGraph {
             .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
         let mut rootsorts = func.schema.input.clone();
         if include_output {
-            rootsorts.push(func.schema.output.clone());
+            rootsorts.extend(func.schema.outputs().cloned());
         }
         let extractor = Extractor::compute_costs_from_rootsorts(
             Some(rootsorts),
@@ -897,11 +897,22 @@ impl EGraph {
                 }
                 inputs.push(termdag.app(sym.to_owned(), children));
                 if include_output {
-                    let value = row.vals[func.schema.input.len()];
-                    let sort = &func.schema.output;
-                    let (_, term) = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    // Extract every output (value) column. A tuple-output function has more than
+                    // one; we display them wrapped in a `(values ...)` term to mirror the surface
+                    // syntax.
+                    let mut out_terms = Vec::new();
+                    for (i, sort) in func.schema.outputs().enumerate() {
+                        let value = row.vals[func.schema.input.len() + i];
+                        let (_, term) = extractor
+                            .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+                            .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        out_terms.push(term);
+                    }
+                    let term = if out_terms.len() == 1 {
+                        out_terms.pop().unwrap()
+                    } else {
+                        termdag.app("values".to_owned(), out_terms)
+                    };
                     output.as_mut().unwrap().push(term);
                 }
                 true

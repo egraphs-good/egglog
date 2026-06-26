@@ -357,13 +357,11 @@ impl RuleBuilder<'_> {
         let schema_math = if let Some(func) = func {
             let info = &self.egraph.funcs[func];
             assert_eq!(info.schema.len(), entries.len());
-            SchemaMath {
-                subsume: info.can_subsume,
-                func_cols: info.schema.len(),
-            }
+            info.schema_math()
         } else {
             SchemaMath {
                 subsume: subsume_entry.is_some(),
+                n_keys: entries.len().saturating_sub(1),
                 func_cols: entries.len(),
             }
         };
@@ -484,10 +482,7 @@ impl RuleBuilder<'_> {
             || "subsumed a nonextestent row!".to_string(),
         );
         let info = &self.egraph.funcs[func];
-        let schema_math = SchemaMath {
-            subsume: info.can_subsume,
-            func_cols: info.schema.len(),
-        };
+        let schema_math = info.schema_math();
         assert!(info.can_subsume);
         assert_eq!(entries.len() + 1, info.schema.len());
         let entries = entries.to_vec();
@@ -540,10 +535,7 @@ impl RuleBuilder<'_> {
             .to_var();
         let table = info.table;
         let id_counter = self.query.id_counter;
-        let schema_math = SchemaMath {
-            subsume: info.can_subsume,
-            func_cols: info.schema.len(),
-        };
+        let schema_math = info.schema_math();
         let cb: BuildRuleCallback = match info.default_val {
             DefaultVal::Const(_) | DefaultVal::FreshId => {
                 let wv: WriteVal = match &info.default_val {
@@ -673,10 +665,7 @@ impl RuleBuilder<'_> {
         let info = &self.egraph.funcs[func];
         let table = info.table;
         let entries = entries.to_vec();
-        let schema_math = SchemaMath {
-            subsume: info.can_subsume,
-            func_cols: info.schema.len(),
-        };
+        let schema_math = info.schema_math();
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);
             schema_math.write_table_row(

@@ -30,6 +30,9 @@ impl ProofInstrumentor<'_> {
             ResolvedCall::Primitive(_) => {
                 return Err(ProveExistsError::PrimitivesUnsupported);
             }
+            ResolvedCall::Values(_) => {
+                return Err(ProveExistsError::RequiresConstructor);
+            }
         };
 
         let function = self

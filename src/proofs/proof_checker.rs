@@ -189,6 +189,7 @@ fn eval_expr_with_subst(
                     })
                 })?
             }
+            ResolvedCall::Values(_) => panic!("`values` is not supported in proofs"),
         },
     };
 
@@ -1013,6 +1014,7 @@ impl ProofStore {
                             }
                         }
                     }
+                    ResolvedCall::Values(_) => panic!("`values` is not supported in proofs"),
                 }
             }
         }

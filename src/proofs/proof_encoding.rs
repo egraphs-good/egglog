@@ -932,6 +932,9 @@ impl<'a> ProofInstrumentor<'a> {
 
                         (fv.clone(), proof)
                     }
+                    ResolvedCall::Values(_) => {
+                        panic!("tuple-output (`values`) functions are not supported in proofs")
+                    }
                 }
             }
         }
@@ -1177,6 +1180,9 @@ impl<'a> ProofInstrumentor<'a> {
                             ListDisplay(args, " ")
                         ));
                         fv
+                    }
+                    ResolvedCall::Values(_) => {
+                        panic!("tuple-output (`values`) functions are not supported in proofs")
                     }
                 }
             }

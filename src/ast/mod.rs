@@ -8,7 +8,8 @@ pub mod remove_globals;
 use std::cmp::max;
 
 use crate::core::{
-    GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
+    GenericAtom, GenericAtomTerm, GenericExprExt, HeadOps, HeadOrEq, Query, ResolvedCall,
+    ResolvedCoreRule,
 };
 use crate::*;
 pub use egglog_ast::generic_ast::{
@@ -657,7 +658,7 @@ where
     },
 
     /// The `function` command declare an egglog custom function, which is a database table with a
-    /// a functional dependency (also called a primary key) on its inputs to one output.
+    /// a functional dependency (also called a primary key) on its inputs to its output(s).
     ///
     /// ```text
     /// (function <name:Ident> <schema:Schema> <cost:Cost>
@@ -665,6 +666,13 @@ where
     ///        (:merge <Expr>)?)
     ///```
     /// A function can have a `cost` for extraction.
+    ///
+    /// The output of a function is usually a single sort, but may be a parenthesized list of
+    /// sorts, e.g. `(function f (Math) (i64 i64) ...)`, declaring a *tuple-output* function whose
+    /// functional dependency maps the inputs to a tuple of value columns. Tuple outputs are
+    /// destructured in queries with `(= (values a b) (f x))`, written with
+    /// `(set (f x) (values a b))`, and merged with a `(values e0 e1 ...)` clause where `ei` merges
+    /// column `i` using the bound variables `old0`, `new0`, `old1`, `new1`, ....
     ///
     /// Finally, it can have a `merge` and `on_merge`, which are triggered when
     /// the function dependency is violated.
@@ -1289,18 +1297,66 @@ impl Display for Variant {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub input: Vec<String>,
+    /// The first (primary) output sort. Most functions have exactly this one output.
     pub output: String,
+    /// Additional output sorts for tuple-output functions (declared with a parenthesized list of
+    /// output sorts, e.g. `(function f (Math) (i64 i64) ...)`). Empty for ordinary functions.
+    /// Together with [`Schema::output`], `output` followed by `extra_outputs` gives all of a
+    /// function's value columns (see [`Schema::outputs`]).
+    pub extra_outputs: Vec<String>,
 }
 
 impl Display for Schema {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "({}) {}", ListDisplay(&self.input, " "), self.output)
+        if self.extra_outputs.is_empty() {
+            write!(f, "({}) {}", ListDisplay(&self.input, " "), self.output)
+        } else {
+            write!(
+                f,
+                "({}) ({} {})",
+                ListDisplay(&self.input, " "),
+                self.output,
+                ListDisplay(&self.extra_outputs, " ")
+            )
+        }
     }
 }
 
 impl Schema {
     pub fn new(input: Vec<String>, output: String) -> Self {
-        Self { input, output }
+        Self {
+            input,
+            output,
+            extra_outputs: vec![],
+        }
+    }
+
+    /// Construct a schema with one or more output sorts. `outputs` must be non-empty.
+    pub fn new_tuple(input: Vec<String>, outputs: Vec<String>) -> Self {
+        let mut outputs = outputs.into_iter();
+        let output = outputs
+            .next()
+            .expect("schema must have at least one output");
+        Self {
+            input,
+            output,
+            extra_outputs: outputs.collect(),
+        }
+    }
+
+    /// Iterate over all output (value-column) sorts: the primary output followed by any extras.
+    pub fn outputs(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.output).chain(self.extra_outputs.iter())
+    }
+
+    /// The number of output (value) columns.
+    pub fn num_outputs(&self) -> usize {
+        1 + self.extra_outputs.len()
+    }
+
+    /// Whether this function has more than one output column.
+    pub fn is_tuple_output(&self) -> bool {
+        !self.extra_outputs.is_empty()
     }
 }
 
@@ -1385,7 +1441,7 @@ pub struct Facts<Head, Leaf>(pub Vec<GenericFact<Head, Leaf>>);
 
 impl<Head, Leaf> Facts<Head, Leaf>
 where
-    Head: Clone + Display,
+    Head: Clone + Display + HeadOps,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     /// Flattens a list of facts into a Query.
@@ -1406,21 +1462,66 @@ where
         for fact in self.0.iter() {
             match fact {
                 GenericFact::Eq(span, e1, e2) => {
-                    let mut to_equate = vec![];
-                    let mut process = |expr: &GenericExpr<Head, Leaf>| {
-                        let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
-                        atoms.extend(child_atoms);
-                        to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
-                        expr
-                    };
-                    let e1 = process(e1);
-                    let e2 = process(e2);
-                    atoms.push(GenericAtom {
-                        span: span.clone(),
-                        head: HeadOrEq::Eq,
-                        args: to_equate,
-                    });
-                    new_body.push(GenericFact::Eq(span.clone(), e1, e2));
+                    // Tuple destructure: `(= (values v...) (f a...))` (in either order), where `f`
+                    // is a tuple-output function. This lowers directly to the function atom
+                    // `f(a..., v...)` — the `values` targets become the function's output columns.
+                    if let Some(td) = match_tuple_destructure(e1, e2, typeinfo) {
+                        let mut atom_args = vec![];
+                        let mut mapped_inputs = vec![];
+                        for arg in td.func_args {
+                            let (child_atoms, mexpr) = arg.to_query(typeinfo, fresh_gen);
+                            atoms.extend(child_atoms);
+                            atom_args.push(mexpr.get_corresponding_var_or_lit(typeinfo));
+                            mapped_inputs.push(mexpr);
+                        }
+                        let mut mapped_values = vec![];
+                        for v in td.values_args {
+                            let (child_atoms, mexpr) = v.to_query(typeinfo, fresh_gen);
+                            atoms.extend(child_atoms);
+                            atom_args.push(mexpr.get_corresponding_var_or_lit(typeinfo));
+                            mapped_values.push(mexpr);
+                        }
+                        atoms.push(GenericAtom {
+                            span: td.func_span.clone(),
+                            head: HeadOrEq::Head(td.func_head.clone()),
+                            args: atom_args,
+                        });
+                        // Reconstruct a mapped `Eq` fact so type annotation can produce the
+                        // resolved form (which is re-lowered the same way during canonicalization).
+                        let values_mapped = GenericExpr::Call(
+                            td.values_span.clone(),
+                            CorrespondingVar::new(
+                                td.values_head.clone(),
+                                fresh_gen.fresh(td.func_head),
+                            ),
+                            mapped_values,
+                        );
+                        let func_mapped = GenericExpr::Call(
+                            td.func_span.clone(),
+                            CorrespondingVar::new(
+                                td.func_head.clone(),
+                                fresh_gen.fresh(td.func_head),
+                            ),
+                            mapped_inputs,
+                        );
+                        new_body.push(GenericFact::Eq(span.clone(), values_mapped, func_mapped));
+                    } else {
+                        let mut to_equate = vec![];
+                        let mut process = |expr: &GenericExpr<Head, Leaf>| {
+                            let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
+                            atoms.extend(child_atoms);
+                            to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
+                            expr
+                        };
+                        let e1 = process(e1);
+                        let e2 = process(e2);
+                        atoms.push(GenericAtom {
+                            span: span.clone(),
+                            head: HeadOrEq::Eq,
+                            args: to_equate,
+                        });
+                        new_body.push(GenericFact::Eq(span.clone(), e1, e2));
+                    }
                 }
                 GenericFact::Fact(expr) => {
                     let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
@@ -1431,6 +1532,47 @@ where
         }
         (Query { atoms }, new_body)
     }
+}
+
+/// The pieces of a recognized `(= (values v...) (f a...))` tuple destructure.
+struct TupleDestructure<'a, Head, Leaf> {
+    values_head: &'a Head,
+    values_span: &'a Span,
+    values_args: &'a [GenericExpr<Head, Leaf>],
+    func_head: &'a Head,
+    func_span: &'a Span,
+    func_args: &'a [GenericExpr<Head, Leaf>],
+}
+
+/// Recognize `(= (values v...) (f a...))` in either argument order, where `f` is a tuple-output
+/// function. The arity (number of `values` targets vs. output columns) is validated later by the
+/// usual type-checking arity constraints.
+fn match_tuple_destructure<'a, Head, Leaf>(
+    e1: &'a GenericExpr<Head, Leaf>,
+    e2: &'a GenericExpr<Head, Leaf>,
+    typeinfo: &TypeInfo,
+) -> Option<TupleDestructure<'a, Head, Leaf>>
+where
+    Head: Clone + Display + HeadOps,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    for (a, b) in [(e1, e2), (e2, e1)] {
+        if let GenericExpr::Call(values_span, values_head, values_args) = a
+            && values_head.is_values()
+            && let GenericExpr::Call(func_span, func_head, func_args) = b
+            && func_head.tuple_output_arity(typeinfo).is_some()
+        {
+            return Some(TupleDestructure {
+                values_head,
+                values_span,
+                values_args,
+                func_head,
+                func_span,
+                func_args,
+            });
+        }
+    }
+    None
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1675,6 +1817,7 @@ where
                 schema: Schema {
                     input: schema.input.into_iter().map(&mut *fun).collect(),
                     output: fun(schema.output),
+                    extra_outputs: schema.extra_outputs.into_iter().map(&mut *fun).collect(),
                 },
                 cost,
                 unextractable,
@@ -1702,6 +1845,7 @@ where
                 schema: Schema {
                     input: schema.input.into_iter().map(&mut *fun).collect(),
                     output: fun(schema.output),
+                    extra_outputs: schema.extra_outputs.into_iter().map(&mut *fun).collect(),
                 },
                 merge,
                 hidden,

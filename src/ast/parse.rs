@@ -38,6 +38,60 @@ macro_rules! error {
     };
 }
 
+/// Names that may not be used as user identifiers (function/sort/constructor/relation/variant
+/// names or variables) because they are built-in keywords of the surface syntax: most command,
+/// action, and schedule heads, plus `values` (the tuple constructor for tuple-output functions).
+/// Keeping these out of the identifier namespace avoids confusing programs where, say, a function
+/// named `set` reads like the `set` action. A few common-word commands (`input`, `output`) are
+/// only partially reserved — see [`COMMAND_ONLY_KEYWORDS`]. Names starting with `:` are reserved
+/// separately (the `:` prefix marks option keywords), see [`Parser::ensure_symbol_not_reserved`].
+const RESERVED_KEYWORDS: &[&str] = &[
+    // commands
+    "sort",
+    "datatype",
+    "datatype*",
+    "function",
+    "constructor",
+    "relation",
+    "ruleset",
+    "unstable-combined-ruleset",
+    "rule",
+    "rewrite",
+    "birewrite",
+    "run",
+    "run-schedule",
+    "check",
+    "extract",
+    "push",
+    "pop",
+    "print-function",
+    "print-size",
+    "print-stats",
+    "include",
+    "fail",
+    "prove",
+    "prove-exists",
+    // actions
+    "let",
+    "set",
+    "union",
+    "delete",
+    "subsume",
+    "panic",
+    // schedules
+    "repeat",
+    "saturate",
+    "seq",
+    // tuple-output destructuring/construction
+    "values",
+];
+
+/// Commands whose names are common enough to want as ordinary identifiers, so they are only
+/// *partially* reserved: usable as variables, but not as the head of a call s-expr (so `(input
+/// ...)` always means the command, never a table lookup) nor as a definition (table/sort/etc.)
+/// name.
+const COMMAND_ONLY_KEYWORDS: &[&str] = &["input", "output"];
+
 pub enum Sexp {
     // Will never contain `Literal::Unit`, as this
     // will be parsed as an empty `Sexp::List`.
@@ -168,7 +222,26 @@ impl Default for Parser {
 
 impl Parser {
     fn ensure_symbol_not_reserved(&self, symbol: &str, span: &Span) -> Result<(), ParseError> {
-        if self.symbol_gen.is_reserved(symbol) && self.ensure_no_reserved_symbols {
+        // Disabled when re-parsing egglog's own generated programs (e.g. proof/term encoding),
+        // which may legitimately use internal-prefixed names.
+        if !self.ensure_no_reserved_symbols {
+            return Ok(());
+        }
+        if RESERVED_KEYWORDS.contains(&symbol) {
+            return error!(
+                span.clone(),
+                "`{symbol}` is a reserved keyword and cannot be used as a name"
+            );
+        }
+        // The leading `:` marks option keywords (`:merge`, `:cost`, `:ruleset`, ...); the parser
+        // uses it to delimit options, so it cannot be the start of a user identifier.
+        if symbol.starts_with(':') {
+            return error!(
+                span.clone(),
+                "`{symbol}` cannot be used as a name: the `:` prefix is reserved for option keywords"
+            );
+        }
+        if self.symbol_gen.is_reserved(symbol) {
             return error!(
                 span.clone(),
                 "symbols starting with '{}' are reserved for egglog internals",
@@ -176,6 +249,28 @@ impl Parser {
             );
         }
         Ok(())
+    }
+
+    /// Check that a name introducing a definition (function/sort/constructor/relation/datatype/
+    /// variant) is allowed: neither a reserved keyword nor a command-only keyword like
+    /// `input`/`output` (which would otherwise create an uncallable table).
+    fn ensure_definition_name(&self, name: &str, span: &Span) -> Result<(), ParseError> {
+        self.ensure_symbol_not_reserved(name, span)?;
+        if self.ensure_no_reserved_symbols && COMMAND_ONLY_KEYWORDS.contains(&name) {
+            return error!(
+                span.clone(),
+                "`{name}` is a command and cannot be used as a definition name"
+            );
+        }
+        Ok(())
+    }
+
+    /// Parse an atom that introduces a new name (e.g. a function, sort, constructor, or relation),
+    /// rejecting reserved keywords such as `values` and command names like `input`/`output`.
+    fn parse_name(&self, sexp: &Sexp, what: &'static str) -> Result<String, ParseError> {
+        let name = sexp.expect_atom(what)?;
+        self.ensure_definition_name(&name, &sexp.span())?;
+        Ok(name)
     }
 
     pub fn get_program_from_string(
@@ -263,7 +358,7 @@ impl Parser {
                 match tail {
                     [name] => vec![Command::Sort {
                         span,
-                        name: name.expect_atom("sort name")?,
+                        name: self.parse_name(name, "sort name")?,
                         presort_and_args: None,
                         uf: None,
                         proof_func: None,
@@ -273,7 +368,7 @@ impl Parser {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
                         vec![Command::Sort {
                             span,
-                            name: name.expect_atom("sort name")?,
+                            name: self.parse_name(name, "sort name")?,
                             presort_and_args: Some((
                                 func,
                                 map_fallible(args, self, Self::parse_expr)?,
@@ -306,7 +401,7 @@ impl Parser {
                         }
                         vec![Command::Sort {
                             span,
-                            name: name.expect_atom("sort name")?,
+                            name: self.parse_name(name, "sort name")?,
                             presort_and_args: None,
                             uf,
                             proof_func,
@@ -324,7 +419,7 @@ impl Parser {
             "datatype" => match tail {
                 [name, variants @ ..] => vec![Command::Datatype {
                     span,
-                    name: name.expect_atom("sort name")?,
+                    name: self.parse_name(name, "sort name")?,
                     variants: map_fallible(variants, self, Self::variant)?,
                 }],
                 _ => return error!(span, "usage: (datatype <name> <variant>*)"),
@@ -379,7 +474,7 @@ impl Parser {
                         }
                     };
                     vec![Command::Function {
-                        name: name.expect_atom("function name")?,
+                        name: self.parse_name(name, "function name")?,
                         schema: self.parse_schema(inputs, output)?,
                         merge,
                         hidden,
@@ -419,7 +514,7 @@ impl Parser {
 
                         vec![Command::Constructor {
                             span,
-                            name: name.expect_atom("constructor name")?,
+                            name: self.parse_name(name, "constructor name")?,
                             schema: self.parse_schema(inputs, output)?,
                             cost,
                             unextractable,
@@ -439,7 +534,7 @@ impl Parser {
             "relation" => match tail {
                 [name, inputs] => vec![Command::Relation {
                     span,
-                    name: name.expect_atom("relation name")?,
+                    name: self.parse_name(name, "relation name")?,
                     inputs: map_fallible(inputs.expect_list("input sorts")?, self, |_, sexp| {
                         sexp.expect_atom("input sort")
                     })?,
@@ -931,6 +1026,17 @@ impl Parser {
                         return func.parse(tail, span, self);
                     }
 
+                    // `input`/`output` are commands, not callable tables, so they may not head an
+                    // expression even though they are allowed as ordinary variable names.
+                    if self.ensure_no_reserved_symbols
+                        && COMMAND_ONLY_KEYWORDS.contains(&head.as_str())
+                    {
+                        return error!(
+                            span,
+                            "`{head}` is a command and cannot be used as the head of an expression"
+                        );
+                    }
+
                     Expr::Call(
                         span.clone(),
                         head,
@@ -950,7 +1056,7 @@ impl Parser {
         Ok(match head.as_str() {
             "sort" => match tail {
                 [name, call] => {
-                    let name = name.expect_atom("sort name")?;
+                    let name = self.parse_name(name, "sort name")?;
                     let (func, args, _) = call.expect_call("container sort declaration")?;
                     let args = map_fallible(args, self, Self::parse_expr)?;
                     (span, name, Subdatatypes::NewSort(func, args))
@@ -963,6 +1069,7 @@ impl Parser {
                 }
             },
             _ => {
+                self.ensure_definition_name(&head, &span)?;
                 let variants = map_fallible(tail, self, Self::variant)?;
                 (span, head, Subdatatypes::Variants(variants))
             }
@@ -971,6 +1078,7 @@ impl Parser {
 
     pub fn variant(&mut self, sexp: &Sexp) -> Result<Variant, ParseError> {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
+        self.ensure_definition_name(&name, &span)?;
 
         let (types, cost, unextractable) = match tail {
             [types @ .., Sexp::Atom(o, _)] if *o == ":unextractable" => (types, None, true),
@@ -1023,14 +1131,27 @@ impl Parser {
     }
 
     pub fn parse_schema(&self, input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
-        Ok(Schema {
-            input: input
-                .expect_list("input sorts")?
+        let input = input
+            .expect_list("input sorts")?
+            .iter()
+            .map(|sexp| sexp.expect_atom("input sort"))
+            .collect::<Result<_, _>>()?;
+        // The output is either a single sort, or a parenthesized list of sorts for a
+        // tuple-output function (e.g. `(function f (Math) (i64 i64) ...)`).
+        let outputs: Vec<String> = match output {
+            Sexp::List(list, _) => list
                 .iter()
-                .map(|sexp| sexp.expect_atom("input sort"))
+                .map(|sexp| sexp.expect_atom("output sort"))
                 .collect::<Result<_, _>>()?,
-            output: output.expect_atom("output sort")?,
-        })
+            _ => vec![output.expect_atom("output sort")?],
+        };
+        if outputs.is_empty() {
+            return error!(
+                output.span(),
+                "a function must have at least one output sort"
+            );
+        }
+        Ok(Schema::new_tuple(input, outputs))
     }
 }
 

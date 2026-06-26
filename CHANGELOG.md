@@ -2,6 +2,20 @@
 
 ## [Unreleased] - ReleaseDate
 
+- **Tuple-output functions.** A function may declare more than one output sort, e.g.
+  `(function interval (Math) (i64 i64) :merge (values (max old0 new0) (min old1 new1)))`. Such a
+  function stores its outputs as separate value columns (no boxing); the functional dependency is
+  `keys -> (value0, value1, ...)`. Outputs are destructured in queries with
+  `(= (values lo hi) (interval x))`, written with `(set (interval x) (values 0 100))`, and merged
+  with a `(values ...)` clause whose `i`-th element merges column `i` using the bound variables
+  `old0`, `new0`, `old1`, `new1`, .... Tuple outputs are only allowed for plain functions (not
+  constructors, relations, or view tables) and are not supported by the term/proof encoding.
+- Built-in keywords (most command, action, and schedule heads such as `function`, `set`, `union`,
+  `rule`, `run`, ..., plus the tuple constructor `values`) are now reserved and may no longer be
+  used as user identifiers (function/sort/constructor/relation/variant names or variables). Names
+  starting with `:` are likewise reserved, since that prefix marks option keywords (`:merge`,
+  `:cost`, ...). The common-word commands `input` and `output` are only partially reserved: they
+  remain usable as variables, but not as definition names or as the head of a call expression.
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.

@@ -290,6 +290,9 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
                 match resolved_call {
                     ResolvedCall::Primitive(primitive) => self.apply_primitive(primitive, &values),
                     ResolvedCall::Func(func) => self.apply_resolved_function(func, &values),
+                    ResolvedCall::Values(_) => {
+                        panic!("`values` cannot be evaluated as a single-valued expression")
+                    }
                 }
             }
         }
