@@ -8,7 +8,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::core_relations;
 pub use core_relations::{
-    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, Rebuilder,
+    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, ValueRebuilder,
 };
 pub use egglog_bridge::ColumnTy;
 

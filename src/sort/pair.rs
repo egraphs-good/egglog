@@ -9,7 +9,7 @@ pub struct PairContainer {
 }
 
 impl ContainerValue for PairContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_first {
             let new = rebuilder.rebuild_val(self.first);
@@ -130,13 +130,19 @@ impl ContainerSort for PairSort {
         };
         // `pair-first`/`pair-second` extract a child of a `(pair a b)` term.
         let pair_first_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            let Term::App(head, children) = termdag.get(args[0]) else {
+            let [pair] = args else {
+                return None;
+            };
+            let Term::App(head, children) = termdag.get(*pair) else {
                 return None;
             };
             (head == "pair" && children.len() == 2).then(|| children[0])
         };
         let pair_second_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            let Term::App(head, children) = termdag.get(args[0]) else {
+            let [pair] = args else {
+                return None;
+            };
+            let Term::App(head, children) = termdag.get(*pair) else {
                 return None;
             };
             (head == "pair" && children.len() == 2).then(|| children[1])

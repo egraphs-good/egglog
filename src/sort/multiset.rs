@@ -9,8 +9,16 @@ pub struct MultiSetContainer {
     pub data: MultiSet<Value>,
 }
 
+/// Canonical multiset term form `(multiset-of e0 e1 ...)`: elements sorted by
+/// [`TermDag::ast_cmp`] with multiplicities kept as repeats, so proof checking
+/// can reproduce it from terms.
+fn normalize_multiset_term(termdag: &mut TermDag, mut children: Vec<TermId>) -> TermId {
+    termdag.sort_terms_by_ast(&mut children);
+    termdag.app("multiset-of".into(), children)
+}
+
 impl ContainerValue for MultiSetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         // If the contents are an eq-sort then we want to rebuild
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
@@ -132,8 +140,7 @@ impl ContainerSort for MultiSetSort {
         // `reconstruct_termdag`. (Count merging for proof checking of
         // collapsing multisets is refined in the MultiSet proof stage.)
         let multiset_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            let raw = termdag.app("multiset-of".into(), args.to_vec());
-            Some(termdag.normalize_container_term(raw))
+            Some(normalize_multiset_term(termdag, args.to_vec()))
         };
 
         add_primitive_with_validator!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
@@ -224,10 +231,8 @@ impl ContainerSort for MultiSetSort {
         element_terms: Vec<TermId>,
     ) -> TermId {
         // Canonical form (sorted by deterministic AST order, multiplicities
-        // preserved as repeats) via the shared `normalize_container_term`, so
-        // proof checking can reproduce it from terms alone.
-        let raw = termdag.app("multiset-of".into(), element_terms);
-        termdag.normalize_container_term(raw)
+        // preserved as repeats) so proof checking can reproduce it from terms.
+        normalize_multiset_term(termdag, element_terms)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {

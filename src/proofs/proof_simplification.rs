@@ -336,7 +336,7 @@ impl ProofStore {
                         (p.lhs(), p.rhs())
                     };
                     proof.proposition.lhs = inner_lhs;
-                    proof.proposition.rhs = self.term_dag.normalize_container_term(inner_rhs);
+                    proof.proposition.rhs = self.normalize_container(inner_rhs);
                     changed = true;
                 }
             }

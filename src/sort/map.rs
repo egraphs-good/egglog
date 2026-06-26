@@ -9,7 +9,7 @@ pub struct MapContainer {
 }
 
 impl ContainerValue for MapContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_keys {
             self.data = self
@@ -33,6 +33,65 @@ impl ContainerValue for MapContainer {
     }
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().flat_map(|(k, v)| [k, v]).copied()
+    }
+}
+
+/// Canonicalize a `map-of`/`map-empty`/`map-insert` term to a flat `(map-of k0
+/// v0 ...)` in sorted key order, with last-write-wins on duplicate keys.
+/// Returns `None` for a malformed map term (an odd-arity `map-of`, a
+/// `map-insert` not of arity 3, or a spine not bottoming out in
+/// `map-empty`/`map-of`), so callers leave such terms unchanged.
+fn normalize_map_term(termdag: &mut TermDag, term_id: TermId) -> Option<TermId> {
+    let entries = collect_map_entries(termdag, term_id)?;
+    let mut pairs: Vec<(TermId, TermId)> = Vec::new();
+    for (k, v) in entries {
+        pairs.retain(|(ek, _)| *ek != k);
+        pairs.push((k, v));
+    }
+    pairs.sort_by(|(ka, _), (kb, _)| termdag.ast_cmp(*ka, *kb));
+    let mut flat = Vec::with_capacity(pairs.len() * 2);
+    for (k, v) in pairs {
+        flat.push(k);
+        flat.push(v);
+    }
+    Some(termdag.app("map-of".to_string(), flat))
+}
+
+/// Collect `(key, value)` pairs in insertion order from a flat `map-of` or a
+/// `map-insert`/`map-empty` spine (innermost insert first). Returns `None` for
+/// a malformed map (see [`normalize_map_term`]).
+fn collect_map_entries(termdag: &TermDag, term_id: TermId) -> Option<Vec<(TermId, TermId)>> {
+    let mut out = Vec::new();
+    collect_map_entries_into(termdag, term_id, &mut out)?;
+    Some(out)
+}
+
+fn collect_map_entries_into(
+    termdag: &TermDag,
+    term_id: TermId,
+    out: &mut Vec<(TermId, TermId)>,
+) -> Option<()> {
+    match termdag.get(term_id) {
+        Term::App(head, args) if head == "map-insert" => {
+            let [inner, k, v] = args.as_slice() else {
+                return None;
+            };
+            let (inner, k, v) = (*inner, *k, *v);
+            collect_map_entries_into(termdag, inner, out)?;
+            out.push((k, v));
+            Some(())
+        }
+        Term::App(head, args) if head == "map-of" => {
+            if !args.len().is_multiple_of(2) {
+                return None;
+            }
+            for chunk in args.chunks(2) {
+                out.push((chunk[0], chunk[1]));
+            }
+            Some(())
+        }
+        Term::App(head, args) if head == "map-empty" && args.is_empty() => Some(()),
+        _ => None,
     }
 }
 
@@ -148,16 +207,15 @@ impl ContainerSort for MapSort {
         let map_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
             Some(termdag.app("map-of".into(), vec![]))
         };
+        // `normalize_map_term` returns `None` for malformed terms (e.g. odd-arity
+        // `map-of` or a `map-insert` of the wrong arity), which fails the proof.
         let map_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let raw = termdag.app("map-of".into(), args.to_vec());
-            Some(termdag.normalize_container_term(raw))
+            normalize_map_term(termdag, raw)
         };
         let map_insert_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            if args.len() != 3 {
-                return None;
-            }
             let raw = termdag.app("map-insert".into(), args.to_vec());
-            Some(termdag.normalize_container_term(raw))
+            normalize_map_term(termdag, raw)
         };
 
         add_primitive_with_validator!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
@@ -199,7 +257,7 @@ impl ContainerSort for MapSort {
         // checking can reproduce it from terms alone (and the rebuild proof's
         // Congr indices are flat, like `set-of`/`vec-of`).
         let raw = termdag.app("map-of".into(), element_terms);
-        termdag.normalize_container_term(raw)
+        normalize_map_term(termdag, raw).unwrap_or(raw)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {

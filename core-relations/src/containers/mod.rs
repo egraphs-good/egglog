@@ -28,7 +28,7 @@ use crate::{
     WrappedTable,
     common::{DashMap, IndexSet, SubsetTracker},
     parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
-    table_spec::Rebuilder,
+    table_spec::{Rebuilder, ValueRebuilder},
 };
 
 #[cfg(test)]
@@ -285,11 +285,11 @@ impl ContainerValues {
 /// rebuilding of container contents and merging containers that become equal after a rebuild pass
 /// has taken place.
 pub trait ContainerValue: Hash + Eq + Clone + Send + Sync + 'static {
-    /// Rebuild an additional container in place according the the given [`Rebuilder`].
+    /// Rebuild an additional container in place according the the given [`ValueRebuilder`].
     ///
     /// If this method returns `false` then the container must not have been modified (i.e. it must
     /// hash to the same value, and compare equal to a copy of itself before the call).
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool;
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool;
 
     /// Iterate over the contents of the container.
     ///
@@ -761,55 +761,15 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
     }
 }
 
-/// A [`Rebuilder`] that remaps individual values through a caller-supplied
+/// A [`ValueRebuilder`] that remaps individual values through a caller-supplied
 /// closure. Used by [`ContainerValues::rebuild_val_with`] to rebuild a single
-/// container against an explicit value mapping (rather than a backend
-/// union-find). Only the value-level methods are reachable from
-/// [`ContainerValue::rebuild_contents`]; the table-level methods are never
-/// called in that path.
+/// container against an explicit value mapping rather than a backend union-find.
 struct ClosureRebuilder<'a> {
     remap: &'a (dyn Fn(Value) -> Value + Send + Sync),
 }
 
-impl Rebuilder for ClosureRebuilder<'_> {
-    fn hint_col(&self) -> Option<ColumnId> {
-        None
-    }
-
+impl ValueRebuilder for ClosureRebuilder<'_> {
     fn rebuild_val(&self, val: Value) -> Value {
         (self.remap)(val)
-    }
-
-    fn rebuild_buf(
-        &self,
-        _buf: &crate::row_buffer::RowBuffer,
-        _start: crate::RowId,
-        _end: crate::RowId,
-        _out: &mut TaggedRowBuffer,
-        _exec_state: &mut ExecutionState,
-    ) {
-        unreachable!("ClosureRebuilder is only used for single-container rebuilds")
-    }
-
-    fn rebuild_subset(
-        &self,
-        _other: crate::table_spec::WrappedTableRef,
-        _subset: SubsetRef,
-        _out: &mut TaggedRowBuffer,
-        _exec_state: &mut ExecutionState,
-    ) {
-        unreachable!("ClosureRebuilder is only used for single-container rebuilds")
-    }
-
-    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
-        let mut changed = false;
-        for v in vals.iter_mut() {
-            let new = (self.remap)(*v);
-            if new != *v {
-                *v = new;
-                changed = true;
-            }
-        }
-        changed
     }
 }

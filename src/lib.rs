@@ -1539,11 +1539,17 @@ impl EGraph {
                 name,
                 uf,
                 proof_func,
+                proof_constructors,
                 ..
             } => {
-                // If the sort has a :internal-uf field, store the mapping for extraction
-                if let Some(uf_name) = uf {
-                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                // Restore the sort's UF tables into proof_state: the constructor
+                // for extraction's `find_canonical`, the index for container
+                // rebuild's leader lookups.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_ctor);
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state.uf_function.insert(name.clone(), uf_index);
+                    }
                 }
                 // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
                 // This annotation is set by proof instrumentation and consumed here.
@@ -1551,6 +1557,16 @@ impl EGraph {
                     self.proof_state
                         .proof_func_parent
                         .insert(name.clone(), proof_func_name);
+                }
+                // The Proof sort's :internal-proof-names records the global proof
+                // constructors; restore them so container rebuild can recover them.
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr;
+                    names.eq_trans_constructor = pc.trans;
+                    names.eq_sym_constructor = pc.sym;
+                    names.container_normalize_constructor = pc.normalize;
                 }
                 log::info!("Declared sort {name}.")
             }

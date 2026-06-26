@@ -854,14 +854,11 @@ impl ProofStore {
             }
 
             Justification::ContainerNormalize { proof: inner_id } => {
-                // The sub-proof establishes `t1 = raw`; the normalization maps
-                // `raw` to its canonical container form (selected by `raw`'s
-                // head). We recompute the normalization (rather than trusting
-                // the proof's rhs) so it is sound even against an
-                // adversarial proof term.
+                // The sub-proof establishes `t1 = raw`; normalize `raw` to its
+                // canonical container form via the validator for its head.
                 let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
                 let raw = inner_prop.rhs;
-                let normalized = self.term_dag.normalize_container_term(raw);
+                let normalized = self.normalize_container(raw);
                 let lhs_ok = proof.lhs() == inner_prop.lhs;
                 if !lhs_ok || proof.rhs() != normalized {
                     return Err(ProofCheckErrorKind::ContainerNormalizeMismatch {

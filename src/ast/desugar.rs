@@ -72,6 +72,7 @@ pub(crate) fn desugar_command(
                         uf: None,
                         proof_func: None,
                         container_rebuild: None,
+                        proof_constructors: None,
                         unionable: true,
                     });
                 }
@@ -93,6 +94,7 @@ pub(crate) fn desugar_command(
                     uf: None,
                     proof_func: None,
                     container_rebuild: None,
+                    proof_constructors: None,
                     unionable: true,
                 });
             }
@@ -147,6 +149,7 @@ pub(crate) fn desugar_command(
             uf,
             proof_func,
             container_rebuild,
+            proof_constructors,
             unionable,
         } => vec![NCommand::Sort {
             span,
@@ -155,6 +158,7 @@ pub(crate) fn desugar_command(
             uf,
             proof_func,
             container_rebuild,
+            proof_constructors,
             unionable,
         }],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -239,6 +243,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             uf: None,
             proof_func: None,
             container_rebuild: None,
+            proof_constructors: None,
             unionable: false,
         },
         NCommand::Function(FunctionDecl::constructor(
@@ -290,6 +295,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
         uf: None,
         proof_func: None,
         container_rebuild: None,
+        proof_constructors: None,
         unionable: true,
     }]
     .into_iter()
@@ -417,6 +423,7 @@ fn desugar_relation(
             uf: None,
             proof_func: None,
             container_rebuild: None,
+            proof_constructors: None,
             unionable: false,
         },
         NCommand::Function(FunctionDecl::constructor(

@@ -8,7 +8,7 @@ expression: snapshot
 (ruleset __rebuilding)
 (ruleset __rebuilding_cleanup)
 (ruleset __delete_subsume_ruleset)
-(sort Math :internal-uf __UF_Math)
+(sort Math :internal-uf __UF_Math __UF_Mathf)
 (function __UF_Math (Math Math) Unit :merge old :unextractable :internal-hidden)
 (function __UF_Mathf (Math) Math :merge new :unextractable :internal-hidden)
 (rule ((__UF_Math __uf_a __uf_b)

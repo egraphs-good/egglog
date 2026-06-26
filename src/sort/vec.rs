@@ -12,7 +12,7 @@ pub struct VecContainer {
 }
 
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         if self.do_rebuild {
             rebuilder.rebuild_slice(&mut self.data)
         } else {

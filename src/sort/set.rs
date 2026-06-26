@@ -8,7 +8,7 @@ pub struct SetContainer {
 }
 
 impl ContainerValue for SetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
             let changed = rebuilder.rebuild_slice(&mut xs);
@@ -30,9 +30,12 @@ fn set_term_children(termdag: &TermDag, term: TermId) -> Option<Vec<TermId>> {
     }
 }
 
-fn normalize_set_term(termdag: &mut TermDag, children: Vec<TermId>) -> TermId {
-    let raw = termdag.app("set-of".into(), children);
-    termdag.normalize_container_term(raw)
+/// Canonical set term form `(set-of e0 e1 ...)`: elements sorted by
+/// [`TermDag::ast_cmp`] and deduplicated, so proof checking can reproduce it.
+fn normalize_set_term(termdag: &mut TermDag, mut children: Vec<TermId>) -> TermId {
+    termdag.sort_terms_by_ast(&mut children);
+    children.dedup();
+    termdag.app("set-of".into(), children)
 }
 
 #[derive(Clone, Debug)]
@@ -126,8 +129,7 @@ impl ContainerSort for SetSort {
         // `reconstruct_termdag`. (Element dedup/ordering for proof checking of
         // collapsing sets is refined in the Set proof stage.)
         let set_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            let raw = termdag.app("set-of".into(), args.to_vec());
-            Some(termdag.normalize_container_term(raw))
+            Some(normalize_set_term(termdag, args.to_vec()))
         };
         let set_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
             Some(termdag.app("set-of".into(), vec![]))
@@ -243,11 +245,9 @@ impl ContainerSort for SetSort {
         termdag: &mut TermDag,
         element_terms: Vec<TermId>,
     ) -> TermId {
-        // Canonical form (sorted by deterministic AST order, deduped) via the
-        // shared `normalize_container_term`, so proof checking can reproduce it
-        // from terms alone.
-        let raw = termdag.app("set-of".into(), element_terms);
-        termdag.normalize_container_term(raw)
+        // Canonical form (sorted by deterministic AST order, deduped) so proof
+        // checking can reproduce it from terms alone.
+        normalize_set_term(termdag, element_terms)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {

@@ -132,6 +132,10 @@ impl TermDag {
     ///
     /// Useful for canonicalizing the elements of an unordered structure (e.g. a
     /// set or multiset) into a stable, reproducible term order.
+    ///
+    /// `App` children are compared structurally (recursing via `ast_cmp`), not
+    /// by raw [`TermId`] order, so [`Term`] does not derive `Ord` and the leaf
+    /// arms are written out rather than calling `l.cmp(r)`.
     pub fn ast_cmp(&self, a: TermId, b: TermId) -> std::cmp::Ordering {
         use std::cmp::Ordering;
         match (self.get(a), self.get(b)) {
@@ -154,76 +158,10 @@ impl TermDag {
         }
     }
 
-    /// Canonicalize a container term into the normal form determined by its
-    /// value semantics, ordering elements by [`TermDag::ast_cmp`] so the result
-    /// is reproducible from terms alone:
-    /// - `set-of`: sort children, drop duplicates.
-    /// - `multiset-of`: sort children (multiplicities kept as repeats).
-    /// - `map-empty`/`map-insert`: walk the insert spine, apply last-write-wins
-    ///   per key, then rebuild the inserts in sorted key order.
-    ///
-    /// Any other term (a leaf, `vec-of`, `pair`, …) is returned unchanged. This
-    /// is the single source of truth shared by `reconstruct_termdag`, the
-    /// container constructor validators, and the proof checker's container
-    /// normalization step, so all three agree on the canonical term.
-    pub fn normalize_container_term(&mut self, term_id: TermId) -> TermId {
-        let Term::App(head, args) = self.get(term_id).clone() else {
-            return term_id;
-        };
-        match head.as_str() {
-            "set-of" => {
-                let mut cs = args;
-                cs.sort_by(|a, b| self.ast_cmp(*a, *b));
-                cs.dedup();
-                self.app("set-of".to_string(), cs)
-            }
-            "multiset-of" => {
-                let mut cs = args;
-                cs.sort_by(|a, b| self.ast_cmp(*a, *b));
-                self.app("multiset-of".to_string(), cs)
-            }
-            "map-of" | "map-empty" | "map-insert" => {
-                // Accept either the flat `map-of` form or a `map-insert`/
-                // `map-empty` spine; canonicalize to flat `map-of` in sorted
-                // key order, with last-write-wins on duplicate keys.
-                let mut entries: Vec<(TermId, TermId)> = Vec::new();
-                self.collect_map_entries(term_id, &mut entries);
-                let mut pairs: Vec<(TermId, TermId)> = Vec::new();
-                for (k, v) in entries {
-                    pairs.retain(|(ek, _)| *ek != k);
-                    pairs.push((k, v));
-                }
-                pairs.sort_by(|(ka, _), (kb, _)| self.ast_cmp(*ka, *kb));
-                let mut flat = Vec::with_capacity(pairs.len() * 2);
-                for (k, v) in pairs {
-                    flat.push(k);
-                    flat.push(v);
-                }
-                self.app("map-of".to_string(), flat)
-            }
-            _ => term_id,
-        }
-    }
-
-    /// Collect `(key, value)` pairs from a map term in insertion order. Handles
-    /// both the flat `map-of` form and a `map-insert`/`map-empty` spine
-    /// (innermost insert first).
-    fn collect_map_entries(&self, term_id: TermId, out: &mut Vec<(TermId, TermId)>) {
-        match self.get(term_id) {
-            Term::App(head, args) if head == "map-insert" && args.len() == 3 => {
-                let (inner, k, v) = (args[0], args[1], args[2]);
-                self.collect_map_entries(inner, out);
-                out.push((k, v));
-            }
-            Term::App(head, args) if head == "map-of" => {
-                for chunk in args.chunks(2) {
-                    if let [k, v] = chunk {
-                        out.push((*k, *v));
-                    }
-                }
-            }
-            _ => {}
-        }
+    /// Sort child terms in place by [`ast_cmp`](Self::ast_cmp). A reusable
+    /// building block for canonicalizing container elements.
+    pub fn sort_terms_by_ast(&self, terms: &mut [TermId]) {
+        terms.sort_by(|a, b| self.ast_cmp(*a, *b));
     }
 
     /// Make and return a [`Term::App`] with the given head symbol and children,
