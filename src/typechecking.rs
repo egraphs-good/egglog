@@ -115,14 +115,38 @@ pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
+    /// The first (primary) output sort. See [`FuncType::outputs`].
     pub output: ArcSort,
+    /// Additional output sorts for tuple-output functions. Empty for ordinary functions.
+    pub extra_outputs: Vec<ArcSort>,
+}
+
+impl FuncType {
+    /// All output (value-column) sorts: the primary output followed by any extras.
+    pub fn outputs(&self) -> impl Iterator<Item = &ArcSort> {
+        std::iter::once(&self.output).chain(self.extra_outputs.iter())
+    }
+
+    /// The number of output (value) columns.
+    pub fn num_outputs(&self) -> usize {
+        1 + self.extra_outputs.len()
+    }
+
+    /// Whether this function has more than one output column.
+    pub fn is_tuple_output(&self) -> bool {
+        !self.extra_outputs.is_empty()
+    }
 }
 
 impl PartialEq for FuncType {
     fn eq(&self, other: &Self) -> bool {
         if self.name == other.name
             && self.subtype == other.subtype
-            && self.output.name() == other.output.name()
+            && self.num_outputs() == other.num_outputs()
+            && self
+                .outputs()
+                .zip(other.outputs())
+                .all(|(a, b)| a.name() == b.name())
         {
             if self.input.len() != other.input.len() {
                 return false;
@@ -145,7 +169,9 @@ impl Hash for FuncType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.subtype.hash(state);
-        self.output.name().hash(state);
+        for out in self.outputs() {
+            out.name().hash(state);
+        }
         for inp in &self.input {
             inp.name().hash(state);
         }
@@ -688,32 +714,32 @@ impl TypeInfo {
     }
 
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+        let resolve = |name: &String| -> Result<ArcSort, TypeError> {
+            self.sorts
+                .get(name)
+                .cloned()
+                .ok_or_else(|| TypeError::UndefinedSort(name.clone(), func.span.clone()))
+        };
         let input = func
             .schema
             .input
             .iter()
-            .map(|name| {
-                if let Some(sort) = self.sorts.get(name) {
-                    Ok(sort.clone())
-                } else {
-                    Err(TypeError::UndefinedSort(name.clone(), func.span.clone()))
-                }
-            })
+            .map(&resolve)
             .collect::<Result<Vec<_>, _>>()?;
-        let output = if let Some(sort) = self.sorts.get(&func.schema.output) {
-            Ok(sort.clone())
-        } else {
-            Err(TypeError::UndefinedSort(
-                func.schema.output.clone(),
-                func.span.clone(),
-            ))
-        }?;
+        let output = resolve(&func.schema.output)?;
+        let extra_outputs = func
+            .schema
+            .extra_outputs
+            .iter()
+            .map(&resolve)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(FuncType {
             name: func.name.clone(),
             subtype: func.subtype,
             input,
-            output: output.clone(),
+            output,
+            extra_outputs,
         })
     }
 
@@ -748,34 +774,69 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
-        let mut bound_vars = IndexMap::default();
-        let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
-        if fdecl.subtype == FunctionSubtype::Constructor && !output_type.is_eq_sort() {
+        let outputs: Vec<ArcSort> = fdecl
+            .schema
+            .outputs()
+            .map(|name| self.sorts.get(name).unwrap().clone())
+            .collect();
+        let is_tuple = fdecl.schema.is_tuple_output();
+
+        // Tuple outputs are only meaningful for custom functions (which carry a functional
+        // dependency from keys to a tuple of values). Constructors and view tables mint/track a
+        // single e-class id.
+        if is_tuple
+            && (fdecl.subtype == FunctionSubtype::Constructor || fdecl.term_constructor.is_some())
+        {
+            return Err(TypeError::TupleOutputNotAllowed(
+                fdecl.name.clone(),
+                fdecl.span.clone(),
+            ));
+        }
+        if fdecl.subtype == FunctionSubtype::Constructor && !outputs[0].is_eq_sort() {
             return Err(TypeError::ConstructorOutputNotSort(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
-        bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
-        bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));
+
+        // For single-output functions the merge expression refers to `old`/`new`. For
+        // tuple-output functions it refers to `old0`, `new0`, `old1`, `new1`, ... (one pair per
+        // output column), and the whole merge is a `(values ...)` form.
+        let mut bound_vars = IndexMap::default();
+        let tuple_var_names: Vec<(String, String)> = (0..outputs.len())
+            .map(|i| (format!("old{i}"), format!("new{i}")))
+            .collect();
+        if is_tuple {
+            for (i, (old_name, new_name)) in tuple_var_names.iter().enumerate() {
+                bound_vars.insert(old_name.as_str(), (fdecl.span.clone(), outputs[i].clone()));
+                bound_vars.insert(new_name.as_str(), (fdecl.span.clone(), outputs[i].clone()));
+            }
+        } else {
+            bound_vars.insert("old", (fdecl.span.clone(), outputs[0].clone()));
+            bound_vars.insert("new", (fdecl.span.clone(), outputs[0].clone()));
+        }
+
+        let merge = match &fdecl.merge {
+            // Merge expressions run as part of action-side table updates: writes are allowed, but
+            // live DB reads would be untracked by seminaive rule execution.
+            Some(merge) if is_tuple => {
+                Some(self.typecheck_tuple_merge(symbol_gen, fdecl, merge, &outputs, &bound_vars)?)
+            }
+            Some(merge) => Some(self.typecheck_standalone_expr(
+                symbol_gen,
+                merge,
+                &bound_vars,
+                Context::Write,
+            )?),
+            None => None,
+        };
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
             resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
-            merge: match &fdecl.merge {
-                // Merge expressions run as part of action-side table updates:
-                // writes are allowed, but live DB reads would be untracked by
-                // seminaive rule execution.
-                Some(merge) => Some(self.typecheck_standalone_expr(
-                    symbol_gen,
-                    merge,
-                    &bound_vars,
-                    Context::Write,
-                )?),
-                None => None,
-            },
+            merge,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
             internal_hidden: fdecl.internal_hidden,
@@ -783,6 +844,55 @@ impl TypeInfo {
             span: fdecl.span.clone(),
             term_constructor: fdecl.term_constructor.clone(),
         })
+    }
+
+    /// Typecheck the `(values e0 e1 ...)` merge of a tuple-output function. Each `ei` is checked
+    /// with `old0`/`new0`/... bound to the corresponding output columns, and must have the type of
+    /// output column `i`. The result is a resolved `values` call carrying the output sorts.
+    fn typecheck_tuple_merge(
+        &self,
+        symbol_gen: &mut SymbolGen,
+        fdecl: &FunctionDecl,
+        merge: &Expr,
+        outputs: &[ArcSort],
+        bound_vars: &IndexMap<&str, (Span, ArcSort)>,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let args = match merge {
+            GenericExpr::Call(_, head, args) if head.as_str() == "values" => args,
+            _ => {
+                return Err(TypeError::TupleMergeNotValues(
+                    fdecl.name.clone(),
+                    fdecl.span.clone(),
+                ));
+            }
+        };
+        if args.len() != outputs.len() {
+            return Err(TypeError::TupleMergeArity {
+                name: fdecl.name.clone(),
+                expected: outputs.len(),
+                actual: args.len(),
+                span: fdecl.span.clone(),
+            });
+        }
+        let mut resolved_args = Vec::with_capacity(args.len());
+        for (arg, expected) in args.iter().zip(outputs) {
+            let resolved =
+                self.typecheck_standalone_expr(symbol_gen, arg, bound_vars, Context::Write)?;
+            let actual = resolved.output_type();
+            if actual.name() != expected.name() {
+                return Err(TypeError::Mismatch {
+                    expr: arg.clone(),
+                    expected: expected.clone(),
+                    actual,
+                });
+            }
+            resolved_args.push(resolved);
+        }
+        Ok(GenericExpr::Call(
+            merge.span(),
+            ResolvedCall::Values(outputs.to_vec()),
+            resolved_args,
+        ))
     }
 
     fn typecheck_schedule(
@@ -1197,6 +1307,23 @@ pub enum TypeError {
         crate::GLOBAL_NAME_PREFIX
     )]
     GlobalMissingPrefix { name: String, span: Span },
+    #[error(
+        "{1}\nFunction {0} has a tuple output, which is only allowed for plain functions (not constructors, relations, or view tables)."
+    )]
+    TupleOutputNotAllowed(String, Span),
+    #[error(
+        "{1}\nThe :merge of tuple-output function {0} must be a `(values ...)` form with one expression per output column."
+    )]
+    TupleMergeNotValues(String, Span),
+    #[error(
+        "{span}\nThe :merge of tuple-output function {name} has {actual} columns but the function has {expected} output columns."
+    )]
+    TupleMergeArity {
+        name: String,
+        expected: usize,
+        actual: usize,
+        span: Span,
+    },
 }
 
 #[cfg(test)]

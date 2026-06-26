@@ -2,6 +2,14 @@
 
 ## [Unreleased] - ReleaseDate
 
+- **Tuple-output functions.** A function may declare more than one output sort, e.g.
+  `(function interval (Math) (i64 i64) :merge (values (max old0 new0) (min old1 new1)))`. Such a
+  function stores its outputs as separate value columns (no boxing); the functional dependency is
+  `keys -> (value0, value1, ...)`. Outputs are destructured in queries with
+  `(= (values lo hi) (interval x))`, written with `(set (interval x) (values 0 100))`, and merged
+  with a `(values ...)` clause whose `i`-th element merges column `i` using the bound variables
+  `old0`, `new0`, `old1`, `new1`, .... Tuple outputs are only allowed for plain functions (not
+  constructors, relations, or view tables) and are not supported by the term/proof encoding.
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.

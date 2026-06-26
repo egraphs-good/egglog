@@ -102,6 +102,7 @@ impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
             ResolvedCall::Primitive(prim) => prim.output().clone(),
+            ResolvedCall::Values(sorts) => sorts[0].clone(),
         };
         ResolvedVar {
             name,

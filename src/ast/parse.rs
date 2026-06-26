@@ -1023,14 +1023,27 @@ impl Parser {
     }
 
     pub fn parse_schema(&self, input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
-        Ok(Schema {
-            input: input
-                .expect_list("input sorts")?
+        let input = input
+            .expect_list("input sorts")?
+            .iter()
+            .map(|sexp| sexp.expect_atom("input sort"))
+            .collect::<Result<_, _>>()?;
+        // The output is either a single sort, or a parenthesized list of sorts for a
+        // tuple-output function (e.g. `(function f (Math) (i64 i64) ...)`).
+        let outputs: Vec<String> = match output {
+            Sexp::List(list, _) => list
                 .iter()
-                .map(|sexp| sexp.expect_atom("input sort"))
+                .map(|sexp| sexp.expect_atom("output sort"))
                 .collect::<Result<_, _>>()?,
-            output: output.expect_atom("output sort")?,
-        })
+            _ => vec![output.expect_atom("output sort")?],
+        };
+        if outputs.is_empty() {
+            return error!(
+                output.span(),
+                "a function must have at least one output sort"
+            );
+        }
+        Ok(Schema::new_tuple(input, outputs))
     }
 }
 

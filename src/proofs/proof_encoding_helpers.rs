@@ -460,6 +460,8 @@ pub enum ProofEncodingUnsupportedReason {
         "rule uses `:unsafe-seminaive`. Arbitrary RHS database reads are not representable by the term/proof encoding."
     )]
     UnsafeSeminaive,
+    #[error("tuple-output functions are not supported by the term/proof encoding.")]
+    TupleOutputFunction,
 }
 
 /// Checks whether a desugared program supports proof encoding.
@@ -515,6 +517,14 @@ pub(crate) fn command_supports_proof_encoding(
         && rule.eval_mode == crate::ast::RuleEvalMode::UnsafeSeminaive
     {
         return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
+    }
+
+    // Tuple-output functions store multiple value columns, which the term/proof encoding (built
+    // around single-output constructor views) does not model.
+    if let crate::ast::GenericCommand::Function { schema, .. } = command
+        && schema.is_tuple_output()
+    {
+        return Err(ProofEncodingUnsupportedReason::TupleOutputFunction);
     }
 
     // Check all expressions for primitives without validators
