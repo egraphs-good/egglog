@@ -133,6 +133,69 @@ fn tuple_merge_arity_mismatch_rejected() {
 }
 
 #[test]
+fn builtin_keywords_are_reserved() {
+    // Built-in keywords (command/action/schedule heads, plus the tuple constructor `values`) may
+    // not be used as function/constructor/relation/variant names or as variables.
+    for prog in [
+        // `values` (the tuple constructor) in each identifier position
+        "(function values (i64) i64 :merge new)",
+        "(sort S) (constructor values (i64) S)",
+        "(relation values (i64))",
+        "(datatype D (values i64))",
+        "(relation r (i64)) (rule ((r values)) ())",
+        // a sampling of command/action/schedule keywords
+        "(function set (i64) i64 :merge new)",
+        "(relation union (i64))",
+        "(sort run)",
+        "(datatype D (function i64))",
+        "(relation r (i64)) (rule ((r let)) ())",
+    ] {
+        let err = run(prog).expect_err(&format!("keyword should be rejected in: {prog}"));
+        assert!(
+            err.to_string().contains("reserved keyword"),
+            "expected a reserved-keyword error for {prog:?}, got: {err}"
+        );
+    }
+
+    // The `:` prefix is reserved for option keywords, so it cannot start an identifier.
+    let err = run("(relation :merge (i64))").unwrap_err();
+    assert!(
+        err.to_string().contains("`:` prefix is reserved"),
+        "expected a colon-prefix error, got: {err}"
+    );
+}
+
+#[test]
+fn input_output_are_only_partially_reserved() {
+    // `input`/`output` are usable as ordinary variables...
+    run("(relation r (i64)) (r 0) (rule ((r input)) ((r (+ input 1)))) (run 1) (check (r 1))")
+        .unwrap();
+
+    // ...but not as definition names...
+    for prog in [
+        "(function input (i64) i64 :merge new)",
+        "(relation output (i64))",
+        "(sort input)",
+        "(datatype D (output i64))",
+    ] {
+        let err = run(prog).expect_err(&format!("`input`/`output` should be rejected in: {prog}"));
+        assert!(
+            err.to_string()
+                .contains("cannot be used as a definition name"),
+            "expected a definition-name error for {prog:?}, got: {err}"
+        );
+    }
+
+    // ...and not as the head of a call expression.
+    let err = run("(relation r (i64)) (rule ((r x)) ((r (input x))))").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("cannot be used as the head of an expression"),
+        "expected a call-head error, got: {err}"
+    );
+}
+
+#[test]
 fn tuple_merge_must_be_values_form() {
     let err = EGraph::default()
         .parse_and_run_program(None, "(function f (i64) (i64 i64) :merge old0)")
