@@ -10,7 +10,7 @@ use std::{
 
 use crate::{Notification, Scope, ThreadPool, current_num_threads, scope as threadpool_scope};
 
-use super::is_background_worker_thread;
+use super::{MAX_INLINE_SCOPE_HELP_DEPTH, is_background_worker_thread};
 
 #[test]
 fn scope_runs_spawned_work_and_waits() {
@@ -384,6 +384,9 @@ fn pool_scope_installs_pool_for_root_and_spawned_callbacks() {
             assert_eq!(current_num_threads(), 4);
         });
     });
+
+    assert_eq!(pool.state.backup_workers_spawned(), 0);
+    assert_eq!(pool.state.backup_workers_live(), 0);
 }
 
 #[test]
@@ -443,7 +446,7 @@ fn primary_workers_are_marked_as_background_workers() {
 }
 
 #[test]
-fn root_scope_wait_does_not_spawn_backup_worker() {
+fn root_scope_waits_for_spawned_work() {
     let pool = ThreadPool::new(1);
     let entered = Arc::new(Notification::new());
     let release = Arc::new(Notification::new());
@@ -463,15 +466,15 @@ fn root_scope_wait_does_not_spawn_backup_worker() {
 
         entered.wait();
         thread::sleep(Duration::from_millis(10));
-        assert_eq!(pool.state.backup_workers_spawned(), 0);
         release.notify();
     });
 
+    assert_eq!(pool.state.backup_workers_spawned(), 0);
     assert_eq!(pool.state.backup_workers_live(), 0);
 }
 
 #[test]
-fn backup_worker_avoids_single_worker_nested_scope_deadlock() {
+fn background_worker_helps_single_worker_nested_scope() {
     let pool = ThreadPool::new(1);
     let nested_completed = AtomicBool::new(false);
 
@@ -488,12 +491,12 @@ fn backup_worker_avoids_single_worker_nested_scope_deadlock() {
     });
 
     assert!(nested_completed.load(Ordering::Acquire));
-    assert!(pool.state.backup_workers_spawned() >= 1);
+    assert_eq!(pool.state.backup_workers_spawned(), 0);
     assert_eq!(pool.state.backup_workers_live(), 0);
 }
 
 #[test]
-fn backup_worker_exits_after_blocked_scope_finishes() {
+fn background_worker_wait_returns_after_nested_scope_finishes() {
     let pool = ThreadPool::new(1);
     let nested_started = Arc::new(Notification::new());
     let release_nested = Arc::new(Notification::new());
@@ -519,20 +522,18 @@ fn backup_worker_exits_after_blocked_scope_finishes() {
         });
 
         nested_started.wait();
-        while pool.state.backup_workers_live() == 0 {
-            thread::yield_now();
-        }
+        thread::sleep(Duration::from_millis(10));
         assert!(!scope_returned.load(Ordering::Acquire));
         release_nested.notify();
     });
 
     assert!(scope_returned.load(Ordering::Acquire));
+    assert_eq!(pool.state.backup_workers_spawned(), 0);
     assert_eq!(pool.state.backup_workers_live(), 0);
-    assert_eq!(pool.state.backup_workers_spawned(), 1);
 }
 
 #[test]
-fn backup_workers_can_replace_backup_workers_that_block() {
+fn nested_background_worker_waits_can_reenter_help_loop() {
     let pool = ThreadPool::new(1);
     let completed = AtomicUsize::new(0);
 
@@ -552,6 +553,33 @@ fn backup_workers_can_replace_backup_workers_that_block() {
     });
 
     assert_eq!(completed.load(Ordering::Acquire), 1);
-    assert!(pool.state.backup_workers_spawned() >= 2);
+    assert_eq!(pool.state.backup_workers_spawned(), 0);
+    assert_eq!(pool.state.backup_workers_live(), 0);
+}
+
+#[test]
+fn deeply_nested_background_waits_fall_back_to_backup_worker() {
+    fn recurse(depth: usize, completed: &AtomicUsize) {
+        if depth == 0 {
+            completed.fetch_add(1, Ordering::Release);
+            return;
+        }
+
+        threadpool_scope(|scope| {
+            scope.spawn(move |_| recurse(depth - 1, completed));
+        });
+    }
+
+    let pool = ThreadPool::new(1);
+    let completed = AtomicUsize::new(0);
+
+    pool.scope(|scope| {
+        scope.spawn(|_| {
+            recurse(MAX_INLINE_SCOPE_HELP_DEPTH + 8, &completed);
+        });
+    });
+
+    assert_eq!(completed.load(Ordering::Acquire), 1);
+    assert!(pool.state.backup_workers_spawned() >= 1);
     assert_eq!(pool.state.backup_workers_live(), 0);
 }
