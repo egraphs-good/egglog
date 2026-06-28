@@ -2,11 +2,12 @@
 //!
 //! [`ThreadPool`] owns a fixed set of primary worker threads. Each worker
 //! receives boxed `'static` jobs from a shared channel and exits when the
-//! channel is closed. A primary worker that blocks waiting for scoped work
-//! temporarily starts a backup worker so the pool can continue draining queued
-//! jobs. [`Scope`] provides the safe scoped API on top of those `'static` jobs
-//! by erasing task lifetimes when work is sent to the channel, then waiting for
-//! all work in the scope before returning to the caller.
+//! channel is closed. A primary worker that blocks waiting for nested scoped
+//! work helps drain queued jobs until that nested scope completes, so the pool
+//! does not lose a worker while work it needs may still be queued. [`Scope`]
+//! provides the safe scoped API on top of those `'static` jobs by erasing task
+//! lifetimes when work is sent to the channel, then waiting for all work in the
+//! scope before returning to the caller.
 //!
 //! The root callback runs on the caller thread, and spawned callbacks run on
 //! worker threads. Spawned callbacks receive the same scope reference as the
@@ -111,10 +112,11 @@ use std::sync::atomic::AtomicUsize;
 
 use crossbeam::channel::{Receiver, Sender, bounded, select_biased, unbounded};
 
-use crate::Notification;
-
 const EXPECTED_SHIFT: u32 = 32;
 const COMPLETED_MASK: u64 = u32::MAX as u64;
+// Keep inline helping bounded so pathological nested scopes move onto a fresh
+// stack before exhausting the current worker stack.
+const MAX_INLINE_SCOPE_HELP_DEPTH: usize = 64;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 type ScopedJob<'scope> = Box<dyn FnOnce() + Send + 'scope>;
@@ -123,6 +125,7 @@ type PanicPayload = Box<dyn Any + Send + 'static>;
 thread_local! {
     static CURRENT_POOL: Cell<*const ThreadPoolState> = const { Cell::new(ptr::null()) };
     static IS_BACKGROUND_WORKER: Cell<bool> = const { Cell::new(false) };
+    static INLINE_SCOPE_HELP_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Return the number of threads in the currently installed thread pool.
@@ -194,9 +197,9 @@ where
 
 /// A thread pool using a single shared work queue.
 ///
-/// The pool owns a fixed number of primary workers. It may also create
-/// short-lived backup workers while a primary worker is blocked waiting for
-/// nested scoped work.
+/// The pool owns a fixed number of primary workers. A primary worker that
+/// blocks waiting for nested scoped work helps drain the shared queue until the
+/// nested scope completes.
 ///
 /// # Examples
 ///
@@ -413,14 +416,54 @@ impl ThreadPoolState {
         }
     }
 
-    fn wait_for_notification(&self, notification: &Notification) {
-        if !is_background_worker_thread() || notification.has_been_notified() {
-            notification.wait();
+    fn wait_for_scope_completion(&self, done: &Receiver<()>) {
+        if !is_background_worker_thread() {
+            receive_scope_completion(done);
             return;
         }
 
-        let _backup = BackupWorker::spawn(self);
-        notification.wait();
+        let Some(_guard) = InlineScopeHelpGuard::try_enter() else {
+            let _backup = BackupWorker::spawn(self);
+            receive_scope_completion(done);
+            return;
+        };
+
+        let receiver = self.receiver.clone();
+        loop {
+            match done.try_recv() {
+                Ok(()) => break,
+                Err(crossbeam::channel::TryRecvError::Empty) => {}
+                Err(crossbeam::channel::TryRecvError::Disconnected) => {
+                    panic!("scope completion sender dropped before the scope completed");
+                }
+            }
+
+            match receiver.try_recv() {
+                Ok(job) => {
+                    job();
+                    continue;
+                }
+                Err(crossbeam::channel::TryRecvError::Empty) => {}
+                Err(crossbeam::channel::TryRecvError::Disconnected) => {
+                    receive_scope_completion(done);
+                    break;
+                }
+            }
+
+            select_biased! {
+                recv(done) -> message => {
+                    expect_scope_completion(message);
+                    break;
+                }
+                recv(receiver) -> message => match message {
+                    Ok(job) => job(),
+                    Err(_) => {
+                        receive_scope_completion(done);
+                        break;
+                    }
+                },
+            }
+        }
     }
 
     #[cfg(test)]
@@ -513,6 +556,30 @@ impl Drop for BackgroundWorkerGuard<'_> {
 
 fn is_background_worker_thread() -> bool {
     IS_BACKGROUND_WORKER.with(Cell::get)
+}
+
+struct InlineScopeHelpGuard {
+    previous: usize,
+}
+
+impl InlineScopeHelpGuard {
+    fn try_enter() -> Option<Self> {
+        INLINE_SCOPE_HELP_DEPTH.with(|depth| {
+            let previous = depth.get();
+            if previous >= MAX_INLINE_SCOPE_HELP_DEPTH {
+                return None;
+            }
+
+            depth.set(previous + 1);
+            Some(Self { previous })
+        })
+    }
+}
+
+impl Drop for InlineScopeHelpGuard {
+    fn drop(&mut self) {
+        INLINE_SCOPE_HELP_DEPTH.with(|depth| depth.set(self.previous));
+    }
 }
 
 fn with_current_pool<F, R>(f: F) -> R
@@ -640,15 +707,18 @@ impl<'scope> Scope<'scope> {
 
 struct ScopeState {
     completion: AtomicCounts,
-    finished: Notification,
+    done_sender: Sender<()>,
+    done_receiver: Receiver<()>,
     panic: Mutex<Option<PanicPayload>>,
 }
 
 impl ScopeState {
     fn new() -> Self {
+        let (done_sender, done_receiver) = bounded(1);
         Self {
             completion: AtomicCounts::with_root_callback(),
-            finished: Notification::new(),
+            done_sender,
+            done_receiver,
             panic: Mutex::new(None),
         }
     }
@@ -664,7 +734,13 @@ impl ScopeState {
         debug_assert!(completed <= expected);
 
         if completed == expected {
-            self.finished.notify();
+            // Keep the channel alive while signaling completion. Once the
+            // message is visible, the waiting root may receive it and drop the
+            // `ScopeState` before `try_send` returns on this worker.
+            let done_sender = self.done_sender.clone();
+            done_sender
+                .try_send(())
+                .expect("scope completion should only be signaled once");
             true
         } else {
             false
@@ -672,7 +748,7 @@ impl ScopeState {
     }
 
     fn wait(&self, pool: &ThreadPoolState) {
-        pool.wait_for_notification(&self.finished);
+        pool.wait_for_scope_completion(&self.done_receiver);
     }
 
     fn record_panic(&self, payload: PanicPayload) {
@@ -752,20 +828,22 @@ unsafe fn erase_job_lifetime<'scope>(job: ScopedJob<'scope>) -> Job {
     unsafe { mem::transmute::<ScopedJob<'scope>, Job>(job) }
 }
 
-/// A short-lived queue consumer that replaces a blocked background worker.
+fn receive_scope_completion(done: &Receiver<()>) {
+    expect_scope_completion(done.recv());
+}
+
+fn expect_scope_completion(message: Result<(), crossbeam::channel::RecvError>) {
+    message.expect("scope completion sender dropped before the scope completed");
+}
+
+/// A short-lived queue consumer used once inline scope helping gets too deep.
 ///
-/// Scoped work may itself open a nested scope. If the worker running that outer
-/// job blocks waiting for the nested scope to finish, the pool has one fewer
-/// thread draining the shared job queue. With a one-thread pool, that would
-/// deadlock: the only primary worker would be asleep while the nested job it is
-/// waiting for is still queued. `BackupWorker` temporarily clones the pool's
-/// receiver, installs the same current-pool and background-worker thread-local
-/// state as a primary worker, and runs queued jobs until the blocked worker
-/// finishes waiting.
-///
-/// The guard owns a shutdown channel and joins the spawned thread on drop, so a
-/// backup worker is tied to exactly one blocking wait. It also exits if the pool
-/// work channel is closed.
+/// A worker that waits for nested scoped work usually helps by running queued
+/// jobs on the same stack. Deeply nested scopes can make that recursive
+/// execution chain large enough to overflow the worker stack. `BackupWorker`
+/// provides the same liveness escape hatch as the original implementation, but
+/// only after the waiting worker has already helped inline up to
+/// [`MAX_INLINE_SCOPE_HELP_DEPTH`].
 struct BackupWorker {
     shutdown: Sender<()>,
     worker: Option<JoinHandle<()>>,
