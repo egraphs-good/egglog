@@ -377,6 +377,17 @@ impl Function {
     }
 }
 
+/// Owned constructor application returned by eclass-indexed lookup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstructorEnode {
+    /// Constructor function name.
+    pub function: String,
+    /// Constructor input values.
+    pub children: Vec<Value>,
+    /// Whether this constructor row has been subsumed.
+    pub subsumed: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedSchema {
     pub input: Vec<ArcSort>,
@@ -1283,45 +1294,47 @@ impl EGraph {
         self.read(|rs| rs.constructor_enodes_while(name, f))
     }
 
-    /// Call `f` on constructor rows whose output eclass column equals `eclass`.
+    /// Return constructor enodes whose output is `eclass`.
     ///
-    /// This uses the backend's column index when available. Callers that want
-    /// canonical eclasses should canonicalize `eclass` before calling.
-    pub fn constructor_enodes_with_eclass(
+    /// This uses the backend's output-column index and returns owned rows
+    /// because callers outside the scan callback cannot borrow backend buffers.
+    /// The input eclass is canonicalized before lookup. Hidden constructor
+    /// tables are omitted. Unextractable rows are included only when
+    /// `include_unextractable` is true.
+    pub fn constructor_enodes_for_eclass(
         &self,
-        name: &str,
+        sort: &ArcSort,
         eclass: Value,
-        mut f: impl FnMut(Enode<'_>),
-    ) -> Result<(), Error> {
-        let func = self
-            .functions
-            .get(name)
-            .ok_or_else(|| crate::api::ApiError::MissingTable {
-                name: name.to_owned(),
-            })?;
-        if func.decl.subtype != FunctionSubtype::Constructor {
-            return Err(crate::api::ApiError::WrongSubtype {
-                name: name.to_owned(),
-                expected: "constructor",
-                actual: "function",
+        include_unextractable: bool,
+    ) -> Vec<ConstructorEnode> {
+        let eclass = self.canonical_value(sort, eclass);
+        let mut enodes = Vec::new();
+        for (func_name, func) in self.functions_iter() {
+            if !func.is_constructor()
+                || func.is_hidden()
+                || func.schema().output.name() != sort.name()
+            {
+                continue;
             }
-            .into());
-        }
+            if func.is_unextractable() && !include_unextractable {
+                continue;
+            }
 
-        let output_idx = func.schema.input.len();
-        self.backend
-            .for_each_matching_col(func.backend_id, output_idx, eclass, |row| {
-                let (row_eclass, children) = row
-                    .vals
-                    .split_last()
-                    .expect("constructor row has at least an eclass column");
-                f(Enode {
-                    children,
-                    eclass: *row_eclass,
-                    subsumed: row.subsumed,
+            let output_idx = func.schema.input.len();
+            self.backend
+                .for_each_matching_col(func.backend_id, output_idx, eclass, |row| {
+                    let (_row_eclass, children) = row
+                        .vals
+                        .split_last()
+                        .expect("constructor row has at least an eclass column");
+                    enodes.push(ConstructorEnode {
+                        function: func_name.clone(),
+                        children: children.to_vec(),
+                        subsumed: row.subsumed,
+                    });
                 });
-            });
-        Ok(())
+        }
+        enodes
     }
 
     /// Remove every row from the named function in bulk.
