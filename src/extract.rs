@@ -488,16 +488,6 @@ impl<C: Cost> Extractor<C> {
     }
 
     /// This recursively reconstruct the termdag that gives the minimum cost for eclass value.
-    fn reconstruct_termdag_node(
-        &self,
-        egraph: &EGraph,
-        termdag: &mut TermDag,
-        value: Value,
-        sort: &ArcSort,
-    ) -> TermId {
-        self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut Default::default())
-    }
-
     fn reconstruct_termdag_node_helper(
         &self,
         egraph: &EGraph,
@@ -572,7 +562,13 @@ impl<C: Cost> Extractor<C> {
             Some(best_cost) => {
                 log::debug!("Best cost for the extract root: {best_cost:?}");
 
-                let term = self.reconstruct_termdag_node(egraph, termdag, canonical_value, &sort);
+                let term = self.reconstruct_termdag_node_helper(
+                    egraph,
+                    termdag,
+                    canonical_value,
+                    &sort,
+                    &mut Default::default(),
+                );
 
                 Some(ExtractedTerm {
                     cost: best_cost,
@@ -634,23 +630,16 @@ impl<C: Cost> Extractor<C> {
 
             let mut root_variants: Vec<(C, String, Vec<Value>)> = Vec::new();
 
-            let mut root_funcs: Vec<String> = Vec::new();
-
-            for func_name in self.funcs.iter() {
+            for func_name in self.funcs.iter().filter(|func_name| {
                 // Need an eq on sorts - use extraction_output_sort for view table support
-                if sort.name()
+                sort.name()
                     == egraph
                         .functions
-                        .get(func_name)
+                        .get(*func_name)
                         .unwrap()
                         .extraction_output_sort()
                         .name()
-                {
-                    root_funcs.push(func_name.clone());
-                }
-            }
-
-            for func_name in root_funcs.iter() {
+            }) {
                 let func = egraph.functions.get(func_name).unwrap();
                 let output_idx = func.extraction_output_index();
 
