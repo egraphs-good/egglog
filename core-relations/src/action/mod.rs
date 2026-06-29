@@ -24,7 +24,7 @@ use crate::{
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
-    row_buffer::{TaggedRowBuffer, ValueVec},
+    row_buffer::TaggedRowBuffer,
     table_spec::{ColumnId, Constraint, MutationBuffer},
 };
 
@@ -334,59 +334,6 @@ pub(crate) struct DbView<'a> {
     pub(crate) notification_list: &'a NotificationList<TableId>,
 }
 
-impl DbView<'_> {
-    fn scan_matching_col_project<V: ValueVec>(
-        &self,
-        table: TableId,
-        col: ColumnId,
-        value: Value,
-        cols: &[ColumnId],
-        window: (Offset, usize),
-        out: &mut TaggedRowBuffer<V>,
-    ) -> Option<Offset> {
-        let (start, n) = window;
-        let constraint = Constraint::EqConst { col, val: value };
-        let table_info = &self.table_info[table];
-        let (mut subset, _fast, mut slow) = table_info
-            .table
-            .split_fast_slow(std::slice::from_ref(&constraint));
-
-        slow.retain(|c| {
-            let (col, val) = match c {
-                Constraint::EqConst { col, val } => (*col, *val),
-                Constraint::Eq { .. }
-                | Constraint::LtConst { .. }
-                | Constraint::GtConst { .. }
-                | Constraint::LeConst { .. }
-                | Constraint::GeConst { .. } => return true,
-            };
-            if *table_info
-                .spec
-                .uncacheable_columns
-                .get(col)
-                .unwrap_or(&false)
-            {
-                return true;
-            }
-
-            let index = get_column_index_from_tableinfo(table_info, col);
-            match index.get().unwrap().get_subset(&val) {
-                Some(s) => {
-                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
-                }
-                None => {
-                    subset = Subset::empty();
-                }
-            }
-            false
-        });
-
-        table_info
-            .table
-            .scan_project(subset.as_ref(), cols, start, n, &slow, out)
-    }
-}
-
 /// A handle on a database that may be in the process of running a rule.
 ///
 /// An ExecutionState grants immutable access to the (much of) the database, and also provides a
@@ -538,11 +485,11 @@ impl<'a> ExecutionState<'a> {
         &self.db.table_info[table].table
     }
 
-    /// Iterate over rows where `col == value`.
+    /// Iterate over visible rows in `table` whose `col` equals `value`.
     ///
-    /// This uses the same lazy column indexes as query execution when the
-    /// column is cacheable, but keeps projection/window buffering private to
-    /// core-relations.
+    /// Cacheable columns use the table's lazy column index; uncacheable columns
+    /// fall back to scanning with the equality constraint. The callback
+    /// receives each matching row as a full value slice.
     pub fn for_each_matching_col(
         &self,
         table: TableId,
@@ -550,7 +497,43 @@ impl<'a> ExecutionState<'a> {
         value: Value,
         mut f: impl FnMut(&[Value]),
     ) {
-        let imp = self.get_table(table);
+        let table_info = &self.db.table_info[table];
+        let constraint = Constraint::EqConst { col, val: value };
+        let (mut subset, _fast, mut slow) = table_info
+            .table
+            .split_fast_slow(std::slice::from_ref(&constraint));
+
+        slow.retain(|c| {
+            let (col, val) = match c {
+                Constraint::EqConst { col, val } => (*col, *val),
+                Constraint::Eq { .. }
+                | Constraint::LtConst { .. }
+                | Constraint::GtConst { .. }
+                | Constraint::LeConst { .. }
+                | Constraint::GeConst { .. } => return true,
+            };
+            if *table_info
+                .spec
+                .uncacheable_columns
+                .get(col)
+                .unwrap_or(&false)
+            {
+                return true;
+            }
+
+            let index = get_column_index_from_tableinfo(table_info, col);
+            match index.get().unwrap().get_subset(&val) {
+                Some(s) => {
+                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
+                }
+                None => {
+                    subset = Subset::empty();
+                }
+            }
+            false
+        });
+
+        let imp = &table_info.table;
         let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
         let mut cur = Offset::new(0);
         let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
@@ -564,9 +547,7 @@ impl<'a> ExecutionState<'a> {
             };
         }
 
-        while let Some(next) =
-            self.db
-                .scan_matching_col_project(table, col, value, &cols, (cur, 1024), &mut buf)
+        while let Some(next) = imp.scan_project(subset.as_ref(), &cols, cur, 1024, &slow, &mut buf)
         {
             drain_buf!(buf);
             cur = next;
