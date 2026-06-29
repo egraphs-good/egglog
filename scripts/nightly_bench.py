@@ -265,6 +265,18 @@ def measure_cell(path: Path, threads: int, proof: bool,
 # ── main sweep ──────────────────────────────────────────────────────────────────
 
 
+def ensure_rustup_on_path() -> None:
+    """Put the rustup shim dir (~/.cargo/bin) first on PATH.
+
+    The nightly host has a system `cargo` ahead of the rustup shim; it is too
+    old for this crate's 2024 edition and ignores rust-toolchain.toml. The shim
+    reads rust-toolchain.toml and installs/uses the pinned toolchain on demand.
+    hyperfine and other cargo-installed tools live here too."""
+    cargo_bin = str(Path.home() / ".cargo" / "bin")
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p != cargo_bin]
+    os.environ["PATH"] = os.pathsep.join([cargo_bin, *parts])
+
+
 def build() -> None:
     log("Building egglog (release)...")
     subprocess.run(
@@ -426,6 +438,7 @@ def render_html(rows: list[dict], skipped: list[dict], meta: dict) -> str:
 
 
 def main() -> int:
+    ensure_rustup_on_path()
     if not shutil.which("hyperfine"):
         sys.exit("hyperfine not found — install with: cargo install hyperfine")
     # Fail fast: the report uses eval-live, but it is only needed at the very
