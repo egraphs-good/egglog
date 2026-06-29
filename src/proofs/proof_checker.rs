@@ -79,11 +79,14 @@ pub(crate) fn run_merge(
 ///    - Reflexive equalities for all subterms
 ///    - Ground equalities from union statements (bidirectional)
 ///    - Reflexive equalities from set statements
+///
+/// If `target` is present, stop once that proposition has been produced.
 pub(crate) fn process_actions(
     rule_name: &str,
     mut bindings: HashMap<String, TermId>,
     actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
     term_dag: &mut TermDag,
+    target: Option<&Proposition>,
 ) -> Result<ActionContext, ProofCheckError> {
     let mut propositions = HashSet::default();
 
@@ -131,6 +134,9 @@ pub(crate) fn process_actions(
             GenericAction::Change(_, _, _, _) => {
                 // Changes do not create propositions
             }
+        }
+        if target.is_some_and(|target| propositions.contains(target)) {
+            break;
         }
     }
 
@@ -206,13 +212,31 @@ fn add_subterm_reflexive_equalities(
     term_dag: &TermDag,
     propositions: &mut HashSet<Proposition>,
 ) {
+    add_subterm_reflexive_equalities_helper(
+        term_id,
+        term_dag,
+        propositions,
+        &mut Default::default(),
+    );
+}
+
+fn add_subterm_reflexive_equalities_helper(
+    term_id: TermId,
+    term_dag: &TermDag,
+    propositions: &mut HashSet<Proposition>,
+    seen: &mut HashSet<TermId>,
+) {
+    if !seen.insert(term_id) {
+        return;
+    }
+
     // Add reflexive equality for this term
     propositions.insert(Proposition::new(term_id, term_id));
 
     // Recursively add for all children
     if let Term::App(_, children) = term_dag.get(term_id) {
         for &child_id in children {
-            add_subterm_reflexive_equalities(child_id, term_dag, propositions);
+            add_subterm_reflexive_equalities_helper(child_id, term_dag, propositions, seen);
         }
     }
 }
@@ -226,7 +250,13 @@ pub(crate) fn gather_globals(
     term_dag: &mut TermDag,
 ) -> Result<HashMap<String, TermId>, ProofCheckError> {
     let actions: Vec<_> = gather_global_actions(prog).collect();
-    let ctx = process_actions("global_action", HashMap::default(), &actions, term_dag)?;
+    let ctx = process_actions(
+        "global_action",
+        HashMap::default(),
+        &actions,
+        term_dag,
+        None,
+    )?;
     Ok(ctx.var_bindings)
 }
 
@@ -470,7 +500,13 @@ impl ProofCheckContext {
 
         // Use the new refactored functions
         let actions: Vec<_> = gather_global_actions(prog).collect();
-        let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)?;
+        let action_ctx = process_actions(
+            "global_actions",
+            HashMap::default(),
+            &actions,
+            term_dag,
+            None,
+        )?;
 
         Ok(ProofCheckContext {
             global_equalities: action_ctx.propositions,
@@ -1033,7 +1069,13 @@ impl ProofStore {
         let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
             rule.head.0.iter().collect();
         let bindings = subst_with_globals.clone();
-        let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
+        let action_ctx = process_actions(
+            rule_name,
+            bindings,
+            &action_refs,
+            &mut self.term_dag,
+            Some(claimed),
+        )?;
 
         // Check if the claimed equality is in the propositions
         if action_ctx.propositions.contains(claimed) {
