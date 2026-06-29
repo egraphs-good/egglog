@@ -5,11 +5,6 @@ use crate::*;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
-mod dag_extract;
-mod secondary_map;
-pub use dag_extract::DagCostModel;
-pub use secondary_map::CommutativeMonoid;
-
 /// Shared primitive value cost hook for extraction cost models.
 pub trait BaseCostModel<C: Cost> {
     /// Compute the cost of a (non-container) primitive value.
@@ -53,12 +48,27 @@ pub trait TreeCostModel<C: Cost>: BaseCostModel<C> {
     }
 }
 
+/// Values that can be accumulated in any insertion order.
+///
+/// Extraction cost accumulation relies on `identity` being neutral and
+/// `combine` being associative and commutative for the values used during
+/// extraction. Rust cannot enforce those laws, so custom cost implementations
+/// are responsible for preserving them.
+pub trait CommutativeMonoid: Clone {
+    /// The neutral value for [`CommutativeMonoid::combine`], usually zero.
+    fn identity() -> Self;
+
+    /// Accumulates two values, usually addition.
+    ///
+    /// This operation must not overflow or panic when given large values.
+    fn combine(self, other: &Self) -> Self;
+}
+
 /// Domain marker for values that can be used as extraction costs.
 ///
 /// Implement [`CommutativeMonoid`] for custom cost types. `Cost` is provided
-/// by a blanket impl so public extraction APIs can keep a domain-specific
-/// bound without coupling the secondary-map helper back to extraction. Raw
-/// floats can implement [`CommutativeMonoid`], but they do not satisfy this
+/// by a blanket impl so public extraction APIs can keep a domain-specific bound.
+/// Raw floats can implement [`CommutativeMonoid`], but they do not satisfy this
 /// bound because extractors need a total order. `OrderedFloat` is available for
 /// approximate floating-point costs, but those can be order-sensitive because
 /// floating-point addition is not strictly associative.
@@ -105,6 +115,22 @@ pub struct TreeAdditiveCostModel {}
 impl BaseCostModel<DefaultCost> for TreeAdditiveCostModel {
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
         1
+    }
+}
+
+impl TreeCostModel<DefaultCost> for TreeAdditiveCostModel {
+    fn total_enode_cost(
+        &self,
+        egraph: &EGraph,
+        func: &Function,
+        _enode: &Enode<'_>,
+        child_costs: &[DefaultCost],
+    ) -> DefaultCost {
+        child_costs
+            .iter()
+            .fold(func.extraction_head_cost(egraph), |cost, child| {
+                cost.combine(child)
+            })
     }
 }
 

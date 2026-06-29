@@ -164,9 +164,7 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics(span, file) => {
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
-        Command::Extract(span, expr, variants, extractor) => {
-            vec![NCommand::Extract(span, expr, variants, extractor)]
-        }
+        Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => {
             if proof_testing {
                 desugar_prove(parser, span.clone(), facts.clone())

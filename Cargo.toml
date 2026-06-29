@@ -149,7 +149,6 @@ dyn-clone = { workspace = true }
 enum-map = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
-fixedbitset = { workspace = true }
 egglog-core-relations = { workspace = true }
 egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }

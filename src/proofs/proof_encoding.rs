@@ -1332,7 +1332,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let last = res.pop().unwrap();
                 res.push(Command::Fail(span.clone(), Box::new(last)));
             }
-            ResolvedNCommand::Extract(span, expr, variants, extractor) => {
+            ResolvedNCommand::Extract(span, expr, variants) => {
                 // Instrument the expressions to use view tables (like actions, not facts)
                 let mut action_stmts = vec![];
                 let instrumented_expr =
@@ -1350,7 +1350,6 @@ impl<'a> ProofInstrumentor<'a> {
                     span.clone(),
                     self.parse_expr(&instrumented_expr),
                     self.parse_expr(&instrumented_variants),
-                    *extractor,
                 ));
             }
             ResolvedNCommand::PrintSize(span, name) => {

@@ -111,25 +111,6 @@ fn map_fallible<T>(
         .collect::<Result<_, _>>()
 }
 
-fn parse_extractor_keyword(arg: &Sexp) -> Result<(), ParseError> {
-    let keyword = arg.expect_atom("extract option")?;
-    if keyword == ":extractor" {
-        Ok(())
-    } else {
-        error!(arg.span(), "expected :extractor")
-    }
-}
-
-fn parse_use_greedy_dag(arg: &Sexp) -> Result<bool, ParseError> {
-    match arg.expect_atom("extractor name")?.as_str() {
-        "greedy-dag" => Ok(true),
-        name => error!(
-            arg.span(),
-            "unknown extractor: {name}; omit :extractor to use the default tree extractor"
-        ),
-    }
-}
-
 pub trait Macro<T>: Send + Sync {
     fn name(&self) -> &str;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
@@ -650,37 +631,19 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::parse_schedule)?,
             ))],
-            "extract" => {
-                let (expr, variants, use_greedy_dag) = match tail {
-                    [e] => (e, None, false),
-                    [e, v] => (e, Some(v), false),
-                    [e, keyword, extractor] => {
-                        parse_extractor_keyword(keyword)?;
-                        (e, None, parse_use_greedy_dag(extractor)?)
-                    }
-                    [e, v, keyword, extractor] => {
-                        parse_extractor_keyword(keyword)?;
-                        (e, Some(v), parse_use_greedy_dag(extractor)?)
-                    }
-                    _ => {
-                        return error!(
-                            span,
-                            "usage: (extract <expr> <number of variants>? (:extractor greedy-dag)?)"
-                        );
-                    }
-                };
-                let variants = if let Some(variants) = variants {
-                    self.parse_expr(variants)?
-                } else {
-                    Expr::Lit(span.clone(), Literal::Int(0))
-                };
-                vec![Command::Extract(
+            "extract" => match tail {
+                [e] => vec![Command::Extract(
+                    span.clone(),
+                    self.parse_expr(e)?,
+                    Expr::Lit(span, Literal::Int(0)),
+                )],
+                [e, v] => vec![Command::Extract(
                     span,
-                    self.parse_expr(expr)?,
-                    variants,
-                    use_greedy_dag,
-                )]
-            }
+                    self.parse_expr(e)?,
+                    self.parse_expr(v)?,
+                )],
+                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
+            },
             "check" => vec![Command::Check(
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,

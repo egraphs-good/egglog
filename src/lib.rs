@@ -359,6 +359,16 @@ impl Function {
         self.decl.internal_hidden
     }
 
+    /// Whether this table is a constructor or relation table.
+    pub fn is_constructor(&self) -> bool {
+        self.decl.subtype == FunctionSubtype::Constructor
+    }
+
+    /// Whether this constructor is excluded from ordinary extraction.
+    pub fn is_unextractable(&self) -> bool {
+        self.decl.unextractable
+    }
+
     /// The term-constructor name associated with this function table, if
     /// any. Set on view tables created by the term/proof encoding to refer
     /// back to the user-visible constructor name.
@@ -1273,6 +1283,47 @@ impl EGraph {
         self.read(|rs| rs.constructor_enodes_while(name, f))
     }
 
+    /// Call `f` on constructor rows whose output eclass column equals `eclass`.
+    ///
+    /// This uses the backend's column index when available. Callers that want
+    /// canonical eclasses should canonicalize `eclass` before calling.
+    pub fn constructor_enodes_with_eclass(
+        &self,
+        name: &str,
+        eclass: Value,
+        mut f: impl FnMut(Enode<'_>),
+    ) -> Result<(), Error> {
+        let func = self
+            .functions
+            .get(name)
+            .ok_or_else(|| crate::api::ApiError::MissingTable {
+                name: name.to_owned(),
+            })?;
+        if func.decl.subtype != FunctionSubtype::Constructor {
+            return Err(crate::api::ApiError::WrongSubtype {
+                name: name.to_owned(),
+                expected: "constructor",
+                actual: "function",
+            }
+            .into());
+        }
+
+        let output_idx = func.schema.input.len();
+        self.backend
+            .for_each_matching_col(func.backend_id, output_idx, eclass, |row| {
+                let (row_eclass, children) = row
+                    .vals
+                    .split_last()
+                    .expect("constructor row has at least an eclass column");
+                f(Enode {
+                    children,
+                    eclass: *row_eclass,
+                    subsumed: row.subsumed,
+                });
+            });
+        Ok(())
+    }
+
     /// Remove every row from the named function in bulk.
     ///
     /// This is intended as a faster alternative to issuing a `(delete …)` for
@@ -1656,7 +1707,7 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
-            ResolvedNCommand::Extract(span, expr, variants, use_greedy_dag) => {
+            ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
@@ -1665,11 +1716,7 @@ impl EGraph {
                 let roots = vec![(sort, x)];
 
                 return if n == 0 {
-                    let extracted = if use_greedy_dag {
-                        self.extract_best_greedy_dag(roots, TreeAdditiveCostModel::default())?
-                    } else {
-                        self.extract_best(roots, TreeAdditiveCostModel::default())?
-                    };
+                    let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
                     let root = extracted
                         .terms
                         .into_iter()
@@ -1694,15 +1741,8 @@ impl EGraph {
                             "Cannot extract negative number of variants".into(),
                         ));
                     }
-                    let extracted = if use_greedy_dag {
-                        self.extract_variants_greedy_dag(
-                            roots,
-                            n as usize,
-                            TreeAdditiveCostModel::default(),
-                        )?
-                    } else {
-                        self.extract_variants(roots, n as usize, TreeAdditiveCostModel::default())?
-                    };
+                    let extracted =
+                        self.extract_variants(roots, n as usize, TreeAdditiveCostModel::default())?;
                     let terms: Vec<TermId> = extracted
                         .variants
                         .into_iter()
@@ -2250,6 +2290,60 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// Return the typed child values stored inside a container-sort value.
+    pub fn container_inner_values(&self, sort: &ArcSort, value: Value) -> Vec<(ArcSort, Value)> {
+        sort.inner_values(self.backend.container_values(), value)
+    }
+
+    /// Reconstruct a base-sort value into a [`TermDag`].
+    pub fn reconstruct_base_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> TermId {
+        sort.reconstruct_termdag_base(self.backend.base_values(), value, termdag)
+    }
+
+    /// Reconstruct a container-sort value into a [`TermDag`] from extracted
+    /// element terms.
+    pub fn reconstruct_container_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<TermId>,
+    ) -> TermId {
+        sort.reconstruct_termdag_container(
+            self.backend.container_values(),
+            value,
+            termdag,
+            element_terms,
+        )
+    }
+
+    /// Find the canonical representative of an eq-sort value.
+    ///
+    /// If `sort` does not have an internal union-find table, or if `value` is
+    /// not currently mapped in that table, this returns `value` unchanged.
+    pub fn canonical_value(&self, sort: &ArcSort, value: Value) -> Value {
+        let Some(uf_name) = self.proof_state.uf_parent.get(sort.name()) else {
+            return value;
+        };
+        let Some(uf_func) = self.functions.get(uf_name) else {
+            return value;
+        };
+
+        let mut canonical = value;
+        self.backend
+            .for_each_matching_col(uf_func.backend_id, 0, value, |row| {
+                // The internal UF table stores `(child, parent)` and is kept at
+                // one hop to the canonical representative.
+                canonical = row.vals[1];
+            });
+        canonical
     }
 
     /// Returns `true` if a user-defined command with the given name is

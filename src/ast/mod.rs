@@ -74,7 +74,7 @@ where
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>, bool),
+    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics(Span, Option<String>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
@@ -159,13 +159,8 @@ where
                 GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
             }
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
-            GenericNCommand::Extract(span, expr, variants, use_greedy_dag) => {
-                GenericCommand::Extract(
-                    span.clone(),
-                    expr.clone(),
-                    variants.clone(),
-                    *use_greedy_dag,
-                )
+            GenericNCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
             }
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
@@ -273,13 +268,8 @@ where
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
             }
-            GenericNCommand::Extract(span, expr, variants, use_greedy_dag) => {
-                GenericNCommand::Extract(
-                    span,
-                    expr.visit_exprs(f),
-                    variants.visit_exprs(f),
-                    use_greedy_dag,
-                )
+            GenericNCommand::Extract(span, expr, variants) => {
+                GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericNCommand::Check(span, facts) => GenericNCommand::Check(
                 span,
@@ -843,8 +833,7 @@ where
     /// By default, each constructor costs 1 to extract
     /// (common subexpressions are not shared in the cost
     /// model).
-    /// Use `:extractor greedy-dag` to charge shared subterms once.
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>, bool),
+    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     /// Runs a [`Schedule`], which specifies
     /// rulesets and the number of times to run them.
     ///
@@ -959,11 +948,8 @@ where
                 write!(f, "(datatype {name} {})", ListDisplay(variants, " "))
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
-            GenericCommand::Extract(_span, expr, variants, false) => {
+            GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
-            }
-            GenericCommand::Extract(_span, expr, variants, true) => {
-                write!(f, "(extract {expr} {variants} :extractor greedy-dag)")
             }
             GenericCommand::Sort {
                 name,
@@ -1751,8 +1737,8 @@ where
                 GenericCommand::BiRewrite(fun(name), rewrite)
             }
             GenericCommand::Action(action) => GenericCommand::Action(action),
-            GenericCommand::Extract(span, expr, variants, use_greedy_dag) => {
-                GenericCommand::Extract(span, expr, variants, use_greedy_dag)
+            GenericCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span, expr, variants)
             }
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.map_string_symbols(fun))
@@ -1847,12 +1833,9 @@ where
                 },
             ),
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
-            GenericCommand::Extract(span, expr1, expr2, use_greedy_dag) => GenericCommand::Extract(
-                span,
-                expr1.visit_exprs(f),
-                expr2.visit_exprs(f),
-                use_greedy_dag,
-            ),
+            GenericCommand::Extract(span, expr1, expr2) => {
+                GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
+            }
             GenericCommand::Check(span, facts) => GenericCommand::Check(
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
@@ -1972,14 +1955,11 @@ where
             GenericCommand::Action(action) => {
                 GenericCommand::Action(action.map_symbols(head, leaf))
             }
-            GenericCommand::Extract(span, expr, variants, use_greedy_dag) => {
-                GenericCommand::Extract(
-                    span,
-                    expr.map_symbols(head, leaf),
-                    variants.map_symbols(head, leaf),
-                    use_greedy_dag,
-                )
-            }
+            GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
+                span,
+                expr.map_symbols(head, leaf),
+                variants.map_symbols(head, leaf),
+            ),
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.map_symbols(head, leaf))
             }
