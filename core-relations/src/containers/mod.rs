@@ -17,16 +17,13 @@ use std::{
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use crossbeam_queue::SegQueue;
 use dashmap::SharedValue;
-use rayon::{
-    iter::{ParallelBridge, ParallelIterator},
-    prelude::*,
-};
 use rustc_hash::FxHasher;
 
 use crate::{
     ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
     WrappedTable,
     common::{DashMap, IndexSet, SubsetTracker},
+    parallel,
     parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
     table_spec::Rebuilder,
 };
@@ -177,22 +174,20 @@ impl ContainerValues {
             self.subset_tracker.recent_updates(table_id, table)
         });
         let mut summary = if parallelize_inter_container_op(self.data.next_id().index()) {
-            self.data
-                .iter_mut()
-                .zip(std::iter::repeat_with(|| exec_state.clone()))
-                .par_bridge()
-                .map(|((_, env), mut exec_state)| {
-                    env.apply_rebuild(
-                        table,
-                        &*rebuilder,
-                        to_scan.as_ref().map(|x| x.as_ref()),
-                        &mut exec_state,
-                    )
-                })
-                .reduce(ContainerRebuildSummary::default, |mut acc, summary| {
-                    acc.extend(summary);
-                    acc
-                })
+            parallel::map_dense_id_map_mut(&mut self.data, |_, env| {
+                let mut exec_state = exec_state.clone();
+                env.apply_rebuild(
+                    table,
+                    &*rebuilder,
+                    to_scan.as_ref().map(|x| x.as_ref()),
+                    &mut exec_state,
+                )
+            })
+            .into_iter()
+            .fold(ContainerRebuildSummary::default(), |mut acc, summary| {
+                acc.extend(summary);
+                acc
+            })
         } else {
             let mut summary = ContainerRebuildSummary::default();
             for (_, env) in self.data.iter_mut() {
@@ -584,110 +579,104 @@ impl<C: ContainerValue> ContainerEnv<C> {
         to_reinsert.resize_with(self.to_id.shards().len(), Default::default);
 
         let shards = self.to_id.shards_mut();
-        let changed = shards
-            .par_iter_mut()
-            .map(|shard| {
-                let mut changed = false;
-                let shard = shard.get_mut();
-                // SAFETY: the iterator does not outlive `shard`.
-                for bucket in unsafe { shard.iter() } {
-                    // SAFETY: the bucket is valid; we just got it from the iterator.
-                    let (container, val) = unsafe { bucket.as_mut() };
-                    let old_val = *val.get();
-                    let new_val = rebuilder.rebuild_val(old_val);
-                    let container_changed = container.rebuild_contents(rebuilder);
-                    if !container_changed && new_val == old_val {
-                        // Nothing changed about this entry. Leave it in place.
-                        continue;
-                    }
-                    changed = true;
-                    if container_changed {
-                        // The container changed. Remove both map entries then reinsert.
-                        // SAFETY: This is a valid bucket. Furthermore, iterators remain valid if
-                        // buckets they have already yielded have been removed.
-                        let ((container, _), _) = unsafe { shard.remove(bucket) };
-                        self.to_container.remove(&old_val);
-                        // Spooky: we're using `to_container` to determine the shard for
-                        // `to_id`. We are assuming that the # shards determination is
-                        // deterministic here. There is a debug assertion in `get_or_insert`
-                        // that attempts to verify this.
-                        let shard = self
-                            .to_container
-                            .determine_shard(hash_container(&container) as usize);
-                        to_reinsert[shard].push((container, new_val, new_val == old_val));
-                    } else {
-                        // Just the value changed. Leave the container in place.
-                        *val.get_mut() = new_val;
-                        let prev = self.to_container.remove(&old_val).unwrap().1;
-                        self.to_container.insert(new_val, prev);
-                    }
+        let changed = parallel::map_mut(shards, |_, shard| {
+            let mut changed = false;
+            let shard = shard.get_mut();
+            // SAFETY: the iterator does not outlive `shard`.
+            for bucket in unsafe { shard.iter() } {
+                // SAFETY: the bucket is valid; we just got it from the iterator.
+                let (container, val) = unsafe { bucket.as_mut() };
+                let old_val = *val.get();
+                let new_val = rebuilder.rebuild_val(old_val);
+                let container_changed = container.rebuild_contents(rebuilder);
+                if !container_changed && new_val == old_val {
+                    // Nothing changed about this entry. Leave it in place.
+                    continue;
                 }
-                changed
-            })
-            .max()
-            .unwrap_or(false);
+                changed = true;
+                if container_changed {
+                    // The container changed. Remove both map entries then reinsert.
+                    // SAFETY: This is a valid bucket. Furthermore, iterators remain valid if
+                    // buckets they have already yielded have been removed.
+                    let ((container, _), _) = unsafe { shard.remove(bucket) };
+                    self.to_container.remove(&old_val);
+                    // Spooky: we're using `to_container` to determine the shard for
+                    // `to_id`. We are assuming that the # shards determination is
+                    // deterministic here. There is a debug assertion in `get_or_insert`
+                    // that attempts to verify this.
+                    let shard = self
+                        .to_container
+                        .determine_shard(hash_container(&container) as usize);
+                    to_reinsert[shard].push((container, new_val, new_val == old_val));
+                } else {
+                    // Just the value changed. Leave the container in place.
+                    *val.get_mut() = new_val;
+                    let prev = self.to_container.remove(&old_val).unwrap().1;
+                    self.to_container.insert(new_val, prev);
+                }
+            }
+            changed
+        })
+        .into_iter()
+        .any(|changed| changed);
 
         let dirty_ids = SegQueue::new();
-        shards
-            .iter_mut()
-            .enumerate()
-            .map(|(i, shard)| (i, shard, exec_state.clone()))
-            .par_bridge()
-            .for_each(|(shard_id, shard, mut exec_state)| {
-                // This bit is a real slog. Once Dashmap updates from RawTable to HashTable for
-                // the underlying shard, this will get a little better.
-                //
-                // NB: We are probably leaving some paralellism on the floor with these calls
-                // to `to_container` and `val_index`.
-                let shard = shard.get_mut();
-                let queue = &to_reinsert[shard_id];
-                while let Some((container, val, stable_id)) = queue.pop() {
-                    let hc = hash_container(&container);
-                    let target_map = self.to_container.determine_shard(hc as usize);
-                    match shard.find_or_find_insert_slot(
-                        hc,
-                        |(c, _)| c == &container,
-                        |(c, _)| hash_container(c),
-                    ) {
-                        Ok(bucket) => {
-                            // SAFETY: the bucket is valid; we just got it from the shard and
-                            // we have not done any operations that can invalidate the bucket.
-                            let (container, val_slot) = unsafe { bucket.as_mut() };
-                            let old_val = *val_slot.get();
-                            let result = (self.merge_fn)(&mut exec_state, old_val, val);
-                            if result != old_val {
-                                self.to_container.remove(&old_val);
-                                self.to_container.insert(result, (hc as usize, target_map));
-                                *val_slot.get_mut() = result;
-                                for val in container.iter() {
-                                    let mut index = self.val_index.entry(val).or_default();
-                                    index.swap_remove(&old_val);
-                                    index.insert(result);
-                                }
-                            }
-                            // As in the serial path, only same-id semantic
-                            // changes need an explicit parent-row refresh.
-                            if stable_id && result == val {
-                                dirty_ids.push(val);
+        parallel::for_each_mut(shards, |shard_id, shard| {
+            let mut exec_state = exec_state.clone();
+            // This bit is a real slog. Once Dashmap updates from RawTable to HashTable for
+            // the underlying shard, this will get a little better.
+            //
+            // NB: We are probably leaving some paralellism on the floor with these calls
+            // to `to_container` and `val_index`.
+            let shard = shard.get_mut();
+            let queue = &to_reinsert[shard_id];
+            while let Some((container, val, stable_id)) = queue.pop() {
+                let hc = hash_container(&container);
+                let target_map = self.to_container.determine_shard(hc as usize);
+                match shard.find_or_find_insert_slot(
+                    hc,
+                    |(c, _)| c == &container,
+                    |(c, _)| hash_container(c),
+                ) {
+                    Ok(bucket) => {
+                        // SAFETY: the bucket is valid; we just got it from the shard and
+                        // we have not done any operations that can invalidate the bucket.
+                        let (container, val_slot) = unsafe { bucket.as_mut() };
+                        let old_val = *val_slot.get();
+                        let result = (self.merge_fn)(&mut exec_state, old_val, val);
+                        if result != old_val {
+                            self.to_container.remove(&old_val);
+                            self.to_container.insert(result, (hc as usize, target_map));
+                            *val_slot.get_mut() = result;
+                            for val in container.iter() {
+                                let mut index = self.val_index.entry(val).or_default();
+                                index.swap_remove(&old_val);
+                                index.insert(result);
                             }
                         }
-                        Err(slot) => {
-                            self.to_container.insert(val, (hc as usize, target_map));
-                            for v in container.iter() {
-                                self.val_index.entry(v).or_default().insert(val);
-                            }
-                            // SAFETY: We just got this slot from `find_or_find_insert_slot`
-                            // and we have not mutated the map at all since then.
-                            unsafe {
-                                shard.insert_in_slot(hc, slot, (container, SharedValue::new(val)));
-                            }
-                            if stable_id {
-                                dirty_ids.push(val);
-                            }
+                        // As in the serial path, only same-id semantic
+                        // changes need an explicit parent-row refresh.
+                        if stable_id && result == val {
+                            dirty_ids.push(val);
+                        }
+                    }
+                    Err(slot) => {
+                        self.to_container.insert(val, (hc as usize, target_map));
+                        for v in container.iter() {
+                            self.val_index.entry(v).or_default().insert(val);
+                        }
+                        // SAFETY: We just got this slot from `find_or_find_insert_slot`
+                        // and we have not mutated the map at all since then.
+                        unsafe {
+                            shard.insert_in_slot(hc, slot, (container, SharedValue::new(val)));
+                        }
+                        if stable_id {
+                            dirty_ids.push(val);
                         }
                     }
                 }
-            });
+            }
+        });
         let mut summary = ContainerRebuildSummary::default();
         if changed {
             summary.note_change();

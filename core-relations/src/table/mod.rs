@@ -18,7 +18,6 @@ use std::{
 use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
 use hashbrown::HashTable;
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHasher;
 use sharded_hash_table::ShardedHashTable;
 
@@ -28,6 +27,7 @@ use crate::{
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
     hash_index::{ColumnIndex, Index},
     offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
+    parallel,
     parallel_heuristics::parallelize_table_op,
     pool::with_pool_set,
     row_buffer::{ParallelRowBufWriter, RowBuffer},
@@ -592,46 +592,40 @@ impl SortedWritesTable {
     /// Flush all pending removals, in parallel.
     fn parallel_delete(&mut self) -> bool {
         let shard_data = self.hash.shard_data();
-        let stale_delta: usize = self
-            .hash
-            .mut_shards()
-            .par_iter_mut()
-            .enumerate()
-            .filter_map(|(shard_id, shard)| {
-                let shard_id = ShardId::from_usize(shard_id);
-                if self.pending_state.pending_removals[shard_id].is_empty() {
-                    return None;
-                }
-                Some((shard_id, shard))
-            })
-            .map(|(shard_id, shard)| {
-                let queue = &self.pending_state.pending_removals[shard_id];
-                let mut marked_stale = 0;
-                while let Some(buf) = queue.pop() {
-                    buf.for_each(|to_remove| {
-                        let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
-                        assert_eq!(actual_shard, shard_id);
-                        if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as _)
-                                && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
-                                    == to_remove
-                        }) {
-                            let (ent, _) = entry.remove();
-                            // SAFETY: The safety requirements of
-                            // `set_stale_shared` are that there are no
-                            // concurrent accesses to `row`. No other threads
-                            // can access this row within this method because
-                            // different `shards` partition the space
-                            // (guaranteed by the assertion above), and we
-                            // launch at most one thread per shard.
-                            marked_stale +=
-                                unsafe { !self.data.data.set_stale_shared(ent.row) } as usize;
-                        }
-                    });
-                }
-                marked_stale
-            })
-            .sum();
+        let pending_removals = &self.pending_state.pending_removals;
+        let data = &self.data.data;
+        let n_keys = self.n_keys;
+        let stale_delta: usize = parallel::map_mut(self.hash.mut_shards(), |shard_id, shard| {
+            let shard_id = ShardId::from_usize(shard_id);
+            if pending_removals[shard_id].is_empty() {
+                return 0;
+            }
+            let queue = &pending_removals[shard_id];
+            let mut marked_stale = 0;
+            while let Some(buf) = queue.pop() {
+                buf.for_each(|to_remove| {
+                    let (actual_shard, hc) = hash_code(shard_data, to_remove, n_keys);
+                    assert_eq!(actual_shard, shard_id);
+                    if let Ok(entry) = shard.find_entry(hc, |entry| {
+                        entry.hashcode == (hc as _)
+                            && &data.get_row(entry.row)[0..n_keys] == to_remove
+                    }) {
+                        let (ent, _) = entry.remove();
+                        // SAFETY: The safety requirements of
+                        // `set_stale_shared` are that there are no
+                        // concurrent accesses to `row`. No other threads
+                        // can access this row within this method because
+                        // different `shards` partition the space
+                        // (guaranteed by the assertion above), and we
+                        // launch at most one thread per shard.
+                        marked_stale += unsafe { !data.set_stale_shared(ent.row) } as usize;
+                    }
+                });
+            }
+            marked_stale
+        })
+        .into_iter()
+        .sum();
         // Update the stale count with the total marked stale.
         self.data.stale_rows += stale_delta;
         stale_delta > 0
@@ -829,17 +823,17 @@ impl SortedWritesTable {
         let n_cols = self.n_columns;
         let next_offset = RowId::from_usize(self.data.data.len());
         let row_writer = self.data.data.parallel_writer();
-        let pending_adds = self
-            .hash
-            .mut_shards()
-            .par_iter_mut()
-            .enumerate()
-            .map(|(shard_id, shard)| {
+        let pending_rows = &self.pending_state.pending_rows;
+        let merge = self.merge.clone();
+        let pending_adds = parallel::map_mut_with(
+            self.hash.mut_shards(),
+            || (checker.clone(), 0usize, false),
+            |shard_id, shard| {
                 let shard_id = ShardId::from_usize(shard_id);
                 let mut checker = checker.clone();
                 let mut exec_state = exec_state.clone();
                 let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
-                let queue = &self.pending_state.pending_rows[shard_id];
+                let queue = &pending_rows[shard_id];
                 let mut marked_stale = 0usize;
                 let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
                 let mut changed = false;
@@ -899,7 +893,7 @@ impl SortedWritesTable {
                                     // concurrent accesses to `row`. We have
                                     // exclusive access to any row whose hash matches this
                                     // shard.
-                                    if (self.merge)(&mut exec_state, cur, row, &mut scratch) {
+                                    if (merge)(&mut exec_state, cur, row, &mut scratch) {
                                         unsafe {
                                             let _was_stale = read_handle.set_stale_shared(occ.get().row);
                                             debug_assert!(!_was_stale);
@@ -939,9 +933,7 @@ impl SortedWritesTable {
                     // too many threads if someone needs to resize the row
                     // writer.
                     for row in buf.non_stale() {
-                        staged.insert(row, |cur, new, out| {
-                            (self.merge)(&mut exec_state, cur, new, out)
-                        });
+                        staged.insert(row, |cur, new, out| (merge)(&mut exec_state, cur, new, out));
                         if staged.len() >= BATCH_SIZE {
                             flush_staged_outputs!();
                         }
@@ -949,28 +941,24 @@ impl SortedWritesTable {
                 }
                 flush_staged_outputs!();
                 (checker, marked_stale, changed)
-            })
-            .collect_vec_list();
+            },
+        );
         self.data.data = row_writer.finish();
         // Now we just need to reset our invariants.
 
         // Confirm none of the writes violated sort order and update the
         // `offsets` vector.
-        let checker = C::check_global(pending_adds.iter().flatten().map(|(checker, _, _)| checker));
+        let checker = C::check_global(pending_adds.iter().map(|(checker, _, _)| checker));
         checker.update_offsets(next_offset, &mut self.offsets);
 
         // Update the staleness counters.
         self.data.stale_rows += pending_adds
             .iter()
-            .flatten()
             .map(|(_, stale, _)| *stale)
             .sum::<usize>();
 
         // Register any changes.
-        pending_adds
-            .iter()
-            .flatten()
-            .any(|(_, _, changed)| *changed)
+        pending_adds.iter().any(|(_, _, changed)| *changed)
     }
 
     fn binary_search_sort_val(&self, val: Value) -> Result<(RowId, RowId), RowId> {
@@ -1045,7 +1033,6 @@ impl SortedWritesTable {
         }
     }
     fn parallel_rehash(&mut self) {
-        use rayon::prelude::*;
         // Parallel rehashes go "hash-first" rather than "rows-first".
         //
         // We iterate over each shard and then write out new contents to a fresh row, in parallel.
@@ -1076,7 +1063,16 @@ impl SortedWritesTable {
             }
         }
         let mut results = Vec::<TimestampStats>::with_capacity(self.offsets.len());
-        results.resize_with(self.offsets.len() - 1, Default::default);
+        let offset_windows = self
+            .offsets
+            .windows(2)
+            .map(|xs| {
+                let [(start_val, start_row), (_, end_row)] = xs else {
+                    unreachable!()
+                };
+                (*start_val, *start_row, *end_row)
+            })
+            .collect::<Vec<_>>();
         // Use a macro rather than a lambda to avoid borrow issues.
         macro_rules! compute_hist {
             ($start_val: expr, $start_row: expr, $end_row: expr) => {{
@@ -1099,34 +1095,19 @@ impl SortedWritesTable {
                 }
             }};
         }
-        let mut last: TimestampStats = Default::default();
-        rayon::join(
-            || {
-                // This closure handles computing all timestamps but the last one.
-                self.offsets
-                    .windows(2)
-                    .zip(results.iter_mut())
-                    .par_bridge()
-                    .for_each(|(xs, res)| {
-                        let [(start_val, start_row), (_, end_row)] = xs else {
-                            unreachable!()
-                        };
-                        *res = compute_hist!(*start_val, *start_row, *end_row);
-                    })
-            },
-            || {
-                // And here we handle the final one.
-                let (start_val, start_row) = self.offsets.last().unwrap();
-                let end_row = self.data.next_row();
-                last = compute_hist!(*start_val, *start_row, end_row);
-            },
-        );
+        results.extend(parallel::map(
+            &offset_windows,
+            |_, (start_val, start_row, end_row)| compute_hist!(*start_val, *start_row, *end_row),
+        ));
+        // And here we handle the final one.
+        let (start_val, start_row) = self.offsets.last().unwrap();
+        let end_row = self.data.next_row();
+        let last = compute_hist!(*start_val, *start_row, end_row);
         results.push(last);
         // Now we need to compute cumulative statistics on the row layouts here.
         // We do this serially a we currently don't have a ton of use for cases with thousands
         // of timestamps or more. There are well-known parallel algorithms for computing these
-        // cumulative statistics in parallel, but they aren't currently all that well-suited
-        // for rayon at the moment.
+        // cumulative statistics in parallel, but they are not currently a good fit here.
         let mut prev_count = 0;
         self.offsets.clear();
         for stats in results.iter_mut() {
@@ -1161,42 +1142,37 @@ impl SortedWritesTable {
 
         self.data.scratch.clear();
         self.data.scratch.reserve(prev_count);
-        self.hash
-            .mut_shards()
-            .par_iter_mut()
-            .with_max_len(1)
-            .enumerate()
-            .for_each(|(shard_id, shard)| {
-                let shard_id = ShardId::from_usize(shard_id);
-                let scratch_ptr = self.data.scratch.raw_rows();
-                let mut progress =
-                    HashMap::<Value /* timestamp */, RowId /* next row */>::default();
-                progress.reserve(results.len());
-                for stats in &results {
-                    let Some(start) = stats.histogram.get(shard_id) else {
-                        continue;
-                    };
-                    progress.insert(stats.value, RowId::from_usize(*start));
+        let scratch_ptr = self.data.scratch.raw_rows() as usize;
+        let data = &self.data.data;
+        let n_columns = self.n_columns;
+        parallel::for_each_mut(self.hash.mut_shards(), |shard_id, shard| {
+            let shard_id = ShardId::from_usize(shard_id);
+            let scratch_ptr = scratch_ptr as *const Value;
+            let mut progress = HashMap::<Value /* timestamp */, RowId /* next row */>::default();
+            progress.reserve(results.len());
+            for stats in &results {
+                let Some(start) = stats.histogram.get(shard_id) else {
+                    continue;
+                };
+                progress.insert(stats.value, RowId::from_usize(*start));
+            }
+            for TableEntry { row: row_id, .. } in shard.iter_mut() {
+                let row = data.get_row(*row_id);
+                debug_assert!(!row[0].is_stale(), "shard should not map to a stale value");
+                let val = row[sort_by.index()];
+                let next = progress[&val];
+                // SAFETY: see above longer comment.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        row.as_ptr(),
+                        scratch_ptr.add(next.index() * n_columns) as *mut Value,
+                        n_columns,
+                    )
                 }
-                for TableEntry { row: row_id, .. } in shard.iter_mut() {
-                    let row = self
-                        .data
-                        .get_row(*row_id)
-                        .expect("shard should not map to a stale value");
-                    let val = row[sort_by.index()];
-                    let next = progress[&val];
-                    // SAFETY: see above longer comment.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            row.as_ptr(),
-                            scratch_ptr.add(next.index() * self.n_columns) as *mut Value,
-                            self.n_columns,
-                        )
-                    }
-                    *row_id = next;
-                    progress.insert(val, next.inc());
-                }
-            });
+                *row_id = next;
+                progress.insert(val, next.inc());
+            }
+        });
         // SAFETY: see above longer comment.
         unsafe { self.data.scratch.set_len(prev_count) };
         mem::swap(&mut self.data.data, &mut self.data.scratch);

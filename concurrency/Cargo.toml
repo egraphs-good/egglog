@@ -11,7 +11,7 @@ readme = { workspace = true }
 [dependencies]
 arc-swap = { workspace = true}
 bumpalo = { workspace = true}
-rayon = { workspace = true}
+crossbeam = { workspace = true}
 egglog-numeric-id = { workspace = true }
 smallvec = { workspace = true }
 
@@ -22,4 +22,8 @@ rayon = { workspace = true}
 
 [[bench]]
 name = "simple_read"
+harness = false
+
+[[bench]]
+name = "sum_vector"
 harness = false
