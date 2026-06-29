@@ -1,0 +1,30 @@
+; The `:unsafe-seminaive` rule option keeps seminaive (delta) evaluation
+; but compiles the rule with the permissive Read/Full primitive contexts
+; and skips the "no function lookups in actions" typecheck — so the RHS
+; can perform arbitrary database reads, including function-table lookups.
+;
+; It is unsafe: a read on a seminaive RHS observes the database
+; mid-iteration, so results can depend on evaluation order. It's also a
+; direct-backend feature — the term/proof encoding rejects it, so this
+; file only runs on the default backend.
+
+(function f (i64) i64 :merge (max old new))
+(set (f 1) 100)
+(set (f 2) 200)
+
+(function result (i64) i64 :merge (max old new))
+(relation trigger (i64))
+
+; Without `:unsafe-seminaive`, `(f ?x)` in this action would be rejected
+; as a disallowed function lookup. With it, the rule reads f's stored
+; output directly in the RHS.
+(rule ((trigger ?x))
+      ((set (result ?x) (f ?x)))
+      :unsafe-seminaive)
+
+(trigger 1)
+(trigger 2)
+(run 1)
+
+(check (= (result 1) 100))
+(check (= (result 2) 200))

@@ -324,7 +324,7 @@ pub fn rule(
         body: facts.0,
         name: "".into(),
         ruleset: ruleset.into(),
-        naive: false,
+        eval_mode: RuleEvalMode::Seminaive,
         no_decomp: false,
         include_subsumed: false,
     };
@@ -495,7 +495,7 @@ pub fn rust_rule(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
-        naive: false,
+        eval_mode: RuleEvalMode::Seminaive,
         no_decomp: false,
         include_subsumed: false,
     };
@@ -597,9 +597,9 @@ pub fn rust_rule_full(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
-        // FullPrim action requires `Context::Full`, which is only
-        // available in `:naive` rules.
-        naive: true,
+        // FullPrim actions require `Context::Full`; use the safe whole-database
+        // `:naive` path (`:unsafe-seminaive` also gets `Full` but is unsafe).
+        eval_mode: RuleEvalMode::Naive,
         no_decomp: false,
         include_subsumed: false,
     };

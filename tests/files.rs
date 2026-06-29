@@ -35,28 +35,6 @@ impl Run {
         }
     }
 
-    /// Extraction results may differ slightly due to the proof encoding when multiple
-    /// solutions have the same cost. Snapshot only the extracted cost so shared
-    /// snapshots still verify that normal and proof modes find equally good solutions.
-    fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
-        outputs
-            .iter()
-            .filter_map(|output| match output {
-                // Skip OverallStatistics - contains non-deterministic Duration timing data
-                CommandOutput::OverallStatistics(_) => None,
-                // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
-                CommandOutput::PrintFunction(..) => None,
-                CommandOutput::ExtractBest(_, cost, _) => {
-                    Some(format!("(extraction-costs {cost})\n"))
-                }
-                CommandOutput::ExtractVariants(..) => None,
-                // All other variants use normal Display formatting
-                other => Some(other.to_string()),
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
@@ -102,7 +80,7 @@ impl Run {
                     // so all variants compare against the same expected output
                     let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
                     let snapshot_content_across_treatments =
-                        self.outputs_to_snapshot_preserved_across_treatments(outputs);
+                        CommandOutput::snapshot_stable_under_proof_encoding(outputs);
 
                     if self.should_assert_snapshot_across_treatments(
                         &snapshot_content_across_treatments,
