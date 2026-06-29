@@ -29,39 +29,17 @@ impl TreeCostModel<CustomCost> for CustomCostModel {
     fn total_enode_cost(
         &self,
         _egraph: &EGraph,
-        _func: &Function,
+        func: &Function,
         _enode: &Enode<'_>,
         child_costs: &[CustomCost],
     ) -> CustomCost {
-        child_costs
-            .iter()
-            .fold(CustomCost(1), |cost, child| cost.combine(child))
-    }
-}
-
-struct RootHeavyTreeCostModel;
-
-impl BaseCostModel<DefaultCost> for RootHeavyTreeCostModel {
-    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
-        1
-    }
-}
-
-impl TreeCostModel<DefaultCost> for RootHeavyTreeCostModel {
-    fn total_enode_cost(
-        &self,
-        _egraph: &EGraph,
-        func: &Function,
-        _enode: &Enode<'_>,
-        child_costs: &[DefaultCost],
-    ) -> DefaultCost {
         let children_total = child_costs
             .iter()
-            .fold(DefaultCost::identity(), |cost, child| cost.combine(child));
+            .fold(CustomCost::identity(), |cost, child| cost.combine(child));
         if func.name() == "Wide" {
-            children_total.saturating_mul(10)
+            CustomCost(children_total.0 * 10)
         } else {
-            children_total.saturating_add(1)
+            children_total.combine(&CustomCost(1))
         }
     }
 }
@@ -556,21 +534,6 @@ fn test_extract_variants1() {
 }
 
 #[test]
-fn test_extract_negative_variants_returns_error() {
-    let mut egraph = EGraph::default();
-
-    let err = egraph
-        .parse_and_run_program(None, "(extract 0 -1)")
-        .unwrap_err();
-
-    assert!(
-        err.to_string()
-            .contains("Cannot extract negative number of variants"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
 fn test_tree_extract_accepts_custom_cost_type() {
     let mut egraph = EGraph::default();
     add_daggy_example(&mut egraph);
@@ -583,25 +546,6 @@ fn test_tree_extract_accepts_custom_cost_type() {
     let root = extracted.terms.into_iter().next().unwrap();
 
     assert_eq!(root.cost, CustomCost(5));
-    assert_eq!(
-        extracted.termdag.to_string(root.term),
-        "(Pair (Leaf 1) (Leaf 2))"
-    );
-}
-
-#[test]
-fn test_tree_extract_accepts_tree_only_cost_model() {
-    let mut egraph = EGraph::default();
-    add_daggy_example(&mut egraph);
-
-    let (sort, value) = daggy_root(&mut egraph);
-
-    let extracted = egraph
-        .extract_best(vec![(sort, value)], RootHeavyTreeCostModel)
-        .unwrap();
-    let root = extracted.terms.into_iter().next().unwrap();
-
-    assert_eq!(root.cost, 5);
     assert_eq!(
         extracted.termdag.to_string(root.term),
         "(Pair (Leaf 1) (Leaf 2))"

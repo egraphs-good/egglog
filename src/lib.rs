@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, TreeAdditiveCostModel};
+use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -1726,52 +1726,41 @@ impl EGraph {
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
                 let n = self.eval_resolved_expr(span, &variants)?;
                 let n: i64 = self.backend.base_values().unwrap(n);
-                let roots = vec![(sort, x)];
 
+                let mut termdag = TermDag::default();
+
+                let extractor = Extractor::compute_costs_from_rootsorts(
+                    Some(vec![sort]),
+                    self,
+                    TreeAdditiveCostModel::default(),
+                );
                 return if n == 0 {
-                    let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
-                    let root = extracted
-                        .terms
-                        .into_iter()
-                        .next()
-                        .expect("one root was requested");
-                    // dont turn termdag into a string if we have messages disabled for performance reasons
-                    if log_enabled!(Level::Info) {
-                        log::info!(
-                            "extracted with cost {}: {}",
-                            root.cost,
-                            extracted.termdag.to_string(root.term)
-                        );
+                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                        // dont turn termdag into a string if we have messages disabled for performance reasons
+                        if log_enabled!(Level::Info) {
+                            log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
+                        }
+                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
+                    } else {
+                        Err(Error::ExtractError(
+                            "Unable to find any valid extraction (likely due to subsume or delete)"
+                                .to_string(),
+                        ))
                     }
-                    Ok(vec![CommandOutput::ExtractBest(
-                        extracted.termdag,
-                        root.cost,
-                        root.term,
-                    )])
                 } else {
                     if n < 0 {
-                        return Err(Error::ExtractError(
-                            "Cannot extract negative number of variants".into(),
-                        ));
+                        panic!("Cannot extract negative number of variants");
                     }
-                    let extracted =
-                        self.extract_variants(roots, n as usize, TreeAdditiveCostModel::default())?;
-                    let terms: Vec<TermId> = extracted
-                        .variants
-                        .into_iter()
-                        .next()
-                        .expect("one root was requested")
-                        .into_iter()
-                        .map(|variant| variant.term)
+                    let terms: Vec<TermId> = extractor
+                        .extract_variants(self, &mut termdag, x, n as usize)
+                        .iter()
+                        .map(|e| e.1)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(vec![CommandOutput::ExtractVariants(
-                        extracted.termdag,
-                        terms,
-                    )])
+                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1843,17 +1832,23 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let mut roots = Vec::new();
-                for expr in &exprs {
-                    let value = self.eval_resolved_expr(span.clone(), expr)?;
-                    roots.push((expr.output_type(), value));
-                }
-                let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
-                let termdag = extracted.termdag;
+                let extractor = Extractor::compute_costs_from_rootsorts(
+                    None,
+                    self,
+                    TreeAdditiveCostModel::default(),
+                );
+                let mut termdag: TermDag = Default::default();
 
                 use std::io::Write;
-                for root in extracted.terms {
-                    writeln!(f, "{}", termdag.to_string(root.term))
+                for expr in exprs {
+                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
+                    let expr_type = expr.output_type();
+
+                    let term = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
+                        .unwrap()
+                        .1;
+                    writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
