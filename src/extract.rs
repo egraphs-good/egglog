@@ -177,28 +177,6 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         )
     }
 
-    /// Like `compute_costs_from_rootsorts`, but ignores the unextractable and hidden flags.
-    /// This is used for proof extraction where we need to extract proofs even
-    /// from terms that are marked unextractable (like global let bindings).
-    /// Also skips view tables (those with term_constructor) since proofs need
-    /// to extract from the original term tables with their original names.
-    pub(crate) fn compute_costs_from_rootsorts_allow_unextractable(
-        rootsorts: Option<Vec<ArcSort>>,
-        egraph: &EGraph,
-        cost_model: impl CostModel<C> + 'static,
-    ) -> Self {
-        Self::compute_costs_from_rootsorts_internal(
-            egraph,
-            ExtractionOptions {
-                cost_model: Box::new(cost_model),
-                rootsorts,
-                respect_unextractable: false,
-                skip_view_tables: true,
-                respect_hidden: false,
-            },
-        )
-    }
-
     fn compute_costs_from_rootsorts_internal(
         egraph: &EGraph,
         options: ExtractionOptions<C>,

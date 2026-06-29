@@ -1,6 +1,6 @@
 use crate::ast::FunctionSubtype;
-use crate::extract::{Extractor, TreeAdditiveCostModel};
 use crate::proofs::proof_encoding::ProofInstrumentor;
+use crate::proofs::proof_extractor::extract_root;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
 use crate::{RawValues, Read, ResolvedCall, TermDag};
 use thiserror::Error;
@@ -40,14 +40,6 @@ impl ProofInstrumentor<'_> {
 
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
-
-        // Use the version that ignores unextractable flag since proof extraction
-        // needs to extract proofs from all terms including those marked unextractable
-        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
-            None,
-            self.egraph,
-            TreeAdditiveCostModel::default(),
-        );
 
         let mut termdag = TermDag::default();
         let mut witness_value = None;
@@ -97,8 +89,7 @@ impl ProofInstrumentor<'_> {
             .unwrap()
             .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 
-        let (_, proof_term_id) = extractor
-            .extract_best_with_sort(self.egraph, &mut termdag, proof_value, proof_sort)
+        let proof_term_id = extract_root(self.egraph, &mut termdag, proof_value, proof_sort)
             .unwrap_or_else(|| {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
