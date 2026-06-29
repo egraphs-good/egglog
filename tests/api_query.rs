@@ -149,6 +149,8 @@ fn enodes_for_eclass_basic() -> Result<(), Error> {
 (constructor Add (i64 i64) Math)
 (let $a (Add 1 2))
 (let $b (Add 3 4))
+(union $a $b)
+(subsume (Add 1 2))
 ",
     )?;
 
@@ -156,6 +158,7 @@ fn enodes_for_eclass_basic() -> Result<(), Error> {
     let (_, a_eclass) = egraph.eval_expr(&a_expr)?;
     let b_expr = egraph.parser.get_expr_from_string(None, "$b").unwrap();
     let (_, b_eclass) = egraph.eval_expr(&b_expr)?;
+    assert_eq!(a_eclass, b_eclass);
 
     let mut rows: Vec<(Vec<Value>, Value, bool)> = Vec::new();
     egraph.read(|rs| {
@@ -164,17 +167,21 @@ fn enodes_for_eclass_basic() -> Result<(), Error> {
         })
     })?;
 
-    assert_eq!(rows.len(), 1);
-    let (children, eclass, subsumed) = rows.pop().unwrap();
-    assert_eq!(eclass, a_eclass);
-    assert!(!subsumed);
-    assert_eq!(
-        children
-            .into_iter()
-            .map(|value| egraph.value_to_base::<i64>(value))
-            .collect::<Vec<_>>(),
-        vec![1, 2]
-    );
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|(_, eclass, _)| *eclass == a_eclass));
+    assert!(rows.iter().any(|(_, _, subsumed)| *subsumed));
+    let mut children = rows
+        .into_iter()
+        .map(|(children, _, subsumed)| {
+            let children = children
+                .into_iter()
+                .map(|value| egraph.value_to_base::<i64>(value))
+                .collect::<Vec<_>>();
+            (children, subsumed)
+        })
+        .collect::<Vec<_>>();
+    children.sort();
+    assert_eq!(children, vec![(vec![1, 2], true), (vec![3, 4], false)]);
 
     let mut count = 0;
     egraph.read(|rs| {
@@ -182,7 +189,7 @@ fn enodes_for_eclass_basic() -> Result<(), Error> {
             count += 1;
         })
     })?;
-    assert_eq!(count, 1);
+    assert_eq!(count, 2);
     Ok(())
 }
 

@@ -1,4 +1,3 @@
-use crate::ast::FunctionSubtype;
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
@@ -183,8 +182,7 @@ enum ExtractionMode {
 
 impl ExtractionMode {
     fn includes(self, func: &Function) -> bool {
-        let constructor_or_view = func.decl.subtype == FunctionSubtype::Constructor
-            || func.decl.term_constructor.is_some();
+        let constructor_or_view = func.is_extraction_constructor();
         match self {
             Self::Normal => {
                 constructor_or_view && !func.decl.unextractable && !func.decl.internal_hidden
@@ -358,9 +356,15 @@ impl<C: Cost> Extractor<C> {
             eclass: row.vals[output_idx],
             subsumed: row.subsumed,
         };
+        let cost_func = func
+            .decl
+            .term_constructor
+            .as_ref()
+            .and_then(|name| egraph.functions.get(name))
+            .unwrap_or(func);
         Some(
             self.cost_model
-                .total_enode_cost(egraph, func, &enode, &ch_costs),
+                .total_enode_cost(egraph, cost_func, &enode, &ch_costs),
         )
     }
 
@@ -674,8 +678,9 @@ impl<C: Cost> Extractor<C> {
                 let find_root_variants = |row: egglog_bridge::ScanEntry| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
-                        if *target == canonical_value {
-                            let cost = self.compute_cost_hyperedge(egraph, &row, func).unwrap();
+                        if *target == canonical_value
+                            && let Some(cost) = self.compute_cost_hyperedge(egraph, &row, func)
+                        {
                             root_variants.push((cost, func_name.clone(), row.vals.to_vec()));
                         }
                     }

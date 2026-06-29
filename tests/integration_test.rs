@@ -543,15 +543,20 @@ fn test_tree_extract_accepts_custom_cost_type() {
     let (sort, value) = daggy_root(&mut egraph);
 
     let extracted = egraph
-        .extract_best(vec![(sort, value)], CustomCostModel)
+        .extract_best(vec![(sort.clone(), value)], CustomCostModel)
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
     assert_eq!(root.cost, CustomCost(5));
-    assert_eq!(
-        extracted.termdag.to_string(root.term),
-        "(Pair (Leaf 1) (Leaf 2))"
-    );
+    let extracted_term = extracted.termdag.to_string(root.term);
+    assert_eq!(extracted_term, "(Pair (Leaf 1) (Leaf 2))");
+    let extracted_expr = egraph
+        .parser
+        .get_expr_from_string(None, &extracted_term)
+        .unwrap();
+    let (extracted_sort, extracted_value) = egraph.eval_expr(&extracted_expr).unwrap();
+    assert_eq!(extracted_sort.name(), sort.name());
+    assert_eq!(extracted_value, value);
 }
 
 #[test]
@@ -587,8 +592,23 @@ fn extract_best_returns_none_for_unextractable_roots() {
         .unwrap();
 
     assert_eq!(extracted.terms.len(), 2);
-    assert!(extracted.terms[0].is_some());
+    let visible_root = extracted.terms[0].as_ref().unwrap();
+    assert_eq!(extracted.termdag.to_string(visible_root.term), "(visible)");
     assert!(extracted.terms[1].is_none());
+}
+
+#[test]
+fn extract_negative_variants_returns_error_instead_of_panicking() {
+    let err = EGraph::default()
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math (Num i64))
+            (extract (Num 1) -1)
+            "#,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("negative number of variants"));
 }
 
 #[test]

@@ -359,9 +359,18 @@ impl Function {
         self.decl.internal_hidden
     }
 
-    /// Whether this table is a constructor or relation table.
+    /// Whether this table is a declared constructor or relation table.
     pub fn is_constructor(&self) -> bool {
         self.decl.subtype == FunctionSubtype::Constructor
+    }
+
+    /// Whether this table can act as a constructor edge during extraction.
+    ///
+    /// This includes declared constructors/relations and term-constructor view
+    /// tables. Use [`Function::is_hidden`] and [`Function::is_unextractable`]
+    /// to decide whether to include the table in a particular extraction mode.
+    pub fn is_extraction_constructor(&self) -> bool {
+        self.is_constructor() || self.decl.term_constructor.is_some()
     }
 
     /// Whether this constructor is excluded from ordinary extraction.
@@ -1693,7 +1702,9 @@ impl EGraph {
                     Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                 } else {
                     if n < 0 {
-                        panic!("Cannot extract negative number of variants");
+                        return Err(Error::ExtractError(
+                            "Cannot extract negative number of variants".to_string(),
+                        ));
                     }
                     let extracted = self.extract_variants(
                         vec![(sort, x)],
@@ -1780,12 +1791,6 @@ impl EGraph {
             ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
-                // append to file
-                let mut f = File::options()
-                    .append(true)
-                    .create(true)
-                    .open(&filename)
-                    .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
                 let roots = exprs
                     .iter()
@@ -1795,15 +1800,30 @@ impl EGraph {
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
                 let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
+                let termdag = extracted.termdag;
+                let terms = extracted
+                    .terms
+                    .into_iter()
+                    .map(|extracted_root| {
+                        extracted_root
+                            .ok_or_else(|| {
+                                Error::ExtractError(
+                                    "Unable to find any valid extraction".to_string(),
+                                )
+                            })
+                            .map(|root| root.term)
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
 
+                // append to file only after all requested roots have extracted
                 use std::io::Write;
-                for extracted_root in extracted.terms {
-                    let term = extracted_root
-                        .ok_or_else(|| {
-                            Error::ExtractError("Unable to find any valid extraction".to_string())
-                        })?
-                        .term;
-                    writeln!(f, "{}", extracted.termdag.to_string(term))
+                let mut f = File::options()
+                    .append(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                for term in terms {
+                    writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
