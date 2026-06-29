@@ -2848,6 +2848,48 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn proof_support_rejects_naive_eq_sort_primitive_results_in_facts() {
+        let mut egraph = EGraph::default();
+        let validator =
+            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
+        add_primitive_with_validator!(
+            &mut egraph,
+            "proof-id" = |x: #| -> # { x },
+            validator
+        );
+        let mut egraph = egraph.with_proofs_enabled();
+
+        let err = egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math
+                  (Done)
+                  (Num i64))
+                (relation Seed (Math))
+
+                (rule ((Seed y)
+                       (= x (proof-id y)))
+                      ((Done))
+                      :naive
+                      :name "naive-use-proof-id")
+                "#,
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::NaiveEqSortPrimitiveFact,
+                    ..
+                }
+            ),
+            "expected NaiveEqSortPrimitiveFact, got {err:?}"
+        );
+    }
+
     #[derive(Debug)]
     struct EqContainerTestSort {
         name: String,
