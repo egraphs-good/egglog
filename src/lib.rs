@@ -377,17 +377,6 @@ impl Function {
     }
 }
 
-/// Owned constructor application returned by eclass-indexed lookup.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConstructorEnode {
-    /// Constructor function name.
-    pub function: String,
-    /// Constructor input values.
-    pub children: Vec<Value>,
-    /// Whether this constructor row has been subsumed.
-    pub subsumed: bool,
-}
-
 #[derive(Clone, Debug)]
 pub struct ResolvedSchema {
     pub input: Vec<ArcSort>,
@@ -1292,49 +1281,6 @@ impl EGraph {
         f: impl FnMut(Enode<'_>) -> bool,
     ) -> Result<(), Error> {
         self.read(|rs| rs.constructor_enodes_while(name, f))
-    }
-
-    /// Return constructor enodes whose output is `eclass`.
-    ///
-    /// This uses the backend's output-column index and returns owned rows
-    /// because callers outside the scan callback cannot borrow backend buffers.
-    /// The input eclass is canonicalized before lookup. Hidden constructor
-    /// tables are omitted. Unextractable rows are included only when
-    /// `include_unextractable` is true.
-    pub fn constructor_enodes_for_eclass(
-        &self,
-        sort: &ArcSort,
-        eclass: Value,
-        include_unextractable: bool,
-    ) -> Vec<ConstructorEnode> {
-        let eclass = self.canonical_value(sort, eclass);
-        let mut enodes = Vec::new();
-        for (func_name, func) in self.functions_iter() {
-            if !func.is_constructor()
-                || func.is_hidden()
-                || func.schema().output.name() != sort.name()
-            {
-                continue;
-            }
-            if func.is_unextractable() && !include_unextractable {
-                continue;
-            }
-
-            let output_idx = func.schema.input.len();
-            self.backend
-                .for_each_matching_col(func.backend_id, output_idx, eclass, |row| {
-                    let (_row_eclass, children) = row
-                        .vals
-                        .split_last()
-                        .expect("constructor row has at least an eclass column");
-                    enodes.push(ConstructorEnode {
-                        function: func_name.clone(),
-                        children: children.to_vec(),
-                        subsumed: row.subsumed,
-                    });
-                });
-        }
-        enodes
     }
 
     /// Remove every row from the named function in bulk.
@@ -2338,28 +2284,6 @@ impl EGraph {
             termdag,
             element_terms,
         )
-    }
-
-    /// Find the canonical representative of an eq-sort value.
-    ///
-    /// If `sort` does not have an internal union-find table, or if `value` is
-    /// not currently mapped in that table, this returns `value` unchanged.
-    pub fn canonical_value(&self, sort: &ArcSort, value: Value) -> Value {
-        let Some(uf_name) = self.proof_state.uf_parent.get(sort.name()) else {
-            return value;
-        };
-        let Some(uf_func) = self.functions.get(uf_name) else {
-            return value;
-        };
-
-        let mut canonical = value;
-        self.backend
-            .for_each_matching_col(uf_func.backend_id, 0, value, |row| {
-                // The internal UF table stores `(child, parent)` and is kept at
-                // one hop to the canonical representative.
-                canonical = row.vals[1];
-            });
-        canonical
     }
 
     /// Returns `true` if a user-defined command with the given name is

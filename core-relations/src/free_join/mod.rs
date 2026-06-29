@@ -897,7 +897,10 @@ fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIn
 /// The core logic behind getting and updating a column index.
 ///
 /// This is the single-column analog to [`get_index_from_tableinfo`].
-fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> HashColumnIndex {
+pub(crate) fn get_column_index_from_tableinfo(
+    table_info: &TableInfo,
+    col: ColumnId,
+) -> HashColumnIndex {
     let index: Arc<_> = table_info.column_indexes.get_or_insert(col, || {
         Arc::new(ResettableOnceLock::new(Index::new(
             vec![col],

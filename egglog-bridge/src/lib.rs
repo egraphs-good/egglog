@@ -1422,6 +1422,48 @@ impl TableAction {
         drain_buf!(buf);
     }
 
+    /// Iterate over rows where `col == value`.
+    ///
+    /// This mirrors [`EGraph::for_each_matching_col`] but reaches the table
+    /// through an [`ExecutionState`], so read-capable state wrappers can use the
+    /// same lazy column indexes as direct backend callers.
+    pub fn for_each_matching_col(
+        &self,
+        state: &ExecutionState,
+        col: usize,
+        value: Value,
+        mut f: impl FnMut(ScanEntry<'_>),
+    ) {
+        let schema_math = self.table_math;
+        let imp = state.get_table(self.table);
+        let col = ColumnId::from_usize(col);
+        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
+
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    let subsumed =
+                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                    f(ScanEntry {
+                        vals: &row[0..schema_math.func_cols],
+                        subsumed,
+                    });
+                }
+                $buf.clear();
+            };
+        }
+
+        while let Some(next) =
+            state.scan_matching_col_project(self.table, col, value, &cols, (cur, 1024), &mut buf)
+        {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
+    }
+
     /// Look up a row, inserting the configured default value if absent.
     /// For constructor tables this mints a fresh eclass ID; for custom
     /// functions (no default) this behaves identically to

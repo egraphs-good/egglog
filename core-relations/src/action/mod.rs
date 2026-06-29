@@ -12,18 +12,20 @@ use std::{
 
 use crate::{
     common::HashMap,
-    free_join::{invoke_batch, invoke_batch_assign},
+    free_join::{get_column_index_from_tableinfo, invoke_batch, invoke_batch_assign},
     numeric_id::{DenseIdMap, NumericId},
 };
 use egglog_concurrency::NotificationList;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
+    BaseValues, ContainerValues, ExternalFunctionId, Offset, TaggedRowBuffer, ValueVec,
+    WrappedTable,
     common::Value,
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
+    offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
-    table_spec::{ColumnId, MutationBuffer},
+    table_spec::{ColumnId, Constraint, MutationBuffer},
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
@@ -332,6 +334,59 @@ pub(crate) struct DbView<'a> {
     pub(crate) notification_list: &'a NotificationList<TableId>,
 }
 
+impl DbView<'_> {
+    fn scan_matching_col_project<V: ValueVec>(
+        &self,
+        table: TableId,
+        col: ColumnId,
+        value: Value,
+        cols: &[ColumnId],
+        window: (Offset, usize),
+        out: &mut TaggedRowBuffer<V>,
+    ) -> Option<Offset> {
+        let (start, n) = window;
+        let constraint = Constraint::EqConst { col, val: value };
+        let table_info = &self.table_info[table];
+        let (mut subset, _fast, mut slow) = table_info
+            .table
+            .split_fast_slow(std::slice::from_ref(&constraint));
+
+        slow.retain(|c| {
+            let (col, val) = match c {
+                Constraint::EqConst { col, val } => (*col, *val),
+                Constraint::Eq { .. }
+                | Constraint::LtConst { .. }
+                | Constraint::GtConst { .. }
+                | Constraint::LeConst { .. }
+                | Constraint::GeConst { .. } => return true,
+            };
+            if *table_info
+                .spec
+                .uncacheable_columns
+                .get(col)
+                .unwrap_or(&false)
+            {
+                return true;
+            }
+
+            let index = get_column_index_from_tableinfo(table_info, col);
+            match index.get().unwrap().get_subset(&val) {
+                Some(s) => {
+                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
+                }
+                None => {
+                    subset = Subset::empty();
+                }
+            }
+            false
+        });
+
+        table_info
+            .table
+            .scan_project(subset.as_ref(), cols, start, n, &slow, out)
+    }
+}
+
 /// A handle on a database that may be in the process of running a rule.
 ///
 /// An ExecutionState grants immutable access to the (much of) the database, and also provides a
@@ -481,6 +536,23 @@ impl<'a> ExecutionState<'a> {
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
         &self.db.table_info[table].table
+    }
+
+    /// Scan a projection of rows where `col == value`.
+    ///
+    /// This mirrors [`crate::free_join::Database::scan_matching_col_project`]
+    /// for read-capable execution contexts.
+    pub fn scan_matching_col_project<V: ValueVec>(
+        &self,
+        table: TableId,
+        col: ColumnId,
+        value: Value,
+        cols: &[ColumnId],
+        window: (Offset, usize),
+        out: &mut TaggedRowBuffer<V>,
+    ) -> Option<Offset> {
+        self.db
+            .scan_matching_col_project(table, col, value, cols, window, out)
     }
 
     /// Get the human-readable name for a table, if one exists.
