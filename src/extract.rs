@@ -174,24 +174,6 @@ pub(crate) struct Extractor<C: Cost> {
     parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
 }
 
-#[derive(Clone, Copy)]
-enum ExtractionMode {
-    Normal,
-    Proof,
-}
-
-impl ExtractionMode {
-    fn includes(self, func: &Function) -> bool {
-        let constructor_or_view = func.is_constructor() || func.decl.term_constructor.is_some();
-        match self {
-            Self::Normal => {
-                constructor_or_view && !func.decl.unextractable && !func.decl.internal_hidden
-            }
-            Self::Proof => constructor_or_view && func.decl.term_constructor.is_none(),
-        }
-    }
-}
-
 impl<C: Cost> Extractor<C> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
@@ -204,32 +186,29 @@ impl<C: Cost> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl TreeCostModel<C> + 'static,
     ) -> Self {
-        Self::compute_costs_from_rootsorts_internal(
-            rootsorts,
-            egraph,
-            Box::new(cost_model),
-            ExtractionMode::Normal,
-        )
-    }
-
-    fn compute_costs_from_rootsorts_internal(
-        rootsorts: Option<Vec<ArcSort>>,
-        egraph: &EGraph,
-        cost_model: Box<dyn TreeCostModel<C>>,
-        mode: ExtractionMode,
-    ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
 
         let mut rootsorts = rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
-        // Only include constructors (not regular functions) and respect unextractable flag
+        // Only include constructors (not regular functions), and respect the user-facing
+        // hidden and unextractable flags.
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
-            if mode.includes(func.1) {
+            let unextractable = func.1.decl.unextractable;
+            let hidden = func.1.decl.internal_hidden;
+
+            // Only extract constructors and view tables, which reconstruct as their
+            // term_constructor. Proof extraction uses its own root-directed extractor
+            // and does not need alternate behavior here.
+            if !unextractable
+                && !hidden
+                && (func.1.decl.subtype == FunctionSubtype::Constructor
+                    || func.1.decl.term_constructor.is_some())
+            {
                 let func_name = func.0.clone();
-                // For view tables (with term_constructor in proof mode), the e-class is the last input column
+                // For view tables, the e-class is the last input column.
                 let output_sort_name = func.1.extraction_output_sort().name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
@@ -303,7 +282,7 @@ impl<C: Cost> Extractor<C> {
         let mut extractor = Extractor {
             rootsorts,
             funcs,
-            cost_model,
+            cost_model: Box::new(cost_model),
             costs,
             topo_rnk_cnt: 0,
             topo_rnk,
@@ -725,30 +704,6 @@ impl<C: Cost> Extractor<C> {
     }
 }
 
-/// Extract proof terms with proof-internal visibility rules.
-///
-/// This stays separate from [`EGraph::extract_best`] because normal extraction
-/// respects `:unextractable` and may use view tables, while proof extraction
-/// must extract hidden proof term tables with their original names.
-pub(crate) fn extract_best_for_proofs(
-    egraph: &EGraph,
-    roots: Vec<(ArcSort, Value)>,
-) -> Result<ExtractedTerms<DefaultCost>, Error> {
-    let extracted = egraph.extract_best_with_mode(
-        roots,
-        TreeAdditiveCostModel::default(),
-        ExtractionMode::Proof,
-    )?;
-
-    if extracted.terms.iter().any(Option::is_none) {
-        return Err(Error::ExtractError(
-            "Unable to find any valid proof extraction".to_string(),
-        ));
-    }
-
-    Ok(extracted)
-}
-
 impl Function {
     /// Returns the extraction head cost for this table.
     /// View tables inherit the cost of their referenced hidden term constructor.
@@ -820,22 +775,8 @@ impl EGraph {
         roots: Vec<(ArcSort, Value)>,
         cost_model: M,
     ) -> Result<ExtractedTerms<C>, Error> {
-        self.extract_best_with_mode(roots, cost_model, ExtractionMode::Normal)
-    }
-
-    fn extract_best_with_mode<C: Cost, M: TreeCostModel<C> + 'static>(
-        &self,
-        roots: Vec<(ArcSort, Value)>,
-        cost_model: M,
-        mode: ExtractionMode,
-    ) -> Result<ExtractedTerms<C>, Error> {
         let rootsorts = roots.iter().map(|(sort, _)| sort.clone()).collect();
-        let extractor = Extractor::compute_costs_from_rootsorts_internal(
-            Some(rootsorts),
-            self,
-            Box::new(cost_model),
-            mode,
-        );
+        let extractor = Extractor::compute_costs_from_rootsorts(Some(rootsorts), self, cost_model);
         let mut termdag = TermDag::default();
         let extracted_roots = roots
             .into_iter()

@@ -1,9 +1,8 @@
-use crate::ResolvedCall;
 use crate::ast::FunctionSubtype;
-use crate::extract::extract_best_for_proofs;
 use crate::proofs::proof_encoding::ProofInstrumentor;
+use crate::proofs::proof_extractor::extract_root;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
-use crate::{RawValues, Read};
+use crate::{RawValues, Read, ResolvedCall, TermDag};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -42,6 +41,7 @@ impl ProofInstrumentor<'_> {
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
 
+        let mut termdag = TermDag::default();
         let mut witness_value = None;
 
         self.egraph.backend.for_each_while(backend_id, |row| {
@@ -89,26 +89,15 @@ impl ProofInstrumentor<'_> {
             .unwrap()
             .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 
-        // Proof extraction ignores the unextractable flag since proof terms may
-        // be backed by internal tables that normal user extraction hides.
-        let extracted = extract_best_for_proofs(self.egraph, vec![(proof_sort, proof_value)])
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to extract proof term for constructor {}: {err}",
-                    func.name
-                )
+        let proof_term_id = extract_root(self.egraph, &mut termdag, proof_value, proof_sort)
+            .unwrap_or_else(|| {
+                panic!("failed to extract proof term for constructor {}", func.name)
             });
-        let root = extracted
-            .terms
-            .into_iter()
-            .next()
-            .expect("one proof root was requested")
-            .expect("proof extraction checks that the root is extractable");
 
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
-            extracted.termdag,
-            root.term,
+            termdag,
+            proof_term_id,
             &self.egraph.proof_check_program,
         );
 
