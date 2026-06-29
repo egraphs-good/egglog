@@ -364,25 +364,9 @@ impl Function {
         self.decl.subtype == FunctionSubtype::Constructor
     }
 
-    /// Whether this table can act as a constructor edge during extraction.
-    ///
-    /// This includes declared constructors/relations and term-constructor view
-    /// tables. Use [`Function::is_hidden`] and [`Function::is_unextractable`]
-    /// to decide whether to include the table in a particular extraction mode.
-    pub fn is_extraction_constructor(&self) -> bool {
-        self.is_constructor() || self.decl.term_constructor.is_some()
-    }
-
     /// Whether this constructor is excluded from ordinary extraction.
     pub fn is_unextractable(&self) -> bool {
         self.decl.unextractable
-    }
-
-    /// The term-constructor name associated with this function table, if
-    /// any. Set on view tables created by the term/proof encoding to refer
-    /// back to the user-visible constructor name.
-    pub fn term_constructor(&self) -> Option<&str> {
-        self.decl.term_constructor.as_deref()
     }
 }
 

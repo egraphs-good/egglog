@@ -182,7 +182,7 @@ enum ExtractionMode {
 
 impl ExtractionMode {
     fn includes(self, func: &Function) -> bool {
-        let constructor_or_view = func.is_extraction_constructor();
+        let constructor_or_view = func.is_constructor() || func.decl.term_constructor.is_some();
         match self {
             Self::Normal => {
                 constructor_or_view && !func.decl.unextractable && !func.decl.internal_hidden
