@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::CommandOutput;
     use crate::ast::{ResolvedCommand, RuleEvalMode, sanitize_internal_names};
+    use crate::{
+        ArcSort, CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, Sort, TermDag,
+        TermId, Value, add_primitive_with_validator,
+    };
 
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
@@ -96,6 +99,194 @@ mod tests {
                 "proof encoding did not preserve :naive for:\n{source}"
             );
         }
+    }
+
+    #[test]
+    fn proof_mode_allows_eq_sort_primitive_results_in_facts() {
+        let mut egraph = EGraph::default();
+        let validator =
+            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
+        add_primitive_with_validator!(
+            &mut egraph,
+            "proof-id" = |x: #| -> # { x },
+            validator
+        );
+        let mut egraph = egraph.with_proofs_enabled();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math
+                  (Done)
+                  (Num i64))
+                (relation Seed (Math))
+
+                (Seed (Num 1))
+
+                (rule ((Seed y)
+                       (= x (proof-id y)))
+                      ((Done))
+                      :name "use-proof-id")
+
+                (run 1)
+                (prove (Done))
+                "#,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn proof_support_rejects_naive_eq_sort_primitive_results_in_facts() {
+        let mut egraph = EGraph::default();
+        let validator =
+            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
+        add_primitive_with_validator!(
+            &mut egraph,
+            "proof-id" = |x: #| -> # { x },
+            validator
+        );
+        let mut egraph = egraph.with_proofs_enabled();
+
+        let err = egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math
+                  (Done)
+                  (Num i64))
+                (relation Seed (Math))
+
+                (rule ((Seed y)
+                       (= x (proof-id y)))
+                      ((Done))
+                      :naive
+                      :name "naive-use-proof-id")
+                "#,
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::NaiveEqSortPrimitiveFact,
+                    ..
+                }
+            ),
+            "expected NaiveEqSortPrimitiveFact, got {err:?}"
+        );
+    }
+
+    #[derive(Debug)]
+    struct EqContainerTestSort {
+        name: String,
+    }
+
+    impl Sort for EqContainerTestSort {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> egglog_bridge::ColumnTy {
+            egglog_bridge::ColumnTy::Id
+        }
+
+        fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
+
+        fn as_arc_any(
+            self: std::sync::Arc<Self>,
+        ) -> std::sync::Arc<dyn std::any::Any + Send + Sync + 'static> {
+            self
+        }
+
+        fn is_eq_container_sort(&self) -> bool {
+            true
+        }
+
+        fn value_type(&self) -> Option<std::any::TypeId> {
+            None
+        }
+
+        fn reconstruct_termdag_base(
+            &self,
+            _base_values: &crate::sort::BaseValues,
+            _value: Value,
+            termdag: &mut TermDag,
+        ) -> TermId {
+            termdag.app("SeedValue".into(), vec![])
+        }
+    }
+
+    fn replace_with_eq_container_test_sort(egraph: &mut EGraph, name: &str) -> ArcSort {
+        let sort = std::sync::Arc::new(EqContainerTestSort {
+            name: name.to_string(),
+        }) as ArcSort;
+        egraph
+            .type_info
+            .sorts
+            .insert(name.to_string(), sort.clone());
+        if let Some(original_typechecking) = egraph.proof_state.original_typechecking.as_mut() {
+            original_typechecking
+                .type_info
+                .sorts
+                .insert(name.to_string(), sort.clone());
+        }
+        sort
+    }
+
+    #[test]
+    fn proof_mode_allows_eq_container_primitive_results_in_facts() {
+        let mut egraph = EGraph::new_with_proofs();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort EqContainer)
+                (constructor SeedValue () EqContainer)
+                "#,
+            )
+            .unwrap();
+
+        let eq_container_sort = replace_with_eq_container_test_sort(&mut egraph, "EqContainer");
+        assert!(eq_container_sort.is_eq_container_sort());
+
+        let validator =
+            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
+        add_primitive_with_validator!(
+            &mut egraph,
+            "proof-container-id" = |x: # (eq_container_sort)| -> # (eq_container_sort) { x },
+            validator
+        );
+        let validator =
+            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
+        let original_typechecking = egraph.proof_state.original_typechecking.as_mut().unwrap();
+        add_primitive_with_validator!(
+            &mut **original_typechecking,
+            "proof-container-id" = |x: # (eq_container_sort)| -> # (eq_container_sort) { x },
+            validator
+        );
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (relation SeedContainer (EqContainer))
+                (relation Done ())
+
+                (SeedContainer (SeedValue))
+
+                (rule ((SeedContainer ys)
+                       (= xs (proof-container-id ys)))
+                      ((Done))
+                      :name "use-proof-container-id")
+
+                (run 1)
+                (prove (Done))
+                "#,
+            )
+            .unwrap();
     }
 
     #[test]
