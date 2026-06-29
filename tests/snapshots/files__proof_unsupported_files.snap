@@ -37,6 +37,7 @@ map.egg
 math.egg
 merge_read.egg
 multiset.egg
+naive-action-lookup.egg
 nested-container-dirty-propagation.egg
 pair.egg
 prims.egg
@@ -62,5 +63,7 @@ type-constraints-tests.egg
 typed_primitive_unstable_app.egg
 typeinfer.egg
 uf-extraction.egg
+unsafe-seminaive-read-prim.egg
+unsafe-seminaive.egg
 unstable-fn.egg
 vec.egg

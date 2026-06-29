@@ -489,6 +489,7 @@ dependencies = [
  "rustc-hash",
  "serde_json",
  "serial_test",
+ "smallvec",
  "testing_logger",
  "thiserror",
  "web-time",

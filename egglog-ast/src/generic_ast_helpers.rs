@@ -70,9 +70,21 @@ where
         } else {
             "".into()
         };
-        let naive = if self.naive { " :naive" } else { "" };
+        let eval_mode = match self.eval_mode {
+            RuleEvalMode::Seminaive => "",
+            RuleEvalMode::Naive => " :naive",
+            RuleEvalMode::UnsafeSeminaive => " :unsafe-seminaive",
+        };
         let no_decomp = if self.no_decomp { " :no-decomp" } else { "" };
-        write!(f, ")\n{indent} {ruleset} {name}{naive}{no_decomp})")
+        let include_subsumed = if self.include_subsumed {
+            " :internal-include-subsumed"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            ")\n{indent} {ruleset} {name}{eval_mode}{no_decomp}{include_subsumed})"
+        )
     }
 }
 
@@ -189,8 +201,9 @@ where
                 .collect(),
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
-            naive: self.naive,
+            eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -205,8 +218,9 @@ where
             body: self.body,
             name: self.name,
             ruleset: self.ruleset,
-            naive: self.naive,
+            eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -230,8 +244,9 @@ where
                 .collect(),
             name: self.name,
             ruleset: self.ruleset,
-            naive: self.naive,
+            eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 

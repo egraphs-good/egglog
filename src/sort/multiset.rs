@@ -1,6 +1,6 @@
 use super::*;
+use crate::Write;
 use crate::exec_state::Internal;
-use egglog_bridge::UnionAction;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -200,7 +200,6 @@ impl ContainerSort for MultiSetSort {
                 UnionValues {
                     name: "multiset-union-values".into(),
                     multiset: arc.clone(),
-                    action: eg.new_union_action(),
                     element: self.element.clone(),
                 },
                 None,
@@ -786,7 +785,6 @@ struct UnionValues {
     name: String,
     multiset: ArcSort,
     element: ArcSort,
-    action: UnionAction,
 }
 
 // `UnionValues` writes to the union-find; action-only.
@@ -821,10 +819,8 @@ impl WritePrim for UnionValues {
             return None;
         }
         let first = values[0];
-        let action = self.action;
-        let es = state.raw_exec_state();
         for v in values.into_iter().skip(1) {
-            action.union(es, first, v);
+            state.union(first, v).ok()?;
         }
         Some(first)
     }

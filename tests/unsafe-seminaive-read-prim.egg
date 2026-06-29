@@ -1,0 +1,25 @@
+; `:unsafe-seminaive` also widens a rule's primitive contexts to
+; Read/Full, so the RHS can call primitives that read the database — not
+; just function-table lookups. `unstable-multiset-fill-index` is a
+; FullPrim (it reads a multiset and writes an index function), which the
+; default seminaive action context (Write) does not admit — without
+; `:unsafe-seminaive` the call doesn't even resolve. With it, the rule
+; keeps delta evaluation but the FullPrim is available in the RHS.
+
+(datatype Math (Num i64))
+(sort Maths (MultiSet Math))
+(function ms-count (Maths Math) i64 :merge (+ old new))
+(sort MSIndexFn (UnstableFn (Maths Math) i64))
+
+(let xs (multiset-of (Num 1) (Num 1) (Num 2)))
+
+(relation go ())
+(go)
+
+(rule ((go))
+      ((unstable-multiset-fill-index xs (unstable-fn "ms-count")))
+      :unsafe-seminaive)
+(run 1)
+
+(check (= 2 (ms-count xs (Num 1))))
+(check (= 1 (ms-count xs (Num 2))))

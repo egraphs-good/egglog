@@ -18,7 +18,7 @@ pub trait CostModel<C: Cost> {
     fn fold(&self, head: &str, children_cost: &[C], head_cost: C) -> C;
 
     /// The cost of an enode (without the cost of children)
-    fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C;
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, enode: &Enode<'_>) -> C;
 
     /// The cost of a container value given the costs of its elements.
     ///
@@ -113,12 +113,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
         children_cost.iter().fold(head_cost, |s, c| s.combine(c))
     }
 
-    fn enode_cost(
-        &self,
-        egraph: &EGraph,
-        func: &Function,
-        _row: &egglog_bridge::FunctionRow,
-    ) -> DefaultCost {
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, _enode: &Enode<'_>) -> DefaultCost {
         func.extraction_head_cost(egraph)
     }
 }
@@ -342,7 +337,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     fn compute_cost_hyperedge(
         &self,
         egraph: &EGraph,
-        row: &egglog_bridge::FunctionRow,
+        row: &egglog_bridge::ScanEntry,
         func: &Function,
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
@@ -352,10 +347,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
         let head_name = func.extraction_term_name();
+        let output_idx = func.extraction_output_index();
+        let enode = Enode {
+            children: &row.vals[..output_idx],
+            eclass: row.vals[output_idx],
+            subsumed: row.subsumed,
+        };
         Some(self.cost_model.fold(
             head_name,
             &ch_costs,
-            self.cost_model.enode_cost(egraph, func, row),
+            self.cost_model.enode_cost(egraph, func, &enode),
         ))
     }
 
@@ -380,7 +381,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     fn compute_topo_rnk_hyperedge(
         &self,
         egraph: &EGraph,
-        row: &egglog_bridge::FunctionRow,
+        row: &egglog_bridge::ScanEntry,
         func: &Function,
     ) -> usize {
         let sorts = &func.schema.input;
@@ -417,7 +418,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let target_sort = func.extraction_output_sort();
 
                 let output_idx = func.extraction_output_index();
-                let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
+                let relax_hyperedge = |row: egglog_bridge::ScanEntry| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
                         let mut updated = false;
@@ -464,7 +465,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let target_sort = func.extraction_output_sort();
             let output_idx = func.extraction_output_index();
 
-            let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
+            let save_best_parent_edge = |row: egglog_bridge::ScanEntry| {
                 if !row.subsumed {
                     let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
@@ -634,7 +635,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut canonical = value;
         egraph
             .backend
-            .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+            .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry| {
                 // UF table has (child, parent) as inputs
                 if row.vals[0] == value {
                     canonical = row.vals[1];
@@ -684,7 +685,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let func = egraph.functions.get(func_name).unwrap();
                 let output_idx = func.extraction_output_index();
 
-                let find_root_variants = |row: egglog_bridge::FunctionRow| {
+                let find_root_variants = |row: egglog_bridge::ScanEntry| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
                         if *target == canonical_value {
@@ -884,7 +885,7 @@ impl EGraph {
             None
         };
 
-        let extract_row = |row: egglog_bridge::FunctionRow| {
+        let extract_row = |row: egglog_bridge::ScanEntry| {
             if inputs.len() < n {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();

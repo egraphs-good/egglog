@@ -1,5 +1,4 @@
-use crate::exec_state::Internal;
-use egglog_bridge::UnionAction;
+use crate::Write;
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -142,7 +141,6 @@ impl ContainerSort for VecSort {
                 Union {
                     name: "vec-union".into(),
                     vec: arc.clone(),
-                    action: eg.new_union_action(),
                 },
                 None,
             );
@@ -289,13 +287,12 @@ impl PurePrim for VecMap {
 struct Union {
     name: String,
     vec: ArcSort,
-    action: UnionAction,
 }
 
 // `Union` unions the corresponding entries of two vecs of equal length.
-// It writes to the union-find (via `UnionAction::union`), so it
-// implements `WritePrim` — valid in rule-action and global-action
-// contexts, rejected at rule-build time if used in a rule query.
+// It writes to the union-find (via `Write::union`), so it implements
+// `WritePrim` — valid in rule-action and global-action contexts,
+// rejected at rule-build time if used in a rule query.
 impl Primitive for Union {
     fn name(&self) -> &str {
         &self.name
@@ -330,10 +327,8 @@ impl WritePrim for Union {
         if left.len() != right.len() {
             return None;
         }
-        let action = self.action;
-        let es = state.raw_exec_state();
         for (l, r) in zip(left, right) {
-            action.union(es, l, r);
+            state.union(l, r).ok()?;
         }
         Some(args[0])
     }

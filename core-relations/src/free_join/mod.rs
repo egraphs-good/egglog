@@ -449,6 +449,18 @@ impl Database {
         f(&mut state)
     }
 
+    /// Like [`Database::with_execution_state`], but also reports whether `f`
+    /// staged any mutation through the execution state. Callers can use the
+    /// flag to skip a subsequent `merge_all` when the closure was read-only.
+    pub fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState) -> R,
+    ) -> (R, bool) {
+        let mut state = ExecutionState::new(self.read_only_view(), Default::default());
+        let result = f(&mut state);
+        (result, state.changed)
+    }
+
     pub(crate) fn read_only_view(&self) -> DbView<'_> {
         DbView {
             table_info: &self.tables,

@@ -7,6 +7,7 @@ use crate::{
 };
 use ast::{
     MappedExprExt, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule,
+    RuleEvalMode,
 };
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
@@ -836,22 +837,24 @@ impl TypeInfo {
             body,
             name,
             ruleset,
-            naive,
+            eval_mode,
             no_decomp,
+            include_subsumed,
         } = rule;
         let mut constraints = vec![];
 
-        // This rule runs without seminaive if either the rule-local
-        // `:naive` option or the global `EGraph::seminaive == false`
-        // applies. Both must widen primitive-context selection to
-        // Read/Full so primitives that read or write the database can
-        // run; mirrors the backend's `self.seminaive && !rule.naive`
-        // check at rule-build time.
-        let seminaive = global_seminaive && !*naive;
-        let (query_ctx, action_ctx) = if seminaive {
-            (Context::Pure, Context::Write)
-        } else {
+        // Compile with the permissive Read/Full primitive contexts (so the RHS
+        // can read the database) when the whole EGraph is non-seminaive, or the
+        // rule's own mode requires it (`:naive` / `:unsafe-seminaive`).
+        let read_contexts = !global_seminaive
+            || matches!(
+                eval_mode,
+                RuleEvalMode::Naive | RuleEvalMode::UnsafeSeminaive
+            );
+        let (query_ctx, action_ctx) = if read_contexts {
             (Context::Read, Context::Full)
+        } else {
+            (Context::Pure, Context::Write)
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -884,7 +887,11 @@ impl TypeInfo {
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
-        self.check_lookup_actions(&actions)?;
+        // Function lookups in actions need the `Full` action context; the
+        // `Write` context (`!read_contexts`) can't express them.
+        if !read_contexts {
+            self.check_no_function_lookups_in_actions(&actions)?;
+        }
 
         Ok(ResolvedRule {
             span: span.clone(),
@@ -892,8 +899,9 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
-            naive: *naive,
+            eval_mode: *eval_mode,
             no_decomp: *no_decomp,
+            include_subsumed: *include_subsumed,
         })
     }
 
@@ -907,7 +915,10 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn check_lookup_actions(&self, actions: &ResolvedActions) -> Result<(), TypeError> {
+    fn check_no_function_lookups_in_actions(
+        &self,
+        actions: &ResolvedActions,
+    ) -> Result<(), TypeError> {
         for action in actions.iter() {
             match action {
                 GenericAction::Let(_, _, rhs) => self.check_lookup_expr(rhs)?,

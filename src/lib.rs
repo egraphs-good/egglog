@@ -1,15 +1,5 @@
-//! # egglog
-//! egglog is a language specialized for writing equality saturation
-//! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
-//! egglog is faster and more general than egg.
-//!
-//! # Documentation
-//! Documentation for the egglog language can be found here: [`Command`].
-//!
-//! # Tutorial
-//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
-//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
-//!
+#![doc = include_str!("lib.md")]
+pub mod api;
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
@@ -40,8 +30,8 @@ use core::CoreActionContext;
 use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
-pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
-use core_relations::{ExternalFunctionId, make_external_func};
+pub use core_relations::{BaseValue, ContainerValue, Value};
+use core_relations::{ExecutionState, ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
@@ -49,12 +39,13 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
+use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-pub use exec_state::{Context, Core, FullState, PureState, Read, ReadState, Write, WriteState};
+pub use exec_state::{
+    Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
+};
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
@@ -167,6 +158,28 @@ pub enum CommandOutput {
     RunSchedule(RunReport),
     /// A user defined output
     UserDefined(Arc<dyn UserDefinedCommandOutput>),
+}
+
+impl CommandOutput {
+    /// Render command outputs to a string that is identical whether the program
+    /// ran normally or under proof encoding (`--proofs`). Drops outputs that
+    /// legitimately differ or are non-deterministic (timing, `PrintFunction`
+    /// per #793, extraction variants) and reduces `ExtractBest` to its cost.
+    pub fn snapshot_stable_under_proof_encoding(outputs: &[CommandOutput]) -> String {
+        outputs
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::OverallStatistics(_) => None,
+                CommandOutput::PrintFunction(..) => None,
+                CommandOutput::ExtractBest(_, cost, _) => {
+                    Some(format!("(extraction-costs {cost})\n"))
+                }
+                CommandOutput::ExtractVariants(..) => None,
+                other => Some(other.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
 }
 
 impl std::fmt::Display for CommandOutput {
@@ -979,11 +992,22 @@ impl EGraph {
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
+                let mut i = 0usize;
                 loop {
+                    i += 1;
+                    log::debug!(
+                        "Saturate iteration {i} start: {}",
+                        Self::schedule_for_log(sched)
+                    );
                     let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
+                    log::debug!(
+                        "Saturate iteration {i} end: {}",
+                        Self::run_report_debug_summary(&rec)
+                    );
                     report.union(rec);
                     if !updated {
+                        log::debug!("Saturate reached fixpoint after {i} iteration(s)");
                         break;
                     }
                 }
@@ -1023,10 +1047,53 @@ impl EGraph {
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
-            log::debug!("database size: {}", self.num_tuples());
+            log::debug!(
+                "Finished ruleset {ruleset}: database size {}, {}",
+                self.num_tuples(),
+                Self::run_report_debug_summary(&report)
+            );
         }
 
         Ok(report)
+    }
+
+    fn run_report_debug_summary(report: &RunReport) -> String {
+        let mut rules = report
+            .num_matches_per_rule
+            .iter()
+            .filter(|(_, matches)| **matches > 0)
+            .collect::<Vec<_>>();
+        rules.sort_by(|(_, left), (_, right)| right.cmp(left));
+
+        let top_rules = rules
+            .into_iter()
+            .take(5)
+            .map(|(rule, matches)| {
+                format!("{}={matches}", Self::truncate_for_log(rule.as_ref(), 80))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            "updated={}, can_stop={}, iterations={}, top_matches=[{}]",
+            report.updated,
+            report.can_stop,
+            report.iterations.len(),
+            top_rules
+        )
+    }
+
+    fn schedule_for_log(sched: &ResolvedSchedule) -> String {
+        Self::truncate_for_log(&sched.to_string(), 160)
+    }
+
+    fn truncate_for_log(s: &str, limit: usize) -> String {
+        let mut s = s.replace('\n', " ");
+        if s.len() > limit {
+            s.truncate(limit);
+            s.push_str("...");
+        }
+        s
     }
 
     /// Runs a ruleset for an iteration.
@@ -1080,17 +1147,23 @@ impl EGraph {
         // evaluation. This widens primitive-context selection from
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
-        let seminaive = self.seminaive && !rule.naive;
+        let seminaive = self.seminaive && !rule.eval_mode.is_naive();
         // The `:no-decomp` rule option (and the global `--no-decomp`
         // flag) skips tree-decomposition in query planning, forcing
         // the single-bag fast path.
         let no_decomp = self.no_decomp || rule.no_decomp;
+        let requires_read_context = !seminaive
+            || matches!(
+                rule.eval_mode,
+                RuleEvalMode::Naive | RuleEvalMode::UnsafeSeminaive
+            );
 
         let rule_id = {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
-            let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
-            translator.query(query, false);
+            let mut translator =
+                BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
+            translator.query(query, rule.include_subsumed);
             translator.actions(actions)?;
             translator.build()
         };
@@ -1128,7 +1201,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -1152,21 +1225,52 @@ impl EGraph {
         self.functions.iter()
     }
 
-    /// Read the contents of the given function.
-    /// The callback f is called with each row and its subsumption status.
-    ///
-    /// Raises an error if the function does not exist.
-    pub fn function_for_each(
+    /// Run a read-only closure against the e-graph. The closure receives
+    /// a [`ReadState`], so it can read but not write. Because this
+    /// borrows `&self`, the closure and its callbacks may also call other
+    /// `&self` methods such as [`EGraph::value_to_base`].
+    pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        self.backend
+            .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
+            .0
+    }
+
+    /// Call `f` on each [`FunctionEntry`] of a function table. Top-level
+    /// form of [`Read::function_entries`]; errors if `name` is a
+    /// constructor or unregistered.
+    pub fn function_entries(
         &self,
-        func_name: &str,
-        f: impl FnMut(FunctionRow<'_>),
+        name: &str,
+        f: impl FnMut(FunctionEntry<'_>),
     ) -> Result<(), Error> {
-        let func = self
-            .functions
-            .get(func_name)
-            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
-        self.backend.for_each(func.backend_id, f);
-        Ok(())
+        self.read(|rs| rs.function_entries(name, f))
+    }
+
+    /// Like [`EGraph::function_entries`], but stops when `f` returns `false`.
+    pub fn function_entries_while(
+        &self,
+        name: &str,
+        f: impl FnMut(FunctionEntry<'_>) -> bool,
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.function_entries_while(name, f))
+    }
+
+    /// Call `f` on each [`Enode`] of a constructor / relation table.
+    /// Top-level form of [`Read::constructor_enodes`]; errors if `name`
+    /// is a function or unregistered.
+    pub fn constructor_enodes(&self, name: &str, f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
+        self.read(|rs| rs.constructor_enodes(name, f))
+    }
+
+    /// Like [`EGraph::constructor_enodes`], but stops when `f` returns `false`.
+    pub fn constructor_enodes_while(
+        &self,
+        name: &str,
+        f: impl FnMut(Enode<'_>) -> bool,
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.constructor_enodes_while(name, f))
     }
 
     /// Remove every row from the named function in bulk.
@@ -1361,7 +1465,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
 
         let result_var = ResolvedVar {
@@ -1427,8 +1531,9 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
-            naive: false,
+            eval_mode: RuleEvalMode::default(),
             no_decomp: false,
+            include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1450,7 +1555,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
-            false, // global query context
+            true, // global query: Read context (may read the DB)
         );
         translator.query(&query, true);
         translator
@@ -1901,7 +2006,7 @@ impl EGraph {
                 let desugared =
                     desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
                 for cmd in &desugared {
-                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                    log::trace!("Desugared term encoding: {}", cmd.to_command());
                 }
 
                 // Now typecheck using self, adding term type information.
@@ -1935,10 +2040,16 @@ impl EGraph {
         for before_expanded_command in program {
             // First do user-provided macro expansion for this command,
             // which may rely on type information from previous commands.
+            let macro_type_info = self
+                .proof_state
+                .original_typechecking
+                .as_ref()
+                .map(|egraph| &egraph.type_info)
+                .unwrap_or(&self.type_info);
             let macro_expanded = self.command_macros.apply(
                 before_expanded_command,
                 &mut self.parser.symbol_gen,
-                &self.type_info,
+                macro_type_info,
             )?;
 
             for command in macro_expanded {
@@ -2086,6 +2197,7 @@ impl EGraph {
     }
 
     /// Convert from an egglog value to a Rust type.
+    /// This method assumes `x` belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
     }
@@ -2123,19 +2235,6 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
-    /// Lookup a tuple in afunction in the e-graph.
-    ///
-    /// Returns `None` if the tuple does not exist.
-    /// `panics` if the function does not exist.
-    pub fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
-        let func = self
-            .functions
-            .get(name)
-            .unwrap_or_else(|| panic!("Could not find function {name}"))
-            .backend_id;
-        self.backend.lookup_id(func, key)
-    }
-
     /// Get a function by name.
     ///
     /// Returns `None` if the function does not exist.
@@ -2167,27 +2266,7 @@ impl EGraph {
         ))
     }
 
-    /// Run a closure with full read-write access to the database, then flush
-    /// pending writes.
-    ///
-    /// This is the top-level equivalent of [`FullPrim::apply`], and the closure receives a
-    ///  [`FullState`].
-    ///
-    /// Pending writes staged inside the closure are flushed (and the
-    /// union-find rebuilt if necessary) before this method returns.
-    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
-        // Clone the Arc so the guard is not lifetime-tied to &self.backend,
-        // allowing flush_updates(&mut self.backend) after the closure.
-        let registry_arc = self.backend.action_registry().clone();
-        let registry_guard = registry_arc.read().unwrap();
-        let result = self
-            .backend
-            .with_execution_state(|es| f(FullState::wrap(es, &registry_guard, Context::Full)));
-        drop(registry_guard);
-        self.backend.flush_updates();
-        result
-    }
-
+    /// Set the report verbosity level for rule execution output.
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.backend.set_report_level(level);
     }
@@ -2199,17 +2278,141 @@ impl EGraph {
         self.backend.dump_debug_info();
     }
 
-    /// Get the canonical representation for `val` based on type.
-    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
-        self.backend
-            .get_canon_repr(val, sort.column_ty(&self.backend))
+    /// Run `f` with a [`FullState`] handle on this EGraph's database
+    /// — the same handle a `:naive` rule's `add_rust_rule_full`
+    /// callback receives. Use to drive name-indexed reads / writes
+    /// (`fs.set`, `fs.add`, `fs.lookup`, `fs.eclass_of`,
+    /// `fs.contains`, `fs.remove`, …) from outside a rule.
+    ///
+    /// # Flush semantics
+    ///
+    /// Pending writes flush once, **after** `f` returns. Two
+    /// consequences:
+    ///
+    /// 1. A `set` / `add` / `remove` inside the closure is *not*
+    ///    visible to a subsequent `lookup` / `contains` / `eclass_of`
+    ///    in the **same** closure. Split write-then-read into separate
+    ///    `update` calls.
+    /// 2. Conversely, batching multiple writes in one closure is the
+    ///    fast path — only one flush + rebuild happens, regardless of
+    ///    how many writes occurred.
+    /// 3. A closure that only reads (e.g. `lookup`, `constructor_enodes`)
+    ///    stages nothing, so the flush is skipped entirely — a read
+    ///    costs no more than a direct backend scan.
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::prelude::*;
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
+    /// eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
+    /// let got = eg.update(|fs| fs.lookup("f", 1_i64))?;
+    /// let got: Option<i64> = got.map(|v| eg.value_to_base::<i64>(v));
+    /// assert_eq!(got, Some(42));
+    /// # Ok::<(), egglog::Error>(())
+    /// ```
+    pub fn update<R>(
+        &mut self,
+        f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        if self.are_proofs_enabled() {
+            return Err(Error::ProofsIncompatibleApi {
+                api: "EGraph::update",
+                reason: "writes inside the closure bypass the proof-encoding pipeline,\n\
+                         so any rule derivations resting on them would be unverifiable.",
+            });
+        }
+        self.update_unchecked(f)
     }
 
-    /// Create a new union action that can be used to union two values.
-    pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
-        UnionAction::new(&self.backend)
+    /// Internal version of [`EGraph::update`] without the proofs
+    /// check. Used by proof-system internals that need to read the
+    /// e-graph while the proof system itself is enabled.
+    pub(crate) fn update_unchecked<R>(
+        &mut self,
+        f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        let (result, changed) = self
+            .backend
+            .with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
+        drop(guard);
+        // A read-only closure stages nothing, so `flush_updates` would only do
+        // a no-op merge plus a spurious timestamp bump and rebuild check. Skip
+        // it unless the closure actually wrote, keeping reads as cheap as a
+        // direct backend scan.
+        if changed {
+            self.backend.flush_updates();
+        }
+        result
+    }
+
+    /// Run a pattern query: bind the variables in `vars` against
+    /// `facts` and return one [`HashMap`] per match, keyed by variable
+    /// name. Values stay raw — convert via [`EGraph::value_to_base`].
+    ///
+    /// With zero vars, returns at most one empty map (so `.len()` is 1
+    /// if the body matched, 0 if it didn't).
+    pub fn query(
+        &mut self,
+        vars: &[(&str, ArcSort)],
+        facts: ast::Facts<String, String>,
+    ) -> Result<Vec<HashMap<String, Value>>, Error> {
+        // Fail fast under proofs — otherwise the failure would
+        // surface through `rust_rule`'s check below with a misleading
+        // api: "rust_rule" in the error message.
+        if self.are_proofs_enabled() {
+            return Err(Error::ProofsIncompatibleApi {
+                api: "EGraph::query",
+                reason: "the underlying rust_rule callback has no proof-encoding validator,\n\
+                         so query matches cannot be verified.",
+            });
+        }
+        use std::sync::{Arc, Mutex};
+        let names: Arc<[String]> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
+        let results: Arc<Mutex<Vec<HashMap<String, Value>>>> = Arc::new(Mutex::new(Vec::new()));
+        let results_weak = Arc::downgrade(&results);
+        let names_for_cb = names.clone();
+
+        let ruleset = self.parser.symbol_gen.fresh("query_ruleset");
+        prelude::add_ruleset(self, &ruleset)?;
+        // From here on, we OWN the ruleset and the rule and have to
+        // clean them up on every exit path. Run the rest in a closure
+        // and tear down before propagating.
+        let outcome = (|| -> Result<_, Error> {
+            prelude::rust_rule(self, "query", &ruleset, vars, facts, move |_, values| {
+                let arc = results_weak.upgrade().unwrap();
+                let mut results = arc.lock().unwrap();
+                let map: HashMap<String, Value> = names_for_cb
+                    .iter()
+                    .zip(values.iter().copied())
+                    .map(|(n, v)| (n.clone(), v))
+                    .collect();
+                results.push(map);
+                Some(())
+            })?;
+            prelude::run_ruleset(self, &ruleset)?;
+            Ok(())
+        })();
+
+        // Tear the temporary rule + ruleset down whether the body
+        // succeeded or not.
+        if let Some(Ruleset::Rules(rules)) = self.rulesets.swap_remove(&ruleset) {
+            for (_, rule) in rules {
+                self.backend.free_rule(rule.1);
+            }
+        }
+        outcome?;
+
+        let Some(mutex) = Arc::into_inner(results) else {
+            panic!("`results_weak` outlived the callback");
+        };
+        Ok(mutex.into_inner().unwrap())
     }
 }
+
+pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, RawValues};
 
 /// Build the runtime value backing a resolved `(unstable-fn name)` target.
 ///
@@ -2342,14 +2545,11 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// `true` for a regular seminaive rule; `false` for any of:
-    /// (a) global one-shots (`eval`, `check`, top-level actions),
-    /// (b) rules with the `:naive` option,
-    /// (c) `EGraph::seminaive == false` (the global opt-out).
-    /// Combined with whether we're in the query or action phase, this
-    /// picks the [`crate::Context`] used to select a primitive's
-    /// context-specific runtime id at each call site.
-    seminaive: bool,
+    /// Whether primitives may read the database. When true the per-phase
+    /// [`crate::Context`] widens from `Pure`/`Write` to `Read`/`Full` (query
+    /// gains reads, action gains reads on top of writes). True for `:naive` /
+    /// `:unsafe-seminaive` rules and a non-seminaive EGraph.
+    requires_read_context: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -2357,13 +2557,13 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
-        seminaive: bool,
+        requires_read_context: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
-            seminaive,
+            requires_read_context,
             entries: Default::default(),
         }
     }
@@ -2375,10 +2575,10 @@ impl<'a> BackendRule<'a> {
     /// this to [`Context::Read`] so reads from primitives are
     /// admissible.
     fn query_context(&self) -> crate::Context {
-        if self.seminaive {
-            crate::Context::Pure
-        } else {
+        if self.requires_read_context {
             crate::Context::Read
+        } else {
+            crate::Context::Pure
         }
     }
 
@@ -2388,10 +2588,10 @@ impl<'a> BackendRule<'a> {
     /// widens to [`Context::Full`] so writes and reads are both
     /// admissible.
     fn action_context(&self) -> crate::Context {
-        if self.seminaive {
-            crate::Context::Write
-        } else {
+        if self.requires_read_context {
             crate::Context::Full
+        } else {
+            crate::Context::Write
         }
     }
 
@@ -2588,6 +2788,8 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
+    #[error(transparent)]
+    ApiError(#[from] crate::api::ApiError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]
@@ -2632,6 +2834,14 @@ pub enum Error {
     UnsupportedProofCommand {
         command: String,
         reason: ProofEncodingUnsupportedReason,
+    },
+    #[error(
+        "`{api}` is incompatible with proof mode: {reason} \
+         Disable proofs or make the operation a command in the syntax of the egglog language and use `EGraph::parse_and_run`."
+    )]
+    ProofsIncompatibleApi {
+        api: &'static str,
+        reason: &'static str,
     },
 }
 
