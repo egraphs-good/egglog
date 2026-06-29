@@ -339,3 +339,29 @@ fn test_macro_accesses_type_info() {
         "Program with type info reading macro should run: {result:?}"
     );
 }
+
+#[test]
+fn test_proof_mode_macro_accesses_original_type_info() {
+    let mut egraph = EGraph::new_with_proofs();
+    egraph
+        .command_macros_mut()
+        .register(Arc::new(TypeInfoReader));
+
+    let result = egraph.resolve_program(
+        None,
+        r#"
+        (sort Math)
+        (constructor Num (i64) Math)
+        (function Cost (Math) i64 :merge old)
+        (relation SeenCost (i64))
+
+        (rule ((= cost (Cost value)))
+              ((SeenCost cost)))
+        "#,
+    );
+
+    assert!(
+        result.is_ok(),
+        "proof-mode command macro should see original function arities: {result:?}"
+    );
+}
