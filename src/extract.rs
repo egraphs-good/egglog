@@ -164,7 +164,7 @@ pub struct ExtractedTermVariants<C> {
 /// subterm should always lead to a non-worse superterm, to guarantee the extracted term
 /// being optimal under the given cost model.
 /// If this is not followed, the extractor may panic on reconstruction
-pub(crate) struct Extractor<C: Cost> {
+struct Extractor<C: Cost> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
     cost_model: Box<dyn TreeCostModel<C>>,
@@ -181,7 +181,7 @@ impl<C: Cost> Extractor<C> {
     /// Holding a reference to the egraph would enforce this but prevents the extractor being reused.
     ///
     /// For convenience, if the rootsorts is `None`, it defaults to extract all extractable rootsorts.
-    pub(crate) fn compute_costs_from_rootsorts(
+    fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
         cost_model: impl TreeCostModel<C> + 'static,
@@ -558,7 +558,7 @@ impl<C: Cost> Extractor<C> {
     ///
     /// This function expects the sort to be already computed,
     /// which can be one of the rootsorts, or reachable from rootsorts, or primitives, or containers of computed sorts.
-    pub(crate) fn extract_best_with_sort(
+    fn extract_best_with_sort(
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
@@ -618,7 +618,7 @@ impl<C: Cost> Extractor<C> {
     ///
     /// The variants are selected by first picking `nvairants` e-nodes with the lowest cost from the e-class
     /// and then extracting a term from each e-node.
-    pub(crate) fn extract_variants_with_sort(
+    fn extract_variants_with_sort(
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,

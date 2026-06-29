@@ -359,6 +359,13 @@ impl Function {
         self.decl.internal_hidden
     }
 
+    /// The term-constructor name associated with this function table, if
+    /// any. Set on view tables created by the term/proof encoding to refer
+    /// back to the user-visible constructor name.
+    pub fn term_constructor(&self) -> Option<&str> {
+        self.decl.term_constructor.as_deref()
+    }
+
     /// Whether this table is a declared constructor or relation table.
     pub fn is_constructor(&self) -> bool {
         self.decl.subtype == FunctionSubtype::Constructor
