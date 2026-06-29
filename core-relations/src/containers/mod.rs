@@ -162,15 +162,12 @@ impl ContainerValues {
         env.get_or_insert(&container, exec_state)
     }
 
-    /// Rebuild a single container value by remapping each of its contained
-    /// values through `remap`, returning the (possibly new) interned value.
+    /// Rebuild a single container value by remapping each contained value
+    /// through `remap`, returning the (possibly new) interned value, or `value`
+    /// unchanged if it is not a registered container of type `C`.
     ///
-    /// This is the single-container analogue of [`ContainerValues::rebuild_all`]:
-    /// instead of driving rebuilds off the backend union-find, the caller
-    /// supplies an explicit value remapping (e.g. a lookup into an
-    /// egglog-level union-find table during term encoding). The caller must
-    /// know the container type `C`. Returns the original value unchanged if it
-    /// is not a registered container of type `C`.
+    /// Unlike [`ContainerValues::rebuild_all`], which drives rebuilds off the
+    /// backend union-find, the caller supplies the remapping explicitly.
     pub fn rebuild_val_with<C: ContainerValue>(
         &self,
         value: Value,

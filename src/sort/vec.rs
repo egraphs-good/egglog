@@ -201,6 +201,20 @@ impl ContainerSort for VecSort {
         }
     }
 
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "vec-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                let head = if args.is_empty() {
+                    "vec-empty"
+                } else {
+                    "vec-of"
+                };
+                Some(termdag.app(head.into(), args.to_vec()))
+            }),
+        ))
+    }
+
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "vec-of".to_owned()
     }

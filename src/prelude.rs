@@ -874,6 +874,14 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     ) -> TermId;
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String;
 
+    /// Optional: a container that supports proofs returns its canonical
+    /// constructor head and the validator that canonicalizes its term form (e.g.
+    /// `set-of` sorts and dedups). `None` (the default) means proofs are
+    /// unsupported for this container. See [`Sort::container_term_normalizer`].
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        None
+    }
+
     fn to_arcsort(self) -> ArcSort
     where
         Self: Sized,
@@ -943,6 +951,10 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     ) -> TermId {
         self.0
             .reconstruct_termdag(container_values, value, termdag, element_terms)
+    }
+
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        self.0.container_term_normalizer()
     }
 
     fn rebuild_container_with_leaders(

@@ -172,6 +172,18 @@ impl ContainerSort for PairSort {
         termdag.app("pair".into(), vec![element_terms[0], element_terms[1]])
     }
 
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "pair".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                if args.len() != 2 {
+                    return None;
+                }
+                Some(termdag.app("pair".into(), args.to_vec()))
+            }),
+        ))
+    }
+
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         self.name().to_owned()
     }

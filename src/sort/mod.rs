@@ -84,6 +84,15 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
+    /// For a container sort that supports proofs: its canonical constructor head
+    /// and the validator that canonicalizes the term form (e.g. `set-of` sorts
+    /// and dedups its elements). Proof checking looks this up by head to normalize
+    /// a container term. `None` (the default) means proofs are unsupported for
+    /// this container.
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        None
+    }
+
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name

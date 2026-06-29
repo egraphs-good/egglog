@@ -250,6 +250,15 @@ impl ContainerSort for SetSort {
         normalize_set_term(termdag, element_terms)
     }
 
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "set-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                Some(normalize_set_term(termdag, args.to_vec()))
+            }),
+        ))
+    }
+
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "set-of".to_owned()
     }

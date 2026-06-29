@@ -151,10 +151,11 @@ pub enum Justification {
     /// Primitive reflexive equalities like 2 = 2 are also justified by Fiat.
     /// Reflexivity of equality is not assumed: a proof of `t = t`` must correspond to some `t` added at the top level.
     Fiat,
-    /// Proves a grounded equality `t1 = t2` from the body of a rule, given a
-    /// substitution and a proof for each premise. If the [`Proposition`] proven
-    /// is `t = t`, `t` may be a subexpression of the rule body under the
-    /// substitution.
+    /// Proves a grounded equality `t1 = t2` which appears
+    /// in the body of a rule given a substitution given proofs
+    /// for each premise ([`Fact`]) of the rule.
+    /// If the [`Propostion`] proven is a term like `t = t`,
+    /// t may be a subexpression of the body of the rule under the substitution.
     ///
     /// A proof for a premise is an equality t1 = t2 that matches the premise under some substitution.
     /// A proof for a premise that doesn't involve equality (i.e. (Add a b)) gives a proof of t1 = t2 where t2 matches the premise.

@@ -260,6 +260,16 @@ impl ContainerSort for MapSort {
         normalize_map_term(termdag, raw).unwrap_or(raw)
     }
 
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "map-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                let raw = termdag.app("map-of".into(), args.to_vec());
+                normalize_map_term(termdag, raw)
+            }),
+        ))
+    }
+
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "map-of".to_owned()
     }

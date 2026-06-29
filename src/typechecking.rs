@@ -1118,18 +1118,15 @@ impl TypeInfo {
         self.primitives.get(sym).map(Vec::as_slice)
     }
 
-    /// Map from primitive name to a validator, for every registered primitive
-    /// that has one. A container constructor's validator canonicalizes its term
-    /// form, so proof checking uses this to normalize a container term by its
-    /// head — without any container-specific knowledge.
-    pub(crate) fn primitive_validators(&self) -> HashMap<String, PrimitiveValidator> {
-        let mut validators = HashMap::default();
-        for (name, prims) in &self.primitives {
-            if let Some(validator) = prims.iter().find_map(|p| p.validator.clone()) {
-                validators.insert(name.clone(), validator);
-            }
-        }
-        validators
+    /// Map from a container's constructor head to the validator that canonicalizes
+    /// its term form, collected from the container sorts that support proofs (see
+    /// [`Sort::container_term_normalizer`]). Proof checking uses this to normalize
+    /// a container term by its head.
+    pub(crate) fn container_term_normalizers(&self) -> HashMap<String, PrimitiveValidator> {
+        self.sorts
+            .values()
+            .filter_map(|sort| sort.container_term_normalizer())
+            .collect()
     }
 
     pub fn is_primitive(&self, sym: &str) -> bool {

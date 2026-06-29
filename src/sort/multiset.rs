@@ -235,6 +235,15 @@ impl ContainerSort for MultiSetSort {
         normalize_multiset_term(termdag, element_terms)
     }
 
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "multiset-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                Some(normalize_multiset_term(termdag, args.to_vec()))
+            }),
+        ))
+    }
+
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "multiset-of".to_owned()
     }

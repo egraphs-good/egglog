@@ -2,7 +2,20 @@ Rewrites an egglog program to use an encoding for equality tracking, optionally 
 
 # Term Encoding
 
-The term encoding *removes all calls to union*, making equality reasoning explicit so it can be instrumented with proof tracking. It adds a per-sort union-find, maintained by rules that run during scheduled maintenance, and stores it in two tables per sort: a constructor UF table (`UF_<Sort>`) holding raw parent edges, and a function-index table (`UF_<Sort>f`) mapping each term to its parent (for fast rebuild lookups). Every constructor becomes two tables too: a term table holding the actual terms, and a view table holding canonicalized terms with their e-class leader. Proof tracking (below) is done in the same pass. The encoding keeps the operational semantics equivalent to the standard one (for the supported subset of commands).
+The job of the term encoding is to *remove all calls to union* in the egglog program.
+This makes proof production easier, since all equality reasoning is explicit and
+  can be instrumented with proof tracking.
+The term encoding adds an explicit union-find structure per sort, and maintains it via
+  rules that run during scheduled maintenance.
+To speed up rebuild queries, each sort now uses two UF tables:
+  a constructor UF table (`UF_<Sort>`) that stores raw parent edges, and a function UF table
+  (`UF_<Sort>f`) that stores the current parent for each term as an index.
+For efficiency, every constructor becomes two tables:
+  a term table that stores the actual terms, and a view table storing representative terms along with their e-class (stored as the leader term).
+The term encoding enables proof tracking, done at the
+  same time in this file.
+The encoding keeps the operational semantics equivalent to the standard encoding (for the
+subset of commands that are currently supported).
 
 The transformation is triggered when an `EGraph` is created with
 [`EGraph::new_with_term_encoding`](crate::EGraph::new_with_term_encoding) or
@@ -23,7 +36,7 @@ Consider a tiny program that defines a pure arithmetic helper and checks a fact 
 (delete (Add 1 2))
 ```
 
-Lowering it with the term encoding expands to a lot of new egglog, shown (mostly) in pieces.
+Lowering the program with the term encoding expands to a bunch of new egglog, which we'll show (most of) in pieces.
 
 ```text
 (ruleset parent)
@@ -34,9 +47,9 @@ Lowering it with the term encoding expands to a lot of new egglog, shown (mostly
 (ruleset delete_subsume_ruleset)
 ```
 
-*The new rulesets* drive per-sort union-find (`parent`, `single_parent`), the fast
-function index over UF (`uf_function_index`), rebuild-time congruence (`rebuilding` +
-`rebuilding_cleanup`), and deferred deletions/subsumptions (`delete_subsume_ruleset`).
+*The new rulesets* orchestrate new rules for per-sort union-find tables (`parent` and `single_parent`),
+building a fast function index over UF (`uf_function_index`),
+rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred deletions/subsumptions (`delete_subsume_ruleset`).
 
 ```text
 (run-schedule
@@ -49,8 +62,8 @@ function index over UF (`uf_function_index`), rebuild-time congruence (`rebuildi
     delete_subsume_ruleset) ;; process deletions/subsumptions
 ```
 
-*Between* the original program's commands, the encoding runs these rulesets to
-maintain egglog's invariants.
+*In-between* the original program's commands, the term encoding
+  runs these rulesets to maintain egglog's invariants.
 
 ```text
 (sort Math)
@@ -58,10 +71,15 @@ maintain egglog's invariants.
 (function UF_Mathf (Math) Math :merge new)
 ```
 
-*The union-find tables* store each sort's equivalence classes. `UF_<Sort>` is the
-source of truth for UF maintenance; `UF_<Sort>f` is the function-backed index used by
-rebuild rules. `UF_<Sort>`'s output is `Unit` (without proofs) or `Proof` (with proofs);
-`:merge old` keeps only the first value.
+*The union-find* tables for each sort store the equivalence
+  classes of terms of that sort.
+`UF_<Sort>` remains the source of truth for UF maintenance updates,
+  while `UF_<Sort>f` is a function-backed index used by rebuild rules.
+`UF_<Sort>` is always a function whose output type is `Unit` (without proof tracking)
+  or `Proof` (with proof tracking).
+Using `:merge old` ensures that only the first proof/unit value is kept.
+When proof tracking is enabled, proofs are stored directly in the UF table
+  (e.g., `(function UF_Math (Math Math) Proof :merge old :internal-hidden)`).
 
 ```text
 (rule ((UF_Math a b)
@@ -82,16 +100,26 @@ rebuild rules. `UF_<Sort>`'s output is `Unit` (without proofs) or `Proof` (with 
        :ruleset uf_function_index :name "uf_function_index_update")
 ```
 
-*Union-find rules* keep the UF up to date as equalities are added, and the indexing
-ruleset mirrors its rows into the function UF. The `ordering-max`/`ordering-min`
-primitives define an arbitrary (insertion-order) ordering on terms, used to pick a
-parent deterministically.
+*Union-find rules:*
+A couple rules ensure the UF function is kept up to date as
+  equalities are added, and the indexing ruleset mirrors those rows
+  into the function UF.
+We use the `ordering-max` and `ordering-min` egglog primitives
+  to define an arbitrary ordering on terms based on insertion order,
+  so that we can deterministically choose which term becomes the parent
+  in the union-find structure.
 
-**Invariant:** every representative term needs a self-loop in the constructor UF (e.g.
-`(UF_Math v v)`), because the rebuild rules query the UF for every eq-sort column at
-once — a missing entry blocks the rule even when other columns changed. `add_term_and_view`
-adds these self-loops when a constructor value is created, and `uf_function_index` copies
-them into `UF_<Sort>f`, so representatives also satisfy `(= (UF_<Sort>f v) v)`.
+**Important invariant:** every representative term must have a self-loop
+  entry in the constructor union-find table (e.g., `(UF_Math v v)`).
+This is because the rebuild rules query the union-find for every
+  eq-sort column simultaneously, so a missing entry for any column
+  prevents the rule from firing even when other columns have changed.
+Self-loops are added in `add_term_and_view` whenever a constructor
+  value is created.
+The `uf_function_index` ruleset then copies those rows into
+  `UF_<Sort>f`, so representatives also satisfy `(= (UF_<Sort>f v) v)`.
+We may want to remove this invariant in the future if we move
+  to a different encoding, saving some space and time.
 
 
 ```text
@@ -102,11 +130,15 @@ them into `UF_<Sort>f`, so representatives also satisfy `(= (UF_<Sort>f v) v)`.
 (constructor to_subsume_Add (i64 i64) view)
 ```
 
-Each constructor expands to a term table (`Add`), a view table (`AddView`), and deferred
-delete/subsume helpers (`to_delete_Add`, `to_subsume_Add`). The view table (`Unit`, or
-`Proof` with proofs; `:merge old`) maps a canonicalized term — one whose children are
-representatives — to its e-class representative (the last column), and is kept current
-during rebuilding.
+Each constructor in the original program is expanded to
+  a term table (`Add`), a view table (`AddView`), and helpers for deferred deletion/subsumption
+  (`to_delete_Add`, `to_subsume_Add`).
+The view table is always a function whose output type is `Unit` (without proof tracking)
+  or `Proof` (with proof tracking), with `:merge old`.
+A view table stores "canonicalized" terms and their e-class representative.
+A canonicalized term has representative terms for its children.
+The last column of the view table is the representative term for the e-class.
+The view tables are kept up to date during rebuilding.
 
 ```text
 (rule ((AddView c0 c1 new)
@@ -124,10 +156,14 @@ during rebuilding.
         :ruleset rebuilding :name "rebuild_rule")
 ```
 
-Each constructor gets a congruence rule (adds an equality when two applications have
-equal arguments) and a rebuild rule (repoints views at child representatives). Rebuild
-rules read representatives from `UF_<Sort>f` rather than joining on `UF_<Sort>`, avoiding
-expensive UF joins.
+For each constructor, we add a congruence rule and a rebuild rule.
+The congruence rule adds equalities to the union-find table when two constructor applications
+  have equal arguments.
+The rebuild rule updates view tables so that views
+  point to representative terms for child e-classes.
+Rebuild rules read representatives from `UF_<Sort>f` (function lookup)
+  rather than joining directly on `UF_<Sort>`,
+  which avoids expensive UF joins during rebuilding.
 
 ```text
 (function v2 () Math :no-merge)
@@ -136,9 +172,14 @@ expensive UF joins.
 (set (UF_Math (v2) (v2)) ())
 ```
 
-The desugaring for `(Add 1 2)`: every constructor/function application is added to both
-the view and term tables, and the self-loop `(UF_Math (v2) (v2))` initializes the new
-term's e-class. Global variables are represented as no-arg functions (see Globals below).
+Above is the desugaring for `(Add 1 2)`.
+We add to both view and term tables whenever we evaluate
+  a constructor or function application.
+The self-loop `(UF_Math (v2) (v2))` initializes the e-class for the new term.
+It's straightforward except for global variables.
+Since global variables are not allowed after this pass,
+  we use functions with no arguments to represent them
+  (see globals section below).
 
 
 ```text
@@ -153,9 +194,12 @@ term's e-class. Global variables are represented as no-arg functions (see Global
        :name "commutativity")
 ```
 
-The instrumented commutativity rule: the query uses the view table to find the canonical
-e-node, and the actions add to the term and view tables and add an equality to the UF
-(again using `ordering-max`/`ordering-min` to pick the parent).
+Here we have the instrumented commutativity rule.
+The query uses the view table to find the canonical e-node.
+The actions add to the term table, add to the view table,
+  and add an equality to the union-find table.
+We add an equality to the union-find table for the two terms, using the `ordering-max` and 
+  `ordering-min` egglog primitives to correctly choose a parent.
 
 
 
@@ -166,8 +210,9 @@ e-node, and the actions add to the term and view tables and add an equality to t
        (= v8 v10))
 ```
 
-All queries, including `check`, use the view tables. This one checks that `(Add 1 2)` and
-`(Add 2 1)` share an e-class representative.
+All queries use the view tables, including check commands.
+This query checks that the e-class representatives for `(Add 1 2)` and `(Add 2 1)` are equal,
+  ensuring they share the same e-class.
 
 ```text
 (rule ((to_delete_Add c0 c1)
@@ -183,17 +228,25 @@ All queries, including `check`, use the view tables. This one checks that `(Add 
 (to_delete_Add 1 2)
 ```
 
-Deletions and subsumptions are deferred via per-constructor `to_delete_<C>` /
-`to_subsume_<C>` tables, processed during rebuilding. We only delete/subsume from the
-view tables (the term tables aren't queried), which keeps terms around for proof tracking
-even after they leave the e-graph. Views support subsumption via `:internal-term-constructor`.
+Finally, deletions and subsumptions are deferred via helper tables.
+For every constructor, we add a `to_delete_<Constructor>` and `to_subsume_<Constructor>` table.
+When a deletion or subsumption is requested, we add to these tables.
+During rebuilding, we process these tables to actually delete or subsume the requested terms.
+View functions support subsumption (via the `:internal-term-constructor` annotation).
+We only need to delete or subsume from the view tables,
+  since the term tables are not used for queries.
+This has the added benefit of allowing us to keep terms around
+  for proof tracking even after they are deleted from the e-graph.
 
 
 # Globals
 
-Before term encoding, the `proof_global_remover.rs` pass desugars global variables to
-constructors, so the encoding and backend need not handle globals. The example above has
-none, so it is unchanged. A program with a global:
+*Before the term encoding*, egglog desugars all global
+  variables to constructors with the `proof_global_remover.rs` pass.
+This makes the encoding simpler and makes it so the backend
+  need not worry about globals.
+The above program doesn't have any global variables, so it stays the same.
+A different program like this one:
 ```text
 (sort Math)
 (constructor Add (i64 i64) Math)
@@ -202,7 +255,7 @@ none, so it is unchanged. A program with a global:
       ((Add 3 4))))
 ```
 
-desugars to this before term encoding:
+Would desugar to this before term encoding:
 ```text
 (sort Math)
 (constructor Add (i64 i64) Math)
@@ -216,8 +269,12 @@ desugars to this before term encoding:
 
 # Proof Tracking
 
-With proof tracking enabled, the same pass also instruments the program to track proofs
-of equalities. Continuing the example above:
+During term encoding, if proof tracking is enabled,
+  we also instrument the program to track proofs of equalities.
+We'll continue with our example from above, showing the additions
+  for proof tracking.
+
+Original program snippet is
 
 ```text
 (sort Math)
@@ -231,32 +288,45 @@ of equalities. Continuing the example above:
 ```
 
 
-A proof header is added first, defining the proof format that corresponds to
-[`RawProof`](crate::proofs::RawProof) (see `proof_encoding_helpers.rs`).
+The encoding with proof tracking adds a proof header before the rest of the program.
+The header defines the proof format corresponding to [`RawProof`](crate::proofs::RawProof) in Rust.
+See the proof header in `proof_encoding_helpers.rs` for details.
 
 ```text
 (function MathProof (Math) Proof :merge old)
 ```
 
-Every sort gets a proof table mapping a term `t` to a proof of `t = t` (oldest kept).
+Every sort gets a proof table storing
+  a proof for that term.
+The proof proves a proposition `t = t` for
+  input term `t`.
+We store the oldest proof currently.
 
-The union-find table's output becomes `Proof`:
+When proof tracking is enabled, the union-find table's output type is `Proof` instead of `Unit`:
 
 ```text
 (function UF_Math (Math Math) Proof :merge old :internal-hidden)
 ```
 
-If `a` has parent `b`, `(UF_Math a b)` is a proof of `a = b`. The path-compression and
-single-parent rules are instrumented to compose these with `Sym`/`Trans` as needed.
+If term `a` has parent `b`, `(UF_Math a b)` returns a 
+  proof of `a = b`.
+The path compression and single-parent rules are instrumented to produce
+  proofs using symmetry (`Sym`) and transitivity (`Trans`) as needed.
 
-The view table's output likewise becomes `Proof`:
+
+Similarly, the view table's output type is `Proof` instead of `Unit`:
 
 ```text
 (function AddView (i64 i64 Math) Proof :merge old :internal-term-constructor Add)
 ```
 
-For a term `t` with representative `r`, the view's proof proves `r = t` (this direction
-eases later proof production); `:merge old` keeps the earliest.
+Recall that view tables store a term
+  along with the e-class representative.
+For a term `t` with representative `r`,
+  the proof (output of the view function) proves that `r = t`.
+The direction is important, making
+  proof production easier later.
+We store the earliest proof (`:merge old`).
 
 
 ```text
@@ -286,47 +356,67 @@ eases later proof production); `:merge old` keeps the earliest.
          :name "commutativity")
 ```
 
-Instrumented rules query the view function (whose output is the proof) and build a proof
-for each action. The structure matches term mode — views and UF still use `set` — but the
-stored values are `Proof` terms instead of `()`. Nested terms get congruence proofs so the
-proof terms match the original queries.
+Instrumented rules with proof tracking query the view function directly
+  (since the proof is its output column), then construct proofs for each action.
+The structure is the same as term mode — view updates use `set`, UF updates use `set` —
+  but the values stored are `Proof` terms instead of `()`.
+For nested terms, congruence proofs are built to ensure
+  the proof terms match the original queries.
 
 # Containers
 
-Container sorts (`Vec`, `Set`, `Map`, `MultiSet`, `Pair`) participate too. They are never
-unioned directly, so they get no union-find tables; instead their elements are
-canonicalized structurally during rebuilding. An eq-container column is rebuilt by a
-per-container *rebuild primitive* (registered by the encoding) called inside the rebuild
-rule; because that primitive reads the element sorts' `UF_<E>f` indices, the rule is
-`:naive`. The primitive clones the container, remaps each eq-sort element to its
-union-find leader (via `ContainerValues::rebuild_val_with`), and re-interns it.
+Container sorts (`Vec`, `Set`, `Map`, `MultiSet`, `Pair`) participate in the
+  encoding too.
+Unlike eq-sorts, containers are never unioned directly, so they get **no**
+  union-find tables; instead their elements are canonicalized structurally
+  during rebuilding.
+A column of an eq-container sort is rebuilt by calling a per-container *rebuild
+  primitive* (registered by the encoding) inside the rebuild rule.
+Because that primitive reads the element sorts' `UF_<E>f` indices, the rebuild
+  rule is marked `:naive`.
+The primitive clones the container, remaps each eq-sort element to its
+  union-find leader (via `ContainerValues::rebuild_val_with`),
+  and re-interns it.
 
-In proof mode, a container's "term form" is the s-expr headed by its constructor —
-`(vec-of e0 e1 ...)`, `(pair a b)`, etc. — built by the constructor's validator, so the
-generic `Congr` machinery applies unchanged. Every container sort gets a `<Sort>Proof`
-table holding a reflexive `container = container` proof (set on creation), used as the
-anchor for a `Congr` chain over the changed elements proving `old = new`. That proof folds
-into the view's congruence step like an eq-sort child's union-find proof. Nested containers
-(e.g. `(Vec (Vec Math))`) recurse, each rebuilt container recording its own reflexive
-anchor for later rebuilds.
+In proof mode, each container's "term form" is the s-expr headed by its
+  constructing primitive — `(vec-of e0 e1 ...)`, `(pair a b)`, etc. — which the
+  primitive's validator builds, so the generic `Congr` machinery applies with no
+  proof-format changes.
+Every container sort gets a `<Sort>Proof` table holding a reflexive
+  `container = container` proof (set when the container is created), used as the
+  anchor for a `Congr` chain over the changed elements that proves
+  `old_container = new_container`.
+This proof is folded into the view's congruence step exactly like an eq-sort
+  child's union-find proof.
 
-The flat `Congr` chain replaces children in place, which for a reordering/merging container
-(`Set`, `Map`, `MultiSet`) may leave them out of order or duplicated. The **container
-normalization** (`ContainerNormalize` in [`crate::proofs::proof_format`]) bridges that gap:
-sort + dedup for sets, sort for multisets, sort + last-write-wins for maps. Each rebuild
-mints it unconditionally; the proof simplifier drops it where it is the identity (always
-for order-preserving `Vec`/`Pair`, and for already-canonical sets/maps). A container's
-normalization lives in its constructor validator (so a user-defined container normalizes
-like the built-ins); the checker recomputes it by applying the validator for the term's
-head, and `reconstruct_termdag` produces the same canonical form.
+Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
+  rebuild through container-typed elements; each rebuilt container records its
+  own reflexive `<CSort>Proof` anchor so it can be rebuilt again later.
 
-Maps use a flat `(map-of k0 v0 k1 v1 ...)` term form (like `set-of`/`vec-of`) rather than
-nested `map-insert`s, so rebuild `Congr` indices are flat and key collapse works like the
-other containers.
+The flat `Congr` chain produces the term with children replaced in place, which
+  for a reordering/merging container (`Set`, `Map`, `MultiSet`) may be in the
+  wrong order or contain duplicates. The **container normalization** (`ContainerNormalize`
+  in [`crate::proofs::proof_format`]) bridges that gap: it normalizes the term —
+  sort + dedup for sets, sort for multisets, sort + last-write-wins for maps,
+  selected by the term head. Every rebuild mints the normalization unconditionally; the
+  proof simplifier then drops it wherever normalization is the identity — always
+  for order/arity-preserving `Vec`/`Pair`, and for already-canonical sets/maps.
+  Each container's normalization lives in its own constructor validator (ordered by
+  the deterministic structural `ast_cmp`), so user-defined containers normalize like
+  the built-ins; the checker recomputes it by applying the validator registered for the
+  term's head, and `reconstruct_termdag` produces the same canonical form.
 
-The rebuild primitives are registered programmatically with fresh names, so a re-parse of
-the desugared program could not resolve them. The encoder therefore records their names on
-the container's `(sort …)` as an `:internal-container-rebuild` annotation (everything else
-they need is recovered from `proof_state`); when that Sort is typechecked — during encoding
-*and* on re-parse — the primitives are re-registered. See
-[`crate::proofs::proof_container_rebuild`].
+Maps use a flat `(map-of k0 v0 k1 v1 ...)` term form (a `map-of` constructor,
+  like `set-of`/`vec-of`) rather than nested `map-insert`s, so their rebuild
+  `Congr` indices are flat and key collapse (last-write-wins) works like the
+  other containers.
+
+The rebuild primitives are registered programmatically, with fresh names, so
+  they would not exist if the desugared program were re-parsed on its own. To
+  make the desugar round-trip work, the encoder records their names on the
+  container's `(sort …)` declaration as an `:internal-container-rebuild` annotation
+  (everything else they need is recovered from `proof_state` at register time). When
+  that Sort command is typechecked (during encoding *and* on re-parse), the
+  primitives are re-registered, so the rebuild rules resolve in both cases. See
+  [`crate::proofs::proof_container_rebuild`].
+
