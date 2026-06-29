@@ -635,27 +635,6 @@ impl<C: Cost> Extractor<C> {
         }
     }
 
-    /// A convenience method for extraction.
-    ///
-    /// This expects the value to be of the unique sort the extractor has been initialized with
-    pub fn extract_best(
-        &self,
-        egraph: &EGraph,
-        termdag: &mut TermDag,
-        value: Value,
-    ) -> Option<ExtractedTerm<C>> {
-        assert!(
-            self.rootsorts.len() == 1,
-            "extract_best requires a single rootsort"
-        );
-        self.extract_best_with_sort(
-            egraph,
-            termdag,
-            value,
-            self.rootsorts.first().unwrap().clone(),
-        )
-    }
-
     /// Find the canonical representative of a value using the union-find table.
     /// If no UF is registered for this sort, returns the original value.
     /// The UF table stores (value, canonical) pairs - one hop lookup.
@@ -770,29 +749,6 @@ impl<C: Cost> Extractor<C> {
                 vec![]
             }
         }
-    }
-
-    /// A convenience method for extracting variants of a value.
-    ///
-    /// This expects the value to be of the unique sort the extractor has been initialized with.
-    pub fn extract_variants(
-        &self,
-        egraph: &EGraph,
-        termdag: &mut TermDag,
-        value: Value,
-        nvariants: usize,
-    ) -> Vec<ExtractedTerm<C>> {
-        assert!(
-            self.rootsorts.len() == 1,
-            "extract_variants requires a single rootsort"
-        );
-        self.extract_variants_with_sort(
-            egraph,
-            termdag,
-            value,
-            nvariants,
-            self.rootsorts.first().unwrap().clone(),
-        )
     }
 }
 
@@ -965,10 +921,11 @@ impl EGraph {
         value: Value,
         cost_model: CM,
     ) -> Result<(TermDag, TermId, DefaultCost), Error> {
-        let extractor =
-            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
-        let mut termdag = TermDag::default();
-        let extracted = extractor.extract_best(self, &mut termdag, value).unwrap();
+        let ExtractedTerms { termdag, mut terms } =
+            self.extract_best(vec![(sort.clone(), value)], cost_model)?;
+        let extracted = terms
+            .pop()
+            .expect("extract_best returns one result for one root");
         Ok((termdag, extracted.term, extracted.cost))
     }
 
