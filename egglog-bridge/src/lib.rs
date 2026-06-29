@@ -472,53 +472,6 @@ impl EGraph {
         drain_buf!(buf);
     }
 
-    /// Iterate over function rows where `col == value`.
-    ///
-    /// This uses the database's lazy column indexes for cacheable columns, falling
-    /// back to filtered scans for columns that cannot be indexed.
-    pub fn for_each_matching_col(
-        &self,
-        table: FunctionId,
-        col: usize,
-        value: Value,
-        mut f: impl FnMut(ScanEntry<'_>),
-    ) {
-        let info = &self.funcs[table];
-        let table = self.funcs[table].table;
-        let schema_math = SchemaMath {
-            subsume: info.can_subsume,
-            func_cols: info.schema.len(),
-        };
-        let imp = self.db.get_table(table);
-        let col = ColumnId::from_usize(col);
-        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
-        let mut cur = Offset::new(0);
-        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
-
-        macro_rules! drain_buf {
-            ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
-                    let subsumed =
-                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                    f(ScanEntry {
-                        vals: &row[0..schema_math.func_cols],
-                        subsumed,
-                    });
-                }
-                $buf.clear();
-            };
-        }
-
-        while let Some(next) =
-            self.db
-                .scan_matching_col_project(table, col, value, &cols, (cur, 1024), &mut buf)
-        {
-            drain_buf!(buf);
-            cur = next;
-        }
-        drain_buf!(buf);
-    }
-
     /// A basic method for dumping the state of the database to `log::info!`.
     ///
     /// For large tables, this is unlikely to give particularly useful output.
@@ -1422,46 +1375,26 @@ impl TableAction {
         drain_buf!(buf);
     }
 
-    /// Iterate over rows where `col == value`.
+    /// Iterate over rows whose output column is `value`.
     ///
-    /// This mirrors [`EGraph::for_each_matching_col`] but reaches the table
-    /// through an [`ExecutionState`], so read-capable state wrappers can use the
-    /// same lazy column indexes as direct backend callers.
-    pub fn for_each_matching_col(
+    /// This reaches the table through an [`ExecutionState`], so read-capable
+    /// state wrappers can use the same lazy column indexes as direct backend
+    /// callers without exposing lower-level scan buffers or projection details.
+    pub fn for_each_output_value(
         &self,
         state: &ExecutionState,
-        col: usize,
         value: Value,
         mut f: impl FnMut(ScanEntry<'_>),
     ) {
         let schema_math = self.table_math;
-        let imp = state.get_table(self.table);
-        let col = ColumnId::from_usize(col);
-        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
-        let mut cur = Offset::new(0);
-        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
-
-        macro_rules! drain_buf {
-            ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
-                    let subsumed =
-                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                    f(ScanEntry {
-                        vals: &row[0..schema_math.func_cols],
-                        subsumed,
-                    });
-                }
-                $buf.clear();
-            };
-        }
-
-        while let Some(next) =
-            state.scan_matching_col_project(self.table, col, value, &cols, (cur, 1024), &mut buf)
-        {
-            drain_buf!(buf);
-            cur = next;
-        }
-        drain_buf!(buf);
+        let output_col = ColumnId::from_usize(self.input_arity());
+        state.for_each_matching_col(self.table, output_col, value, |row| {
+            let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+            f(ScanEntry {
+                vals: &row[0..schema_math.func_cols],
+                subsumed,
+            });
+        });
     }
 
     /// Look up a row, inserting the configured default value if absent.

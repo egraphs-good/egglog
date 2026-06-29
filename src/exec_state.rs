@@ -409,7 +409,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
         check_subtype(name, &action, TableKind::Constructor, "constructor")?;
-        action.for_each_matching_col(self.es(), action.input_arity(), eclass, |row| {
+        action.for_each_output_value(self.es(), eclass, |row| {
             let (eclass, children) = row
                 .vals
                 .split_last()

@@ -28,10 +28,8 @@ use crate::{
     parallel_heuristics::parallelize_db_level_op,
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
-    row_buffer::{TaggedRowBuffer, ValueVec},
     table_spec::{
-        ColumnId, Constraint, MutationBuffer, Offset, Table, TableSpec, WrappedTable,
-        WrappedTableRef,
+        ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable, WrappedTableRef,
     },
 };
 
@@ -772,33 +770,6 @@ impl Database {
             false
         });
         ProcessedConstraints { subset, fast, slow }
-    }
-
-    /// Scan a projection of rows where `col == value`.
-    ///
-    /// This uses the same constraint processing path as query execution, so
-    /// cacheable columns use the database's lazy column indexes and uncacheable
-    /// columns fall back to filtered scans.
-    pub fn scan_matching_col_project<V: ValueVec>(
-        &self,
-        table: TableId,
-        col: ColumnId,
-        value: Value,
-        cols: &[ColumnId],
-        window: (Offset, usize),
-        out: &mut TaggedRowBuffer<V>,
-    ) -> Option<Offset> {
-        let (start, n) = window;
-        let constraint = Constraint::EqConst { col, val: value };
-        let processed = self.process_constraints(table, &[constraint]);
-        self.get_table(table).scan_project(
-            processed.subset.as_ref(),
-            cols,
-            start,
-            n,
-            &processed.slow,
-            out,
-        )
     }
 
     /// Get direct mutable access to the table.

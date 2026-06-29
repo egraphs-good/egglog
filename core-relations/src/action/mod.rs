@@ -19,12 +19,12 @@ use egglog_concurrency::NotificationList;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, ExternalFunctionId, Offset, TaggedRowBuffer, ValueVec,
-    WrappedTable,
+    BaseValues, ContainerValues, ExternalFunctionId, Offset, WrappedTable,
     common::Value,
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
+    row_buffer::{TaggedRowBuffer, ValueVec},
     table_spec::{ColumnId, Constraint, MutationBuffer},
 };
 
@@ -538,21 +538,40 @@ impl<'a> ExecutionState<'a> {
         &self.db.table_info[table].table
     }
 
-    /// Scan a projection of rows where `col == value`.
+    /// Iterate over rows where `col == value`.
     ///
-    /// This mirrors [`crate::free_join::Database::scan_matching_col_project`]
-    /// for read-capable execution contexts.
-    pub fn scan_matching_col_project<V: ValueVec>(
+    /// This uses the same lazy column indexes as query execution when the
+    /// column is cacheable, but keeps projection/window buffering private to
+    /// core-relations.
+    pub fn for_each_matching_col(
         &self,
         table: TableId,
         col: ColumnId,
         value: Value,
-        cols: &[ColumnId],
-        window: (Offset, usize),
-        out: &mut TaggedRowBuffer<V>,
-    ) -> Option<Offset> {
-        self.db
-            .scan_matching_col_project(table, col, value, cols, window, out)
+        mut f: impl FnMut(&[Value]),
+    ) {
+        let imp = self.get_table(table);
+        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
+
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    f(row);
+                }
+                $buf.clear();
+            };
+        }
+
+        while let Some(next) =
+            self.db
+                .scan_matching_col_project(table, col, value, &cols, (cur, 1024), &mut buf)
+        {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
     }
 
     /// Get the human-readable name for a table, if one exists.
