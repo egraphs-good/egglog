@@ -157,6 +157,9 @@ fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
     egraph
         .backend
         .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry| {
+            // The generated UF parent table is a normal custom function with
+            // can_subsume=false, so there are no subsumed UF rows to filter.
+            // This matches the public extractor's one-hop canonical scan.
             // UF table has (child, parent) as inputs.
             if row.vals[0] == value {
                 canonical = row.vals[1];
@@ -168,6 +171,38 @@ fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn first_output(egraph: &EGraph, function_name: &str) -> Value {
+        let func = egraph.functions.get(function_name).unwrap();
+        let mut value = None;
+        egraph.backend.for_each_while(func.backend_id, |row| {
+            value = Some(row.vals[func.extraction_output_index()]);
+            false
+        });
+        value.unwrap()
+    }
+
+    fn first_input(egraph: &EGraph, function_name: &str, input: usize) -> Value {
+        let func = egraph.functions.get(function_name).unwrap();
+        let mut value = None;
+        egraph.backend.for_each_while(func.backend_id, |row| {
+            value = Some(row.vals[input]);
+            false
+        });
+        value.unwrap()
+    }
+
+    fn extract_to_string(egraph: &EGraph, value: Value, sort_name: &str) -> String {
+        let mut termdag = TermDag::default();
+        let term = extract_root(
+            egraph,
+            &mut termdag,
+            value,
+            egraph.get_sort_by_name(sort_name).unwrap().clone(),
+        )
+        .unwrap();
+        termdag.to_string(term)
+    }
 
     #[test]
     fn extracts_direct_constructor_root() {
@@ -183,24 +218,80 @@ mod tests {
             )
             .unwrap();
 
-        let target_func = egraph.functions.get("Target").unwrap();
-        let mut target_value = None;
+        assert_eq!(
+            extract_to_string(&egraph, first_output(&egraph, "Target"), "Expr"),
+            "(Target)"
+        );
+    }
+
+    #[test]
+    fn canonicalizes_when_exact_root_is_subsumed() {
+        let mut egraph = EGraph::default();
         egraph
-            .backend
-            .for_each_while(target_func.backend_id, |row| {
-                target_value = Some(row.vals[target_func.extraction_output_index()]);
-                false
-            });
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort Expr :internal-uf UF_Expr)
+                (function UF_Expr (Expr Expr) Unit :merge old :internal-hidden)
+                (constructor Alias () Expr)
+                (constructor Target () Expr)
 
+                (let $alias (Alias))
+                (let $target (Target))
+                (set (UF_Expr $alias $target) ())
+                (subsume (Alias))
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            extract_to_string(&egraph, first_output(&egraph, "Alias"), "Expr"),
+            "(Target)"
+        );
+    }
+
+    #[test]
+    fn extracts_container_root() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort Expr)
+                (sort ExprPair (Pair Expr Expr))
+                (constructor Leaf () Expr)
+                (constructor Box (ExprPair) Expr)
+                (Box (pair (Leaf) (Leaf)))
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            extract_to_string(&egraph, first_input(&egraph, "Box", 0), "ExprPair"),
+            "(pair (Leaf) (Leaf))"
+        );
+    }
+
+    #[test]
+    fn active_roots_break_cycles() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort Expr)
+                (constructor Target () Expr)
+                (Target)
+                "#,
+            )
+            .unwrap();
+
+        let value = first_output(&egraph, "Target");
+        let sort = egraph.get_sort_by_name("Expr").unwrap().clone();
+        let mut extractor = RootExtractor::new();
         let mut termdag = TermDag::default();
-        let term = extract_root(
-            &egraph,
-            &mut termdag,
-            target_value.unwrap(),
-            egraph.get_sort_by_name("Expr").unwrap().clone(),
-        )
-        .unwrap();
+        extractor.active.insert((value, sort.name().to_owned()));
 
-        assert_eq!(termdag.to_string(term), "(Target)");
+        assert_eq!(extractor.extract(&egraph, &mut termdag, value, &sort), None);
     }
 }
