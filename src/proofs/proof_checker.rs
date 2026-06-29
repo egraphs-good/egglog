@@ -79,14 +79,11 @@ pub(crate) fn run_merge(
 ///    - Reflexive equalities for all subterms
 ///    - Ground equalities from union statements (bidirectional)
 ///    - Reflexive equalities from set statements
-///
-/// If `target` is present, stop once that proposition has been produced.
 pub(crate) fn process_actions(
     rule_name: &str,
     mut bindings: HashMap<String, TermId>,
     actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
     term_dag: &mut TermDag,
-    target: Option<&Proposition>,
 ) -> Result<ActionContext, ProofCheckError> {
     let mut propositions = HashSet::default();
 
@@ -134,9 +131,6 @@ pub(crate) fn process_actions(
             GenericAction::Change(_, _, _, _) => {
                 // Changes do not create propositions
             }
-        }
-        if target.is_some_and(|target| propositions.contains(target)) {
-            break;
         }
     }
 
@@ -250,13 +244,7 @@ pub(crate) fn gather_globals(
     term_dag: &mut TermDag,
 ) -> Result<HashMap<String, TermId>, ProofCheckError> {
     let actions: Vec<_> = gather_global_actions(prog).collect();
-    let ctx = process_actions(
-        "global_action",
-        HashMap::default(),
-        &actions,
-        term_dag,
-        None,
-    )?;
+    let ctx = process_actions("global_action", HashMap::default(), &actions, term_dag)?;
     Ok(ctx.var_bindings)
 }
 
@@ -500,13 +488,7 @@ impl ProofCheckContext {
 
         // Use the new refactored functions
         let actions: Vec<_> = gather_global_actions(prog).collect();
-        let action_ctx = process_actions(
-            "global_actions",
-            HashMap::default(),
-            &actions,
-            term_dag,
-            None,
-        )?;
+        let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)?;
 
         Ok(ProofCheckContext {
             global_equalities: action_ctx.propositions,
@@ -1069,13 +1051,7 @@ impl ProofStore {
         let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
             rule.head.0.iter().collect();
         let bindings = subst_with_globals.clone();
-        let action_ctx = process_actions(
-            rule_name,
-            bindings,
-            &action_refs,
-            &mut self.term_dag,
-            Some(claimed),
-        )?;
+        let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
 
         // Check if the claimed equality is in the propositions
         if action_ctx.propositions.contains(claimed) {
