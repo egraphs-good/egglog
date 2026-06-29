@@ -7,8 +7,9 @@ use crate::{
     EGraph, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
-        ResolvedExprExt, Schedule,
+        ResolvedExprExt, ResolvedFact, Schedule,
     },
+    core::ResolvedCall,
     proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, SymbolGen},
 };
@@ -460,6 +461,10 @@ pub enum ProofEncodingUnsupportedReason {
         "rule uses `:unsafe-seminaive`. Arbitrary RHS database reads are not representable by the term/proof encoding."
     )]
     UnsafeSeminaive,
+    #[error(
+        "rule uses `:naive` with an eq-sort primitive in the body. Proof encoding can only look up proofs for primitive eq-sort fact results under seminaive-safe query evaluation."
+    )]
+    NaiveEqSortPrimitiveFact,
 }
 
 /// Checks whether a desugared program supports proof encoding.
@@ -503,6 +508,20 @@ fn action_has_function_lookup(action: &ResolvedAction, type_info: &TypeInfo) -> 
     has_lookup
 }
 
+/// Check if a fact contains a primitive expression whose result needs a stored term proof.
+fn fact_has_eq_sort_primitive_result(fact: &ResolvedFact) -> bool {
+    let mut has_eq_sort_primitive = false;
+    fact.clone().visit_exprs(&mut |expr| {
+        if let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = &expr
+            && (prim.output().is_eq_sort() || prim.output().is_eq_container_sort())
+        {
+            has_eq_sort_primitive = true;
+        }
+        expr
+    });
+    has_eq_sort_primitive
+}
+
 /// Checks whether a resolved command supports proof encoding.
 /// Returns Ok(()) if supported, or Err with the reason if not.
 pub(crate) fn command_supports_proof_encoding(
@@ -515,6 +534,12 @@ pub(crate) fn command_supports_proof_encoding(
         && rule.eval_mode == crate::ast::RuleEvalMode::UnsafeSeminaive
     {
         return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
+    }
+    if let crate::ast::GenericCommand::Rule { rule } = command
+        && rule.eval_mode == crate::ast::RuleEvalMode::Naive
+        && rule.body.iter().any(fact_has_eq_sort_primitive_result)
+    {
+        return Err(ProofEncodingUnsupportedReason::NaiveEqSortPrimitiveFact);
     }
 
     // Check all expressions for primitives without validators
