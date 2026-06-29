@@ -359,6 +359,16 @@ impl Function {
         self.decl.internal_hidden
     }
 
+    /// Whether this table is a constructor or relation table.
+    pub fn is_constructor(&self) -> bool {
+        self.decl.subtype == FunctionSubtype::Constructor
+    }
+
+    /// Whether this constructor is excluded from ordinary extraction.
+    pub fn is_unextractable(&self) -> bool {
+        self.decl.unextractable
+    }
+
     /// The term-constructor name associated with this function table, if
     /// any. Set on view tables created by the term/proof encoding to refer
     /// back to the user-visible constructor name.
@@ -2227,6 +2237,38 @@ impl EGraph {
         })
     }
 
+    /// Return the typed child values stored inside a container-sort value.
+    pub fn container_inner_values(&self, sort: &ArcSort, value: Value) -> Vec<(ArcSort, Value)> {
+        sort.inner_values(self.backend.container_values(), value)
+    }
+
+    /// Reconstruct a base-sort value into a [`TermDag`].
+    pub fn reconstruct_base_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> TermId {
+        sort.reconstruct_termdag_base(self.backend.base_values(), value, termdag)
+    }
+
+    /// Reconstruct a container-sort value into a [`TermDag`] from extracted
+    /// element terms.
+    pub fn reconstruct_container_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<TermId>,
+    ) -> TermId {
+        sort.reconstruct_termdag_container(
+            self.backend.container_values(),
+            value,
+            termdag,
+            element_terms,
+        )
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
@@ -2240,6 +2282,30 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// Find the canonical representative of an eq-sort value.
+    ///
+    /// If `sort` does not have an internal union-find table, or if `value` is
+    /// not currently mapped in that table, this returns `value` unchanged.
+    pub fn canonical_value(&self, sort: &ArcSort, value: Value) -> Value {
+        let Some(uf_name) = self.proof_state.uf_parent.get(sort.name()) else {
+            return value;
+        };
+        let Some(uf_func) = self.functions.get(uf_name) else {
+            return value;
+        };
+
+        let mut canonical = value;
+        self.backend
+            .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry| {
+                // The internal UF table stores `(child, parent)` and is kept at
+                // one hop to the canonical representative.
+                if row.vals[0] == value {
+                    canonical = row.vals[1];
+                }
+            });
+        canonical
     }
 
     /// Returns `true` if a user-defined command with the given name is
