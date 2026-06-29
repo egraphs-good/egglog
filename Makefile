@@ -9,10 +9,13 @@ all: test nits docs
 
 # Build egglog and benchmark every tests/*.egg file with hyperfine, writing an
 # HTML dashboard to nightly/output/ (matching `report=` in nightly-conf).
-# Run nightly on nightly.cs.washington.edu.
+# Run nightly on nightly.cs.washington.edu. Dependencies install into a venv so
+# this works on PEP 668 externally-managed systems; eval_live must be importable
+# by the script's interpreter, so run it with the venv's python.
 nightly:
-	pip install -q -r scripts/requirements.txt
-	python3 scripts/nightly_bench.py
+	python3 -m venv nightly/.venv
+	nightly/.venv/bin/pip install -q -r scripts/requirements.txt
+	nightly/.venv/bin/python scripts/nightly_bench.py
 
 test: doctest
 	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject

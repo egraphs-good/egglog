@@ -10,6 +10,7 @@ flamegraph.svg
 perf.data*
 profile.json
 nightly/output/
+nightly/.venv/
 /*.json
 /*.txt
 
