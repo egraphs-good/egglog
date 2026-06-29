@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{DefaultCost, ExtractedTerm, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -1735,7 +1735,9 @@ impl EGraph {
                     TreeAdditiveCostModel::default(),
                 );
                 return if n == 0 {
-                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                    if let Some(ExtractedTerm { cost, term }) =
+                        extractor.extract_best(self, &mut termdag, x)
+                    {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
@@ -1754,7 +1756,7 @@ impl EGraph {
                     let terms: Vec<TermId> = extractor
                         .extract_variants(self, &mut termdag, x, n as usize)
                         .iter()
-                        .map(|e| e.1)
+                        .map(|extracted| extracted.term)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
@@ -1847,7 +1849,7 @@ impl EGraph {
                     let term = extractor
                         .extract_best_with_sort(self, &mut termdag, value, expr_type)
                         .unwrap()
-                        .1;
+                        .term;
                     writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }

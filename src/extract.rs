@@ -613,7 +613,7 @@ impl<C: Cost> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: ArcSort,
-    ) -> Option<(C, TermId)> {
+    ) -> Option<ExtractedTerm<C>> {
         // Canonicalize the value using the union-find if available (for term-encoding mode)
         let canonical_value = self.find_canonical(egraph, value, &sort);
 
@@ -623,7 +623,10 @@ impl<C: Cost> Extractor<C> {
 
                 let term = self.reconstruct_termdag_node(egraph, termdag, canonical_value, &sort);
 
-                Some((best_cost, term))
+                Some(ExtractedTerm {
+                    cost: best_cost,
+                    term,
+                })
             }
             None => {
                 log::error!("Unextractable root {value:?} with sort {sort:?}",);
@@ -640,7 +643,7 @@ impl<C: Cost> Extractor<C> {
         egraph: &EGraph,
         termdag: &mut TermDag,
         value: Value,
-    ) -> Option<(C, TermId)> {
+    ) -> Option<ExtractedTerm<C>> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_best requires a single rootsort"
@@ -692,7 +695,7 @@ impl<C: Cost> Extractor<C> {
         value: Value,
         nvariants: usize,
         sort: ArcSort,
-    ) -> Vec<(C, TermId)> {
+    ) -> Vec<ExtractedTerm<C>> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
@@ -734,7 +737,7 @@ impl<C: Cost> Extractor<C> {
                 egraph.backend.for_each(func.backend_id, find_root_variants);
             }
 
-            let mut res: Vec<(C, TermId)> = Vec::new();
+            let mut res: Vec<ExtractedTerm<C>> = Vec::new();
             let mut cache: HashMap<(Value, String), TermId> = Default::default();
             root_variants.sort();
             root_variants.truncate(nvariants);
@@ -750,10 +753,10 @@ impl<C: Cost> Extractor<C> {
                     ));
                 }
                 // Use extraction_term_name for view tables (maps to the original constructor)
-                res.push((
+                res.push(ExtractedTerm {
                     cost,
-                    termdag.app(func.extraction_term_name().to_string(), ch_terms),
-                ));
+                    term: termdag.app(func.extraction_term_name().to_string(), ch_terms),
+                });
             }
 
             res
@@ -778,7 +781,7 @@ impl<C: Cost> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         nvariants: usize,
-    ) -> Vec<(C, TermId)> {
+    ) -> Vec<ExtractedTerm<C>> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_variants requires a single rootsort"
@@ -815,7 +818,6 @@ pub(crate) fn extract_best_for_proofs(
             let sort_name = sort.name().to_owned();
             extractor
                 .extract_best_with_sort(egraph, &mut termdag, value, sort)
-                .map(|(cost, term)| ExtractedTerm { cost, term })
                 .ok_or_else(|| {
                     Error::ExtractError(format!(
                         "Unable to find any valid extraction for sort {sort_name}"
@@ -910,7 +912,6 @@ impl EGraph {
                 let sort_name = sort.name().to_owned();
                 extractor
                     .extract_best_with_sort(self, &mut termdag, value, sort)
-                    .map(|(cost, term)| ExtractedTerm { cost, term })
                     .ok_or_else(|| {
                         Error::ExtractError(format!(
                             "Unable to find any valid extraction for sort {sort_name}"
@@ -938,11 +939,7 @@ impl EGraph {
         let variants = roots
             .into_iter()
             .map(|(sort, value)| {
-                extractor
-                    .extract_variants_with_sort(self, &mut termdag, value, nvariants, sort)
-                    .into_iter()
-                    .map(|(cost, term)| ExtractedTerm { cost, term })
-                    .collect()
+                extractor.extract_variants_with_sort(self, &mut termdag, value, nvariants, sort)
             })
             .collect();
 
@@ -971,8 +968,8 @@ impl EGraph {
         let extractor =
             Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
         let mut termdag = TermDag::default();
-        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
-        Ok((termdag, term, cost))
+        let extracted = extractor.extract_best(self, &mut termdag, value).unwrap();
+        Ok((termdag, extracted.term, extracted.cost))
     }
 
     /// Extract a value to a string for printing.
@@ -1019,19 +1016,25 @@ impl EGraph {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
-                    let (_, term_id) = extractor
+                    let extracted = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    children.push(term_id);
+                        .unwrap_or_else(|| ExtractedTerm {
+                            cost: 0,
+                            term: termdag.var("Unextractable".into()),
+                        });
+                    children.push(extracted.term);
                 }
                 inputs.push(termdag.app(sym.to_owned(), children));
                 if include_output {
                     let value = row.vals[func.schema.input.len()];
                     let sort = &func.schema.output;
-                    let (_, term) = extractor
+                    let extracted = extractor
                         .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    output.as_mut().unwrap().push(term);
+                        .unwrap_or_else(|| ExtractedTerm {
+                            cost: 0,
+                            term: termdag.var("Unextractable".into()),
+                        });
+                    output.as_mut().unwrap().push(extracted.term);
                 }
                 true
             } else {
