@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{DefaultCost, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -1679,7 +1679,10 @@ impl EGraph {
                     let mut terms = extracted.terms;
                     let extracted_root = terms
                         .pop()
-                        .expect("extract_best returns one result for one root");
+                        .expect("extract_best returns one result for one root")
+                        .ok_or_else(|| {
+                            Error::ExtractError("Unable to find any valid extraction".to_string())
+                        })?;
                     let termdag = extracted.termdag;
                     let cost = extracted_root.cost;
                     let term = extracted_root.term;
@@ -1784,23 +1787,23 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    None,
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
-                let mut termdag: TermDag = Default::default();
+                let roots = exprs
+                    .iter()
+                    .map(|expr| {
+                        let value = self.eval_resolved_expr(span.clone(), expr)?;
+                        Ok((expr.output_type(), value))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
 
                 use std::io::Write;
-                for expr in exprs {
-                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
-                    let expr_type = expr.output_type();
-
-                    let term = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
-                        .unwrap()
+                for extracted_root in extracted.terms {
+                    let term = extracted_root
+                        .ok_or_else(|| {
+                            Error::ExtractError("Unable to find any valid extraction".to_string())
+                        })?
                         .term;
-                    writeln!(f, "{}", termdag.to_string(term))
+                    writeln!(f, "{}", extracted.termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 

@@ -1,6 +1,8 @@
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
-    extract::{BaseCostModel, CommutativeMonoid, DefaultCost, TreeCostModel},
+    extract::{
+        BaseCostModel, CommutativeMonoid, DefaultCost, TreeAdditiveCostModel, TreeCostModel,
+    },
     *,
 };
 
@@ -543,13 +545,50 @@ fn test_tree_extract_accepts_custom_cost_type() {
     let extracted = egraph
         .extract_best(vec![(sort, value)], CustomCostModel)
         .unwrap();
-    let root = extracted.terms.into_iter().next().unwrap();
+    let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
     assert_eq!(root.cost, CustomCost(5));
     assert_eq!(
         extracted.termdag.to_string(root.term),
         "(Pair (Leaf 1) (Leaf 2))"
     );
+}
+
+#[test]
+fn extract_best_returns_none_for_unextractable_roots() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math)
+            (constructor visible () Math)
+            (constructor hidden () Math :unextractable)
+            "#,
+        )
+        .unwrap();
+
+    let visible = egraph
+        .parser
+        .get_expr_from_string(None, "(visible)")
+        .unwrap();
+    let hidden = egraph
+        .parser
+        .get_expr_from_string(None, "(hidden)")
+        .unwrap();
+    let (sort, visible) = egraph.eval_expr(&visible).unwrap();
+    let (_, hidden) = egraph.eval_expr(&hidden).unwrap();
+
+    let extracted = egraph
+        .extract_best(
+            vec![(sort.clone(), visible), (sort, hidden)],
+            TreeAdditiveCostModel::default(),
+        )
+        .unwrap();
+
+    assert_eq!(extracted.terms.len(), 2);
+    assert!(extracted.terms[0].is_some());
+    assert!(extracted.terms[1].is_none());
 }
 
 #[test]

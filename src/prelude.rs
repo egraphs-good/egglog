@@ -94,9 +94,8 @@
 //! - [`crate::EGraph::extract_value_to_string`] — convenience: prints
 //!   the extracted term back as egglog-syntax text.
 //!
-//! See the [`crate::extract`] module for the full API
-//! ([`crate::extract::Extractor`], variant extraction,
-//! sort-restricted extraction, custom cost types).
+//! See the [`crate::extract`] module for custom cost types and batch
+//! extraction APIs.
 //!
 //! To get the `(sort, Value)` pair an `extract_value` call needs in
 //! the first place, the easiest path is to let-bind a global name in

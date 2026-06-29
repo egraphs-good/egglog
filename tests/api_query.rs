@@ -137,10 +137,10 @@ fn constructor_enodes_basic() -> Result<(), Error> {
     Ok(())
 }
 
-/// `constructor_enodes_for_eclass` uses the output eclass index and
+/// `enodes_for_eclass` uses the output eclass index and
 /// visits only matching constructor rows.
 #[test]
-fn constructor_enodes_for_eclass_basic() -> Result<(), Error> {
+fn enodes_for_eclass_basic() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -159,7 +159,7 @@ fn constructor_enodes_for_eclass_basic() -> Result<(), Error> {
 
     let mut rows: Vec<(Vec<Value>, Value, bool)> = Vec::new();
     egraph.read(|rs| {
-        rs.constructor_enodes_for_eclass("Add", a_eclass, |enode| {
+        rs.enodes_for_eclass("Add", a_eclass, |enode| {
             rows.push((enode.children.to_vec(), enode.eclass, enode.subsumed));
         })
     })?;
@@ -178,7 +178,7 @@ fn constructor_enodes_for_eclass_basic() -> Result<(), Error> {
 
     let mut count = 0;
     egraph.read(|rs| {
-        rs.constructor_enodes_for_eclass("Add", b_eclass, |_| {
+        rs.enodes_for_eclass("Add", b_eclass, |_| {
             count += 1;
         })
     })?;

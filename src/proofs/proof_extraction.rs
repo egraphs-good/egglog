@@ -102,7 +102,8 @@ impl ProofInstrumentor<'_> {
             .terms
             .into_iter()
             .next()
-            .expect("one proof root was requested");
+            .expect("one proof root was requested")
+            .expect("proof extraction checks that the root is extractable");
 
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,

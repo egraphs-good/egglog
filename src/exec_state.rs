@@ -401,7 +401,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// This uses the backend's indexed output-column lookup instead of scanning
     /// the whole constructor table. Errors with `WrongSubtype` if `name` is a
     /// function.
-    fn constructor_enodes_for_eclass(
+    fn enodes_for_eclass(
         &self,
         name: &str,
         eclass: Value,

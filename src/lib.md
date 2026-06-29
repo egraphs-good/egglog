@@ -39,4 +39,4 @@ global name to it (`(let $root ...)`), resolve the global with
 [`EGraph::extract_value`] (default cost model) or
 [`EGraph::extract_value_with_cost_model`] / a custom
 [`extract::TreeCostModel`] when you want non-default costs. The
-[`extract`] module has the full extractor API.
+[`extract`] module also exposes batch extraction APIs.
