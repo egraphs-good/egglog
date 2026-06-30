@@ -1,8 +1,77 @@
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
-    extract::DefaultCost,
+    extract::{
+        BaseCostModel, CommutativeMonoid, DefaultCost, TreeAdditiveCostModel, TreeCostModel,
+    },
     *,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct CustomCost(u128);
+
+impl CommutativeMonoid for CustomCost {
+    fn identity() -> Self {
+        Self(0)
+    }
+
+    fn combine(self, other: &Self) -> Self {
+        Self(self.0 + other.0)
+    }
+}
+
+struct CustomCostModel;
+
+impl BaseCostModel<CustomCost> for CustomCostModel {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
+        CustomCost(1)
+    }
+}
+
+impl TreeCostModel<CustomCost> for CustomCostModel {
+    fn total_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        func: &Function,
+        _enode: &Enode<'_>,
+        child_costs: &[CustomCost],
+    ) -> CustomCost {
+        let children_total = child_costs
+            .iter()
+            .fold(CustomCost::identity(), |cost, child| cost.combine(child));
+        if func.name() == "Wide" {
+            CustomCost(children_total.0 * 10)
+        } else {
+            children_total.combine(&CustomCost(1))
+        }
+    }
+}
+
+fn daggy_root(egraph: &mut EGraph) -> (ArcSort, Value) {
+    let expr = egraph
+        .parser
+        .get_expr_from_string(None, "(Pair (Wide (Leaf 0)) (Wide (Leaf 0)))")
+        .unwrap();
+    egraph.eval_expr(&expr).unwrap()
+}
+
+fn add_daggy_example(egraph: &mut EGraph) {
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype E
+               (Pair E E)
+               (Wide E)
+               (Leaf i64)
+             )
+             (let shared (Wide (Leaf 0)))
+             (let daggy (Pair shared shared))
+             (let treeish (Pair (Leaf 1) (Leaf 2)))
+             (union daggy treeish)
+             "#,
+        )
+        .unwrap();
+}
 
 #[test]
 fn globals_missing_prefix_errors_when_opted_in() {
@@ -464,6 +533,82 @@ fn test_extract_variants1() {
         outputs[0].to_string(),
         "(\n   (SmallStep (SmallStep (SmallStep (SmallStep (Origin)))))\n   (BigStep (Origin))\n)\n"
     );
+}
+
+#[test]
+fn test_tree_extract_accepts_custom_cost_type() {
+    let mut egraph = EGraph::default();
+    add_daggy_example(&mut egraph);
+
+    let (sort, value) = daggy_root(&mut egraph);
+
+    let extracted = egraph
+        .extract_best(vec![(sort.clone(), value)], CustomCostModel)
+        .unwrap();
+    let root = extracted.terms.into_iter().next().unwrap().unwrap();
+
+    assert_eq!(root.cost, CustomCost(5));
+    let extracted_term = extracted.termdag.to_string(root.term);
+    assert_eq!(extracted_term, "(Pair (Leaf 1) (Leaf 2))");
+    let extracted_expr = egraph
+        .parser
+        .get_expr_from_string(None, &extracted_term)
+        .unwrap();
+    let (extracted_sort, extracted_value) = egraph.eval_expr(&extracted_expr).unwrap();
+    assert_eq!(extracted_sort.name(), sort.name());
+    assert_eq!(extracted_value, value);
+}
+
+#[test]
+fn extract_best_returns_none_for_unextractable_roots() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math)
+            (constructor visible () Math)
+            (constructor hidden () Math :unextractable)
+            "#,
+        )
+        .unwrap();
+
+    let visible = egraph
+        .parser
+        .get_expr_from_string(None, "(visible)")
+        .unwrap();
+    let hidden = egraph
+        .parser
+        .get_expr_from_string(None, "(hidden)")
+        .unwrap();
+    let (sort, visible) = egraph.eval_expr(&visible).unwrap();
+    let (_, hidden) = egraph.eval_expr(&hidden).unwrap();
+
+    let extracted = egraph
+        .extract_best(
+            vec![(sort.clone(), visible), (sort, hidden)],
+            TreeAdditiveCostModel::default(),
+        )
+        .unwrap();
+
+    assert_eq!(extracted.terms.len(), 2);
+    let visible_root = extracted.terms[0].as_ref().unwrap();
+    assert_eq!(extracted.termdag.to_string(visible_root.term), "(visible)");
+    assert!(extracted.terms[1].is_none());
+}
+
+#[test]
+fn extract_negative_variants_returns_error_instead_of_panicking() {
+    let err = EGraph::default()
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math (Num i64))
+            (extract (Num 1) -1)
+            "#,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("negative number of variants"));
 }
 
 #[test]

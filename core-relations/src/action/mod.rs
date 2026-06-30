@@ -12,18 +12,20 @@ use std::{
 
 use crate::{
     common::HashMap,
-    free_join::{invoke_batch, invoke_batch_assign},
+    free_join::{get_column_index_from_tableinfo, invoke_batch, invoke_batch_assign},
     numeric_id::{DenseIdMap, NumericId},
 };
 use egglog_concurrency::NotificationList;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
+    BaseValues, ContainerValues, ExternalFunctionId, Offset, WrappedTable,
     common::Value,
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
+    offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
-    table_spec::{ColumnId, MutationBuffer},
+    row_buffer::TaggedRowBuffer,
+    table_spec::{ColumnId, Constraint, MutationBuffer},
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
@@ -481,6 +483,76 @@ impl<'a> ExecutionState<'a> {
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
         &self.db.table_info[table].table
+    }
+
+    /// Iterate over visible rows in `table` whose `col` equals `value`.
+    ///
+    /// Cacheable columns use the table's lazy column index; uncacheable columns
+    /// fall back to scanning with the equality constraint. The callback
+    /// receives each matching row as a full value slice.
+    pub fn for_each_matching_col(
+        &self,
+        table: TableId,
+        col: ColumnId,
+        value: Value,
+        mut f: impl FnMut(&[Value]),
+    ) {
+        let table_info = &self.db.table_info[table];
+        let constraint = Constraint::EqConst { col, val: value };
+        let (mut subset, _fast, mut slow) = table_info
+            .table
+            .split_fast_slow(std::slice::from_ref(&constraint));
+
+        slow.retain(|c| {
+            let (col, val) = match c {
+                Constraint::EqConst { col, val } => (*col, *val),
+                Constraint::Eq { .. }
+                | Constraint::LtConst { .. }
+                | Constraint::GtConst { .. }
+                | Constraint::LeConst { .. }
+                | Constraint::GeConst { .. } => return true,
+            };
+            if *table_info
+                .spec
+                .uncacheable_columns
+                .get(col)
+                .unwrap_or(&false)
+            {
+                return true;
+            }
+
+            let index = get_column_index_from_tableinfo(table_info, col);
+            match index.get().unwrap().get_subset(&val) {
+                Some(s) => {
+                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
+                }
+                None => {
+                    subset = Subset::empty();
+                }
+            }
+            false
+        });
+
+        let imp = &table_info.table;
+        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
+
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    f(row);
+                }
+                $buf.clear();
+            };
+        }
+
+        while let Some(next) = imp.scan_project(subset.as_ref(), &cols, cur, 1024, &slow, &mut buf)
+        {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
     }
 
     /// Get the human-readable name for a table, if one exists.

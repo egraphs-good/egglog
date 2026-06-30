@@ -1375,6 +1375,28 @@ impl TableAction {
         drain_buf!(buf);
     }
 
+    /// Iterate over rows whose output column is `value`.
+    ///
+    /// This reaches the table through an [`ExecutionState`], so read-capable
+    /// state wrappers can use the same lazy column indexes as direct backend
+    /// callers without exposing lower-level scan buffers or projection details.
+    pub fn for_each_output_value(
+        &self,
+        state: &ExecutionState,
+        value: Value,
+        mut f: impl FnMut(ScanEntry<'_>),
+    ) {
+        let schema_math = self.table_math;
+        let output_col = ColumnId::from_usize(self.input_arity());
+        state.for_each_matching_col(self.table, output_col, value, |row| {
+            let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+            f(ScanEntry {
+                vals: &row[0..schema_math.func_cols],
+                subsumed,
+            });
+        });
+    }
+
     /// Look up a row, inserting the configured default value if absent.
     /// For constructor tables this mints a fresh eclass ID; for custom
     /// functions (no default) this behaves identically to

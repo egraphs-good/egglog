@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{DefaultCost, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -364,6 +364,16 @@ impl Function {
     /// back to the user-visible constructor name.
     pub fn term_constructor(&self) -> Option<&str> {
         self.decl.term_constructor.as_deref()
+    }
+
+    /// Whether this table is a declared constructor or relation table.
+    pub fn is_constructor(&self) -> bool {
+        self.decl.subtype == FunctionSubtype::Constructor
+    }
+
+    /// Whether this constructor is excluded from ordinary extraction.
+    pub fn is_unextractable(&self) -> bool {
+        self.decl.unextractable
     }
 }
 
@@ -1663,40 +1673,51 @@ impl EGraph {
                 let n = self.eval_resolved_expr(span, &variants)?;
                 let n: i64 = self.backend.base_values().unwrap(n);
 
-                let mut termdag = TermDag::default();
-
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    Some(vec![sort]),
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
                 return if n == 0 {
-                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
-                        // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if log_enabled!(Level::Info) {
-                            log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
-                        }
-                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
-                    } else {
-                        Err(Error::ExtractError(
-                            "Unable to find any valid extraction (likely due to subsume or delete)"
-                                .to_string(),
-                        ))
+                    let extracted =
+                        self.extract_best(vec![(sort, x)], TreeAdditiveCostModel::default())?;
+                    let mut terms = extracted.terms;
+                    let extracted_root = terms
+                        .pop()
+                        .expect("extract_best returns one result for one root")
+                        .ok_or_else(|| {
+                            Error::ExtractError("Unable to find any valid extraction".to_string())
+                        })?;
+                    let termdag = extracted.termdag;
+                    let cost = extracted_root.cost;
+                    let term = extracted_root.term;
+                    // dont turn termdag into a string if we have messages disabled for performance reasons
+                    if log_enabled!(Level::Info) {
+                        log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                     }
+                    Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                 } else {
                     if n < 0 {
-                        panic!("Cannot extract negative number of variants");
+                        return Err(Error::ExtractError(
+                            "Cannot extract negative number of variants".to_string(),
+                        ));
                     }
-                    let terms: Vec<TermId> = extractor
-                        .extract_variants(self, &mut termdag, x, n as usize)
-                        .iter()
-                        .map(|e| e.1)
+                    let extracted = self.extract_variants(
+                        vec![(sort, x)],
+                        n as usize,
+                        TreeAdditiveCostModel::default(),
+                    )?;
+                    let terms: Vec<TermId> = extracted
+                        .variants
+                        .into_iter()
+                        .next()
+                        .expect("extract_variants returns one result for one root")
+                        .into_iter()
+                        .map(|extracted| extracted.term)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
+                    Ok(vec![CommandOutput::ExtractVariants(
+                        extracted.termdag,
+                        terms,
+                    )])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1761,29 +1782,38 @@ impl EGraph {
             ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
-                // append to file
+
+                let roots = exprs
+                    .iter()
+                    .map(|expr| {
+                        let value = self.eval_resolved_expr(span.clone(), expr)?;
+                        Ok((expr.output_type(), value))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
+                let termdag = extracted.termdag;
+                let terms = extracted
+                    .terms
+                    .into_iter()
+                    .map(|extracted_root| {
+                        extracted_root
+                            .ok_or_else(|| {
+                                Error::ExtractError(
+                                    "Unable to find any valid extraction".to_string(),
+                                )
+                            })
+                            .map(|root| root.term)
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+
+                // append to file only after all requested roots have extracted
+                use std::io::Write;
                 let mut f = File::options()
                     .append(true)
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    None,
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
-                let mut termdag: TermDag = Default::default();
-
-                use std::io::Write;
-                for expr in exprs {
-                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
-                    let expr_type = expr.output_type();
-
-                    let term = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
-                        .unwrap()
-                        .1;
+                for term in terms {
                     writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
@@ -2240,6 +2270,38 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// Return the typed child values stored inside a container-sort value.
+    pub fn container_inner_values(&self, sort: &ArcSort, value: Value) -> Vec<(ArcSort, Value)> {
+        sort.inner_values(self.backend.container_values(), value)
+    }
+
+    /// Reconstruct a base-sort value into a [`TermDag`].
+    pub fn reconstruct_base_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> TermId {
+        sort.reconstruct_termdag_base(self.backend.base_values(), value, termdag)
+    }
+
+    /// Reconstruct a container-sort value into a [`TermDag`] from extracted
+    /// element terms.
+    pub fn reconstruct_container_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<TermId>,
+    ) -> TermId {
+        sort.reconstruct_termdag_container(
+            self.backend.container_values(),
+            value,
+            termdag,
+            element_terms,
+        )
     }
 
     /// Returns `true` if a user-defined command with the given name is
