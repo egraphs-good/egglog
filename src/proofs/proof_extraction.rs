@@ -2,7 +2,7 @@ use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
 use crate::proofs::proof_encoding::ProofInstrumentor;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
-use crate::{ResolvedCall, TermDag};
+use crate::{RawValues, Read, ResolvedCall, TermDag};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -78,11 +78,6 @@ impl ProofInstrumentor<'_> {
                 )
             })
             .clone();
-        let proof_value = self
-            .egraph
-            .lookup_function(&proof_function_name, &[witness_value])
-            .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
-
         let proof_sort = self
             .egraph
             .functions
@@ -96,6 +91,11 @@ impl ProofInstrumentor<'_> {
             .schema
             .output
             .clone();
+        let proof_value = self
+            .egraph
+            .update_unchecked(|fs| fs.lookup(&proof_function_name, RawValues(vec![witness_value])))
+            .unwrap()
+            .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 
         let (_, proof_term_id) = extractor
             .extract_best_with_sort(self.egraph, &mut termdag, proof_value, proof_sort)

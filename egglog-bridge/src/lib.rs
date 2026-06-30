@@ -426,7 +426,7 @@ impl EGraph {
     /// Read the contents of the given function.
     ///
     /// The callback `f` is called with each row and its subsumption status.
-    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
+    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(ScanEntry<'_>)) {
         self.for_each_while(table, |row| {
             f(row);
             true
@@ -435,7 +435,7 @@ impl EGraph {
 
     /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
     /// the function returns early and stops reading rows from the table.
-    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>) -> bool) {
+    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -455,7 +455,7 @@ impl EGraph {
                 for (_, row) in $buf.non_stale() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                    if !f(FunctionRow {
+                    if !f(ScanEntry {
                         vals: &row[0..schema_math.func_cols],
                         subsumed,
                     }) {
@@ -934,13 +934,25 @@ impl EGraph {
     /// # Seminaive-safety trust boundary
     ///
     /// This method hands out a raw `&mut ExecutionState`, which bypasses
-    /// the typed state wrappers (`PureState`, `WriteState`, `ReadState`,
-    /// `FullState`) that the egglog crate uses to enforce #772's
-    /// seminaive-safety model. Treat it as top-level / global-action
-    /// context: appropriate for one-shot database manipulation from
-    /// outside any rule, not for use inside primitive implementations.
+    /// the egglog crate's `Read` / `Write` capability wrappers
+    /// (`PureState`, `WriteState`, `ReadState`, `FullState`) that
+    /// enforce #772's seminaive-safety model. Treat it as top-level
+    /// / global-action context: appropriate for one-shot database
+    /// manipulation from outside any rule, not for use inside
+    /// primitive implementations.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.with_execution_state(f)
+    }
+
+    /// Like [`EGraph::with_execution_state`], but also reports whether `f`
+    /// staged any mutation. A read-only closure leaves the flag `false`, so
+    /// callers can skip a [`EGraph::flush_updates`] that would otherwise be a
+    /// no-op merge plus a spurious timestamp bump.
+    pub fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> (R, bool) {
+        self.db.with_execution_state_tracked(f)
     }
 
     /// Flush the pending update buffers to the EGraph.
@@ -1245,6 +1257,16 @@ impl ResolvedMergeFn {
     }
 }
 
+/// Coarse classification of a table — `Constructor` mints a fresh
+/// eclass id when a row is missed; `Function` does not. Mirrors the
+/// `FunctionSubtype` split on the egglog side without dragging that
+/// type into the bridge crate.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TableKind {
+    Function,
+    Constructor,
+}
+
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
@@ -1254,6 +1276,7 @@ pub struct TableAction {
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
+    kind: TableKind,
 }
 
 impl TableAction {
@@ -1261,6 +1284,10 @@ impl TableAction {
     /// This requires access to the `egglog_bridge::EGraph`.
     pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
         let func_info = &egraph.funcs[func];
+        let kind = match &func_info.default_val {
+            DefaultVal::FreshId => TableKind::Constructor,
+            DefaultVal::Fail | DefaultVal::Const(_) => TableKind::Function,
+        };
         TableAction {
             table: func_info.table,
             table_math: SchemaMath {
@@ -1273,7 +1300,20 @@ impl TableAction {
                 DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
             },
             timestamp: egraph.timestamp_counter,
+            kind,
         }
+    }
+
+    /// Whether this table is a `Function` (no auto-insert) or a
+    /// `Constructor` (mints a fresh eclass id on miss).
+    pub fn kind(&self) -> TableKind {
+        self.kind
+    }
+
+    /// Number of input columns (schema minus the trailing output
+    /// column).
+    pub fn input_arity(&self) -> usize {
+        self.table_math.func_cols - 1
     }
 
     /// Look up a row and return its return-value column, or `None` if the
@@ -1292,6 +1332,47 @@ impl TableAction {
     /// Return the current number of rows in this table.
     pub fn row_count(&self, state: &ExecutionState) -> usize {
         state.get_table(self.table).len()
+    }
+
+    /// Iterate this table's rows, calling `f` on each function row.
+    /// Mirrors [`EGraph::for_each`] but reaches the table through an
+    /// [`ExecutionState`] — so it's callable from primitive bodies via
+    /// the typed `Read`-style API.
+    pub fn for_each(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>)) {
+        self.for_each_while(state, |row| {
+            f(row);
+            true
+        });
+    }
+
+    /// Like [`TableAction::for_each`], but stops as soon as `f`
+    /// returns `false`.
+    pub fn for_each_while(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
+        let schema_math = self.table_math;
+        let imp = state.get_table(self.table);
+        let all = imp.all();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new(imp.spec().arity());
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    let subsumed =
+                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                    if !f(ScanEntry {
+                        vals: &row[0..schema_math.func_cols],
+                        subsumed,
+                    }) {
+                        return;
+                    }
+                }
+                $buf.clear();
+            };
+        }
+        while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 32, &mut buf) {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
     }
 
     /// Look up a row, inserting the configured default value if absent.
@@ -1551,7 +1632,8 @@ struct SchemaMath {
 /// A struct containing possible non-key portions of a table row. To be used with
 /// [`SchemaMath::write_table_row`].
 ///
-/// This is not to be confused with [`FunctionRow`], which is higher-level and for public uses.
+/// This is the write side (building a row); [`ScanEntry`] is the
+/// read side (a row yielded by a table scan).
 struct RowVals<T> {
     /// The timestamp for the row.
     timestamp: T,
@@ -1562,9 +1644,14 @@ struct RowVals<T> {
     ret_val: Option<T>,
 }
 
-/// A struct representing the content of a row in a function table
+/// A raw row yielded by a table scan; `vals` includes the trailing
+/// output/eclass column.
+///
+/// Public so the `egglog` crate can consume it, but **do not re-export
+/// it from `egglog`'s public API** — the user-facing row types are
+/// `egglog::FunctionEntry` and `egglog::Enode`.
 #[derive(Clone, Debug)]
-pub struct FunctionRow<'a> {
+pub struct ScanEntry<'a> {
     pub vals: &'a [Value],
     pub subsumed: bool,
 }

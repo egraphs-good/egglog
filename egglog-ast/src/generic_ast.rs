@@ -80,6 +80,30 @@ where
     Expr(Span, GenericExpr<Head, Leaf>),
 }
 
+/// How a rule is evaluated. The three modes are mutually exclusive, so they
+/// share one field on [`GenericRule`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RuleEvalMode {
+    /// Default: seminaive (delta) evaluation with restrictive `Pure`/`Write`
+    /// primitive contexts (no database reads in the RHS).
+    #[default]
+    Seminaive,
+    /// `:naive`: match the whole database every iteration, with permissive
+    /// `Read`/`Full` contexts so the RHS may read the database.
+    Naive,
+    /// `:unsafe-seminaive`: like `:naive`'s `Read`/`Full` contexts (the RHS may
+    /// read the database) but keeps delta evaluation. **Unsafe**: an RHS read
+    /// observes the database mid-iteration and isn't re-evaluated if it changes.
+    UnsafeSeminaive,
+}
+
+impl RuleEvalMode {
+    /// `:naive` — disables seminaive evaluation (unlike `:unsafe-seminaive`).
+    pub fn is_naive(self) -> bool {
+        matches!(self, RuleEvalMode::Naive)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRule<Head, Leaf>
 where
@@ -93,12 +117,8 @@ where
     pub name: String,
     /// The ruleset this rule belongs to. Defaults to `""`.
     pub ruleset: String,
-    /// If `true`, this rule disables seminaive evaluation. The body is
-    /// matched against the entire database every iteration and the
-    /// query/action are compiled with the global (read+write) primitive
-    /// contexts, allowing primitives that read or write the database
-    /// inside queries and actions. Set via the `:naive` rule option.
-    pub naive: bool,
+    /// How this rule is evaluated; set by `:naive` / `:unsafe-seminaive`.
+    pub eval_mode: RuleEvalMode,
     /// If `true`, this rule skips tree-decomposition during query
     /// planning and evaluate rules as a single-bag (without decomposing
     /// it into smaller queries). Set via the `:no-decomp` rule option.

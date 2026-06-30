@@ -36,6 +36,7 @@ map.egg
 math.egg
 merge_read.egg
 multiset.egg
+naive-action-lookup.egg
 pair.egg
 prims.egg
 print-function.egg
@@ -57,5 +58,7 @@ tricky-type-checking.egg
 typed_primitive_unstable_app.egg
 typeinfer.egg
 uf-extraction.egg
+unsafe-seminaive-read-prim.egg
+unsafe-seminaive.egg
 unstable-fn.egg
 vec.egg

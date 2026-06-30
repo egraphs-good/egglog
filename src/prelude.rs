@@ -1,21 +1,156 @@
-//! This module makes it easier to use `egglog` from Rust.
+//! Rust entry point for egglog.
+//!
 //! ```
 //! use egglog::prelude::*;
 //! ```
 //!
-//! Common entry points:
+//! Most workflows are best expressed as an egglog program parsed and
+//! run via [`crate::EGraph::parse_and_run_program`]: declare your
+//! sorts, functions, and rules once in egglog text, then call into
+//! the database from Rust around it.
 //!
-//! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
-//!   Rust closure (the closure receives an
-//!   [`crate::WriteState`]).
-//! - [`query`] — run a one-shot query and read out matches.
-//! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
-//! - [`crate::PurePrim`] / [`crate::WritePrim`] / [`crate::ReadPrim`] /
-//!   [`crate::FullPrim`] — register custom primitives via the matching
-//!   `EGraph::add_*_primitive` method.
-//! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
-//!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
-//!   the simple "pure native function" case.
+//! ```
+//! use egglog::prelude::*;
+//! let mut eg = EGraph::default();
+//! eg.parse_and_run_program(
+//!     None,
+//!     "(datatype Math (Num i64) (Add Math Math))
+//!      (Add (Num 1) (Num 2))",
+//! )?;
+//! # Ok::<(), egglog::Error>(())
+//! ```
+//!
+//! Three cases need a Rust escape from the language:
+//!
+//! 1. **Driving the e-graph database directly** — building rows,
+//!    looking them up, iterating tables, running ad-hoc queries from
+//!    Rust between (or instead of) running egglog rules.
+//! 2. **Custom rules whose right-hand side runs Rust** — a
+//!    [`rust_rule`] / [`rust_rule_full`] callback fires on every
+//!    match and gets a state handle to read/write the database.
+//!    Useful when the rule body needs arithmetic, control flow, or
+//!    data conversion that's awkward in egglog itself.
+//! 3. **Custom primitives callable from egglog expressions** — new
+//!    functions (e.g. arithmetic on a custom Rust type, an FFI call,
+//!    a cost computation) that you want to invoke from egglog code as
+//!    if they were built-ins. See "Extending egglog" below.
+//!
+//! Cases 1 and 2 share the same surface: the [`crate::Read`] and
+//! [`crate::Write`] capability traits, implemented on the
+//! [`crate::PureState`] / [`crate::ReadState`] / [`crate::WriteState`]
+//! / [`crate::FullState`] wrappers. Inside a rule callback you
+//! receive one of those wrappers directly; outside a rule you get a
+//! [`crate::FullState`] from [`crate::EGraph::update`]:
+//!
+//! ```
+//! use egglog::prelude::*;
+//! let mut eg = EGraph::default();
+//! eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
+//!
+//! // Stage writes; flush once when the closure returns.
+//! eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
+//!
+//! // Read in a separate `update` call — writes inside a closure
+//! // aren't visible to reads in the same closure.
+//! let v = eg.update(|fs| fs.lookup("f", 1_i64))?;
+//! assert_eq!(v.map(|v| eg.value_to_base::<i64>(v)), Some(42));
+//! # Ok::<(), egglog::Error>(())
+//! ```
+//!
+//! ## Adding and reading facts
+//!
+//! Methods on [`crate::Read`] and [`crate::Write`], available via the
+//! state wrappers:
+//!
+//! - [`crate::Write::set`] — write a function-table cell `(set (f k) v)`.
+//! - [`crate::Write::add`] — mint or look up a constructor / relation eclass.
+//! - [`crate::Write::remove`] — remove a row from any subtype.
+//! - [`crate::Write::union`] — union two eclass `Value`s in the union-find.
+//! - [`crate::Read::lookup`] — read a function's output value.
+//! - [`crate::Read::eclass_of`] — read a constructor's eclass without minting.
+//! - [`crate::Read::contains`] — row presence on any subtype.
+//!
+//! ## Iterating and querying
+//!
+//! - [`crate::Read::function_entries`] visits each entry of a function
+//!   table via a callback, exposing `inputs` / `output` as raw `Value`s.
+//! - [`crate::Read::constructor_enodes`] visits each enode of a
+//!   constructor / relation table, exposing `children` / `eclass`.
+//! - [`crate::EGraph::query`] runs a one-shot pattern query and
+//!   returns one `HashMap<String, Value>` per match, keyed by
+//!   variable name. Useful for extracting bindings without compiling
+//!   a persistent rule.
+//!
+//! ## Extracting terms
+//!
+//! Pulling a Rust-side term out of an eclass:
+//!
+//! - [`crate::EGraph::extract_value`] — picks the lowest-cost
+//!   representative under the default tree-additive cost model and
+//!   returns it as a [`crate::TermId`] in a [`crate::TermDag`].
+//! - [`crate::EGraph::extract_value_with_cost_model`] — same but with
+//!   a user-supplied cost model, an impl of
+//!   [`crate::extract::CostModel`].
+//! - [`crate::EGraph::extract_value_to_string`] — convenience: prints
+//!   the extracted term back as egglog-syntax text.
+//!
+//! See the [`crate::extract`] module for the full API
+//! ([`crate::extract::Extractor`], variant extraction,
+//! sort-restricted extraction, custom cost types).
+//!
+//! To get the `(sort, Value)` pair an `extract_value` call needs in
+//! the first place, the easiest path is to let-bind a global name in
+//! egglog and then resolve it with [`crate::EGraph::eval_expr`]:
+//!
+//! ```
+//! use egglog::prelude::*;
+//! let mut eg = EGraph::default();
+//! eg.parse_and_run_program(
+//!     None,
+//!     "(datatype Math (Num i64) (Add Math Math))
+//!      (let $root (Add (Num 1) (Num 2)))",
+//! )?;
+//! let (sort, value) = eg.eval_expr(&exprs::var("$root"))?;
+//! let (_dag, _term, _cost) = eg.extract_value(&sort, value)?;
+//! # Ok::<(), egglog::Error>(())
+//! ```
+//!
+//! ## Rules
+//!
+//! - [`rule`] — add a rule whose RHS is egglog code.
+//! - [`rust_rule`] — add a rule whose RHS is a Rust closure
+//!   `Fn(WriteState, &[Value]) -> Option<()>`. Seminaive-safe.
+//! - [`rust_rule_full`] — same but the closure receives a
+//!   [`crate::FullState`] (can read the database in the callback).
+//!   Runs `:naive` since the body sees live state.
+//! - [`run_ruleset`] / [`add_ruleset`] step rules forward.
+//!
+//! ## Extending egglog
+//!
+//! - **Custom sort types:** [`BaseSort`] / [`ContainerSort`].
+//! - **Custom primitives:** implement [`crate::Primitive`] plus one
+//!   of [`crate::PurePrim`] / [`crate::ReadPrim`] /
+//!   [`crate::WritePrim`] / [`crate::FullPrim`] (pick by what the
+//!   body needs to do — pure, read-only, write-only, full). Register
+//!   via the matching `EGraph::add_*_primitive`. The state wrapper
+//!   the body sees enforces what the body can do; see issue #772 for
+//!   the seminaive-safety reasoning.
+//! - **Simple pure primitives:** the [`add_primitive!`] /
+//!   [`add_primitive_with_validator!`] / [`add_literal_prim!`] macros
+//!   cover the "pure native function" case without writing out the
+//!   full trait impl.
+//!
+//! ## Caveat: type unsafety at the column level
+//!
+//! Eclass identifiers flow through the API as bare [`Value`]s. A
+//! `Value` returned from a `Math` constructor and a `Value` returned
+//! from a `List` constructor are indistinguishable at compile time
+//! *and* at runtime — callers track sort identity themselves.
+//! [`crate::Write::union`] does not check that its arguments are the
+//! same eq-sort; [`crate::Write::set`] and [`crate::Write::add`] do
+//! not check that their column values match the table's declared
+//! column sorts. Arity (column count) and subtype (function vs.
+//! constructor) *are* checked at runtime via [`crate::ApiError`].
 
 use crate::*;
 use std::any::{Any, TypeId};
@@ -270,13 +405,12 @@ macro_rules! actions {
 /// let big_number = 20;
 ///
 /// // check that `(fib 20)` is not in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// assert!(results.iter().next().is_none());
+/// assert!(results.is_empty());
 ///
 /// let ruleset = "custom_ruleset";
 /// add_ruleset(&mut egraph, ruleset)?;
@@ -300,15 +434,13 @@ macro_rules! actions {
 /// }
 ///
 /// // check that `(fib 20)` is now in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// let y = egraph.base_to_value::<i64>(6765);
-/// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, [[y]]);
+/// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
+/// assert_eq!(f, [6765]);
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
@@ -324,7 +456,7 @@ pub fn rule(
         body: facts.0,
         name: "".into(),
         ruleset: ruleset.into(),
-        naive: false,
+        eval_mode: RuleEvalMode::Seminaive,
         no_decomp: false,
         include_subsumed: false,
     };
@@ -408,13 +540,12 @@ where
 /// let big_number = 20;
 ///
 /// // check that `(fib 20)` is not in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// assert!(results.iter().next().is_none());
+/// assert!(results.is_empty());
 ///
 /// let ruleset = "custom_ruleset";
 /// add_ruleset(&mut egraph, ruleset)?;
@@ -437,7 +568,7 @@ where
 ///
 ///         let y = ctx.base_to_value::<i64>(x + 2);
 ///         let f2 = ctx.base_to_value::<i64>(f0 + f1);
-///         ctx.insert("fib", [y, f2].into_iter());
+///         ctx.set("fib", (y,), f2);
 ///
 ///         Some(())
 ///     },
@@ -449,15 +580,13 @@ where
 /// }
 ///
 /// // check that `(fib 20)` is now in the e-graph
-/// let results = query(
-///     &mut egraph,
+/// let results = egraph.query(
 ///     vars![f: i64],
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// let y = egraph.base_to_value::<i64>(6765);
-/// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, [[y]]);
+/// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
+/// assert_eq!(f, [6765]);
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
@@ -473,6 +602,13 @@ pub fn rust_rule(
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
+    if egraph.are_proofs_enabled() {
+        return Err(Error::ProofsIncompatibleApi {
+            api: "rust_rule",
+            reason: "the rule's RHS is a Rust closure with no proof-encoding validator,\n\
+                     so the proof checker cannot verify what it does.",
+        });
+    }
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     egraph.add_write_primitive(
         RustRuleRhs {
@@ -495,7 +631,7 @@ pub fn rust_rule(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
-        naive: false,
+        eval_mode: RuleEvalMode::Seminaive,
         no_decomp: false,
         include_subsumed: false,
     };
@@ -575,6 +711,13 @@ pub fn rust_rule_full(
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
+    if egraph.are_proofs_enabled() {
+        return Err(Error::ProofsIncompatibleApi {
+            api: "rust_rule_full",
+            reason: "the rule's RHS is a Rust closure with no proof-encoding validator,\n\
+                     so the proof checker cannot verify what it does.",
+        });
+    }
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_full_prim");
     egraph.add_full_primitive(
         RustRuleFullRhs {
@@ -597,116 +740,14 @@ pub fn rust_rule_full(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
-        // FullPrim action requires `Context::Full`, which is only
-        // available in `:naive` rules.
-        naive: true,
+        // FullPrim actions require `Context::Full`; use the safe whole-database
+        // `:naive` path (`:unsafe-seminaive` also gets `Full` but is unsafe).
+        eval_mode: RuleEvalMode::Naive,
         no_decomp: false,
         include_subsumed: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
-}
-
-/// The result of a query.
-pub struct QueryResult {
-    rows: usize,
-    cols: usize,
-    data: Vec<Value>,
-}
-
-impl QueryResult {
-    /// Get an iterator over the query results,
-    /// where each match is a `&[Value]` in the same order
-    /// as the `vars` that were passed to `query`.
-    pub fn iter(&self) -> impl Iterator<Item = &[Value]> {
-        assert!(self.cols > 0, "no vars; use `any_matches` instead");
-        assert!(self.data.len().is_multiple_of(self.cols));
-        self.data.chunks_exact(self.cols)
-    }
-
-    /// Check if any matches were returned at all.
-    pub fn any_matches(&self) -> bool {
-        self.rows > 0
-    }
-}
-
-/// Run a query over the database.
-/// ```
-/// use egglog::prelude::*;
-///
-/// let mut egraph = EGraph::default();
-/// egraph.parse_and_run_program(
-///     None,
-///     "
-/// (function fib (i64) i64 :no-merge)
-/// (set (fib 0) 0)
-/// (set (fib 1) 1)
-/// (rule (
-///     (= f0 (fib x))
-///     (= f1 (fib (+ x 1)))
-/// ) (
-///     (set (fib (+ x 2)) (+ f0 f1))
-/// ))
-/// (run 10)
-///     ",
-/// )?;
-///
-/// let results = query(
-///     &mut egraph,
-///     vars![x: i64, y: i64],
-///     facts![
-///         (= (fib x) y)
-///         (= y 13)
-///     ],
-/// )?;
-///
-/// let x = egraph.base_to_value::<i64>(7);
-/// let y = egraph.base_to_value::<i64>(13);
-/// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, [[x, y]]);
-///
-/// # Ok::<(), egglog::Error>(())
-/// ```
-pub fn query(
-    egraph: &mut EGraph,
-    vars: &[(&str, ArcSort)],
-    facts: Facts<String, String>,
-) -> Result<QueryResult, Error> {
-    use std::sync::{Arc, Mutex};
-
-    let results = Arc::new(Mutex::new(QueryResult {
-        rows: 0,
-        cols: vars.len(),
-        data: Vec::new(),
-    }));
-    let results_weak = Arc::downgrade(&results);
-
-    let ruleset = egraph.parser.symbol_gen.fresh("query_ruleset");
-    add_ruleset(egraph, &ruleset)?;
-
-    rust_rule(egraph, "query", &ruleset, vars, facts, move |_, values| {
-        let arc = results_weak.upgrade().unwrap();
-        let mut results = arc.lock().unwrap();
-        results.rows += 1;
-        results.data.extend(values);
-        Some(())
-    })?;
-
-    run_ruleset(egraph, &ruleset)?;
-
-    let ruleset = egraph.rulesets.swap_remove(&ruleset).unwrap();
-
-    let Ruleset::Rules(rules) = ruleset else {
-        unreachable!()
-    };
-    assert_eq!(rules.len(), 1);
-    let rule = rules.into_iter().next().unwrap().1;
-    egraph.backend.free_rule(rule.1);
-
-    let Some(mutex) = Arc::into_inner(results) else {
-        panic!("results_weak.upgrade() was not dropped");
-    };
-    Ok(mutex.into_inner().unwrap())
 }
 
 /// Declare a new sort.
@@ -1017,8 +1058,7 @@ mod tests {
     fn rust_api_query() -> Result<(), Error> {
         let mut egraph = build_test_database()?;
 
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![x: i64, y: i64],
             facts![
                 (= (fib x) y)
@@ -1026,9 +1066,9 @@ mod tests {
             ],
         )?;
 
-        let x = egraph.backend.base_values().get::<i64>(7);
-        let y = egraph.backend.base_values().get::<i64>(13);
-        assert_eq!(results.data, [x, y]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["x"]), 7);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["y"]), 13);
 
         Ok(())
     }
@@ -1040,13 +1080,12 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        assert!(results.data.is_empty());
+        assert!(results.is_empty());
 
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
@@ -1070,14 +1109,13 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
-        assert_eq!(results.data, [y]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
 
         Ok(())
     }
@@ -1121,13 +1159,12 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        assert!(results.data.is_empty());
+        assert!(results.is_empty());
 
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
@@ -1148,9 +1185,7 @@ mod tests {
                 let f0 = ctx.value_to_base::<i64>(*f0);
                 let f1 = ctx.value_to_base::<i64>(*f1);
 
-                let y = ctx.base_to_value::<i64>(x + 2);
-                let f2 = ctx.base_to_value::<i64>(f0 + f1);
-                ctx.insert("fib", [y, f2].into_iter());
+                ctx.set("fib", (x + 2,), f0 + f1).ok()?;
 
                 Some(())
             },
@@ -1162,14 +1197,13 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = query(
-            &mut egraph,
+        let results = egraph.query(
             vars![f: i64],
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
-        assert_eq!(results.data, [y]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
 
         Ok(())
     }

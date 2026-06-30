@@ -146,7 +146,10 @@ fn self_lookup_leader(
     let Some(uf_name) = uf_names.get(esort.name()) else {
         return Some(None);
     };
-    let Some(looked_up) = state.lookup(uf_name, &[eval]) else {
+    let Some(looked_up) = state
+        .lookup(uf_name, eval)
+        .expect("union-find index lookup failed")
+    else {
         return Some(None);
     };
     let leader = if proof_mode {
@@ -260,7 +263,9 @@ fn rebuild_container_proof_rec(
     value: Value,
 ) -> Option<(Value, Value)> {
     // Reflexive base proof `value = value`.
-    let base = state.lookup(prim.cproof_names.get(sort.name())?, &[value])?;
+    let base = state
+        .lookup(prim.cproof_names.get(sort.name())?, value)
+        .expect("container proof lookup failed")?;
     let elements = {
         let cvs = state.container_values();
         sort.inner_values(cvs, value)
@@ -271,7 +276,9 @@ fn rebuild_container_proof_rec(
     for (j, (esort, eval)) in elements.iter().enumerate() {
         if esort.is_eq_sort() {
             if let Some(uf_name) = prim.uf_names.get(esort.name())
-                && let Some(pair_val) = state.lookup(uf_name, &[*eval])
+                && let Some(pair_val) = state
+                    .lookup(uf_name, *eval)
+                    .expect("union-find index lookup failed")
             {
                 let (leader, proof) = {
                     let pc = state
