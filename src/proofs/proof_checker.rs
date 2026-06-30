@@ -206,13 +206,31 @@ fn add_subterm_reflexive_equalities(
     term_dag: &TermDag,
     propositions: &mut HashSet<Proposition>,
 ) {
+    add_subterm_reflexive_equalities_helper(
+        term_id,
+        term_dag,
+        propositions,
+        &mut Default::default(),
+    );
+}
+
+fn add_subterm_reflexive_equalities_helper(
+    term_id: TermId,
+    term_dag: &TermDag,
+    propositions: &mut HashSet<Proposition>,
+    seen: &mut HashSet<TermId>,
+) {
+    if !seen.insert(term_id) {
+        return;
+    }
+
     // Add reflexive equality for this term
     propositions.insert(Proposition::new(term_id, term_id));
 
     // Recursively add for all children
     if let Term::App(_, children) = term_dag.get(term_id) {
         for &child_id in children {
-            add_subterm_reflexive_equalities(child_id, term_dag, propositions);
+            add_subterm_reflexive_equalities_helper(child_id, term_dag, propositions, seen);
         }
     }
 }
