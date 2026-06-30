@@ -1,0 +1,149 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Rust entry point for egglog."><title>egglog::prelude - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-e56847b5.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="egglog" data-themes="" data-resource-suffix="" data-rustdoc-version="1.91.0 (f8297e351 2025-10-28)" data-channel="1.91.0" data-search-js="search-e256b49e.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-6dc2a7f3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module prelude</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../egglog/index.html">egglog</a><span class="version">2.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module prelude</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#adding-and-reading-facts" title="Adding and reading facts">Adding and reading facts</a></li><li><a href="#iterating-and-querying" title="Iterating and querying">Iterating and querying</a></li><li><a href="#extracting-terms" title="Extracting terms">Extracting terms</a></li><li><a href="#rules" title="Rules">Rules</a></li><li><a href="#extending-egglog" title="Extending egglog">Extending egglog</a></li><li><a href="#caveat-type-unsafety-at-the-column-level" title="Caveat: type unsafety at the column level">Caveat: type unsafety at the column level</a></li></ul><h3><a href="#reexports">Module Items</a></h3><ul class="block"><li><a href="#reexports" title="Re-exports">Re-exports</a></li><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#macros" title="Macros">Macros</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate egglog</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">egglog</a></div><h1>Module <span>prelude</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/egglog/prelude.rs.html#1-1182">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Rust entry point for egglog.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog::prelude::<span class="kw-2">*</span>;</code></pre></div>
+<p>Most workflows are best expressed as an egglog program parsed and
+run via <a href="../struct.EGraph.html#method.parse_and_run_program" title="method egglog::EGraph::parse_and_run_program"><code>crate::EGraph::parse_and_run_program</code></a>: declare your
+sorts, functions, and rules once in egglog text, then call into
+the database from Rust around it.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog::prelude::<span class="kw-2">*</span>;
+<span class="kw">let </span><span class="kw-2">mut </span>eg = EGraph::default();
+eg.parse_and_run_program(
+    <span class="prelude-val">None</span>,
+    <span class="string">"(datatype Math (Num i64) (Add Math Math))
+     (Add (Num 1) (Num 2))"</span>,
+)<span class="question-mark">?</span>;</code></pre></div>
+<p>Three cases need a Rust escape from the language:</p>
+<ol>
+<li><strong>Driving the e-graph database directly</strong> — building rows,
+looking them up, iterating tables, running ad-hoc queries from
+Rust between (or instead of) running egglog rules.</li>
+<li><strong>Custom rules whose right-hand side runs Rust</strong> — a
+<a href="fn.rust_rule.html" title="fn egglog::prelude::rust_rule"><code>rust_rule</code></a> / <a href="fn.rust_rule_full.html" title="fn egglog::prelude::rust_rule_full"><code>rust_rule_full</code></a> callback fires on every
+match and gets a state handle to read/write the database.
+Useful when the rule body needs arithmetic, control flow, or
+data conversion that’s awkward in egglog itself.</li>
+<li><strong>Custom primitives callable from egglog expressions</strong> — new
+functions (e.g. arithmetic on a custom Rust type, an FFI call,
+a cost computation) that you want to invoke from egglog code as
+if they were built-ins. See “Extending egglog” below.</li>
+</ol>
+<p>Cases 1 and 2 share the same surface: the <a href="../trait.Read.html" title="trait egglog::Read"><code>crate::Read</code></a> and
+<a href="../trait.Write.html" title="trait egglog::Write"><code>crate::Write</code></a> capability traits, implemented on the
+<a href="../struct.PureState.html" title="struct egglog::PureState"><code>crate::PureState</code></a> / <a href="../struct.ReadState.html" title="struct egglog::ReadState"><code>crate::ReadState</code></a> / <a href="../struct.WriteState.html" title="struct egglog::WriteState"><code>crate::WriteState</code></a>
+/ <a href="../struct.FullState.html" title="struct egglog::FullState"><code>crate::FullState</code></a> wrappers. Inside a rule callback you
+receive one of those wrappers directly; outside a rule you get a
+<a href="../struct.FullState.html" title="struct egglog::FullState"><code>crate::FullState</code></a> from <a href="../struct.EGraph.html#method.update" title="method egglog::EGraph::update"><code>crate::EGraph::update</code></a>:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog::prelude::<span class="kw-2">*</span>;
+<span class="kw">let </span><span class="kw-2">mut </span>eg = EGraph::default();
+eg.parse_and_run_program(<span class="prelude-val">None</span>, <span class="string">"(function f (i64) i64 :no-merge)"</span>)<span class="question-mark">?</span>;
+
+<span class="comment">// Stage writes; flush once when the closure returns.
+</span>eg.update(|<span class="kw-2">mut </span>fs| fs.set(<span class="string">"f"</span>, (<span class="number">1_i64</span>,), <span class="number">42_i64</span>))<span class="question-mark">?</span>;
+
+<span class="comment">// Read in a separate `update` call — writes inside a closure
+// aren't visible to reads in the same closure.
+</span><span class="kw">let </span>v = eg.update(|fs| fs.lookup(<span class="string">"f"</span>, <span class="number">1_i64</span>))<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(v.map(|v| eg.value_to_base::&lt;i64&gt;(v)), <span class="prelude-val">Some</span>(<span class="number">42</span>));</code></pre></div><h3 id="adding-and-reading-facts"><a class="doc-anchor" href="#adding-and-reading-facts">§</a>Adding and reading facts</h3>
+<p>Methods on <a href="../trait.Read.html" title="trait egglog::Read"><code>crate::Read</code></a> and <a href="../trait.Write.html" title="trait egglog::Write"><code>crate::Write</code></a>, available via the
+state wrappers:</p>
+<ul>
+<li><a href="../trait.Write.html#method.set" title="method egglog::Write::set"><code>crate::Write::set</code></a> — write a function-table cell <code>(set (f k) v)</code>.</li>
+<li><a href="../trait.Write.html#method.add" title="method egglog::Write::add"><code>crate::Write::add</code></a> — mint or look up a constructor / relation eclass.</li>
+<li><a href="../trait.Write.html#method.remove" title="method egglog::Write::remove"><code>crate::Write::remove</code></a> — remove a row from any subtype.</li>
+<li><a href="../trait.Write.html#method.union" title="method egglog::Write::union"><code>crate::Write::union</code></a> — union two eclass <code>Value</code>s in the union-find.</li>
+<li><a href="../trait.Read.html#method.lookup" title="method egglog::Read::lookup"><code>crate::Read::lookup</code></a> — read a function’s output value.</li>
+<li><a href="../trait.Read.html#method.eclass_of" title="method egglog::Read::eclass_of"><code>crate::Read::eclass_of</code></a> — read a constructor’s eclass without minting.</li>
+<li><a href="../trait.Read.html#method.contains" title="method egglog::Read::contains"><code>crate::Read::contains</code></a> — row presence on any subtype.</li>
+</ul>
+<h3 id="iterating-and-querying"><a class="doc-anchor" href="#iterating-and-querying">§</a>Iterating and querying</h3>
+<ul>
+<li><a href="../trait.Read.html#method.function_entries" title="method egglog::Read::function_entries"><code>crate::Read::function_entries</code></a> visits each entry of a function
+table via a callback, exposing <code>inputs</code> / <code>output</code> as raw <code>Value</code>s.</li>
+<li><a href="../trait.Read.html#method.constructor_enodes" title="method egglog::Read::constructor_enodes"><code>crate::Read::constructor_enodes</code></a> visits each enode of a
+constructor / relation table, exposing <code>children</code> / <code>eclass</code>.</li>
+<li><a href="../struct.EGraph.html#method.query" title="method egglog::EGraph::query"><code>crate::EGraph::query</code></a> runs a one-shot pattern query and
+returns one <code>HashMap&lt;String, Value&gt;</code> per match, keyed by
+variable name. Useful for extracting bindings without compiling
+a persistent rule.</li>
+</ul>
+<h3 id="extracting-terms"><a class="doc-anchor" href="#extracting-terms">§</a>Extracting terms</h3>
+<p>Pulling a Rust-side term out of an eclass:</p>
+<ul>
+<li><a href="../struct.EGraph.html#method.extract_value" title="method egglog::EGraph::extract_value"><code>crate::EGraph::extract_value</code></a> — picks the lowest-cost
+representative under the default tree-additive cost model and
+returns it as a <a href="../type.TermId.html" title="type egglog::TermId"><code>crate::TermId</code></a> in a <a href="../struct.TermDag.html" title="struct egglog::TermDag"><code>crate::TermDag</code></a>.</li>
+<li><a href="../struct.EGraph.html#method.extract_value_with_cost_model" title="method egglog::EGraph::extract_value_with_cost_model"><code>crate::EGraph::extract_value_with_cost_model</code></a> — same but with
+a user-supplied cost model, an impl of
+<a href="../extract/trait.CostModel.html" title="trait egglog::extract::CostModel"><code>crate::extract::CostModel</code></a>.</li>
+<li><a href="../struct.EGraph.html#method.extract_value_to_string" title="method egglog::EGraph::extract_value_to_string"><code>crate::EGraph::extract_value_to_string</code></a> — convenience: prints
+the extracted term back as egglog-syntax text.</li>
+</ul>
+<p>See the <a href="../extract/index.html" title="mod egglog::extract"><code>crate::extract</code></a> module for the full API
+(<a href="../extract/struct.Extractor.html" title="struct egglog::extract::Extractor"><code>crate::extract::Extractor</code></a>, variant extraction,
+sort-restricted extraction, custom cost types).</p>
+<p>To get the <code>(sort, Value)</code> pair an <code>extract_value</code> call needs in
+the first place, the easiest path is to let-bind a global name in
+egglog and then resolve it with <a href="../struct.EGraph.html#method.eval_expr" title="method egglog::EGraph::eval_expr"><code>crate::EGraph::eval_expr</code></a>:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog::prelude::<span class="kw-2">*</span>;
+<span class="kw">let </span><span class="kw-2">mut </span>eg = EGraph::default();
+eg.parse_and_run_program(
+    <span class="prelude-val">None</span>,
+    <span class="string">"(datatype Math (Num i64) (Add Math Math))
+     (let $root (Add (Num 1) (Num 2)))"</span>,
+)<span class="question-mark">?</span>;
+<span class="kw">let </span>(sort, value) = eg.eval_expr(<span class="kw-2">&amp;</span>exprs::var(<span class="string">"$root"</span>))<span class="question-mark">?</span>;
+<span class="kw">let </span>(_dag, _term, _cost) = eg.extract_value(<span class="kw-2">&amp;</span>sort, value)<span class="question-mark">?</span>;</code></pre></div><h3 id="rules"><a class="doc-anchor" href="#rules">§</a>Rules</h3>
+<ul>
+<li><a href="fn.rule.html" title="fn egglog::prelude::rule"><code>rule</code></a> — add a rule whose RHS is egglog code.</li>
+<li><a href="fn.rust_rule.html" title="fn egglog::prelude::rust_rule"><code>rust_rule</code></a> — add a rule whose RHS is a Rust closure
+<code>Fn(WriteState, &amp;[Value]) -&gt; Option&lt;()&gt;</code>. Seminaive-safe.</li>
+<li><a href="fn.rust_rule_full.html" title="fn egglog::prelude::rust_rule_full"><code>rust_rule_full</code></a> — same but the closure receives a
+<a href="../struct.FullState.html" title="struct egglog::FullState"><code>crate::FullState</code></a> (can read the database in the callback).
+Runs <code>:naive</code> since the body sees live state.</li>
+<li><a href="fn.run_ruleset.html" title="fn egglog::prelude::run_ruleset"><code>run_ruleset</code></a> / <a href="fn.add_ruleset.html" title="fn egglog::prelude::add_ruleset"><code>add_ruleset</code></a> step rules forward.</li>
+</ul>
+<h3 id="extending-egglog"><a class="doc-anchor" href="#extending-egglog">§</a>Extending egglog</h3>
+<ul>
+<li><strong>Custom sort types:</strong> <a href="trait.BaseSort.html" title="trait egglog::prelude::BaseSort"><code>BaseSort</code></a> / <a href="trait.ContainerSort.html" title="trait egglog::prelude::ContainerSort"><code>ContainerSort</code></a>.</li>
+<li><strong>Custom primitives:</strong> implement <a href="../trait.Primitive.html" title="trait egglog::Primitive"><code>crate::Primitive</code></a> plus one
+of <a href="../trait.PurePrim.html" title="trait egglog::PurePrim"><code>crate::PurePrim</code></a> / <a href="../trait.ReadPrim.html" title="trait egglog::ReadPrim"><code>crate::ReadPrim</code></a> /
+<a href="../trait.WritePrim.html" title="trait egglog::WritePrim"><code>crate::WritePrim</code></a> / <a href="../trait.FullPrim.html" title="trait egglog::FullPrim"><code>crate::FullPrim</code></a> (pick by what the
+body needs to do — pure, read-only, write-only, full). Register
+via the matching <code>EGraph::add_*_primitive</code>. The state wrapper
+the body sees enforces what the body can do; see issue #772 for
+the seminaive-safety reasoning.</li>
+<li><strong>Simple pure primitives:</strong> the <a href="../macro.add_primitive.html" title="macro egglog::add_primitive"><code>add_primitive!</code></a> /
+<a href="../macro.add_primitive_with_validator.html" title="macro egglog::add_primitive_with_validator"><code>add_primitive_with_validator!</code></a> / <a href="../macro.add_literal_prim.html" title="macro egglog::add_literal_prim"><code>add_literal_prim!</code></a> macros
+cover the “pure native function” case without writing out the
+full trait impl.</li>
+</ul>
+<h3 id="caveat-type-unsafety-at-the-column-level"><a class="doc-anchor" href="#caveat-type-unsafety-at-the-column-level">§</a>Caveat: type unsafety at the column level</h3>
+<p>Eclass identifiers flow through the API as bare <a href="../struct.Value.html" title="struct egglog::Value"><code>Value</code></a>s. A
+<code>Value</code> returned from a <code>Math</code> constructor and a <code>Value</code> returned
+from a <code>List</code> constructor are indistinguishable at compile time
+<em>and</em> at runtime — callers track sort identity themselves.
+<a href="../trait.Write.html#method.union" title="method egglog::Write::union"><code>crate::Write::union</code></a> does not check that its arguments are the
+same eq-sort; <a href="../trait.Write.html#method.set" title="method egglog::Write::set"><code>crate::Write::set</code></a> and <a href="../trait.Write.html#method.add" title="method egglog::Write::add"><code>crate::Write::add</code></a> do
+not check that their column values match the table’s declared
+column sorts. Arity (column count) and subtype (function vs.
+constructor) <em>are</em> checked at runtime via <a href="../api/enum.ApiError.html" title="enum egglog::api::ApiError"><code>crate::ApiError</code></a>.</p>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><dl class="item-table reexports"><dt id="reexport.Action"><code>pub use egglog::ast::<a class="type" href="../ast/type.Action.html" title="type egglog::ast::Action">Action</a>;</code></dt><dt id="reexport.Fact"><code>pub use egglog::ast::<a class="type" href="../ast/type.Fact.html" title="type egglog::ast::Fact">Fact</a>;</code></dt><dt id="reexport.Facts"><code>pub use egglog::ast::<a class="struct" href="../ast/struct.Facts.html" title="struct egglog::ast::Facts">Facts</a>;</code></dt><dt id="reexport.BigIntSort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.BigIntSort.html" title="struct egglog::sort::BigIntSort">BigIntSort</a>;</code></dt><dt id="reexport.BigRatSort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.BigRatSort.html" title="struct egglog::sort::BigRatSort">BigRatSort</a>;</code></dt><dt id="reexport.BoolSort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.BoolSort.html" title="struct egglog::sort::BoolSort">BoolSort</a>;</code></dt><dt id="reexport.F64Sort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.F64Sort.html" title="struct egglog::sort::F64Sort">F64Sort</a>;</code></dt><dt id="reexport.I64Sort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.I64Sort.html" title="struct egglog::sort::I64Sort">I64Sort</a>;</code></dt><dt id="reexport.StringSort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.StringSort.html" title="struct egglog::sort::StringSort">StringSort</a>;</code></dt><dt id="reexport.UnitSort"><code>pub use egglog::sort::<a class="struct" href="../sort/struct.UnitSort.html" title="struct egglog::sort::UnitSort">UnitSort</a>;</code></dt><dt id="reexport.CommandMacro"><code>pub use egglog::<a class="trait" href="../trait.CommandMacro.html" title="trait egglog::CommandMacro">CommandMacro</a>;</code></dt><dt id="reexport.CommandMacroRegistry"><code>pub use egglog::<a class="struct" href="../struct.CommandMacroRegistry.html" title="struct egglog::CommandMacroRegistry">CommandMacroRegistry</a>;</code></dt><dt id="reexport.Core"><code>pub use egglog::<a class="trait" href="../trait.Core.html" title="trait egglog::Core">Core</a>;</code></dt><dt id="reexport.FullState"><code>pub use egglog::<a class="struct" href="../struct.FullState.html" title="struct egglog::FullState">FullState</a>;</code></dt><dt id="reexport.PureState"><code>pub use egglog::<a class="struct" href="../struct.PureState.html" title="struct egglog::PureState">PureState</a>;</code></dt><dt id="reexport.Read"><code>pub use egglog::<a class="trait" href="../trait.Read.html" title="trait egglog::Read">Read</a>;</code></dt><dt id="reexport.ReadState"><code>pub use egglog::<a class="struct" href="../struct.ReadState.html" title="struct egglog::ReadState">ReadState</a>;</code></dt><dt id="reexport.Write"><code>pub use egglog::<a class="trait" href="../trait.Write.html" title="trait egglog::Write">Write</a>;</code></dt><dt id="reexport.WriteState"><code>pub use egglog::<a class="struct" href="../struct.WriteState.html" title="struct egglog::WriteState">WriteState</a>;</code></dt><dt id="reexport.EGraph"><code>pub use egglog::<a class="struct" href="../struct.EGraph.html" title="struct egglog::EGraph">EGraph</a>;</code></dt><dt id="reexport.sort"><code>pub use egglog::<a class="mod" href="../sort/index.html" title="mod egglog::sort">sort</a>;</code></dt><dt id="reexport.sort-1"><code>pub use egglog::<a class="macro" href="../macro.sort.html" title="macro egglog::sort">sort</a>;</code></dt></dl><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="exprs/index.html" title="mod egglog::prelude::exprs">exprs</a></dt></dl><h2 id="macros" class="section-header">Macros<a href="#macros" class="anchor">§</a></h2><dl class="item-table"><dt><a class="macro" href="macro.action.html" title="macro egglog::prelude::action">action</a></dt><dt><a class="macro" href="macro.actions.html" title="macro egglog::prelude::actions">actions</a></dt><dt><a class="macro" href="macro.datatype.html" title="macro egglog::prelude::datatype">datatype</a></dt><dd>Adds sorts and constructor tables to the database.</dd><dt><a class="macro" href="macro.expr.html" title="macro egglog::prelude::expr">expr</a></dt><dt><a class="macro" href="macro.fact.html" title="macro egglog::prelude::fact">fact</a></dt><dt><a class="macro" href="macro.facts.html" title="macro egglog::prelude::facts">facts</a></dt><dt><a class="macro" href="macro.sort.html" title="macro egglog::prelude::sort">sort</a></dt><dt><a class="macro" href="macro.span.html" title="macro egglog::prelude::span">span</a></dt><dt><a class="macro" href="macro.vars.html" title="macro egglog::prelude::vars">vars</a></dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.GenericActions.html" title="struct egglog::prelude::GenericActions">Generic<wbr>Actions</a></dt><dt><a class="struct" href="struct.RustSpan.html" title="struct egglog::prelude::RustSpan">Rust<wbr>Span</a></dt></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.Span.html" title="enum egglog::prelude::Span">Span</a></dt></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.BaseSort.html" title="trait egglog::prelude::BaseSort">Base<wbr>Sort</a></dt><dd>A “default” implementation of <a href="../sort/trait.Sort.html" title="trait egglog::sort::Sort"><code>Sort</code></a> for simple types
+which just want to put some data in the e-graph. If you
+implement this trait, do not implement <code>Sort</code> or
+<code>ContainerSort. Use </code>add_base_sort<code>to register base sorts with the</code>EGraph<code>. See </code>Sort<code>for documentation of the methods. Do not override</code>to_arcsort`.</dd><dt><a class="trait" href="trait.ContainerSort.html" title="trait egglog::prelude::ContainerSort">Container<wbr>Sort</a></dt><dd>A “default” implementation of <a href="../sort/trait.Sort.html" title="trait egglog::sort::Sort"><code>Sort</code></a> for types which
+just want to store a pure data structure in the e-graph.
+If you implement this trait, do not implement <code>Sort</code> or
+<code>BaseSort</code>. Use <code>add_container_sort</code> to register container
+sorts with the <code>EGraph</code>. See <code>Sort</code> for documentation
+of the methods. Do not override <code>to_arcsort</code>.</dd><dt><a class="trait" href="trait.LiteralConvertible.html" title="trait egglog::prelude::LiteralConvertible">Literal<wbr>Convertible</a></dt><dd>Trait for types that can be converted to/from Literal for use in validated primitives.
+This enables automatic validator generation for literal primitives.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.add_base_sort.html" title="fn egglog::prelude::add_base_sort">add_<wbr>base_<wbr>sort</a></dt><dd>Add a <a href="trait.BaseSort.html" title="trait egglog::prelude::BaseSort"><code>BaseSort</code></a> to the e-graph</dd><dt><a class="fn" href="fn.add_constructor.html" title="fn egglog::prelude::add_constructor">add_<wbr>constructor</a></dt><dd>Declare a new constructor table.</dd><dt><a class="fn" href="fn.add_container_sort.html" title="fn egglog::prelude::add_container_sort">add_<wbr>container_<wbr>sort</a></dt><dt><a class="fn" href="fn.add_function.html" title="fn egglog::prelude::add_function">add_<wbr>function</a></dt><dd>Declare a new function table.</dd><dt><a class="fn" href="fn.add_relation.html" title="fn egglog::prelude::add_relation">add_<wbr>relation</a></dt><dd>Declare a new relation table.</dd><dt><a class="fn" href="fn.add_ruleset.html" title="fn egglog::prelude::add_ruleset">add_<wbr>ruleset</a></dt><dd>Create a new ruleset.</dd><dt><a class="fn" href="fn.add_sort.html" title="fn egglog::prelude::add_sort">add_<wbr>sort</a></dt><dd>Declare a new sort.</dd><dt><a class="fn" href="fn.rule.html" title="fn egglog::prelude::rule">rule</a></dt><dd>Add a rule to the e-graph whose right-hand side is made up of actions.</dd><dt><a class="fn" href="fn.run_ruleset.html" title="fn egglog::prelude::run_ruleset">run_<wbr>ruleset</a></dt><dd>Run one iteration of a ruleset.</dd><dt><a class="fn" href="fn.rust_rule.html" title="fn egglog::prelude::rust_rule">rust_<wbr>rule</a></dt><dd>Add a rule to the e-graph whose right-hand side is a Rust callback.</dd><dt><a class="fn" href="fn.rust_rule_full.html" title="fn egglog::prelude::rust_rule_full">rust_<wbr>rule_<wbr>full</a></dt><dd>Like <a href="fn.rust_rule.html" title="fn egglog::prelude::rust_rule"><code>rust_rule</code></a>, but the action callback receives a <a href="../struct.FullState.html" title="struct egglog::FullState"><code>FullState</code></a>
+— it can read tables (<code>ctx.lookup</code>) in addition to writing them.
+Action callbacks of <code>FullPrim</code> are only valid in <code>Context::Full</code>,
+so this helper marks the generated rule <code>:naive</code>: the body matches
+against the entire database every iteration instead of using the
+seminaive delta. Use this when the action genuinely needs to look
+up rows; prefer <a href="fn.rust_rule.html" title="fn egglog::prelude::rust_rule"><code>rust_rule</code></a> when the data can be bound via the
+matcher in the rule body.</dd></dl></section></div></main></body></html>

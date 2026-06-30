@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["Extractor","TreeAdditiveCostModel"],"trait":["Cost","CostModel"],"type":["DefaultCost"]};
