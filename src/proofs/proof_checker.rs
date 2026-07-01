@@ -455,6 +455,17 @@ pub enum ProofCheckErrorKind {
     /// Two rules have the same name
     #[error("Duplicate rule name '{rule_name}' found in the program")]
     DuplicateRuleName { rule_name: String },
+    /// Container-normalize proof: the normalized container term doesn't match the claim
+    #[error(
+        "Proof {proof_id}: container normalization error - normalizing {raw:?} gives {normalized:?}, but proof claims rhs {proof_rhs:?} (lhs ok: {lhs_ok})"
+    )]
+    ContainerNormalizeMismatch {
+        proof_id: ProofId,
+        raw: TermId,
+        normalized: TermId,
+        proof_rhs: TermId,
+        lhs_ok: bool,
+    },
 }
 
 /// Context needed for proof checking
@@ -857,6 +868,26 @@ impl ProofStore {
                     return Err(ProofCheckErrorKind::CongruenceLhsMismatch { proof_id }.into());
                 }
 
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
+            }
+
+            Justification::ContainerNormalize { proof: inner_id } => {
+                // The sub-proof establishes `t1 = raw`; normalize `raw` to its
+                // canonical container form via the validator for its head.
+                let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
+                let raw = inner_prop.rhs;
+                let normalized = self.normalize_container(raw);
+                let lhs_ok = proof.lhs() == inner_prop.lhs;
+                if !lhs_ok || proof.rhs() != normalized {
+                    return Err(ProofCheckErrorKind::ContainerNormalizeMismatch {
+                        proof_id,
+                        raw,
+                        normalized,
+                        proof_rhs: proof.rhs(),
+                        lhs_ok,
+                    }
+                    .into());
+                }
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
         };

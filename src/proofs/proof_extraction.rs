@@ -94,11 +94,13 @@ impl ProofInstrumentor<'_> {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
 
+        let container_normalizers = self.egraph.type_info.container_term_normalizers();
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
             termdag,
             proof_term_id,
             &self.egraph.proof_check_program,
+            container_normalizers,
         );
 
         // Remove globals from the proof

@@ -363,3 +363,60 @@ The structure is the same as term mode — view updates use `set`, UF updates us
 For nested terms, congruence proofs are built to ensure
   the proof terms match the original queries.
 
+# Containers
+
+Container sorts (`Vec`, `Set`, `Map`, `MultiSet`, `Pair`) participate in the
+  encoding too.
+Unlike eq-sorts, containers are never unioned directly, so they get **no**
+  union-find tables; instead their elements are canonicalized structurally
+  during rebuilding.
+A column of an eq-container sort is rebuilt by calling a per-container *rebuild
+  primitive* (registered by the encoding) inside the rebuild rule.
+Because that primitive reads the element sorts' `UF_<E>f` indices, the rebuild
+  rule is marked `:naive`.
+The primitive clones the container, remaps each eq-sort element to its
+  union-find leader (via `ContainerValues::rebuild_val_with`),
+  and re-interns it.
+
+In proof mode, each container's "term form" is the s-expr headed by its
+  constructing primitive — `(vec-of e0 e1 ...)`, `(pair a b)`, etc. — which the
+  primitive's validator builds, so the generic `Congr` machinery applies with no
+  proof-format changes.
+Every container sort gets a `<Sort>Proof` table holding a reflexive
+  `container = container` proof (set when the container is created), used as the
+  anchor for a `Congr` chain over the changed elements that proves
+  `old_container = new_container`.
+This proof is folded into the view's congruence step exactly like an eq-sort
+  child's union-find proof.
+
+Nested containers (e.g. `(Vec (Vec Math))`) are handled by recursing the
+  rebuild through container-typed elements; each rebuilt container records its
+  own reflexive `<CSort>Proof` anchor so it can be rebuilt again later.
+
+The flat `Congr` chain produces the term with children replaced in place, which
+  for a reordering/merging container (`Set`, `Map`, `MultiSet`) may be in the
+  wrong order or contain duplicates. The **container normalization** (`ContainerNormalize`
+  in [`crate::proofs::proof_format`]) bridges that gap: it normalizes the term —
+  sort + dedup for sets, sort for multisets, sort + last-write-wins for maps,
+  selected by the term head. Every rebuild mints the normalization unconditionally; the
+  proof simplifier then drops it wherever normalization is the identity — always
+  for order/arity-preserving `Vec`/`Pair`, and for already-canonical sets/maps.
+  Each container's normalization lives in its own constructor validator (ordered by
+  the deterministic structural `ast_cmp`), so user-defined containers normalize like
+  the built-ins; the checker recomputes it by applying the validator registered for the
+  term's head, and `reconstruct_termdag` produces the same canonical form.
+
+Maps use a flat `(map-of k0 v0 k1 v1 ...)` term form (a `map-of` constructor,
+  like `set-of`/`vec-of`) rather than nested `map-insert`s, so their rebuild
+  `Congr` indices are flat and key collapse (last-write-wins) works like the
+  other containers.
+
+The rebuild primitives are registered programmatically, with fresh names, so
+  they would not exist if the desugared program were re-parsed on its own. To
+  make the desugar round-trip work, the encoder records their names on the
+  container's `(sort …)` declaration as an `:internal-container-rebuild` annotation
+  (everything else they need is recovered from `proof_state` at register time). When
+  that Sort command is typechecked (during encoding *and* on re-parse), the
+  primitives are re-registered, so the rebuild rules resolve in both cases. See
+  [`crate::proofs::proof_container_rebuild`].
+

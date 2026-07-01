@@ -28,6 +28,7 @@ pub(crate) struct EncodingNames {
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
+    pub(crate) container_normalize_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
@@ -69,6 +70,7 @@ impl EncodingNames {
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
+            container_normalize_constructor: symbol_gen.fresh("ContainerNormalize"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
             single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
@@ -364,6 +366,7 @@ impl ProofInstrumentor<'_> {
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
+            ref container_normalize_constructor,
             ref pcons,
             ref pnil,
             ..
@@ -373,7 +376,9 @@ impl ProofInstrumentor<'_> {
             "
 (sort {proof_list_sort})
 (sort {ast_sort}) ;; wrap sorts in this for proofs
-(sort {proof_datatype})
+;; The proof datatype records the global proof constructor names so container
+;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor})
 
 (constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort} :internal-hidden)
 (constructor {pnil} () {proof_list_sort} :internal-hidden)
@@ -399,6 +404,11 @@ impl ProofInstrumentor<'_> {
 ;; and a proof that ci = c2,
 ;; produces a justification that t1 = f(..., c2, ...)
 (constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype} :internal-hidden)
+
+;; given a proof that t1 = c, where c is a container term, produces a proof that
+;; t1 = normalize(c) (the container's canonicalization: sort/dedup for sets,
+;; last-write-wins for maps, sort for multisets)
+(constructor  {container_normalize_constructor} ({proof_datatype}) {proof_datatype} :internal-hidden)
                 "
         )
     }
@@ -571,9 +581,14 @@ pub(crate) fn command_supports_proof_encoding(
     // Now check command-specific constraints
     match command {
         GenericCommand::Sort {
+            name,
             presort_and_args: Some(_),
             ..
-        } => Err(ProofEncodingUnsupportedReason::SortWithPresort),
+        } => type_info
+            .get_sort_by_name(name)
+            .filter(|sort| sort.is_container_sort())
+            .map(|_| ())
+            .ok_or(ProofEncodingUnsupportedReason::SortWithPresort),
         GenericCommand::Sort { uf: Some(_), .. } => {
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }

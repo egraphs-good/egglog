@@ -2,8 +2,8 @@
 mod tests {
     use crate::ast::{ResolvedCommand, RuleEvalMode, sanitize_internal_names};
     use crate::{
-        ArcSort, CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, Sort, TermDag,
-        TermId, Value, add_primitive_with_validator,
+        CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
+        add_primitive_with_validator,
     };
 
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
@@ -178,80 +178,28 @@ mod tests {
         );
     }
 
-    #[derive(Debug)]
-    struct EqContainerTestSort {
-        name: String,
-    }
-
-    impl Sort for EqContainerTestSort {
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> egglog_bridge::ColumnTy {
-            egglog_bridge::ColumnTy::Id
-        }
-
-        fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
-
-        fn as_arc_any(
-            self: std::sync::Arc<Self>,
-        ) -> std::sync::Arc<dyn std::any::Any + Send + Sync + 'static> {
-            self
-        }
-
-        fn is_eq_container_sort(&self) -> bool {
-            true
-        }
-
-        fn value_type(&self) -> Option<std::any::TypeId> {
-            None
-        }
-
-        fn reconstruct_termdag_base(
-            &self,
-            _base_values: &crate::sort::BaseValues,
-            _value: Value,
-            termdag: &mut TermDag,
-        ) -> TermId {
-            termdag.app("SeedValue".into(), vec![])
-        }
-    }
-
-    fn replace_with_eq_container_test_sort(egraph: &mut EGraph, name: &str) -> ArcSort {
-        let sort = std::sync::Arc::new(EqContainerTestSort {
-            name: name.to_string(),
-        }) as ArcSort;
-        egraph
-            .type_info
-            .sorts
-            .insert(name.to_string(), sort.clone());
-        if let Some(original_typechecking) = egraph.proof_state.original_typechecking.as_mut() {
-            original_typechecking
-                .type_info
-                .sorts
-                .insert(name.to_string(), sort.clone());
-        }
-        sort
-    }
-
     #[test]
     fn proof_mode_allows_eq_container_primitive_results_in_facts() {
+        // A real (presort-declared) eq-container sort, so the term/proof
+        // encoding builds its rebuild primitive. A custom identity primitive
+        // returns an existing eq-container value, exercising the
+        // eq-container-primitive-result-in-a-fact path under proofs.
         let mut egraph = EGraph::new_with_proofs();
-
         egraph
             .parse_and_run_program(
                 None,
                 r#"
-                (sort EqContainer)
-                (constructor SeedValue () EqContainer)
+                (datatype E (Mk))
+                (sort EqContainer (Vec E))
                 "#,
             )
             .unwrap();
 
-        let eq_container_sort = replace_with_eq_container_test_sort(&mut egraph, "EqContainer");
-        assert!(eq_container_sort.is_eq_container_sort());
-
+        let eq_container_sort = egraph
+            .type_info
+            .get_sort_by_name("EqContainer")
+            .expect("EqContainer sort")
+            .clone();
         let validator =
             |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
         add_primitive_with_validator!(
@@ -275,7 +223,7 @@ mod tests {
                 (relation SeedContainer (EqContainer))
                 (relation Done ())
 
-                (SeedContainer (SeedValue))
+                (SeedContainer (vec-of (Mk)))
 
                 (rule ((SeedContainer ys)
                        (= xs (proof-container-id ys)))
@@ -287,6 +235,45 @@ mod tests {
                 "#,
             )
             .unwrap();
+    }
+
+    // KNOWN GAP: a container's reflexive `<CSort>Proof` is anchored only during
+    // rebuild, not at creation (unlike eq-sort terms). So a rule body that
+    // produces a *newly-created* container via a primitive and needs its proof
+    // in the same iteration fails -- the action lookup of the container's term
+    // proof has no row yet. Contrast
+    // `proof_mode_allows_eq_container_primitive_results_in_facts`, which uses an
+    // already-anchored container. This test pins the current (failing)
+    // behavior; flip it to assert success once the gap is fixed.
+    #[test]
+    fn proof_mode_new_container_primitive_result_in_fact_is_unsupported() {
+        let mut egraph = EGraph::new_with_proofs();
+        let err = egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype E (Mk))
+                (sort EqContainer (Vec E))
+                (relation SeedElem (E))
+                (relation Done ())
+
+                (SeedElem (Mk))
+
+                (rule ((SeedElem e)
+                       (= xs (vec-of e)))
+                      ((Done))
+                      :name "new-container-in-body")
+
+                (run 1)
+                (prove (Done))
+                "#,
+            )
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("lookup of function"),
+            "expected a container term-proof lookup failure, got: {msg}"
+        );
     }
 
     #[test]

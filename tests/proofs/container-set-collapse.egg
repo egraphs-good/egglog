@@ -1,0 +1,23 @@
+;; Container proof: a collapsing (Set Math).
+;;
+;; `(set-of (A) (B))` and `(set-of (B))` start as distinct sets, each held by a
+;; `Holds` constructor. Unioning A and B collapses `{A, B}` to a singleton, so
+;; the two sets (and the two `Holds` terms) become equal.
+;;
+;; The proof exercises the container rebuild path: a `Congr` chain rebuilds the
+;; set's element to its union-find leader, producing the (non-canonical)
+;; `set-of(A, A)`, and the container normalization (sort + dedup) reduces it to
+;; `set-of(A)` to match the canonical value.
+
+(sort Math)
+(constructor A () Math)
+(constructor B () Math)
+(sort MathSet (Set Math))
+(constructor Holds (MathSet) Math)
+
+(Holds (set-of (A) (B)))
+(Holds (set-of (B)))
+(union (A) (B))
+(run 1)
+
+(prove (= (Holds (set-of (A) (B))) (Holds (set-of (B)))))

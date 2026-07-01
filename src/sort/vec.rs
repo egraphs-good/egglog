@@ -11,7 +11,7 @@ pub struct VecContainer {
 }
 
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         if self.do_rebuild {
             rebuilder.rebuild_slice(&mut self.data)
         } else {
@@ -113,14 +113,29 @@ impl ContainerSort for VecSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc: Arc<dyn Sort> = self.clone().to_arcsort();
 
-        add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
+        // The proof "term form" of a vec: `(vec-of e0 e1 ...)`, or `(vec-empty)`
+        // when empty, matching `reconstruct_termdag`. The validator lets the
+        // proof checker evaluate `vec-of`/`vec-empty` applications.
+        let vec_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let head = if args.is_empty() {
+                "vec-empty"
+            } else {
+                "vec-of"
+            };
+            Some(termdag.app(head.into(), args.to_vec()))
+        };
+        let vec_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("vec-empty".into(), vec![]))
+        };
+
+        add_primitive_with_validator!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: Vec::new()
-        } });
-        add_primitive!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
+        } }, vec_empty_validator);
+        add_primitive_with_validator!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs                     .collect()
-        } });
+        } }, vec_of_validator);
         add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.flat_map(|x| x.data).collect()
@@ -182,6 +197,20 @@ impl ContainerSort for VecSort {
         } else {
             termdag.app("vec-of".into(), element_terms)
         }
+    }
+
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "vec-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                let head = if args.is_empty() {
+                    "vec-empty"
+                } else {
+                    "vec-of"
+                };
+                Some(termdag.app(head.into(), args.to_vec()))
+            }),
+        ))
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
