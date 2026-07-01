@@ -8,7 +8,7 @@ pub struct SetContainer {
 }
 
 impl ContainerValue for SetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
             let changed = rebuilder.rebuild_slice(&mut xs);
@@ -21,6 +21,21 @@ impl ContainerValue for SetContainer {
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().copied()
     }
+}
+
+fn set_term_children(termdag: &TermDag, term: TermId) -> Option<Vec<TermId>> {
+    match termdag.get(term) {
+        Term::App(head, children) if head == "set-of" => Some(children.clone()),
+        _ => None,
+    }
+}
+
+/// Canonical set term form `(set-of e0 e1 ...)`: elements sorted by
+/// [`TermDag::ast_cmp`] and deduplicated, so proof checking can reproduce it.
+fn normalize_set_term(termdag: &mut TermDag, mut children: Vec<TermId>) -> TermId {
+    termdag.sort_terms_by_ast(&mut children);
+    children.dedup();
+    termdag.app("set-of".into(), children)
 }
 
 #[derive(Clone, Debug)]
@@ -110,26 +125,117 @@ impl ContainerSort for SetSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
+        // Proof term form of a set: `(set-of e0 e1 ...)`, matching
+        // `reconstruct_termdag`. (Element dedup/ordering for proof checking of
+        // collapsing sets is refined in the Set proof stage.)
+        let set_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            Some(normalize_set_term(termdag, args.to_vec()))
+        };
+        let set_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("set-of".into(), vec![]))
+        };
+        let set_get_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [set, index] = args else {
+                return None;
+            };
+            let Term::Lit(Literal::Int(index)) = termdag.get(*index) else {
+                return None;
+            };
+            let index = usize::try_from(*index).ok()?;
+            set_term_children(termdag, *set)?.get(index).copied()
+        };
+        let set_insert_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [set, value] = args else {
+                return None;
+            };
+            let mut children = set_term_children(termdag, *set)?;
+            children.push(*value);
+            Some(normalize_set_term(termdag, children))
+        };
+        let set_remove_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [set, value] = args else {
+                return None;
+            };
+            let children = set_term_children(termdag, *set)?
+                .into_iter()
+                .filter(|child| child != value)
+                .collect();
+            Some(normalize_set_term(termdag, children))
+        };
+        let set_length_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [set] = args else {
+                return None;
+            };
+            let len = set_term_children(termdag, *set)?.len() as i64;
+            Some(termdag.lit(Literal::Int(len)))
+        };
+        let set_contains_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [set, value] = args else {
+                return None;
+            };
+            set_term_children(termdag, *set)?
+                .contains(value)
+                .then(|| termdag.lit(Literal::Unit))
+        };
+        let set_not_contains_validator =
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [set, value] = args else {
+                    return None;
+                };
+                let contains = set_term_children(termdag, *set)?.contains(value);
+                (!contains).then(|| termdag.lit(Literal::Unit))
+            };
+        let set_union_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [left, right] = args else {
+                return None;
+            };
+            let mut children = set_term_children(termdag, *left)?;
+            children.extend(set_term_children(termdag, *right)?);
+            Some(normalize_set_term(termdag, children))
+        };
+        let set_diff_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [left, right] = args else {
+                return None;
+            };
+            let right = set_term_children(termdag, *right)?;
+            let children = set_term_children(termdag, *left)?
+                .into_iter()
+                .filter(|child| !right.contains(child))
+                .collect();
+            Some(normalize_set_term(termdag, children))
+        };
+        let set_intersect_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [left, right] = args else {
+                return None;
+            };
+            let right = set_term_children(termdag, *right)?;
+            let children = set_term_children(termdag, *left)?
+                .into_iter()
+                .filter(|child| right.contains(child))
+                .collect();
+            Some(normalize_set_term(termdag, children))
+        };
+
+        add_primitive_with_validator!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: BTreeSet::new()
-        } });
-        add_primitive!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
+        } }, set_empty_validator);
+        add_primitive_with_validator!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
-        } });
+        } }, set_of_validator);
 
-        add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }});
-        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove(&x); xs }});
+        add_primitive_with_validator!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() }, set_get_validator);
+        add_primitive_with_validator!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }}, set_insert_validator);
+        add_primitive_with_validator!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove(&x); xs }}, set_remove_validator);
 
-        add_primitive!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "set-contains"     = |xs: @SetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive_with_validator!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.len() as i64 }, set_length_validator);
+        add_primitive_with_validator!(eg, "set-contains"     = |xs: @SetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, set_contains_validator);
+        add_primitive_with_validator!(eg, "set-not-contains" = |xs: @SetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, set_not_contains_validator);
 
-        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.extend(ys.data);                  xs }});
-        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
-        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
+        add_primitive_with_validator!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.extend(ys.data);                  xs }}, set_union_validator);
+        add_primitive_with_validator!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }}, set_diff_validator);
+        add_primitive_with_validator!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }}, set_intersect_validator);
     }
 
     fn reconstruct_termdag(
@@ -139,7 +245,18 @@ impl ContainerSort for SetSort {
         termdag: &mut TermDag,
         element_terms: Vec<TermId>,
     ) -> TermId {
-        termdag.app("set-of".into(), element_terms)
+        // Canonical form (sorted by deterministic AST order, deduped) so proof
+        // checking can reproduce it from terms alone.
+        normalize_set_term(termdag, element_terms)
+    }
+
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "set-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                Some(normalize_set_term(termdag, args.to_vec()))
+            }),
+        ))
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {

@@ -363,3 +363,53 @@ The structure is the same as term mode — view updates use `set`, UF updates us
 For nested terms, congruence proofs are built to ensure
   the proof terms match the original queries.
 
+# Containers
+
+Container sorts (`Vec`, `Set`, `Map`, `MultiSet`, `Pair`) are never unioned
+directly, so they get **no** union-find tables. Instead a container is
+recanonicalized structurally when its elements' e-classes change. Take:
+
+```text
+(datatype Math (Num i64))
+(sort MathVec (Vec Math))
+(constructor Wrap (MathVec) Math)
+```
+
+The `MathVec` argument of `Wrap` is a container column, so `Wrap`'s rebuild rule
+canonicalizes it with a per-container *rebuild primitive* the encoding registers
+(here `MathVec_rebuild`), alongside the usual `UF_Mathf` lookup for the
+representative column:
+
+```text
+(rule ((= v (WrapView c0 c1))
+       (= c0_rebuilt (MathVec_rebuild c0))
+       (= c1_leader (UF_Mathf c1))
+       (guard (or (bool-!= c0 c0_rebuilt) (bool-!= c1 c1_leader))))
+      ((set (WrapView c0_rebuilt c1_leader) ())
+       (delete (WrapView c0 c1)))
+       :ruleset rebuilding :name "rebuild_rule" :naive)
+```
+
+The primitive clones the container, remaps each element to its union-find leader,
+and re-interns it. Because it reads the elements' `UF_<E>f` indices rather than
+joining a tracked table, the rule is marked `:naive`: an element becoming equal
+to another produces no delta on the container's own view row, so the rule must
+rescan the view each round. Nested containers (e.g. `(Vec (Vec Math))`) rebuild
+by recursing through container-typed elements.
+
+**Proofs.** A container's term form is the s-expr of its constructor —
+`(vec-of e0 e1 …)`, `(pair a b)`, `(map-of k0 v0 …)` — so the generic `Congr`
+machinery applies unchanged. Every container sort gets a reflexive `<Sort>Proof`
+table (a `container = container` proof, set at creation); a `Congr` chain over
+the changed elements, anchored there, proves `old = new` and folds into the
+view's congruence step like an eq-sort child's UF proof.
+
+For reordering/merging containers (`Set`, `Map`, `MultiSet`) the element-wise
+`Congr` term can be out of order or hold duplicates, so a `ContainerNormalize`
+step (see [`crate::proofs::proof_format`]) canonicalizes it — sort + dedup for
+sets, sort for multisets, sort + last-write-wins for maps. It is emitted on every
+rebuild and dropped by the proof simplifier wherever it is the identity (always
+for `Vec` / `Pair`). Maps use a flat `(map-of k0 v0 …)` form so this works like
+the other containers.
+
+See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives.

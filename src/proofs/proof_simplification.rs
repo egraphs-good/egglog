@@ -74,6 +74,10 @@ impl ProofStore {
     /// - Collapse double symmetry: Sym(Sym(p)) -> p
     /// - Push symmetry through transitivity: Sym(Trans(p1, p2)) -> Trans(Sym(p2), Sym(p1))
     ///   This enables further simplifications by exposing the inner proofs
+    /// - Remove redundant container normalization: ContainerNormalize(p) -> p when the
+    ///   normalization left the term unchanged (always the case for
+    ///   order/arity-preserving containers like Vec/Pair, which mint the normalization
+    ///   unconditionally, and for already-canonical sets/maps/multisets)
     pub fn simplify(&mut self, proof_id: ProofId) -> ProofId {
         // First, recursively simplify all child proofs
         let proof_id = self.map_child_proofs(proof_id, |store, pid| store.simplify(pid));
@@ -104,6 +108,7 @@ impl ProofStore {
             Self::opt_reflexive_sym,
             Self::opt_double_sym,
             Self::opt_sym_trans,
+            Self::opt_redundant_container_normalize,
         ];
 
         for opt in optimizations {
@@ -128,6 +133,19 @@ impl ProofStore {
             if child.lhs() == child.rhs() {
                 return Some(*base_proof);
             }
+        }
+        None
+    }
+
+    /// Optimization: Remove a redundant container normalization.
+    /// ContainerNormalize(p) -> p when normalization left the term unchanged
+    /// (its rhs equals the inner proof's rhs).
+    fn opt_redundant_container_normalize(&mut self, proof_id: ProofId) -> Option<ProofId> {
+        let proof = self.get(proof_id);
+        if let Justification::ContainerNormalize { proof: inner } = proof.justification()
+            && proof.rhs() == self.get(*inner).rhs()
+        {
+            return Some(*inner);
         }
         None
     }
@@ -309,6 +327,21 @@ impl ProofStore {
                     changed = true;
                 }
             }
+            Justification::ContainerNormalize { proof: inner } => {
+                let mapped_inner = f(self, *inner);
+                if mapped_inner != *inner {
+                    *inner = mapped_inner;
+                    let (inner_lhs, inner_rhs) = {
+                        let p = self.get(*inner);
+                        (p.lhs(), p.rhs())
+                    };
+                    proof.proposition.lhs = inner_lhs;
+                    proof.proposition.rhs = self.normalize_container(inner_rhs);
+                    changed = true;
+                }
+            }
+            // No sub-proofs to remap; the result lives in the proposition.
+            Justification::Eval => return proof_id,
         }
 
         if !changed {
@@ -350,6 +383,9 @@ impl Proof {
             } => {}
             Justification::Trans(_, _) => {}
             Justification::Sym(_) => {}
+            Justification::ContainerNormalize { proof: _ } => {}
+            // The only term (the result) lives in the proposition, already mapped.
+            Justification::Eval => {}
         }
     }
 }
