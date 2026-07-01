@@ -1,0 +1,41 @@
+---
+source: tests/files.rs
+assertion_line: 88
+expression: snapshot_content_across_treatments
+---
+(let prf0 (Fiat (= (B) (A))))
+(let t0 (Holds (set-of (A) (B))))
+(let prf1
+  (Congr
+            (= t0 (Holds (set-of (A))))
+            (Fiat (= t0 t0))
+            (ContainerNormalize
+              (= (set-of (A) (B)) (set-of (A)))
+              (Congr
+                (= (set-of (A) (B)) (set-of (A) (A)))
+                (Fiat (= (set-of (A) (B)) (set-of (A) (B))))
+                prf0
+                1))
+            0))
+(Rule
+  (= (@ExistsConstructor) (@ExistsConstructor))
+  (name "@prove_exists_rule")
+  (premises
+    (Fiat (= (A) (A)))
+    prf0
+    (Eval)
+    prf0
+    (Eval)
+    (Trans
+      (= (Holds (set-of (A))) (Holds (set-of (A))))
+      (Sym (= (Holds (set-of (A))) t0) prf1)
+      prf1))
+  (substitution
+    (@v34 (A))
+    (@v35 (set-of (A)))
+    (@v36 (A))
+    (@v37 (set-of (A)))
+    (@v33 (A))))
+((A 1)
+ (B 1)
+ (Holds 1))

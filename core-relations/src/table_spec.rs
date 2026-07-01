@@ -100,7 +100,32 @@ pub enum Constraint {
     GeConst { col: ColumnId, val: Value },
 }
 
+/// Remap individual values (e.g. to their union-find leaders) — the value-level
+/// half of rebuilding, enough to rebuild a single container's contents (see
+/// [`crate::ContainerValue::rebuild_contents`]).
+pub trait ValueRebuilder: Send + Sync {
+    /// Rebuild a single value.
+    fn rebuild_val(&self, val: Value) -> Value;
+    /// Rebuild a slice of values in place, returning true if any values were changed.
+    ///
+    /// Defaults to mapping each value through [`ValueRebuilder::rebuild_val`];
+    /// implementors may override for efficiency.
+    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
+        let mut changed = false;
+        for val in vals.iter_mut() {
+            let new = self.rebuild_val(*val);
+            if new != *val {
+                *val = new;
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
 /// Custom functions used for tables that encode a bulk value-level rebuild of other tables.
+///
+/// Extends [`ValueRebuilder`] with table-level (bulk) operations.
 ///
 /// The initial use-case for this trait is to support optimized implementations of rebuilding,
 /// where `Rebuilder` is implemented as a Union-find.
@@ -108,11 +133,10 @@ pub enum Constraint {
 /// Value-level rebuilds are difficult to implement efficiently using rules as they require
 /// searching for changes to any column for a table: while it is possible to do, implementing this
 /// custom is more efficient in the case of rebuilding.
-pub trait Rebuilder: Send + Sync {
+pub trait Rebuilder: ValueRebuilder {
     /// The column that contains values that should be rebuilt. If this is set, callers can use
     /// this functionality to perform rebuilds incrementally.
     fn hint_col(&self) -> Option<ColumnId>;
-    fn rebuild_val(&self, val: Value) -> Value;
     /// Rebuild a contiguous slice of rows in the table.
     fn rebuild_buf(
         &self,
@@ -130,8 +154,6 @@ pub trait Rebuilder: Send + Sync {
         out: &mut TaggedRowBuffer,
         exec_state: &mut ExecutionState,
     );
-    /// Rebuild a slice of values in place, returning true if any values were changed.
-    fn rebuild_slice(&self, vals: &mut [Value]) -> bool;
 }
 
 /// A row in a table.

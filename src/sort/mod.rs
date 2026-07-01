@@ -8,7 +8,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::core_relations;
 pub use core_relations::{
-    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, Rebuilder,
+    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, ValueRebuilder,
 };
 pub use egglog_bridge::ColumnTy;
 
@@ -84,6 +84,15 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
+    /// For a container sort that supports proofs: its canonical constructor head
+    /// and the validator that canonicalizes the term form (e.g. `set-of` sorts
+    /// and dedups its elements). Proof checking looks this up by head to normalize
+    /// a container term. `None` (the default) means proofs are unsupported for
+    /// this container.
+    fn container_term_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        None
+    }
+
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
@@ -139,6 +148,25 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _value = value;
         let _termdag = termdag;
         todo!("reconstruct_termdag_leaf: {}", self.name());
+    }
+
+    /// Canonicalize a container value for the term encoding by remapping each
+    /// contained value through `leaders` (an old-value -> union-find-leader
+    /// map), returning the new interned container value. Only container sorts
+    /// implement this; it is the value-level half of the container rebuild
+    /// performed by the term encoding's rebuild rules.
+    fn rebuild_container_with_leaders(
+        &self,
+        container_values: &ContainerValues,
+        exec_state: &mut ExecutionState,
+        value: Value,
+        leaders: &crate::util::HashMap<Value, Value>,
+    ) -> Value {
+        let _ = (container_values, exec_state, value, leaders);
+        panic!(
+            "rebuild_container_with_leaders called on non-container sort: {}",
+            self.name()
+        );
     }
 }
 
