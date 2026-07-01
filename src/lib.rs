@@ -2792,7 +2792,7 @@ pub enum Error {
     ApiError(#[from] crate::api::ApiError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]
+    #[error("{}\nCheck failed (are the relevant terms present in the e-graph?): \n{}", .1, ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
     #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(String, Span),
