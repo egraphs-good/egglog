@@ -145,19 +145,6 @@ impl ContainerSort for SetSort {
         let set_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
             Some(termdag.app("set-of".into(), vec![]))
         };
-        let set_get_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            let [set, index] = args else {
-                return None;
-            };
-            let Term::Lit(Literal::Int(index)) = termdag.get(*index) else {
-                return None;
-            };
-            let index = usize::try_from(*index).ok()?;
-            set_term_to_btreeset(termdag, *set)?
-                .iter()
-                .nth(index)
-                .map(|e| e.id())
-        };
         let set_insert_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let [set, value] = args else {
                 return None;
@@ -238,7 +225,9 @@ impl ContainerSort for SetSort {
             data: xs.collect()
         } }, set_of_validator);
 
-        add_primitive_with_validator!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() }, set_get_validator);
+        // No validator: `set-get` indexes the runtime `BTreeSet<Value>` order,
+        // which terms cannot reproduce, so it is unsupported in proof mode.
+        add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
         add_primitive_with_validator!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }}, set_insert_validator);
         add_primitive_with_validator!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove(&x); xs }}, set_remove_validator);
 

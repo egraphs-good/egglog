@@ -3002,7 +3002,6 @@ mod tests {
                 (sort ISet (Set i64))
                 (function Shared () ISet :merge (set-intersect old new))
 
-                (check (= (set-get (set-of 1 2) 0) 1))
                 (check (= (set-insert (set-empty) 1) (set-of 1)))
                 (check (= (set-remove (set-of 1 2) 2) (set-of 1)))
                 (check (= (set-length (set-of 1 2)) 2))
@@ -3016,6 +3015,24 @@ mod tests {
             .unwrap();
 
         assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    /// `set-get` indexes the runtime value order, which the proof checker
+    /// cannot reproduce from terms, so it has no validator.
+    #[test]
+    fn proof_support_rejects_set_get() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (check (= (set-get (set-of 1 2) 0) 1))
+                "#,
+            )
+            .unwrap();
+
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
     }
 
     #[test]

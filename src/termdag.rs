@@ -171,29 +171,42 @@ impl TermDag {
     /// Useful for canonicalizing the elements of an unordered structure (e.g. a
     /// set or multiset) into a stable, reproducible term order.
     ///
-    /// `App` children are compared structurally (recursing via `ast_cmp`), not
-    /// by raw [`TermId`] order, so [`Term`] does not derive `Ord` and the leaf
-    /// arms are written out rather than calling `l.cmp(r)`.
+    /// `App` children are compared structurally, not by raw [`TermId`] order,
+    /// so [`Term`] does not derive `Ord` and the leaf arms are written out
+    /// rather than calling `l.cmp(r)`. Uses an explicit worklist because terms
+    /// can be deeply nested.
     pub fn ast_cmp(&self, a: TermId, b: TermId) -> std::cmp::Ordering {
         use std::cmp::Ordering;
-        match (self.get(a), self.get(b)) {
-            (Term::Lit(x), Term::Lit(y)) => x.cmp(y),
-            (Term::Lit(_), _) => Ordering::Less,
-            (_, Term::Lit(_)) => Ordering::Greater,
-            (Term::Var(x), Term::Var(y)) => x.cmp(y),
-            (Term::Var(_), _) => Ordering::Less,
-            (_, Term::Var(_)) => Ordering::Greater,
-            (Term::App(hx, ax), Term::App(hy, ay)) => hx
-                .cmp(hy)
-                .then_with(|| ax.len().cmp(&ay.len()))
-                .then_with(|| {
-                    ax.iter()
-                        .zip(ay.iter())
-                        .map(|(&ca, &cb)| self.ast_cmp(ca, cb))
-                        .find(|o| o.is_ne())
-                        .unwrap_or(Ordering::Equal)
-                }),
+        let mut worklist = vec![(a, b)];
+        while let Some((a, b)) = worklist.pop() {
+            if a == b {
+                // Hashconsed: identical ids are structurally equal.
+                continue;
+            }
+            let ord = match (self.get(a), self.get(b)) {
+                (Term::Lit(x), Term::Lit(y)) => x.cmp(y),
+                (Term::Lit(_), _) => Ordering::Less,
+                (_, Term::Lit(_)) => Ordering::Greater,
+                (Term::Var(x), Term::Var(y)) => x.cmp(y),
+                (Term::Var(_), _) => Ordering::Less,
+                (_, Term::Var(_)) => Ordering::Greater,
+                (Term::App(hx, ax), Term::App(hy, ay)) => {
+                    match hx.cmp(hy).then_with(|| ax.len().cmp(&ay.len())) {
+                        Ordering::Equal => {
+                            // Children compare left to right: push reversed so
+                            // the leftmost pair pops first.
+                            worklist.extend(ax.iter().copied().zip(ay.iter().copied()).rev());
+                            continue;
+                        }
+                        ord => ord,
+                    }
+                }
+            };
+            if ord.is_ne() {
+                return ord;
+            }
         }
+        Ordering::Equal
     }
 
     /// Sort child terms in place by [`ast_cmp`](Self::ast_cmp). A reusable

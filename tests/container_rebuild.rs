@@ -247,8 +247,7 @@ fn multiset_rebuild_proof_mode() {
 
 /// Proof mode: a `(Set Math)` rebuild that does NOT collapse (the changed
 /// element stays distinct from the others), so arity is preserved and it
-/// checks. (The collapse case — two elements merging into one — is a known
-/// limitation; see CHANGELOG.)
+/// checks.
 #[test]
 fn set_rebuild_noncollapse_proof_mode() {
     let mut egraph = EGraph::new_with_proofs().with_proof_testing();
@@ -324,7 +323,10 @@ fn set_rebuild_collapse_proof_mode() {
 }
 
 /// Proof mode: a `(Set Math)` rebuild where a leader sorts to a different slot
-/// (reorder without collapse). The container normalization re-sorts to canonical order.
+/// (reorder without collapse). `A`'s `:cost` forces the merged class to
+/// extract as `(E)`, so `{(A), (C)}` rebuilds to `{(C), (E)}`: the changed
+/// element moves from slot 0 to slot 1 and the container normalization
+/// re-sorts the raw `Congr` result to canonical order.
 #[test]
 fn set_rebuild_reorder_proof_mode() {
     let mut egraph = EGraph::new_with_proofs().with_proof_testing();
@@ -333,16 +335,16 @@ fn set_rebuild_reorder_proof_mode() {
             None,
             r#"
             (sort Math)
-            (constructor A () Math)
-            (constructor B () Math)
+            (constructor A () Math :cost 100)
             (constructor C () Math)
+            (constructor E () Math)
             (sort MathSet (Set Math))
             (constructor Holds (MathSet) Math)
             (Holds (set-of (A) (C)))
-            (Holds (set-of (B) (C)))
-            (union (A) (B))
+            (Holds (set-of (E) (C)))
+            (union (A) (E))
             (run 1)
-            (check (= (Holds (set-of (A) (C))) (Holds (set-of (B) (C)))))
+            (check (= (Holds (set-of (A) (C))) (Holds (set-of (E) (C)))))
             "#,
         )
         .unwrap();
