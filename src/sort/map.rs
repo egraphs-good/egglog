@@ -36,26 +36,15 @@ impl ContainerValue for MapContainer {
     }
 }
 
-/// A map term — a flat `map-of`, or a `map-insert` spine bottoming out in
-/// `map-empty`/`map-of` — as a Rust `BTreeMap` in canonical key order, with
-/// `MapContainer`'s last-write-wins semantics on duplicate keys. Returns
-/// `None` for a malformed map term.
+/// The entries of a flat `(map-of k0 v0 ...)` term as a Rust `BTreeMap` in
+/// canonical key order, with `MapContainer`'s last-write-wins semantics on
+/// duplicate keys; `None` for any other term.
 fn map_term_to_btreemap<'a>(
     termdag: &'a TermDag,
     term_id: TermId,
 ) -> Option<BTreeMap<OrdTerm<'a>, TermId>> {
     match termdag.get(term_id) {
-        Term::App(head, args) if head == "map-insert" => {
-            let [inner, k, v] = args.as_slice() else {
-                return None;
-            };
-            let (k, v) = (*k, *v);
-            let mut map = map_term_to_btreemap(termdag, *inner)?;
-            map.insert(termdag.ord_term(k), v);
-            Some(map)
-        }
         Term::App(head, args) if head == "map-of" => map_of_args_to_btreemap(termdag, args),
-        Term::App(head, args) if head == "map-empty" && args.is_empty() => Some(BTreeMap::new()),
         _ => None,
     }
 }
