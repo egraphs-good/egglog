@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Fix user-defined primitives (registered through the Rust API after construction) being reported as unbound under term encoding / proofs: primitive registration now also reaches the term-encoding typechecker, so the encoder can typecheck the encoded program. Previously callers had to manually register the primitive on `proof_state.original_typechecking` as well.
 - Add `make nightly` and `scripts/nightly_bench.py`, a hyperfine-based benchmark harness that measures every `tests/**/*.egg` program at 1/2/4/8 threads and (where supported) in proof-testing mode, caps each run at a 2-minute timeout, skips sub-50ms programs, and emits an HTML dashboard (one row per benchmark, one column per configuration) for nightly.cs.washington.edu. The dashboard uses [eval-live](https://github.com/oflatt/eval-live) for interactive filtering and sorting.
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Fix custom scheduler queries so subsumed rows are not offered as fresh matches.

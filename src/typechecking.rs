@@ -264,7 +264,15 @@ impl EGraph {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
                 e.insert(sort.clone());
+                // A sort's primitives already reach the term-encoding typechecker
+                // through its OWN `add_arcsort` when it typechecks the sort
+                // command, so don't propagate them again from here (that would
+                // double-register and make primitive resolution ambiguous).
+                // Detach the typechecker while the sort registers, so only direct
+                // `add_*_primitive` calls propagate to it.
+                let saved = self.proof_state.original_typechecking.take();
                 sort.register_primitives(self);
+                self.proof_state.original_typechecking = saved;
                 Ok(())
             }
         }
@@ -356,6 +364,42 @@ impl EGraph {
     ) where
         T: Primitive + Clone,
         F: FnMut(T, Context) -> Box<dyn ExternalFunction>,
+    {
+        // Register on this e-graph AND every term-encoding typechecker down the
+        // chain. Each typechecker is a separate e-graph that typechecks the
+        // encoded program (see `typecheck_program`); a primitive added after
+        // construction is otherwise unknown to it and reported as unbound. A
+        // typechecker only typechecks and never evaluates, so the wrapper's
+        // runtime state is irrelevant there, and — since both e-graphs register
+        // the same built-ins during construction — a primitive added to both
+        // gets the same `ExternalFunctionId`.
+        let mut eg: &mut EGraph = self;
+        loop {
+            eg.register_primitive_local(
+                x.clone(),
+                validator.clone(),
+                valid_ctxs,
+                &mut build_wrapper,
+            );
+            match eg.proof_state.original_typechecking.as_deref_mut() {
+                Some(next) => eg = next,
+                None => break,
+            }
+        }
+    }
+
+    /// Register one primitive on THIS e-graph only (its `type_info` plus a
+    /// backend `ExternalFunctionId` per valid context). Non-generic over the
+    /// wrapper builder so the chain walk in [`register_per_context`] doesn't
+    /// recurse through ever-growing `&mut F` types.
+    fn register_primitive_local<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+        valid_ctxs: &[Context],
+        build_wrapper: &mut dyn FnMut(T, Context) -> Box<dyn ExternalFunction>,
+    ) where
+        T: Primitive + Clone,
     {
         let primitive: Arc<dyn Primitive> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
