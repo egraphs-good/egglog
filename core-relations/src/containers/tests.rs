@@ -9,8 +9,8 @@ use crate::numeric_id::NumericId;
 use egglog_concurrency::Notification;
 
 use crate::{
-    ColumnId, Database, ExecutionState, Rebuilder, RowId, Value, row_buffer::RowBuffer,
-    table_spec::WrappedTableRef,
+    ColumnId, Database, ExecutionState, Rebuilder, RowId, Value, ValueRebuilder,
+    row_buffer::RowBuffer, table_spec::WrappedTableRef,
 };
 
 use super::{ContainerEnv, ContainerRebuildSummary, ContainerValue, hash_container};
@@ -23,7 +23,7 @@ fn cont<const N: usize>(values: [usize; N]) -> VecContainer {
 }
 
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         rebuilder.rebuild_slice(&mut self.0)
     }
 
@@ -41,16 +41,33 @@ struct FakeRebuilder {
     new_inner_val: Option<Value>,
 }
 
-impl Rebuilder for FakeRebuilder {
-    fn hint_col(&self) -> Option<ColumnId> {
-        None
-    }
-
+impl ValueRebuilder for FakeRebuilder {
     fn rebuild_val(&self, val: Value) -> Value {
         match (self.old_outer_id, self.new_outer_id) {
             (Some(old), Some(new)) if val == old => new,
             _ => val,
         }
+    }
+
+    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
+        let mut changed = false;
+        for val in vals {
+            if let (Some(old), Some(new)) = (self.old_inner_val, self.new_inner_val)
+                && *val == old
+            {
+                *val = new;
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
+// Also exercised via the table-level rebuild path, so it implements the full
+// `Rebuilder`; that path only calls the value-level methods for containers.
+impl Rebuilder for FakeRebuilder {
+    fn hint_col(&self) -> Option<ColumnId> {
+        None
     }
 
     fn rebuild_buf(
@@ -72,19 +89,6 @@ impl Rebuilder for FakeRebuilder {
         _exec_state: &mut ExecutionState,
     ) {
         unreachable!("FakeRebuilder does not support rebuild_subset")
-    }
-
-    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
-        let mut changed = false;
-        for val in vals {
-            if let (Some(old), Some(new)) = (self.old_inner_val, self.new_inner_val)
-                && *val == old
-            {
-                *val = new;
-                changed = true;
-            }
-        }
-        changed
     }
 }
 

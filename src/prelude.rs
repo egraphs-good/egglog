@@ -758,6 +758,8 @@ pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, E
         presort_and_args: None,
         uf: None,
         proof_func: None,
+        container_rebuild: None,
+        proof_constructors: None,
         unionable: true,
     }])
 }
@@ -913,6 +915,14 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     ) -> TermId;
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String;
 
+    /// Optional: a container that supports proofs returns its canonical
+    /// constructor head and the validator that canonicalizes its term form (e.g.
+    /// `set-of` sorts and dedups). `None` (the default) means proofs are
+    /// unsupported for this container. See [`Sort::rebuild_container_normalizer`].
+    fn rebuild_container_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        None
+    }
+
     fn to_arcsort(self) -> ArcSort
     where
         Self: Sized,
@@ -982,6 +992,10 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     ) -> TermId {
         self.0
             .reconstruct_termdag(container_values, value, termdag, element_terms)
+    }
+
+    fn rebuild_container_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        self.0.rebuild_container_normalizer()
     }
 }
 

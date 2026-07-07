@@ -9,7 +9,7 @@ pub struct MapContainer {
 }
 
 impl ContainerValue for MapContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_keys {
             self.data = self
@@ -34,6 +34,48 @@ impl ContainerValue for MapContainer {
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().flat_map(|(k, v)| [k, v]).copied()
     }
+}
+
+/// The entries of a flat `(map-of k0 v0 ...)` term as a Rust `BTreeMap` in
+/// canonical key order, with `MapContainer`'s last-write-wins semantics on
+/// duplicate keys; `None` for any other term.
+fn map_term_to_btreemap<'a>(
+    termdag: &'a TermDag,
+    term_id: TermId,
+) -> Option<BTreeMap<OrdTerm<'a>, TermId>> {
+    match termdag.get(term_id) {
+        Term::App(head, args) if head == "map-of" => map_of_args_to_btreemap(termdag, args),
+        _ => None,
+    }
+}
+
+/// Alternating `[k0, v0, ...]` `map-of` arguments as a `BTreeMap` (see
+/// [`map_term_to_btreemap`]); `None` on odd arity.
+fn map_of_args_to_btreemap<'a>(
+    termdag: &'a TermDag,
+    args: &[TermId],
+) -> Option<BTreeMap<OrdTerm<'a>, TermId>> {
+    if !args.len().is_multiple_of(2) {
+        return None;
+    }
+    Some(
+        args.chunks_exact(2)
+            .map(|kv| (termdag.ord_term(kv[0]), kv[1]))
+            .collect(),
+    )
+}
+
+/// Flatten a map back to the `[k0, v0, k1, v1, ...]` argument list of its
+/// canonical `(map-of ...)` term (sorted by key order, deduplicated).
+fn map_term_args(map: BTreeMap<OrdTerm<'_>, TermId>) -> Vec<TermId> {
+    map.into_iter().flat_map(|(k, v)| [k.id(), v]).collect()
+}
+
+/// Canonicalize alternating `[k0, v0, ...]` arguments to the flat
+/// `(map-of ...)` term; `None` on odd arity.
+fn normalize_map_term(termdag: &mut TermDag, args: &[TermId]) -> Option<TermId> {
+    let flat = map_term_args(map_of_args_to_btreemap(termdag, args)?);
+    Some(termdag.app("map-of".to_string(), flat))
 }
 
 /// A map from a key type to a value type supporting these primitives:
@@ -69,6 +111,7 @@ impl Presort for MapSort {
     fn reserved_primitives() -> Vec<&'static str> {
         vec![
             "map-empty",
+            "map-of",
             "map-insert",
             "map-get",
             "map-not-contains",
@@ -139,19 +182,75 @@ impl ContainerSort for MapSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
+        // The proof "term form" of a map is the flat `(map-of k0 v0 k1 v1 ...)`
+        // in canonical key order (like `set-of`/`vec-of`), matching
+        // `reconstruct_termdag`. Each validator round-trips through a Rust
+        // `BTreeMap` (see `map_term_to_btreemap`), so it evaluates map terms
+        // with `MapContainer`'s semantics; `None` for a malformed map term
+        // fails the proof.
+        let map_empty_validator = |termdag: &mut TermDag, _args: &[TermId]| -> Option<TermId> {
+            Some(termdag.app("map-of".into(), vec![]))
+        };
+        let map_insert_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [map, key, value] = args else {
+                return None;
+            };
+            let mut map = map_term_to_btreemap(termdag, *map)?;
+            map.insert(termdag.ord_term(*key), *value);
+            let flat = map_term_args(map);
+            Some(termdag.app("map-of".into(), flat))
+        };
+        let map_get_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [map, key] = args else { return None };
+            map_term_to_btreemap(termdag, *map)?
+                .get(&termdag.ord_term(*key))
+                .copied()
+        };
+        let map_length_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [map] = args else { return None };
+            let len = map_term_to_btreemap(termdag, *map)?.len() as i64;
+            Some(termdag.lit(Literal::Int(len)))
+        };
+        let map_contains_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [map, key] = args else { return None };
+            let contains =
+                map_term_to_btreemap(termdag, *map)?.contains_key(&termdag.ord_term(*key));
+            contains.then(|| termdag.lit(Literal::Unit))
+        };
+        let map_not_contains_validator =
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [map, key] = args else { return None };
+                let contains =
+                    map_term_to_btreemap(termdag, *map)?.contains_key(&termdag.ord_term(*key));
+                (!contains).then(|| termdag.lit(Literal::Unit))
+            };
+
+        add_primitive_with_validator!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
             data: BTreeMap::new()
-        } });
+        } }, map_empty_validator);
 
-        add_primitive!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }});
+        // `map-of` is the flat constructor used as the canonical term form. It
+        // takes alternating key/value arguments, so it needs a custom type
+        // constraint rather than the `add_primitive!` macro.
+        eg.add_pure_primitive(
+            MapOf {
+                name: "map-of".to_string(),
+                map: arc.clone(),
+                key: self.key.clone(),
+                value: self.value.clone(),
+            },
+            Some(std::sync::Arc::new(normalize_map_term)),
+        );
+
+        add_primitive_with_validator!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() }, map_get_validator);
+        add_primitive_with_validator!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }}, map_insert_validator);
         add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
 
-        add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
-        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
+        add_primitive_with_validator!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 }, map_length_validator);
+        add_primitive_with_validator!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) }, map_contains_validator);
+        add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
     }
 
     fn reconstruct_termdag(
@@ -161,16 +260,110 @@ impl ContainerSort for MapSort {
         termdag: &mut TermDag,
         element_terms: Vec<TermId>,
     ) -> TermId {
-        let mut term = termdag.app("map-empty".into(), vec![]);
+        // Flat `(map-of k0 v0 k1 v1 ...)` in canonical key order, so proof
+        // checking can reproduce it from terms alone (and the rebuild proof's
+        // Congr indices are flat, like `set-of`/`vec-of`).
+        normalize_map_term(termdag, &element_terms).expect("map elements come in key/value pairs")
+    }
 
-        for x in element_terms.chunks(2) {
-            term = termdag.app("map-insert".into(), vec![term, x[0], x[1]])
-        }
-
-        term
+    fn rebuild_container_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some(("map-of".to_owned(), Arc::new(normalize_map_term)))
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
-        self.name().to_owned()
+        "map-of".to_owned()
+    }
+}
+
+/// The flat `map-of` constructor: takes alternating key/value arguments and
+/// builds a map. Used as the canonical term form for maps (analogous to
+/// `set-of`/`vec-of`). Needs a custom type constraint because its arguments
+/// alternate between the key and value sorts.
+#[derive(Clone)]
+struct MapOf {
+    name: String,
+    map: ArcSort,
+    key: ArcSort,
+    value: ArcSort,
+}
+
+impl Primitive for MapOf {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(MapOfTypeConstraint {
+            name: self.name.clone(),
+            key: self.key.clone(),
+            value: self.value.clone(),
+            map: self.map.clone(),
+            span: span.clone(),
+        })
+    }
+}
+
+impl PurePrim for MapOf {
+    fn apply<'a, 'db>(&self, mut state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let mut data = BTreeMap::new();
+        for chunk in args.chunks(2) {
+            if let [k, v] = chunk {
+                data.insert(*k, *v);
+            }
+        }
+        let mc = MapContainer {
+            do_rebuild_keys: self.key.is_eq_sort() || self.key.is_eq_container_sort(),
+            do_rebuild_vals: self.value.is_eq_sort() || self.value.is_eq_container_sort(),
+            data,
+        };
+        Some(state.register_container(mc))
+    }
+}
+
+/// Type constraint for [`MapOf`]: an even number of inputs alternating between
+/// the key and value sorts, producing the map sort.
+struct MapOfTypeConstraint {
+    name: String,
+    key: ArcSort,
+    value: ArcSort,
+    map: ArcSort,
+    span: Span,
+}
+
+impl TypeConstraint for MapOfTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        let arity_mismatch = |expected: usize| {
+            vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected,
+                },
+            )]
+        };
+        let Some((out, inputs)) = arguments.split_last() else {
+            return arity_mismatch(1);
+        };
+        if inputs.len() % 2 != 0 {
+            return arity_mismatch(inputs.len() + 2);
+        }
+        let mut cs: Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> =
+            vec![constraint::assign(out.clone(), self.map.clone())];
+        for (i, arg) in inputs.iter().enumerate() {
+            let sort = if i % 2 == 0 {
+                self.key.clone()
+            } else {
+                self.value.clone()
+            };
+            cs.push(constraint::assign(arg.clone(), sort));
+        }
+        cs
     }
 }

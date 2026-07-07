@@ -18,7 +18,7 @@ use crate::{
     row_buffer::RowBuffer,
     table_spec::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table, TableSpec,
-        TableVersion, WrappedTableRef,
+        TableVersion, ValueRebuilder, WrappedTableRef,
     },
 };
 
@@ -64,12 +64,16 @@ struct Canonicalizer<'a> {
     table: &'a DisplacedTable,
 }
 
+impl ValueRebuilder for Canonicalizer<'_> {
+    fn rebuild_val(&self, val: Value) -> Value {
+        self.table.uf.find_naive(val)
+    }
+    // `rebuild_slice` uses the default (per-value `rebuild_val`).
+}
+
 impl Rebuilder for Canonicalizer<'_> {
     fn hint_col(&self) -> Option<ColumnId> {
         Some(ColumnId::new(0))
-    }
-    fn rebuild_val(&self, val: Value) -> Value {
-        self.table.uf.find_naive(val)
     }
     fn rebuild_buf(
         &self,
@@ -183,15 +187,6 @@ impl Rebuilder for Canonicalizer<'_> {
                 out.set_stale(i);
             }
         }
-    }
-    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
-        let mut changed = false;
-        for val in vals {
-            let canon = self.table.uf.find_naive(*val);
-            changed |= canon != *val;
-            *val = canon;
-        }
-        changed
     }
 }
 

@@ -1,6 +1,7 @@
 use std::hash::Hasher;
 
 use crate::Context;
+use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
@@ -415,6 +416,8 @@ impl EGraph {
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => {
                 // Note this is bad since typechecking should be pure and idempotent
@@ -424,12 +427,51 @@ impl EGraph {
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
                 }
+                // Record this sort's UF / proof tables in proof_state (as
+                // run_command also does) so the container rebuild registration
+                // below can recover them — including this container's own proof
+                // table, which has not run yet.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state
+                        .uf_parent
+                        .insert(name.clone(), uf_ctor.clone());
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state
+                            .uf_function
+                            .insert(name.clone(), uf_index.clone());
+                    }
+                }
+                if let Some(pf) = proof_func {
+                    self.proof_state
+                        .proof_func_parent
+                        .insert(name.clone(), pf.clone());
+                }
+                // The Proof sort records the global proof constructors; restore
+                // them into proof_state so container rebuild can recover them
+                // (the `Proof` datatype name is this sort's own name).
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr.clone();
+                    names.eq_trans_constructor = pc.trans.clone();
+                    names.eq_sym_constructor = pc.sym.clone();
+                    names.container_normalize_constructor = pc.normalize.clone();
+                }
+                // A container sort under the term/proof encoding carries a spec
+                // for its rebuild primitives; register them here so they are
+                // available both during encoding and when the desugared program
+                // is re-parsed.
+                if let Some(spec) = container_rebuild {
+                    register_container_rebuild_from_spec(self, name, spec);
+                }
                 ResolvedNCommand::Sort {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
                     proof_func: proof_func.clone(),
+                    container_rebuild: container_rebuild.clone(),
+                    proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,
                 }
             }

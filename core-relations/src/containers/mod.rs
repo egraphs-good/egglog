@@ -28,7 +28,7 @@ use crate::{
     WrappedTable,
     common::{DashMap, IndexSet, SubsetTracker},
     parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
-    table_spec::Rebuilder,
+    table_spec::{Rebuilder, ValueRebuilder},
 };
 
 #[cfg(test)]
@@ -162,6 +162,31 @@ impl ContainerValues {
         env.get_or_insert(&container, exec_state)
     }
 
+    /// Rebuild a single container value by remapping each contained value
+    /// through `remap`, returning the (possibly new) interned value, or `value`
+    /// unchanged if it is not a registered container of the type behind
+    /// `type_id`.
+    ///
+    /// Unlike [`ContainerValues::rebuild_all`], which drives rebuilds off the
+    /// backend union-find, the caller supplies the remapping explicitly and
+    /// identifies the container type dynamically by its [`TypeId`].
+    pub fn rebuild_val_with(
+        &self,
+        type_id: TypeId,
+        value: Value,
+        exec_state: &mut ExecutionState,
+        remap: &(dyn Fn(Value) -> Value + Send + Sync),
+    ) -> Value {
+        let Some(id) = self.container_ids.get(&type_id) else {
+            return value;
+        };
+        let Some(env) = self.data.get(id) else {
+            return value;
+        };
+        env.rebuild_val_with(value, exec_state, remap)
+            .unwrap_or(value)
+    }
+
     /// Apply the given rebuild to the contents of each container.
     pub fn rebuild_all(
         &mut self,
@@ -262,11 +287,11 @@ impl ContainerValues {
 /// rebuilding of container contents and merging containers that become equal after a rebuild pass
 /// has taken place.
 pub trait ContainerValue: Hash + Eq + Clone + Send + Sync + 'static {
-    /// Rebuild an additional container in place according the the given [`Rebuilder`].
+    /// Rebuild an additional container in place according the the given [`ValueRebuilder`].
     ///
     /// If this method returns `false` then the container must not have been modified (i.e. it must
     /// hash to the same value, and compare equal to a copy of itself before the call).
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool;
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool;
 
     /// Iterate over the contents of the container.
     ///
@@ -292,6 +317,15 @@ pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
     /// [`ContainerValue::iter`] and lets callers climb from dirty child ids to
     /// all directly containing parent container ids.
     fn extend_containers_containing(&self, values: &IndexSet<Value>, out: &mut IndexSet<Value>);
+    /// Rebuild the single container `value` by remapping each contained value
+    /// through `remap`, returning the (possibly new) interned value, or `None`
+    /// if `value` is not registered in this environment.
+    fn rebuild_val_with(
+        &self,
+        value: Value,
+        exec_state: &mut ExecutionState,
+        remap: &(dyn Fn(Value) -> Value + Send + Sync),
+    ) -> Option<Value>;
 }
 
 // Implements `Clone` for `Box<dyn DynamicContainerEnv>`.
@@ -349,6 +383,19 @@ impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
                 out.extend(containers.iter().copied());
             }
         }
+    }
+
+    fn rebuild_val_with(
+        &self,
+        value: Value,
+        exec_state: &mut ExecutionState,
+        remap: &(dyn Fn(Value) -> Value + Send + Sync),
+    ) -> Option<Value> {
+        // Clone out of the guard before re-interning to avoid deadlocking on
+        // the underlying map.
+        let mut container = self.get_container(value)?.clone();
+        container.rebuild_contents(&ClosureRebuilder { remap });
+        Some(self.get_or_insert(&container, exec_state))
     }
 }
 
@@ -735,5 +782,18 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
         table_size > 1000 && uf_size * 512 <= table_size
     } else {
         table_size > 1000 && uf_size * 8 <= table_size
+    }
+}
+
+/// A [`ValueRebuilder`] that remaps individual values through a caller-supplied
+/// closure. Used by [`ContainerValues::rebuild_val_with`] to rebuild a single
+/// container against an explicit value mapping rather than a backend union-find.
+struct ClosureRebuilder<'a> {
+    remap: &'a (dyn Fn(Value) -> Value + Send + Sync),
+}
+
+impl ValueRebuilder for ClosureRebuilder<'_> {
+    fn rebuild_val(&self, val: Value) -> Value {
+        (self.remap)(val)
     }
 }

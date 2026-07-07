@@ -70,7 +70,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-pub use termdag::{Term, TermDag, TermId};
+pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
@@ -1589,11 +1589,17 @@ impl EGraph {
                 name,
                 uf,
                 proof_func,
+                proof_constructors,
                 ..
             } => {
-                // If the sort has a :internal-uf field, store the mapping for extraction
-                if let Some(uf_name) = uf {
-                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                // Restore the sort's UF tables into proof_state: the constructor
+                // for extraction's `find_canonical`, the index for container
+                // rebuild's leader lookups.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_ctor);
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state.uf_function.insert(name.clone(), uf_index);
+                    }
                 }
                 // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
                 // This annotation is set by proof instrumentation and consumed here.
@@ -1601,6 +1607,16 @@ impl EGraph {
                     self.proof_state
                         .proof_func_parent
                         .insert(name.clone(), proof_func_name);
+                }
+                // The Proof sort's :internal-proof-names records the global proof
+                // constructors; restore them so container rebuild can recover them.
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr;
+                    names.eq_trans_constructor = pc.trans;
+                    names.eq_sym_constructor = pc.sym;
+                    names.container_normalize_constructor = pc.normalize;
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -1954,9 +1970,10 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if let Err(reason) =
-                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
-                {
+                if let Err(reason) = command_supports_proof_encoding(
+                    &command.to_command(),
+                    &original_typechecking.type_info,
+                ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
@@ -2941,6 +2958,81 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn proof_support_accepts_container_sort_declarations() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XPair (Pair X i64))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XFn (UnstableFn (X) X))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_rejects_unstable_fn_primitives_without_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype X (x))
+                (sort XFn (UnstableFn (X) X))
+                (function id (X) X :merge old)
+                (let f (unstable-fn "id"))
+                "#,
+            )
+            .unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_accepts_set_primitive_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (function Shared () ISet :merge (set-intersect old new))
+
+                (check (= (set-insert (set-empty) 1) (set-of 1)))
+                (check (= (set-remove (set-of 1 2) 2) (set-of 1)))
+                (check (= (set-length (set-of 1 2)) 2))
+                (check (set-contains (set-of 1 2) 1))
+                (check (set-not-contains (set-of 1 2) 3))
+                (check (= (set-union (set-of 1) (set-of 2)) (set-of 1 2)))
+                (check (= (set-diff (set-of 1 2) (set-of 2)) (set-of 1)))
+                (check (= (set-intersect (set-of 1 2) (set-of 2 3)) (set-of 2)))
+                "#,
+            )
+            .unwrap();
+
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    /// `set-get` indexes the runtime value order, which the proof checker
+    /// cannot reproduce from terms, so it has no validator.
+    #[test]
+    fn proof_support_rejects_set_get() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (check (= (set-get (set-of 1 2) 0) 1))
+                "#,
+            )
+            .unwrap();
+
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
     }
 
     #[test]
