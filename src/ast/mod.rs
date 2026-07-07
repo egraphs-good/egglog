@@ -76,6 +76,9 @@ where
     CoreAction(GenericAction<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
+    /// Internal: records the maintenance schedule the term encoding runs
+    /// between steps. Not for direct use; emitted by the term-encoding pass.
+    SetRebuildSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics(Span, Option<String>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     PrintFunction(
@@ -155,6 +158,9 @@ where
             }
             GenericNCommand::NormRule { rule } => GenericCommand::Rule { rule: rule.clone() },
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
+            GenericNCommand::SetRebuildSchedule(schedule) => {
+                GenericCommand::SetRebuildSchedule(schedule.clone())
+            }
             GenericNCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
             }
@@ -226,6 +232,7 @@ where
             | GenericNCommand::Pop(..)
             | GenericNCommand::Input { .. }
             | GenericNCommand::UserDefined(..)
+            | GenericNCommand::SetRebuildSchedule(..)
             | GenericNCommand::ProveExists(..) => self,
         }
     }
@@ -261,6 +268,9 @@ where
             },
             GenericNCommand::RunSchedule(schedule) => {
                 GenericNCommand::RunSchedule(schedule.visit_exprs(f))
+            }
+            GenericNCommand::SetRebuildSchedule(schedule) => {
+                GenericNCommand::SetRebuildSchedule(schedule.visit_exprs(f))
             }
             GenericNCommand::PrintOverallStatistics(span, file) => {
                 GenericNCommand::PrintOverallStatistics(span, file)
@@ -849,6 +859,10 @@ where
     ///
     /// See [`Schedule`] for more details.
     RunSchedule(GenericSchedule<Head, Leaf>),
+    /// Internal command emitted by the term-encoding pass to record the
+    /// maintenance schedule that `step_rules` runs between steps. Not intended
+    /// for direct use.
+    SetRebuildSchedule(GenericSchedule<Head, Leaf>),
     /// Print runtime statistics about rules
     /// and rulesets so far.
     PrintOverallStatistics(Span, Option<String>),
@@ -1051,6 +1065,9 @@ where
             }
             GenericCommand::Rule { rule } => rule.fmt(f),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
+            GenericCommand::SetRebuildSchedule(sched) => {
+                write!(f, "(internal-rebuild-schedule {sched})")
+            }
             GenericCommand::PrintOverallStatistics(_span, file) => match file {
                 Some(file) => write!(f, "(print-stats :file {file})"),
                 None => write!(f, "(print-stats)"),
@@ -1743,6 +1760,9 @@ where
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.map_string_symbols(fun))
             }
+            GenericCommand::SetRebuildSchedule(schedule) => {
+                GenericCommand::SetRebuildSchedule(schedule.map_string_symbols(fun))
+            }
             GenericCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span, file)
             }
@@ -1851,6 +1871,9 @@ where
             },
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.visit_exprs(f))
+            }
+            GenericCommand::SetRebuildSchedule(schedule) => {
+                GenericCommand::SetRebuildSchedule(schedule.visit_exprs(f))
             }
             GenericCommand::Fail(span, cmd) => {
                 GenericCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
@@ -1962,6 +1985,9 @@ where
             ),
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.map_symbols(head, leaf))
+            }
+            GenericCommand::SetRebuildSchedule(schedule) => {
+                GenericCommand::SetRebuildSchedule(schedule.map_symbols(head, leaf))
             }
             GenericCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span, file)

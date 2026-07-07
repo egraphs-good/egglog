@@ -9,6 +9,7 @@
 - Add a BigRat to-i64 primitive for integral rationals.
 - Add f64 exp, log, and sqrt primitives.
 - Add `RunReport::can_stop` so scheduler progress can be reported separately from database updates.
+- Make custom schedulers compose with the term/proof encoding. The term-encoding maintenance schedule (rebuilding/congruence/deferred deletes) is now carried in the program via an internal `(internal-rebuild-schedule ...)` command and run to fixpoint after every step inside `step_rules` and `step_rules_with_scheduler`, rather than being woven around each `run` in the desugared schedule. This keeps the desugared program self-contained while letting a scheduler drive only the user's ruleset, with maintenance always running unscheduled.
 - Add `EGraph::typecheck_expr_with_bindings_and_output`, `Core::eval_resolved_expr`, and `Core::apply_primitive` for body-defined primitive support, including normal command-path global rewrites for expressions typechecked through the helper.
 - Allow `unstable-fn` function containers to target primitive overloads.
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.

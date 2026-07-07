@@ -271,6 +271,11 @@ impl EGraph {
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
+        // Under term encoding, run maintenance to fixpoint so the next
+        // scheduled step queries a canonical e-graph. The maintenance rulesets
+        // are run unscheduled; only the user's ruleset is scheduled.
+        query_report.union(self.maybe_run_rebuild_schedule(ruleset)?);
+
         Ok(query_report)
     }
 }
@@ -476,6 +481,420 @@ mod test {
         }
 
         assert_eq!(iter, 12);
+    }
+
+    #[derive(Clone)]
+    struct ChooseAllScheduler;
+
+    impl Scheduler for ChooseAllScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            matches.choose_all();
+            // Re-seek next step so we keep firing on rows produced by rebuilding.
+            true
+        }
+    }
+
+    // A scheduled step under term encoding must run maintenance (rebuilding /
+    // congruence / UF indexing) before returning, otherwise the next step and
+    // any query would observe stale, un-canonicalized view tables.
+    #[test]
+    fn test_scheduler_runs_term_encoding_maintenance() {
+        let mut egraph = EGraph::new_with_term_encoding();
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort Math)
+                (constructor Add (i64 i64) Math)
+                (Add 1 2)
+                (ruleset commutative)
+                (rule ((Add a b)) ((union (Add a b) (Add b a)))
+                      :ruleset commutative :name "commutativity")
+                "#,
+            )
+            .unwrap();
+
+        // One scheduled step fires the rule, creating `(Add 2 1)` and unioning
+        // it with `(Add 1 2)`. The equality is only visible in the view tables
+        // once maintenance has rebuilt them.
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "commutative")
+            .unwrap();
+
+        // Passes only if maintenance ran during the scheduled step.
+        egraph
+            .parse_and_run_program(None, "(check (= (Add 1 2) (Add 2 1)))")
+            .unwrap();
+    }
+
+    // Driving a ruleset through a scheduler to a fixpoint must reach the same
+    // saturated e-graph as running it unscheduled, even under term encoding
+    // (where maintenance runs between scheduled steps). Uses `choose_all` so
+    // termination is unambiguous; the delaying-scheduler case is covered against
+    // the real backoff scheduler in egglog-experimental.
+    #[test]
+    fn test_scheduler_saturation_matches_unscheduled_term_encoding() {
+        let program = r#"
+            (sort Math)
+            (constructor Num (i64) Math)
+            (constructor Add (Math Math) Math)
+            (Add (Num 1) (Add (Num 2) (Num 3)))
+            (ruleset rw)
+            (rule ((Add x y)) ((union (Add x y) (Add y x)))
+                  :name "comm" :ruleset rw)
+            (rule ((Add (Add x y) z)) ((union (Add (Add x y) z) (Add x (Add y z))))
+                  :name "assoc" :ruleset rw)
+            (rule ((Add x (Add y z))) ((union (Add x (Add y z)) (Add (Add x y) z)))
+                  :name "assoc2" :ruleset rw)
+        "#;
+
+        // (1) unscheduled saturation
+        let mut base = EGraph::new_with_term_encoding();
+        base.parse_and_run_program(None, program).unwrap();
+        base.parse_and_run_program(None, "(run-schedule (saturate rw))")
+            .unwrap();
+
+        // (2) driven through a delaying scheduler to a fixpoint
+        let mut sched = EGraph::new_with_term_encoding();
+        let id = sched.add_scheduler(Box::new(ChooseAllScheduler));
+        sched.parse_and_run_program(None, program).unwrap();
+        let mut iters = 0;
+        loop {
+            let report = sched.step_rules_with_scheduler(id, "rw").unwrap();
+            iters += 1;
+            assert!(iters < 10_000, "scheduler did not converge");
+            if report.can_stop {
+                break;
+            }
+        }
+
+        // Same number of e-nodes for every user constructor.
+        for ctor in ["Num", "Add"] {
+            assert_eq!(
+                base.get_size(ctor),
+                sched.get_size(ctor),
+                "e-node count differs for {ctor}"
+            );
+        }
+
+        // The same equalities and inequalities hold in both e-graphs.
+        let checks = [
+            "(check (= (Add (Num 1) (Add (Num 2) (Num 3))) (Add (Num 3) (Add (Num 2) (Num 1)))))",
+            "(check (= (Add (Add (Num 1) (Num 2)) (Num 3)) (Add (Num 1) (Add (Num 2) (Num 3)))))",
+            "(check (!= (Num 1) (Num 2)))",
+            "(check (!= (Add (Num 1) (Num 2)) (Add (Num 1) (Num 3))))",
+        ];
+        for check in checks {
+            base.parse_and_run_program(None, check)
+                .unwrap_or_else(|e| panic!("unscheduled check failed: {check}: {e}"));
+            sched
+                .parse_and_run_program(None, check)
+                .unwrap_or_else(|e| panic!("scheduled check failed: {check}: {e}"));
+        }
+    }
+
+    // Fractional scheduler: fires one match at a time for a while (holding
+    // residual matches across many rebuilds — the "residual staleness" path),
+    // then chooses everything to converge. Used to check that residual matches
+    // held across term-encoding maintenance don't change the final result.
+    #[derive(Clone)]
+    struct DelayThenAll {
+        n: usize,
+        calls: usize,
+        budget: usize,
+    }
+
+    impl Scheduler for DelayThenAll {
+        fn can_stop(&mut self, _rules: &[&str], _ruleset: &str) -> bool {
+            // Only stoppable once past the delaying phase, so pending residual
+            // matches during the delay never terminate the loop early.
+            self.calls >= self.budget
+        }
+
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            self.calls += 1;
+            if self.calls < self.budget {
+                let size = matches.match_size();
+                for i in 0..size.min(self.n) {
+                    matches.choose(i);
+                }
+            } else {
+                matches.choose_all();
+            }
+            true
+        }
+    }
+
+    #[test]
+    fn test_fractional_scheduler_matches_unscheduled_term_encoding() {
+        let program = r#"
+            (sort Math)
+            (constructor Num (i64) Math)
+            (constructor Add (Math Math) Math)
+            (Add (Num 1) (Add (Num 2) (Num 3)))
+            (ruleset rw)
+            (rule ((Add x y)) ((union (Add x y) (Add y x)))
+                  :name "comm" :ruleset rw)
+            (rule ((Add (Add x y) z)) ((union (Add (Add x y) z) (Add x (Add y z))))
+                  :name "assoc" :ruleset rw)
+            (rule ((Add x (Add y z))) ((union (Add x (Add y z)) (Add (Add x y) z)))
+                  :name "assoc2" :ruleset rw)
+        "#;
+
+        let mut base = EGraph::new_with_term_encoding();
+        base.parse_and_run_program(None, program).unwrap();
+        base.parse_and_run_program(None, "(run-schedule (saturate rw))")
+            .unwrap();
+
+        let mut sched = EGraph::new_with_term_encoding();
+        let id = sched.add_scheduler(Box::new(DelayThenAll {
+            n: 1,
+            calls: 0,
+            budget: 40,
+        }));
+        sched.parse_and_run_program(None, program).unwrap();
+        let mut iters = 0;
+        loop {
+            let report = sched.step_rules_with_scheduler(id, "rw").unwrap();
+            iters += 1;
+            assert!(iters < 10_000, "scheduler did not converge");
+            if report.can_stop {
+                break;
+            }
+        }
+
+        for ctor in ["Num", "Add"] {
+            assert_eq!(
+                base.get_size(ctor),
+                sched.get_size(ctor),
+                "e-node count differs for {ctor} (residual staleness affected the result)"
+            );
+        }
+        for check in [
+            "(check (= (Add (Num 1) (Add (Num 2) (Num 3))) (Add (Num 3) (Add (Num 2) (Num 1)))))",
+            "(check (!= (Num 1) (Num 2)))",
+        ] {
+            base.parse_and_run_program(None, check).unwrap();
+            sched.parse_and_run_program(None, check).unwrap();
+        }
+    }
+
+    // Scheduling must keep proof tracking consistent: a term derived by a
+    // scheduled rule firing must still have an extractable, checkable proof.
+    #[test]
+    fn test_scheduler_preserves_proofs() {
+        // Proof-testing mode turns `check` into a proof extraction + check, so
+        // the equality check below validates the proof produced for the term
+        // derived by the scheduled rule firing.
+        let mut egraph = EGraph::new_with_proofs().with_proof_testing();
+        let id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort Math)
+                (constructor Add (i64 i64) Math)
+                (Add 1 2)
+                (ruleset commutative)
+                (rule ((Add a b)) ((union (Add a b) (Add b a)))
+                      :ruleset commutative :name "commutativity")
+                "#,
+            )
+            .unwrap();
+
+        // Drive the rule under the scheduler to a fixpoint.
+        let mut iters = 0;
+        loop {
+            let report = egraph.step_rules_with_scheduler(id, "commutative").unwrap();
+            iters += 1;
+            assert!(iters < 1000, "scheduler did not converge");
+            if report.can_stop {
+                break;
+            }
+        }
+
+        // Under proof-testing this extracts and checks a proof of the equality
+        // derived by the scheduled rule.
+        egraph
+            .parse_and_run_program(None, "(check (= (Add 1 2) (Add 2 1)))")
+            .unwrap();
+    }
+
+    // The backoff scheduler, ported verbatim (minus logging) from
+    // egglog-experimental `src/scheduling.rs`, so we can check that a real
+    // banning scheduler reaches the same fixpoint under term encoding. Backoff
+    // is all-or-nothing (`choose_all` or ban), so it never leaves residual
+    // matches.
+    #[derive(Clone)]
+    struct BackOffScheduler {
+        default_match_limit: usize,
+        default_ban_length: usize,
+        stats: crate::util::HashMap<String, RuleStats>,
+    }
+
+    #[derive(Clone)]
+    struct RuleStats {
+        iteration: usize,
+        times_applied: usize,
+        banned_until: usize,
+        times_banned: usize,
+        match_limit: usize,
+        ban_length: usize,
+    }
+
+    impl BackOffScheduler {
+        fn new(match_limit: usize, ban_length: usize) -> Self {
+            Self {
+                default_match_limit: match_limit,
+                default_ban_length: ban_length,
+                stats: crate::util::HashMap::default(),
+            }
+        }
+
+        fn get_stats(&mut self, rule: String) -> &mut RuleStats {
+            self.stats.entry(rule).or_insert_with(|| RuleStats {
+                iteration: 0,
+                times_applied: 0,
+                banned_until: 0,
+                times_banned: 0,
+                match_limit: self.default_match_limit,
+                ban_length: self.default_ban_length,
+            })
+        }
+    }
+
+    impl Scheduler for BackOffScheduler {
+        fn can_stop(&mut self, rules: &[&str], _ruleset: &str) -> bool {
+            let stats = &mut self.stats;
+            let mut banned: Vec<(&str, RuleStats)> = rules
+                .iter()
+                .filter_map(|rule| {
+                    let s = stats.remove(*rule).unwrap();
+                    if s.banned_until > s.iteration {
+                        Some((*rule, s))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let result = if banned.is_empty() {
+                true
+            } else {
+                let min_delta = banned
+                    .iter()
+                    .map(|(_, s)| s.banned_until - s.iteration)
+                    .min()
+                    .unwrap();
+                for (_, s) in &mut banned {
+                    s.banned_until -= min_delta;
+                }
+                false
+            };
+
+            for (rule, s) in banned {
+                stats.insert(rule.to_owned(), s);
+            }
+            result
+        }
+
+        fn filter_matches(&mut self, rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            let stats = self.get_stats(rule.to_owned());
+            stats.iteration += 1;
+
+            if stats.iteration < stats.banned_until {
+                return false;
+            }
+
+            let threshold = stats
+                .match_limit
+                .checked_shl(stats.times_banned as u32)
+                .unwrap();
+            if matches.match_size() > threshold {
+                let ban_length = stats.ban_length << stats.times_banned;
+                stats.times_banned += 1;
+                stats.banned_until = stats.iteration + ban_length;
+                false
+            } else {
+                stats.times_applied += 1;
+                matches.choose_all();
+                true
+            }
+        }
+    }
+
+    // The real backoff scheduler must reach the same saturated e-graph as an
+    // unscheduled run on a benchmark that triggers repeated banning, under term
+    // encoding (maintenance runs between scheduled steps).
+    #[test]
+    fn test_backoff_scheduler_matches_unscheduled_term_encoding() {
+        // An AC-rewrite closure over four numbers: enough matches that a small
+        // match limit forces `comm`/`assoc` to be banned and later unbanned.
+        let program = r#"
+            (sort Math)
+            (constructor Num (i64) Math)
+            (constructor Add (Math Math) Math)
+            (Add (Num 1) (Add (Num 2) (Add (Num 3) (Num 4))))
+            (ruleset rw)
+            (rule ((Add x y)) ((union (Add x y) (Add y x)))
+                  :name "comm" :ruleset rw)
+            (rule ((Add (Add x y) z)) ((union (Add (Add x y) z) (Add x (Add y z))))
+                  :name "assoc" :ruleset rw)
+            (rule ((Add x (Add y z))) ((union (Add x (Add y z)) (Add (Add x y) z)))
+                  :name "assoc2" :ruleset rw)
+        "#;
+
+        let mut base = EGraph::new_with_term_encoding();
+        base.parse_and_run_program(None, program).unwrap();
+        base.parse_and_run_program(None, "(run-schedule (saturate rw))")
+            .unwrap();
+
+        let mut sched = EGraph::new_with_term_encoding();
+        let id = sched.add_scheduler(Box::new(BackOffScheduler::new(4, 2)));
+        sched.parse_and_run_program(None, program).unwrap();
+        let mut banned_at_least_once = false;
+        let mut iters = 0;
+        loop {
+            let report = sched.step_rules_with_scheduler(id, "rw").unwrap();
+            iters += 1;
+            assert!(iters < 10_000, "backoff scheduler did not converge");
+            // A step that finds matches but makes no database change means a rule
+            // was banned this iteration.
+            if !report.updated && !report.can_stop {
+                banned_at_least_once = true;
+            }
+            if report.can_stop {
+                break;
+            }
+        }
+        assert!(
+            banned_at_least_once,
+            "benchmark never triggered a ban; test would not exercise backoff"
+        );
+
+        for ctor in ["Num", "Add"] {
+            assert_eq!(
+                base.get_size(ctor),
+                sched.get_size(ctor),
+                "e-node count differs for {ctor}"
+            );
+        }
+
+        let checks = [
+            "(check (= (Add (Num 1) (Add (Num 2) (Add (Num 3) (Num 4)))) \
+                       (Add (Num 4) (Add (Num 3) (Add (Num 2) (Num 1))))))",
+            "(check (= (Add (Add (Num 1) (Num 2)) (Add (Num 3) (Num 4))) \
+                       (Add (Num 1) (Add (Num 2) (Add (Num 3) (Num 4))))))",
+            "(check (!= (Num 1) (Num 2)))",
+        ];
+        for check in checks {
+            base.parse_and_run_program(None, check)
+                .unwrap_or_else(|e| panic!("unscheduled check failed: {check}: {e}"));
+            sched
+                .parse_and_run_program(None, check)
+                .unwrap_or_else(|e| panic!("backoff check failed: {check}: {e}"));
+        }
     }
 
     #[derive(Clone, Default)]

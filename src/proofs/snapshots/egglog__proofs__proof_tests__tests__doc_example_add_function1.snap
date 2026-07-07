@@ -8,6 +8,7 @@ expression: snapshot
 (ruleset __rebuilding)
 (ruleset __rebuilding_cleanup)
 (ruleset __delete_subsume_ruleset)
+(internal-rebuild-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (saturate (run __uf_function_index)) (run __rebuilding))) (run __delete_subsume_ruleset)))
 (sort Math :internal-uf __UF_Math)
 (function __UF_Math (Math Math) Unit :merge old :unextractable :internal-hidden)
 (function __UF_Mathf (Math) Math :merge new :unextractable :internal-hidden)

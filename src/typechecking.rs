@@ -491,6 +491,9 @@ impl EGraph {
             NCommand::RunSchedule(schedule) => ResolvedNCommand::RunSchedule(
                 self.type_info.typecheck_schedule(symbol_gen, schedule)?,
             ),
+            NCommand::SetRebuildSchedule(schedule) => ResolvedNCommand::SetRebuildSchedule(
+                self.type_info.typecheck_schedule(symbol_gen, schedule)?,
+            ),
             NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
             NCommand::Push(n) => ResolvedNCommand::Push(*n),
             NCommand::AddRuleset(span, ruleset) => {

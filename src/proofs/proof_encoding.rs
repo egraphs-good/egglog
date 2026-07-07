@@ -1281,7 +1281,11 @@ impl<'a> ProofInstrumentor<'a> {
     fn instrument_schedule(&mut self, schedule: &ResolvedSchedule) -> Schedule {
         match schedule {
             ResolvedSchedule::Run(span, config) => {
-                let new_run = match config.until {
+                // A run needs no maintenance wrapped around it: `step_rules`
+                // runs the schedule recorded by `(internal-rebuild-schedule
+                // ...)` after each step. Only the run's `:until` facts are
+                // rewritten to query the view tables.
+                match config.until {
                     Some(ref facts) => {
                         let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
                         let instrumented_facts = self.parse_facts(&instrumented);
@@ -1300,8 +1304,7 @@ impl<'a> ProofInstrumentor<'a> {
                             until: None,
                         },
                     ),
-                };
-                Schedule::Sequence(span.clone(), vec![new_run, self.rebuild()])
+                }
             }
             ResolvedSchedule::Sequence(span, schedules) => Schedule::Sequence(
                 span.clone(),
@@ -1370,6 +1373,12 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedNCommand::RunSchedule(schedule) => {
                 res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
+            }
+            // Only emitted by this pass, never present in its input; pass through.
+            ResolvedNCommand::SetRebuildSchedule(schedule) => {
+                res.push(Command::SetRebuildSchedule(
+                    self.parse_schedule(schedule.to_string()),
+                ));
             }
             ResolvedNCommand::Fail(span, cmd) => {
                 self.term_encode_command(cmd, res);
@@ -1441,16 +1450,26 @@ impl<'a> ProofInstrumentor<'a> {
                 let proof_header = self.proof_header();
                 res.extend(self.parse_program(&proof_header));
             }
+            // Record the maintenance schedule so `step_rules` runs it between
+            // steps. Carried in the program so the desugared output stays
+            // self-contained (e.g. when re-run without term encoding).
+            let rebuild = self.rebuild();
+            res.push(Command::SetRebuildSchedule(rebuild));
             self.egraph.proof_state.term_header_added = true;
         }
 
         for command in program {
             self.term_encode_command(&command, &mut res);
 
-            // run rebuilding after every command except a few
+            // Rebuild after each command's instrumented output, except where it
+            // can't have changed the e-graph (declarations) or already rebuilt
+            // internally (`RunSchedule`, via the fold in `step_rules`). Emitted
+            // per user command so a command's multi-command desugaring (e.g. a
+            // merge `set`) runs before maintenance reconciles it.
             if let ResolvedNCommand::Function(..)
             | ResolvedNCommand::NormRule { .. }
-            | ResolvedNCommand::Sort { .. } = &command
+            | ResolvedNCommand::Sort { .. }
+            | ResolvedNCommand::RunSchedule(..) = &command
             {
             } else {
                 res.push(Command::RunSchedule(self.rebuild()));

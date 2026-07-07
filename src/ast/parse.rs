@@ -631,6 +631,10 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::parse_schedule)?,
             ))],
+            "internal-rebuild-schedule" => match tail {
+                [sched] => vec![Command::SetRebuildSchedule(self.parse_schedule(sched)?)],
+                _ => return error!(span, "usage: (internal-rebuild-schedule <schedule>)"),
+            },
             "extract" => match tail {
                 [e] => vec![Command::Extract(
                     span.clone(),

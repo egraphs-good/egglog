@@ -76,6 +76,7 @@ impl Names {
             }
             ResolvedNCommand::Extract(..) => Ok(()),
             ResolvedNCommand::RunSchedule(..) => Ok(()),
+            ResolvedNCommand::SetRebuildSchedule(..) => Ok(()),
             ResolvedNCommand::PrintOverallStatistics(..) => Ok(()),
             ResolvedNCommand::ProveExists(..) => Ok(()),
             ResolvedNCommand::PrintFunction(..) => Ok(()),

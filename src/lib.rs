@@ -308,6 +308,11 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    /// Maintenance schedule run to fixpoint after each step under term
+    /// encoding, set via the internal `(internal-rebuild-schedule ...)` command
+    /// so it travels with the desugared program. `None` when term encoding is
+    /// off.
+    rebuild_schedule: Option<ResolvedSchedule>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -417,6 +422,7 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            rebuild_schedule: None,
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
@@ -1130,7 +1136,36 @@ impl EGraph {
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        Ok(RunReport::singleton(ruleset, iteration_report))
+        let mut report = RunReport::singleton(ruleset, iteration_report);
+        report.union(self.maybe_run_rebuild_schedule(ruleset)?);
+        Ok(report)
+    }
+
+    /// Under term encoding, run the maintenance schedule (set via
+    /// `(internal-rebuild-schedule ...)`) to fixpoint so the next step and any
+    /// query observe a canonical e-graph. A no-op when no schedule is set, or
+    /// when `ruleset` is itself part of the maintenance schedule (which must not
+    /// re-trigger it).
+    fn maybe_run_rebuild_schedule(&mut self, ruleset: &str) -> Result<RunReport, Error> {
+        let Some(sched) = self.rebuild_schedule.clone() else {
+            return Ok(RunReport::default());
+        };
+        if Self::schedule_mentions_ruleset(&sched, ruleset) {
+            return Ok(RunReport::default());
+        }
+        self.run_schedule(&sched)
+    }
+
+    fn schedule_mentions_ruleset(schedule: &ResolvedSchedule, ruleset: &str) -> bool {
+        match schedule {
+            GenericSchedule::Run(_, config) => config.ruleset == ruleset,
+            GenericSchedule::Saturate(_, inner) | GenericSchedule::Repeat(_, _, inner) => {
+                Self::schedule_mentions_ruleset(inner, ruleset)
+            }
+            GenericSchedule::Sequence(_, scheds) => scheds
+                .iter()
+                .any(|s| Self::schedule_mentions_ruleset(s, ruleset)),
+        }
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1627,6 +1662,9 @@ impl EGraph {
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
                 return Ok(vec![CommandOutput::RunSchedule(report)]);
+            }
+            ResolvedNCommand::SetRebuildSchedule(sched) => {
+                self.rebuild_schedule = Some(sched);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
                 None => {
