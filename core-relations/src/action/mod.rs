@@ -503,26 +503,16 @@ impl<'a> ExecutionState<'a> {
             .table
             .split_fast_slow(std::slice::from_ref(&constraint));
 
-        slow.retain(|c| {
-            let (col, val) = match c {
-                Constraint::EqConst { col, val } => (*col, *val),
-                Constraint::Eq { .. }
-                | Constraint::LtConst { .. }
-                | Constraint::GtConst { .. }
-                | Constraint::LeConst { .. }
-                | Constraint::GeConst { .. } => return true,
-            };
-            if *table_info
-                .spec
-                .uncacheable_columns
-                .get(col)
-                .unwrap_or(&false)
-            {
-                return true;
-            }
+        debug_assert!(slow.iter().all(|c| matches!(c, Constraint::EqConst { .. })));
 
+        if !*table_info
+            .spec
+            .uncacheable_columns
+            .get(col)
+            .unwrap_or(&false)
+        {
             let index = get_column_index_from_tableinfo(table_info, col);
-            match index.get().unwrap().get_subset(&val) {
+            match index.get().unwrap().get_subset(&value) {
                 Some(s) => {
                     with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
                 }
@@ -530,8 +520,8 @@ impl<'a> ExecutionState<'a> {
                     subset = Subset::empty();
                 }
             }
-            false
-        });
+            slow.clear();
+        }
 
         let imp = &table_info.table;
         let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
