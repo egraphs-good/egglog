@@ -47,14 +47,16 @@ pub trait TreeCostModel<C: Cost>: BaseCostModel<C> {
     }
 }
 
-/// Values that can be accumulated in any insertion order.
+/// Requirements for a type to be usable as an extraction cost.
 ///
 /// Extraction cost accumulation relies on `identity` being neutral and
 /// `combine` being associative and commutative for the values used during
 /// extraction. Rust cannot enforce those laws, so custom cost implementations
-/// are responsible for preserving them.
-pub trait CommutativeMonoid: Clone {
-    /// The neutral value for [`CommutativeMonoid::combine`], usually zero.
+/// are responsible for preserving them. Raw floats do not implement this trait
+/// because extractors need a total order; use `OrderedFloat` for approximate
+/// floating-point costs.
+pub trait Cost: Clone + Ord + Eq + Debug {
+    /// The neutral value for [`Cost::combine`], usually zero.
     fn identity() -> Self;
 
     /// Accumulates two values, usually addition.
@@ -63,21 +65,9 @@ pub trait CommutativeMonoid: Clone {
     fn combine(self, other: &Self) -> Self;
 }
 
-/// Domain marker for values that can be used as extraction costs.
-///
-/// Implement [`CommutativeMonoid`] for custom cost types. `Cost` is provided
-/// by a blanket impl so public extraction APIs can keep a domain-specific bound.
-/// Raw floats can implement [`CommutativeMonoid`], but they do not satisfy this
-/// bound because extractors need a total order. `OrderedFloat` is available for
-/// approximate floating-point costs, but those can be order-sensitive because
-/// floating-point addition is not strictly associative.
-pub trait Cost: CommutativeMonoid + Ord + Eq + Debug {}
-
-impl<T: CommutativeMonoid + Ord + Eq + Debug> Cost for T {}
-
 macro_rules! cost_impl_int {
     ($($cost:ty),*) => {$(
-        impl CommutativeMonoid for $cost {
+        impl Cost for $cost {
             fn identity() -> Self { 0 }
             fn combine(self, other: &Self) -> Self {
                 self.saturating_add(*other)
@@ -90,7 +80,7 @@ cost_impl_int!(i8, i16, i32, i64, i128, isize);
 
 macro_rules! cost_impl_num {
     ($($cost:ty),*) => {$(
-        impl CommutativeMonoid for $cost {
+        impl Cost for $cost {
             fn identity() -> Self {
                 use num::Zero;
                 Self::zero()
@@ -103,7 +93,7 @@ macro_rules! cost_impl_num {
 }
 cost_impl_num!(num::BigInt, num::BigRational);
 use ordered_float::OrderedFloat;
-cost_impl_num!(f32, f64, OrderedFloat<f32>, OrderedFloat<f64>);
+cost_impl_num!(OrderedFloat<f32>, OrderedFloat<f64>);
 
 pub type DefaultCost = u64;
 
@@ -796,50 +786,6 @@ impl EGraph {
             .collect();
 
         Ok(ExtractedTermVariants { termdag, variants })
-    }
-
-    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`] using the default cost model.
-    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
-    pub fn extract_value(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
-        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
-    }
-
-    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`].
-    /// Note that the `TermDag` may contain a superset of the nodes referenced by the returned `TermId`.
-    /// See also [`EGraph::extract_value_to_string`] for convenience.
-    pub fn extract_value_with_cost_model<CM: TreeCostModel<DefaultCost> + 'static>(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-        cost_model: CM,
-    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
-        let ExtractedTerms { termdag, mut terms } =
-            self.extract_best(vec![(sort.clone(), value)], cost_model)?;
-        let extracted = terms
-            .pop()
-            .expect("extract_best returns one result for one root")
-            .ok_or_else(|| {
-                Error::ExtractError(format!(
-                    "Unable to find any valid extraction for sort {}",
-                    sort.name()
-                ))
-            })?;
-        Ok((termdag, extracted.term, extracted.cost))
-    }
-
-    /// Extract a value to a string for printing.
-    /// See also [`EGraph::extract_value`] for more control.
-    pub fn extract_value_to_string(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<(String, DefaultCost), Error> {
-        let (termdag, term, cost) = self.extract_value(sort, value)?;
-        Ok((termdag.to_string(term), cost))
     }
 
     /// For constructors and relations, the output column can be ignored

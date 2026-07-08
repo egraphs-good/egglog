@@ -36,7 +36,6 @@ the common "pure native function" case.
 To pull an extracted term back out of the e-graph, let-bind a
 global name to it (`(let $root ...)`), resolve the global with
 [`EGraph::eval_expr`] to get its `(sort, Value)`, then call
-[`EGraph::extract_value`] (default cost model) or
-[`EGraph::extract_value_with_cost_model`] / a custom
-[`extract::TreeCostModel`] when you want non-default costs. The
-[`extract`] module also exposes batch extraction APIs.
+[`EGraph::extract_best`] with a cost model such as
+[`extract::TreeAdditiveCostModel`]. The [`extract`] module also
+exposes custom cost types and variant extraction APIs.

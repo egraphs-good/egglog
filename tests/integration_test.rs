@@ -1,15 +1,13 @@
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
-    extract::{
-        BaseCostModel, CommutativeMonoid, DefaultCost, TreeAdditiveCostModel, TreeCostModel,
-    },
+    extract::{BaseCostModel, Cost, DefaultCost, TreeAdditiveCostModel, TreeCostModel},
     *,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct CustomCost(u128);
 
-impl CommutativeMonoid for CustomCost {
+impl Cost for CustomCost {
     fn identity() -> Self {
         Self(0)
     }
