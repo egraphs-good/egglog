@@ -17,11 +17,13 @@ impl Cost for CustomCost {
     }
 }
 
-struct CustomCostModel;
+struct CustomCostModel {
+    node_cost: CustomCost,
+}
 
 impl BaseCostModel<CustomCost> for CustomCostModel {
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
-        CustomCost(1)
+        self.node_cost.clone()
     }
 }
 
@@ -39,7 +41,7 @@ impl TreeCostModel<CustomCost> for CustomCostModel {
         if func.name() == "Wide" {
             CustomCost(children_total.0 * 10)
         } else {
-            children_total.combine(&CustomCost(1))
+            children_total.combine(&self.node_cost)
         }
     }
 }
@@ -541,7 +543,12 @@ fn test_tree_extract_accepts_custom_cost_type() {
     let (sort, value) = daggy_root(&mut egraph);
 
     let extracted = egraph
-        .extract_best(vec![(sort.clone(), value)], CustomCostModel)
+        .extract_best(
+            vec![(sort.clone(), value)],
+            CustomCostModel {
+                node_cost: CustomCost(1),
+            },
+        )
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
@@ -555,6 +562,25 @@ fn test_tree_extract_accepts_custom_cost_type() {
     let (extracted_sort, extracted_value) = egraph.eval_expr(&extracted_expr).unwrap();
     assert_eq!(extracted_sort.name(), sort.name());
     assert_eq!(extracted_value, value);
+}
+
+#[test]
+fn tree_additive_cost_model_uses_configured_default_node_cost() {
+    let mut egraph = EGraph::default();
+    add_daggy_example(&mut egraph);
+
+    let (sort, value) = daggy_root(&mut egraph);
+
+    let extracted = egraph
+        .extract_best(vec![(sort, value)], TreeAdditiveCostModel::new(2))
+        .unwrap();
+    let root = extracted.terms.into_iter().next().unwrap().unwrap();
+
+    assert_eq!(root.cost, 10);
+    assert_eq!(
+        extracted.termdag.to_string(root.term),
+        "(Pair (Leaf 1) (Leaf 2))"
+    );
 }
 
 #[test]

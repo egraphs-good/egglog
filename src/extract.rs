@@ -97,17 +97,36 @@ cost_impl_num!(OrderedFloat<f32>, OrderedFloat<f64>);
 
 pub type DefaultCost = u64;
 
-/// A cost model that computes the cost by summing the cost of each node.
-#[derive(Default, Clone)]
-pub struct TreeAdditiveCostModel {}
+/// A cost model that sums constructor, primitive leaf, and child costs.
+///
+/// With the default cost type, constructor `:cost` declarations override
+/// `node_cost`. Other cost types can use this as a reusable base-value model,
+/// but still need their own `TreeCostModel` impl for constructor costs.
+#[derive(Clone, Debug)]
+pub struct TreeAdditiveCostModel<C = DefaultCost> {
+    /// The fallback cost for primitive leaves and constructors without `:cost`.
+    pub node_cost: C,
+}
 
-impl BaseCostModel<DefaultCost> for TreeAdditiveCostModel {
-    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
-        1
+impl<C> TreeAdditiveCostModel<C> {
+    pub fn new(node_cost: C) -> Self {
+        Self { node_cost }
     }
 }
 
-impl TreeCostModel<DefaultCost> for TreeAdditiveCostModel {
+impl Default for TreeAdditiveCostModel<DefaultCost> {
+    fn default() -> Self {
+        Self { node_cost: 1 }
+    }
+}
+
+impl<C: Cost> BaseCostModel<C> for TreeAdditiveCostModel<C> {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> C {
+        self.node_cost.clone()
+    }
+}
+
+impl TreeCostModel<DefaultCost> for TreeAdditiveCostModel<DefaultCost> {
     fn total_enode_cost(
         &self,
         egraph: &EGraph,
@@ -115,11 +134,10 @@ impl TreeCostModel<DefaultCost> for TreeAdditiveCostModel {
         _enode: &Enode<'_>,
         child_costs: &[DefaultCost],
     ) -> DefaultCost {
-        child_costs
-            .iter()
-            .fold(func.extraction_head_cost(egraph), |cost, child| {
-                cost.combine(child)
-            })
+        child_costs.iter().fold(
+            func.extraction_head_cost(egraph, self.node_cost),
+            |cost, child| cost.combine(child),
+        )
     }
 }
 
@@ -684,17 +702,21 @@ impl<C: Cost> Extractor<C> {
 }
 
 impl Function {
-    /// Returns the extraction head cost for this table.
+    /// Returns the extraction head cost for this table, falling back to `default`.
     /// View tables inherit the cost of their referenced hidden term constructor.
-    pub(crate) fn extraction_head_cost(&self, egraph: &EGraph) -> DefaultCost {
+    pub(crate) fn extraction_head_cost(
+        &self,
+        egraph: &EGraph,
+        default: DefaultCost,
+    ) -> DefaultCost {
         if let Some(term_constructor) = &self.decl.term_constructor {
             egraph
                 .functions
                 .get(term_constructor)
                 .and_then(|func| func.decl.cost)
-                .unwrap_or(1)
+                .unwrap_or(default)
         } else {
-            self.decl.cost.unwrap_or(1)
+            self.decl.cost.unwrap_or(default)
         }
     }
 
