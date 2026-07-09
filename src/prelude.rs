@@ -1041,6 +1041,23 @@ mod tests {
     }
 
     #[test]
+    fn add_primitive_under_term_encoding() -> Result<(), Error> {
+        // A primitive registered through the Rust API AFTER construction must
+        // reach the term-encoding typechecker (a separate e-graph), not just the
+        // running e-graph — otherwise the encoder reports it as unbound.
+        let mut egraph = EGraph::new_with_term_encoding();
+        add_literal_prim!(&mut egraph, "tripleit" = |x: i64| -> i64 { x * 3 });
+        egraph.parse_and_run_program(
+            None,
+            "(function f (i64) i64 :merge (min old new))
+(set (f 0) (tripleit 7))
+(run 1)
+(check (= (f 0) 21))",
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn rust_api_query() -> Result<(), Error> {
         let mut egraph = build_test_database()?;
 

@@ -200,18 +200,12 @@ mod tests {
             .get_sort_by_name("EqContainer")
             .expect("EqContainer sort")
             .clone();
+        // Registering on the egraph also registers on its term-encoding
+        // typechecker (see `register_per_context`), so this one call is enough.
         let validator =
             |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
         add_primitive_with_validator!(
             &mut egraph,
-            "proof-container-id" = |x: # (eq_container_sort)| -> # (eq_container_sort) { x },
-            validator
-        );
-        let validator =
-            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
-        let original_typechecking = egraph.proof_state.original_typechecking.as_mut().unwrap();
-        add_primitive_with_validator!(
-            &mut **original_typechecking,
             "proof-container-id" = |x: # (eq_container_sort)| -> # (eq_container_sort) { x },
             validator
         );
