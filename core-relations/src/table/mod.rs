@@ -825,21 +825,18 @@ impl SortedWritesTable {
         let row_writer = self.data.data.parallel_writer();
         let pending_rows = &self.pending_state.pending_rows;
         let merge = self.merge.clone();
-        let pending_adds = parallel::map_mut_with(
-            self.hash.mut_shards(),
-            || (checker.clone(), 0usize, false),
-            |shard_id, shard| {
-                let shard_id = ShardId::from_usize(shard_id);
-                let mut checker = checker.clone();
-                let mut exec_state = exec_state.clone();
-                let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
-                let queue = &pending_rows[shard_id];
-                let mut marked_stale = 0usize;
-                let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
-                let mut changed = false;
-                // The core flush loop: We call once `staged` reaches `BATCH_SIZE` or
-                // when we're done.
-                macro_rules! flush_staged_outputs {
+        let pending_adds = parallel::map_mut(self.hash.mut_shards(), |shard_id, shard| {
+            let shard_id = ShardId::from_usize(shard_id);
+            let mut checker = checker.clone();
+            let mut exec_state = exec_state.clone();
+            let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
+            let queue = &pending_rows[shard_id];
+            let mut marked_stale = 0usize;
+            let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
+            let mut changed = false;
+            // The core flush loop: We call once `staged` reaches `BATCH_SIZE` or
+            // when we're done.
+            macro_rules! flush_staged_outputs {
                     () => {{
                         // Phase 2: Write the staged rows to the row writer. This only
                         // works due to the `ParallelRowBufWriter` machinery.
@@ -924,25 +921,24 @@ impl SortedWritesTable {
                         staged.clear();
                     }};
                 }
-                // Phase 1: process all incoming updates:
-                // * Add new values to `staged`
-                // * Removing entries in `shard` and mark them as stale in
-                // `data` if they will be overwritten.
-                while let Some(buf) = queue.pop() {
-                    // We create a read_handle once per batch to avoid blocking
-                    // too many threads if someone needs to resize the row
-                    // writer.
-                    for row in buf.non_stale() {
-                        staged.insert(row, |cur, new, out| (merge)(&mut exec_state, cur, new, out));
-                        if staged.len() >= BATCH_SIZE {
-                            flush_staged_outputs!();
-                        }
+            // Phase 1: process all incoming updates:
+            // * Add new values to `staged`
+            // * Removing entries in `shard` and mark them as stale in
+            // `data` if they will be overwritten.
+            while let Some(buf) = queue.pop() {
+                // We create a read_handle once per batch to avoid blocking
+                // too many threads if someone needs to resize the row
+                // writer.
+                for row in buf.non_stale() {
+                    staged.insert(row, |cur, new, out| (merge)(&mut exec_state, cur, new, out));
+                    if staged.len() >= BATCH_SIZE {
+                        flush_staged_outputs!();
                     }
                 }
-                flush_staged_outputs!();
-                (checker, marked_stale, changed)
-            },
-        );
+            }
+            flush_staged_outputs!();
+            (checker, marked_stale, changed)
+        });
         self.data.data = row_writer.finish();
         // Now we just need to reset our invariants.
 

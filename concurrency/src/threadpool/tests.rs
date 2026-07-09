@@ -8,7 +8,10 @@ use std::{
     time::Duration,
 };
 
-use crate::{Notification, Scope, ThreadPool, current_num_threads, scope as threadpool_scope};
+use crate::{
+    Notification, Scope, ThreadPool, current_num_threads, scope as threadpool_scope,
+    without_current_pool,
+};
 
 use super::{MAX_INLINE_SCOPE_HELP_DEPTH, is_background_worker_thread};
 
@@ -371,6 +374,21 @@ fn install_sets_and_restores_current_pool() {
         });
         assert_eq!(current_num_threads(), 2);
     });
+    assert_eq!(current_num_threads(), 1);
+}
+
+#[test]
+fn without_current_pool_clears_and_restores_current_pool() {
+    let pool = ThreadPool::new(2);
+
+    pool.install(|| {
+        assert_eq!(current_num_threads(), 2);
+        without_current_pool(|| {
+            assert_eq!(current_num_threads(), 1);
+        });
+        assert_eq!(current_num_threads(), 2);
+    });
+
     assert_eq!(current_num_threads(), 1);
 }
 

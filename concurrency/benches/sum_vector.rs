@@ -1,11 +1,4 @@
-use std::{
-    env,
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    thread,
-};
+use std::{env, sync::OnceLock, thread};
 
 use divan::{Bencher, counter::ItemsCount};
 use egglog_concurrency::ThreadPool;
@@ -79,17 +72,19 @@ fn threadpool_chunked_sum<const CHUNK: usize>(bencher: Bencher) {
         .with_inputs(|| data)
         .input_counter(|data| ItemsCount::new(data.len()))
         .bench_values(|data| {
-            let total = AtomicU64::new(0);
+            let mut partials = vec![0_u64; data.len().div_ceil(CHUNK)];
             pool.scope(|scope| {
-                for chunk in divan::black_box(data).chunks(CHUNK) {
-                    let total = &total;
+                for (slot, chunk) in partials
+                    .iter_mut()
+                    .zip(divan::black_box(data).chunks(CHUNK))
+                {
                     scope.spawn(move |_| {
-                        total.fetch_add(sum_slice(chunk), Ordering::Relaxed);
+                        *slot = sum_slice(chunk);
                     });
                 }
             });
 
-            let sum = total.load(Ordering::Relaxed);
+            let sum: u64 = partials.into_iter().sum();
             assert_eq!(sum, expected);
             divan::black_box(sum)
         });

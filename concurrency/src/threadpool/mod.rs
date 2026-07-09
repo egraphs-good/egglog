@@ -152,6 +152,33 @@ pub fn current_num_threads() -> usize {
     with_current_pool(|pool| pool.map_or(1, ThreadPoolState::thread_count))
 }
 
+/// Run `f` with no current thread pool installed on this thread.
+///
+/// This is useful for serial operations that must not inherit an ambient pool.
+/// The previous current pool, if any, is restored before this function returns
+/// or unwinds.
+///
+/// # Examples
+///
+/// ```
+/// use egglog_concurrency::{ThreadPool, current_num_threads, without_current_pool};
+///
+/// let pool = ThreadPool::new(2);
+/// pool.install(|| {
+///     assert_eq!(current_num_threads(), 2);
+///     without_current_pool(|| {
+///         assert_eq!(current_num_threads(), 1);
+///     });
+///     assert_eq!(current_num_threads(), 2);
+/// });
+/// ```
+pub fn without_current_pool<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    install_pool_ptr(ptr::null(), f)
+}
+
 /// Run `f` in a scope on the currently installed thread pool.
 ///
 /// This is the free-function counterpart to [`ThreadPool::scope`]. It keeps the

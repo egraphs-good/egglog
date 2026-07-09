@@ -17,7 +17,7 @@ pub use notification_list::NotificationList;
 pub use parallel_writer::ParallelVecWriter;
 pub use resettable_oncelock::ResettableOnceLock;
 pub use shared_arena::{Handle, SharedArena, SharedRef};
-pub use threadpool::{Scope, ThreadPool, current_num_threads, scope};
+pub use threadpool::{Scope, ThreadPool, current_num_threads, scope, without_current_pool};
 
 #[cfg(test)]
 mod tests;

@@ -163,7 +163,7 @@ fn normalize_thread_count(threads: usize) -> usize {
 fn install_thread_pool<R>(thread_pool: Option<Arc<ThreadPool>>, f: impl FnOnce() -> R) -> R {
     match thread_pool {
         Some(thread_pool) => thread_pool.install(f),
-        None => f(),
+        None => egglog_concurrency::without_current_pool(f),
     }
 }
 

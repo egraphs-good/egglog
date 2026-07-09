@@ -36,14 +36,17 @@ fn read_usize_env(name: &str) -> Option<usize> {
     std::env::var(name).ok()?.parse().ok()
 }
 
-fn default_vec<T: Default>(len: usize) -> Vec<T> {
-    vec_with(len, T::default)
+fn empty_result_slots<T>(len: usize) -> Vec<Option<T>> {
+    let mut values = Vec::with_capacity(len);
+    values.resize_with(len, || None);
+    values
 }
 
-fn vec_with<T>(len: usize, init: impl FnMut() -> T) -> Vec<T> {
-    let mut values = Vec::with_capacity(len);
-    values.resize_with(len, init);
+fn collect_result_slots<T>(values: Vec<Option<T>>) -> Vec<T> {
     values
+        .into_iter()
+        .map(|value| value.expect("parallel map result slot should be initialized"))
+        .collect()
 }
 
 pub(crate) fn for_each_mut<T, F>(items: &mut [T], f: F)
@@ -75,17 +78,7 @@ where
 pub(crate) fn map_mut<T, R, F>(items: &mut [T], f: F) -> Vec<R>
 where
     T: Send,
-    R: Default + Send,
-    F: Fn(usize, &mut T) -> R + Sync,
-{
-    map_mut_with(items, R::default, f)
-}
-
-pub(crate) fn map_mut_with<T, R, Init, F>(items: &mut [T], init: Init, f: F) -> Vec<R>
-where
-    T: Send,
     R: Send,
-    Init: FnMut() -> R,
     F: Fn(usize, &mut T) -> R + Sync,
 {
     if !enabled_for_len(items.len()) {
@@ -97,7 +90,7 @@ where
     }
 
     let chunk_len = chunk_len(items.len());
-    let mut results = vec_with(items.len(), init);
+    let mut results = empty_result_slots(items.len());
     egglog_concurrency::scope(|scope| {
         let f = &f;
         for (chunk_index, (chunk, out)) in items
@@ -108,13 +101,13 @@ where
             let base = chunk_index * chunk_len;
             scope.spawn(move |_| {
                 for (offset, item) in chunk.iter_mut().enumerate() {
-                    out[offset] = f(base + offset, item);
+                    out[offset] = Some(f(base + offset, item));
                 }
             });
         }
     });
 
-    results
+    collect_result_slots(results)
 }
 
 pub(crate) fn map_dense_id_map_mut<K, V, R, F>(map: &mut DenseIdMap<K, V>, f: F) -> Vec<R>
@@ -146,7 +139,7 @@ where
 pub(crate) fn map<T, R, F>(items: &[T], f: F) -> Vec<R>
 where
     T: Sync,
-    R: Default + Send,
+    R: Send,
     F: Fn(usize, &T) -> R + Sync,
 {
     if !enabled_for_len(items.len()) {
@@ -158,7 +151,7 @@ where
     }
 
     let chunk_len = chunk_len(items.len());
-    let mut results = default_vec(items.len());
+    let mut results = empty_result_slots(items.len());
     egglog_concurrency::scope(|scope| {
         let f = &f;
         for (chunk_index, (chunk, out)) in items
@@ -169,11 +162,11 @@ where
             let base = chunk_index * chunk_len;
             scope.spawn(move |_| {
                 for (offset, item) in chunk.iter().enumerate() {
-                    out[offset] = f(base + offset, item);
+                    out[offset] = Some(f(base + offset, item));
                 }
             });
         }
     });
 
-    results
+    collect_result_slots(results)
 }

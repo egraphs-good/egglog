@@ -384,13 +384,6 @@ impl TaggedRowBuffer {
             inner: RowBuffer::new(n_columns + 1),
         }
     }
-
-    /// Iterate over the contents of the buffer.
-    ///
-    /// This is a compatibility alias for [`TaggedRowBuffer::iter`].
-    pub fn par_iter(&self) -> impl Iterator<Item = (RowId, &[Value])> {
-        self.iter()
-    }
 }
 
 impl TaggedRowBuffer<SmallValueVec> {
