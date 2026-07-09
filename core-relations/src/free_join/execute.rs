@@ -16,6 +16,7 @@ use crate::{
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
+use egglog_concurrency::Scope;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -30,7 +31,7 @@ use crate::{
     },
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{Offsets, RowId, SortedOffsetSlice, SortedOffsetVector, Subset},
-    parallel_heuristics::parallelize_db_level_op,
+    parallel_heuristics::{action_batch_size, free_join_fork_depth, parallelize_db_level_op},
     pool::Pooled,
     query::RuleSet,
     row_buffer::TaggedRowBuffer,
@@ -359,7 +360,7 @@ impl Database {
             let dash_rule_reports: Arc<DashMap<Arc<str>, Vec<RuleReport>>> =
                 Arc::new(DashMap::default());
             let db: &Database = self;
-            rayon::in_place_scope(|scope| {
+            egglog_concurrency::scope(|scope| {
                 for (plan, desc, symbol_map) in rule_set.plans.values() {
                     // TODO: add stats
                     let report_plan = match report_level {
@@ -436,7 +437,7 @@ impl Database {
                                         plan.stages.blocks.iter().enumerate()
                                     {
                                         let mat_id = MatId::from_usize(mat_id);
-                                        rayon::in_place_scope(|stage_scope| {
+                                        egglog_concurrency::scope(|stage_scope| {
                                             let mut materializer = ScopedMaterializer {
                                                 scope: stage_scope,
                                                 specs: specs.clone(),
@@ -641,12 +642,12 @@ struct ActionState {
     bindings: Bindings,
 }
 
-impl Default for ActionState {
-    fn default() -> Self {
+impl ActionState {
+    fn new(batch_size: usize) -> Self {
         Self {
             n_runs: 0,
             len: 0,
-            bindings: Bindings::new(VAR_BATCH_SIZE),
+            bindings: Bindings::new(batch_size),
         }
     }
 }
@@ -986,7 +987,7 @@ impl<'a> JoinState<'a> {
                 }
                 // TODO: `supports_parallel_drain`` is a hack because currently
                 // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
-                if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain() {
+                if cur < free_join_fork_depth() && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
                     $updates.drain(|update| match update {
@@ -1065,7 +1066,7 @@ impl<'a> JoinState<'a> {
                                 JoinState {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
-                                    // Each rayon task uses its own thread-local pool.
+                                    // Each scoped task uses its own thread-local pool.
                                     // This makes drain_updates_parallel slightly more expensive
                                     // than drain_updates eevn when both are run in single thread
                                     pool: with_pool_set(|ps| ps.get_pool()),
@@ -1804,7 +1805,7 @@ impl<'a> JoinState<'a> {
     }
 }
 
-const VAR_BATCH_SIZE: usize = 128;
+const LOCAL_ACTION_BATCH_SIZE: usize = 128;
 
 /// A trait used to abstract over different ways of buffering actions together
 /// before running them.
@@ -1899,7 +1900,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         bindings: &DenseIdMap<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'a>,
     ) {
-        let action_state = self.batches.get_or_default(action);
+        let action_state = self
+            .batches
+            .get_or_insert(action, || ActionState::new(LOCAL_ACTION_BATCH_SIZE));
         action_state.n_runs += 1;
         action_state.len += 1;
         let action_info = &self.rule_set.actions[action];
@@ -1908,7 +1911,7 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         unsafe {
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
-        if action_state.len >= VAR_BATCH_SIZE {
+        if action_state.len >= LOCAL_ACTION_BATCH_SIZE {
             let mut state = to_exec_state();
             let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
             action_state.bindings.clear();
@@ -1940,9 +1943,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
     }
 }
 
-/// An Action buffer that hands off batches to of actions to rayon to execute.
+/// An action buffer that hands off batches of actions to scoped worker tasks.
 struct ScopedActionBuffer<'inner, 'scope> {
-    scope: &'inner rayon::Scope<'scope>,
+    scope: &'inner Scope<'scope>,
     rule_set: &'scope RuleSet,
     match_counter: Arc<MatchCounter>,
     batches: DenseIdMap<ActionId, ActionState>,
@@ -1951,7 +1954,7 @@ struct ScopedActionBuffer<'inner, 'scope> {
 
 impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
     fn new(
-        scope: &'inner rayon::Scope<'scope>,
+        scope: &'inner Scope<'scope>,
         rule_set: &'scope RuleSet,
         match_counter: Arc<MatchCounter>,
     ) -> Self {
@@ -1977,7 +1980,10 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
         self.needs_flush = true;
-        let action_state = self.batches.get_or_default(action);
+        let batch_size = action_batch_size();
+        let action_state = self
+            .batches
+            .get_or_insert(action, || ActionState::new(batch_size));
         action_state.n_runs += 1;
         action_state.len += 1;
         let action_info = &self.rule_set.actions[action];
@@ -1986,10 +1992,9 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         unsafe {
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
-        if action_state.len >= VAR_BATCH_SIZE {
+        if action_state.len >= batch_size {
             let mut state = to_exec_state();
-            let mut bindings =
-                mem::replace(&mut action_state.bindings, Bindings::new(VAR_BATCH_SIZE));
+            let mut bindings = mem::replace(&mut action_state.bindings, Bindings::new(batch_size));
             action_state.len = 0;
             let match_counter = self.match_counter.clone();
             self.scope.spawn(move |_| {
@@ -2171,7 +2176,7 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
 }
 
 struct ScopedMaterializer<'inner, 'scope> {
-    scope: &'inner rayon::Scope<'scope>,
+    scope: &'inner Scope<'scope>,
     specs: Arc<DenseIdMap<MatId, MatSpec>>,
     materializations: Arc<DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>>,
     scratch_key: Vec<Value>,

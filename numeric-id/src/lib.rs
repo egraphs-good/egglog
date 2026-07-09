@@ -160,6 +160,10 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
         &self.data
     }
 
+    pub fn raw_mut(&mut self) -> &mut [Option<V>] {
+        &mut self.data
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
         self.data
             .iter()
@@ -214,24 +218,6 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
     pub fn is_empty(&self) -> bool {
         self.data.iter().all(|v| v.is_none())
-    }
-}
-
-impl<K: NumericId, V: Send + Sync> DenseIdMap<K, V> {
-    /// Get a parallel iterator over the entries in the table.
-    pub fn par_iter(&self) -> impl ParallelIterator<Item = (K, &V)> {
-        self.data
-            .par_iter()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_ref()?)))
-    }
-
-    /// Get a parallel iterator over mutable references to the entries in the table.
-    pub fn par_iter_mut(&mut self) -> impl ParallelIterator<Item = (K, &mut V)> {
-        self.data
-            .par_iter_mut()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
     }
 }
 
@@ -415,15 +401,9 @@ impl<K: NumericId, V> IdVec<K, V> {
     pub fn get(&self, key: K) -> Option<&V> {
         self.data.get(key.index())
     }
-}
 
-impl<K: NumericId, V: Send + Sync> IdVec<K, V> {
-    pub fn par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = (K, &mut V)> {
-        self.data
-            .par_iter_mut()
-            .with_max_len(1)
-            .enumerate()
-            .map(|(i, v)| (K::from_usize(i), v))
+    pub fn as_mut_slice(&mut self) -> &mut [V] {
+        &mut self.data
     }
 }
 
@@ -440,10 +420,6 @@ impl<K: NumericId, V> ops::IndexMut<K> for IdVec<K, V> {
         &mut self.data[key.index()]
     }
 }
-
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
-};
 
 #[macro_export]
 #[doc(hidden)]
