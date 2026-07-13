@@ -40,3 +40,25 @@ global name to it (`(let $root ...)`), resolve the global with
 [`EGraph::extract_value_with_cost_model`] / a custom
 [`extract::CostModel`] when you want non-default costs. The
 [`extract`] module has the full extractor API.
+
+# Writing egglog inline from Rust
+The [`expr!`], [`fact!`], [`action!`], [`command!`], [`egglog!`], and [`rule!`]
+macros let you write egglog as Rust tokens and get back parsed `Command` /
+`Expr` / `Fact` values; splice Rust values in with `#x`, `#..xs`, and
+`:#field`, and build un-parsed fragments with [`sexp!`]. See [`egglog!`] for
+the syntax (all re-exported from [`prelude`]).
+
+```
+use egglog::prelude::*;
+let mut egraph = EGraph::default();
+egraph.run_program(egglog!(
+    (datatype Math (Num i64) (Add Math Math))
+    (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
+    (let start (Add (Num 1) (Num 2)))
+    (run 1)
+    (check (= start (Num 3)))
+)?)?;
+let n = 2;
+assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
+# Ok::<(), egglog::Error>(())
+```

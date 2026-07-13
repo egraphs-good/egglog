@@ -147,9 +147,9 @@ pub struct Proof {
 /// Some justifications are axioms of egglog, like Sym, Trans, and Congr.
 /// Other justifications are based on user input, like Fiat, Rule, and MergeFn.
 ///
-/// Compared to [`RawProof`], a [`Justification`] is always paired with the [`Proposition`] being proven (in a [`Proof`]).
+/// Compared to `RawProof`, a [`Justification`] is always paired with the [`Proposition`] being proven (in a [`Proof`]).
 /// Additionally, [`Justification::Rule`] includes the explicit substitution mapping variable names to terms,
-/// while [`RawProof::Rule`] leaves this implicit.
+/// while `RawProof::Rule` leaves this implicit.
 #[derive(Clone, Debug)]
 pub enum Justification {
     /// Equalities added at the top level are justified by fiat.
@@ -158,8 +158,8 @@ pub enum Justification {
     Fiat,
     /// Proves a grounded equality `t1 = t2` which appears
     /// in the body of a rule given a substitution given proofs
-    /// for each premise ([`Fact`]) of the rule.
-    /// If the [`Propostion`] proven is a term like `t = t`,
+    /// for each premise ([`Fact`](crate::ast::Fact)) of the rule.
+    /// If the [`Proposition`] proven is a term like `t = t`,
     /// t may be a subexpression of the body of the rule under the substitution.
     ///
     /// A proof for a premise is an equality t1 = t2 that matches the premise under some substitution.
