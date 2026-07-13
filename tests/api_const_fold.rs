@@ -47,7 +47,8 @@ fn install_const_fold_rule(eg: &mut EGraph) -> Result<(), Error> {
             (= sum (Add lhs rhs))
             (= lhs (Num a))
             (= rhs (Num b))
-        ],
+        ]
+        .unwrap(),
         move |mut ctx, vals| {
             let [sum, _lhs, _rhs, a, b] = vals else {
                 unreachable!()

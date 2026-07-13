@@ -161,7 +161,12 @@ pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, Strin
 pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{Core, FullState, PureState, Read, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
-pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+// NOTE: the `rule!` quasiquote is intentionally *not* re-exported here — it
+// would collide with the `rule()` helper fn below (macro vs value). Reach it as
+// `egglog::rule!` if needed; `command!`/`egglog!` can express rules too.
+pub use egglog::{
+    action, actions, command, datatype, egglog, expr, fact, facts, sexp, sexps, sort, vars,
+};
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -332,54 +337,11 @@ macro_rules! vars {
     };
 }
 
-#[macro_export]
-macro_rules! expr {
-    ((unquote $unquoted:expr)) => { $unquoted };
-    (($func:tt $($arg:tt)*)) => { exprs::call(stringify!($func), vec![$(expr!($arg)),*]) };
-    ($value:literal) => { exprs::int($value) };
-    ($quoted:tt) => { exprs::var(stringify!($quoted)) };
-}
-
-#[macro_export]
-macro_rules! fact {
-    ((= $($arg:tt)*)) => { Fact::Eq(span!(), $(expr!($arg)),*) };
-    ($a:tt) => { Fact::Fact(expr!($a)) };
-}
-
-#[macro_export]
-macro_rules! facts {
-    ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
-}
-
-#[macro_export]
-macro_rules! action {
-    ((let $name:ident $value:tt)) => {
-        Action::Let(span!(), String::from(stringify!($name)), expr!($value))
-    };
-    ((set ($f:ident $($x:tt)*) $value:tt)) => {
-        Action::Set(span!(), String::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
-    };
-    ((delete ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Delete, String::from(stringify!($f)), vec![$(expr!($x)),*])
-    };
-    ((subsume ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Subsume, String::from(stringify!($f)), vec![$(expr!($x)),*])
-    };
-    ((union $x:tt $y:tt)) => {
-        Action::Union(span!(), expr!($x), expr!($y))
-    };
-    ((panic $message:literal)) => {
-        Action::Panic(span!(), $message.to_owned())
-    };
-    ($x:tt) => {
-        Action::Expr(span!(), expr!($x))
-    };
-}
-
-#[macro_export]
-macro_rules! actions {
-    ($($tree:tt)*) => { GenericActions(vec![$(action!($tree)),*]) };
-}
+// `expr!`/`fact!`/`facts!`/`action!`/`actions!` — together with `command!`,
+// `egglog!`, `rule!`, `sexp!`, and `sexps!` — are token-tree quasiquotes that
+// route through the parser, so `?x`, `:field`, `...`, `#`-splices, and every
+// registered parser macro work. They live in the `egglog-quote` proc-macro
+// crate and are re-exported from the crate root; see there for the definitions.
 
 /// Add a rule to the e-graph whose right-hand side is made up of actions.
 /// ```
@@ -407,7 +369,7 @@ macro_rules! actions {
 /// // check that `(fib 20)` is not in the e-graph
 /// let results = egraph.query(
 ///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+///     facts!((= (fib #big_number) f))?,
 /// )?;
 ///
 /// assert!(results.is_empty());
@@ -419,13 +381,13 @@ macro_rules! actions {
 /// rule(
 ///     &mut egraph,
 ///     ruleset,
-///     facts![
+///     facts!(
 ///         (= f0 (fib x))
 ///         (= f1 (fib (+ x 1)))
-///     ],
-///     actions![
+///     )?,
+///     actions!(
 ///         (set (fib (+ x 2)) (+ f0 f1))
-///     ],
+///     )?,
 /// )?;
 ///
 /// // run that rule 10 times
@@ -436,7 +398,7 @@ macro_rules! actions {
 /// // check that `(fib 20)` is now in the e-graph
 /// let results = egraph.query(
 ///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+///     facts!((= (fib #big_number) f))?,
 /// )?;
 ///
 /// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
@@ -542,7 +504,7 @@ where
 /// // check that `(fib 20)` is not in the e-graph
 /// let results = egraph.query(
 ///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+///     facts!((= (fib #big_number) f))?,
 /// )?;
 ///
 /// assert!(results.is_empty());
@@ -556,10 +518,10 @@ where
 ///     "fib_rule",
 ///     ruleset,
 ///     vars![x: i64, f0: i64, f1: i64],
-///     facts![
+///     facts!(
 ///         (= f0 (fib x))
 ///         (= f1 (fib (+ x 1)))
-///     ],
+///     )?,
 ///     move |mut ctx, values| {
 ///         let [x, f0, f1] = values else { unreachable!() };
 ///         let x = ctx.value_to_base::<i64>(*x);
@@ -582,7 +544,7 @@ where
 /// // check that `(fib 20)` is now in the e-graph
 /// let results = egraph.query(
 ///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+///     facts!((= (fib #big_number) f))?,
 /// )?;
 ///
 /// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
@@ -1046,10 +1008,10 @@ mod tests {
 
         let results = egraph.query(
             vars![x: i64, y: i64],
-            facts![
+            facts!(
                 (= (fib x) y)
                 (= y 13)
-            ],
+            )?,
         )?;
 
         assert_eq!(results.len(), 1);
@@ -1066,10 +1028,7 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], facts!((= (fib #big_number) f))?)?;
 
         assert!(results.is_empty());
 
@@ -1080,13 +1039,11 @@ mod tests {
         rule(
             &mut egraph,
             ruleset,
-            facts![
+            facts!(
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
-            ],
-            actions![
-                (set (fib (+ x 2)) (+ f0 f1))
-            ],
+            )?,
+            actions!((set (fib (+ x 2)) (+ f0 f1)))?,
         )?;
 
         // run that rule 10 times
@@ -1095,10 +1052,7 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], facts!((= (fib #big_number) f))?)?;
 
         assert_eq!(results.len(), 1);
         assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
@@ -1118,13 +1072,13 @@ mod tests {
         rule(
             &mut egraph,
             ruleset,
-            facts![
+            facts!(
                 (fib 5)
                 (fib x)
                 (= f1 (fib (+ x 1)))
-                (= 3 (unquote exprs::int(1 + 2)))
-            ],
-            actions![
+                (= 3 #(1 + 2))
+            )?,
+            actions!(
                 (let y (+ x 2))
                 (set (fib (+ x 2)) (+ f1 f1))
                 (delete (fib 0))
@@ -1132,7 +1086,7 @@ mod tests {
                 (union (One) (Two (One) (One)))
                 (panic "message")
                 (+ 6 87)
-            ],
+            )?,
         )?;
 
         Ok(())
@@ -1145,10 +1099,7 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], facts!((= (fib #big_number) f))?)?;
 
         assert!(results.is_empty());
 
@@ -1161,10 +1112,10 @@ mod tests {
             "demo_rule",
             ruleset,
             vars![x: i64, f0: i64, f1: i64],
-            facts![
+            facts!(
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
-            ],
+            )?,
             move |mut ctx, values| {
                 let [x, f0, f1] = values else { unreachable!() };
                 let x = ctx.value_to_base::<i64>(*x);
@@ -1183,10 +1134,7 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], facts!((= (fib #big_number) f))?)?;
 
         assert_eq!(results.len(), 1);
         assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);

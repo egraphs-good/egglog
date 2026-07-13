@@ -8,6 +8,7 @@ members = [
   "numeric-id",
   "union-find",
   "src/sort/add_primitive",
+  "quote-macro",
   "wasm-example"
 ]
 
@@ -39,6 +40,7 @@ rayon = "1.10.0"
 mimalloc = "0.1"
 quote = "1.0"
 syn = "2.0"
+proc-macro2 = "1.0"
 arc-swap = "1.7.1"
 fixedbitset = "0.5"
 smallvec = "1.10"
@@ -77,6 +79,7 @@ egglog-concurrency = { path = "concurrency", version = "2.0.0" }
 egglog-numeric-id = { path = "numeric-id", version = "2.0.0" }
 egglog-union-find = { path = "union-find", version = "2.0.0" }
 egglog-add-primitive = { path = "src/sort/add_primitive", version = "2.0.0" }
+egglog-quote = { path = "quote-macro", version = "2.0.0" }
 egglog-reports = { path = "egglog-reports", version = "2.0.0" }
 egglog = { path = ".", default-features = false, version = "2.0.0" }
 
@@ -154,6 +157,7 @@ egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
+egglog-quote = { workspace = true }
 egglog-reports = { workspace = true }
 serde_json = { workspace = true }
 

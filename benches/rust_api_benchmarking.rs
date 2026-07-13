@@ -43,7 +43,7 @@ fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
         "rust_rule_bench",
         ruleset,
         vars![x: i64],
-        facts![(R x)],
+        facts![(R x)].unwrap(),
         |_ctx, _values| Some(()),
     )
     .unwrap();
@@ -136,7 +136,7 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
         "rust_rule_insert_loop",
         ruleset,
         vars![x: i64],
-        facts![(R x)],
+        facts![(R x)].unwrap(),
         // insert f(x) = x + 1, f(x+1) = x + 2, ..., f(x+n_ops-1) = x + n_ops in one rule run
         move |mut ctx, _values| {
             for i in 0..case.n_ops {
@@ -185,7 +185,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
         "rust_rule_tableaction_hot_path_fill",
         fill_ruleset,
         vars![x: i64],
-        facts![(R x)],
+        facts![(R x)].unwrap(),
         move |mut ctx, values| {
             let [x] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);
@@ -208,7 +208,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
         "rust_rule_tableaction_hot_path_read",
         read_ruleset,
         vars![x: i64],
-        facts![(R x)],
+        facts![(R x)].unwrap(),
         move |ctx, values| {
             let [x] = values else { unreachable!() };
             let _ = ctx.lookup("f", *x).ok().flatten()?;
@@ -347,7 +347,8 @@ fn fib_setup() -> RustRuleBenchInput {
         facts![
             (= f0 (fib x))
             (= f1 (fib (+ x 1)))
-        ],
+        ]
+        .unwrap(),
         move |mut ctx, values| {
             let [x, f0, f1] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);

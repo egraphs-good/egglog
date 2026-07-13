@@ -471,6 +471,7 @@ dependencies = [
  "egglog-bridge",
  "egglog-core-relations",
  "egglog-numeric-id",
+ "egglog-quote",
  "egglog-reports",
  "egraph-serialize",
  "enum-map",
@@ -581,6 +582,14 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
+
+[[package]]
+name = "egglog-quote"
+version = "2.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "egglog-reports"

@@ -99,6 +99,45 @@ impl Sexp {
     }
 }
 
+impl std::fmt::Display for Sexp {
+    /// Render an `Sexp` back to egglog source text (the inverse of parsing an
+    /// atom/list; literals use [`Literal`]'s own `Display`, so it round-trips).
+    ///
+    /// Deliberately **iterative** with an explicit work stack rather than
+    /// recursive: a built term can be a very deep left-nested chain (e.g.
+    /// `(ICons a (ICons b (ICons c …)))` for a long list), and per-level
+    /// recursion would risk a stack overflow. The work stack lives on the heap
+    /// and grows with the term's size instead.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        enum Work<'a> {
+            Node(&'a Sexp),
+            Text(&'static str),
+        }
+        let mut stack = vec![Work::Node(self)];
+        while let Some(work) = stack.pop() {
+            match work {
+                Work::Text(s) => f.write_str(s)?,
+                Work::Node(Sexp::Literal(lit, _)) => write!(f, "{lit}")?,
+                Work::Node(Sexp::Atom(atom, _)) => f.write_str(atom)?,
+                Work::Node(Sexp::List(items, _)) => {
+                    f.write_str("(")?;
+                    // Push in reverse emission order (LIFO): the closing paren
+                    // first, then children interleaved with separating spaces,
+                    // so the first child is popped (emitted) first.
+                    stack.push(Work::Text(")"));
+                    for (i, child) in items.iter().enumerate().rev() {
+                        stack.push(Work::Node(child));
+                        if i != 0 {
+                            stack.push(Work::Text(" "));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 // helper for mapping a function that returns `Result`
 fn map_fallible<T>(
     slice: &[Sexp],
@@ -109,6 +148,96 @@ fn map_fallible<T>(
         .iter()
         .map(|sexp| func(parser, sexp))
         .collect::<Result<_, _>>()
+}
+
+/// Classify an atom's text into a [`Sexp`], matching the lexer used by
+/// [`Parser`]: `true`/`false` → bool, integer → int, `NaN`/`inf`/`-inf` and
+/// finite floats → float, everything else → an atom. Exposed so token-based
+/// builders (the `expr!`/`fact!` quasiquotes) classify atoms identically to
+/// parsing the same text.
+pub fn atom_to_sexp(s: &str, span: Span) -> Sexp {
+    if s == "true" {
+        Sexp::Literal(Literal::Bool(true), span)
+    } else if s == "false" {
+        Sexp::Literal(Literal::Bool(false), span)
+    } else if let Ok(int) = s.parse::<i64>() {
+        Sexp::Literal(Literal::Int(int), span)
+    } else if s == "NaN" {
+        Sexp::Literal(Literal::Float(OrderedFloat(f64::NAN)), span)
+    } else if s == "inf" {
+        Sexp::Literal(Literal::Float(OrderedFloat(f64::INFINITY)), span)
+    } else if s == "-inf" {
+        Sexp::Literal(Literal::Float(OrderedFloat(f64::NEG_INFINITY)), span)
+    } else if let Ok(float) = s.parse::<f64>() {
+        if float.is_finite() {
+            Sexp::Literal(Literal::Float(OrderedFloat(float)), span)
+        } else {
+            Sexp::Atom(s.to_owned(), span)
+        }
+    } else {
+        Sexp::Atom(s.to_owned(), span)
+    }
+}
+
+/// Splice a runtime keyword atom: `keyword_to_sexp("dtype", span)` yields the
+/// atom `:dtype`. Backs the `:#field` quasiquote form, where the keyword name is
+/// a runtime value (e.g. a constructor's field name) rather than literal text.
+/// Kept distinct from [`atom_to_sexp`] because a keyword is always an atom — it
+/// must never be reclassified as an int/float/bool literal.
+pub fn keyword_to_sexp(name: impl std::fmt::Display, span: Span) -> Sexp {
+    Sexp::Atom(format!(":{name}"), span)
+}
+
+/// Values that can be spliced into any quasiquote (`expr!`, `egglog!`, `sexp!`,
+/// …) via `#x` / `#(expr)`, or spread into a list with `#..xs` where each
+/// element is `ToSexp`. Implemented for [`Sexp`] (identity — no round-trip), a
+/// built [`Expr`] (structural), `&str`/`String` (an atom), and `i64` (an int
+/// literal).
+pub trait ToSexp {
+    fn to_sexp(self, span: Span) -> Sexp;
+}
+
+impl ToSexp for Sexp {
+    fn to_sexp(self, _span: Span) -> Sexp {
+        self
+    }
+}
+impl ToSexp for &str {
+    fn to_sexp(self, span: Span) -> Sexp {
+        atom_to_sexp(self, span)
+    }
+}
+impl ToSexp for String {
+    fn to_sexp(self, span: Span) -> Sexp {
+        atom_to_sexp(&self, span)
+    }
+}
+impl ToSexp for i64 {
+    fn to_sexp(self, span: Span) -> Sexp {
+        Sexp::Literal(Literal::Int(self), span)
+    }
+}
+impl ToSexp for Expr {
+    fn to_sexp(self, span: Span) -> Sexp {
+        expr_to_sexp(&self, span)
+    }
+}
+
+/// Structural (not textual) conversion of an already-built [`Expr`] into a
+/// [`Sexp`], so it can be spliced into a quasiquote without a display round-trip.
+fn expr_to_sexp(e: &Expr, span: Span) -> Sexp {
+    match e {
+        Expr::Lit(_, lit) => Sexp::Literal(lit.clone(), span),
+        Expr::Var(_, v) => Sexp::Atom(v.clone(), span),
+        Expr::Call(_, f, args) => {
+            let mut items = Vec::with_capacity(args.len() + 1);
+            items.push(Sexp::Atom(f.clone(), span.clone()));
+            for a in args {
+                items.push(expr_to_sexp(a, span.clone()));
+            }
+            Sexp::List(items, span)
+        }
+    }
 }
 
 /// Parse the `:internal-container-rebuild` annotation value (see
