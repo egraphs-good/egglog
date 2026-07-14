@@ -1,0 +1,48 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(let t0 (Mul (Num 2) (Add (Var "x") (Num 3))))
+(let t1 (Mul (Num 2) (Var "x")))
+(let t2 (Add (Num 6) t1))
+(let t3 (Mul (Num 2) (Num 3)))
+(let t4 (Add t3 t1))
+(let t5 (Add t1 t3))
+(let t6 (premises (Fiat (= t0 t0))))
+(let t7
+  (substitution
+                (@rewrite_var__1 t0)
+                (a (Num 2))
+                (b (Var "x"))
+                (c (Num 3))))
+(let t8
+  (premises
+          (Sym
+            (= t0 t5)
+            (Rule
+              (= t5 t0)
+              (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
+              t6
+              t7))))
+(let t9 (substitution (a t1) (b t3) (@rewrite_var__ t0)))
+(Trans
+  (= t0 t2)
+  (Sym (= t0 t4) (Rule (= t4 t0) (name "(rewrite (Add a b) (Add b a))") t8 t9))
+  (Congr
+    (= t4 t2)
+    (Rule (= t4 t4) (name "(rewrite (Add a b) (Add b a))") t8 t9)
+    (Rule
+      (= t3 (Num 6))
+      (name "(rewrite (Mul (Num a) (Num b)) (Num (* a b)))")
+      (premises
+        (Rule
+          (= t3 t3)
+          (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
+          t6
+          t7))
+      (substitution (a 2) (b 3) (@rewrite_var__3 t3)))
+    0))
+((Add 4)
+ (Mul 3)
+ (Num 3)
+ (Var 1))

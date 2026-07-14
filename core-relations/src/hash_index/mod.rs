@@ -3,24 +3,24 @@ use std::{
     cmp,
     hash::{Hash, Hasher},
     mem,
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 
 use crate::{
     common::IndexMap,
     numeric_id::{IdVec, NumericId, define_id},
 };
-use egglog_concurrency::{Notification, ReadOptimizedLock};
+use egglog_concurrency::{ReadOptimizedLock, ThreadPool};
 use hashbrown::HashTable;
 use indexmap::map::Entry;
 use once_cell::sync::Lazy;
-use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
 use crate::{
     OffsetRange, Subset,
     common::{ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
+    parallel,
     parallel_heuristics::parallelize_index_construction,
     pool::{Pooled, with_pool_set},
     row_buffer::{RowBuffer, TaggedRowBuffer},
@@ -290,8 +290,8 @@ impl IndexBase for ColumnIndex {
             }
         };
 
-        run_in_thread_pool_and_block(&THREAD_POOL, || {
-            rayon::in_place_scope(|inner| {
+        run_in_index_thread_pool(|| {
+            egglog_concurrency::scope(|inner| {
                 let mut cur = Offset::new(0);
                 loop {
                     let mut buf = TaggedRowBuffer::new(cols.len());
@@ -307,7 +307,7 @@ impl IndexBase for ColumnIndex {
                 }
             });
 
-            self.shards.par_iter_mut().for_each(|(shard_id, shard)| {
+            parallel::for_each_id_vec_mut(&mut self.shards, |shard_id, shard| {
                 // Sort the vector by start row id to ensure we populate subsets in sorted order.
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
@@ -380,43 +380,6 @@ impl IndexBase for ColumnIndex {
             shard.table.insert(key, buffered);
         }
     }
-}
-
-/// This function is an alternative for [`rayon::ThreadPool::install`] that doesn't steal work from
-/// the callee's current thread pool while waiting for `f` to finish.
-///
-/// We do this to avoid deadlocks. The whole purpose of using a separate threadpool in this module
-/// is to allow for sufficient parallelism while holding a lock on the main threadpool. That means
-/// we are not worried about an outer lock tying up a thread in the main pool.
-///
-/// On the other hand, it _is_ a bad idea to steal work on a rayon thread pool with some locks
-/// held. In particular, if another task on the thread pool _itself_ attempts to aquire the same
-/// lock, this can cause a deadlock. We saw this in the tests for this crate. The relevant lock
-/// are those around individual indexes stored in the database-level index cache.
-fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + Send + 'a) {
-    // NB: We don't need the heap allocations here. But we are only calling this function if
-    // we are about to do a bunch of work, so clarify is probably going to be better than (even
-    // more) unsafe code.
-
-    // Alright, here we go: pretend `f` has `'static` lifetime because we are passing it to
-    // `spawn`.
-    trait LifetimeWork<'a>: FnMut() + Send + 'a {}
-
-    impl<'a, F: FnMut() + Send + 'a> LifetimeWork<'a> for F {}
-    let as_lifetime: Box<dyn LifetimeWork<'a>> = Box::new(f);
-    let mut casted_away = unsafe {
-        // SAFETY: `casted_away` will be dropped at the end of this method. The notification used
-        // below will ensure it does not escape.
-        mem::transmute::<Box<dyn LifetimeWork<'a>>, Box<dyn LifetimeWork<'static>>>(as_lifetime)
-    };
-    let n = Arc::new(Notification::new());
-    let inner = n.clone();
-    pool.spawn(move || {
-        casted_away();
-        mem::drop(casted_away);
-        inner.notify();
-    });
-    n.wait()
 }
 
 /// Adaptive LSB radix sort for (Value, RowId) pairs, sorting by the Value field.
@@ -669,8 +632,8 @@ impl IndexBase for TupleIndex {
                 queues[shard_id].lock().unwrap().push((first, buf));
             }
         };
-        run_in_thread_pool_and_block(&THREAD_POOL, || {
-            rayon::scope(|scope| {
+        run_in_index_thread_pool(|| {
+            egglog_concurrency::scope(|scope| {
                 let mut cur = Offset::new(0);
                 loop {
                     let mut buf = TaggedRowBuffer::new(cols.len());
@@ -685,7 +648,7 @@ impl IndexBase for TupleIndex {
                     }
                 }
             });
-            self.shards.par_iter_mut().for_each(|(shard_id, shard)| {
+            parallel::for_each_id_vec_mut(&mut self.shards, |shard_id, shard| {
                 use hashbrown::hash_table::Entry;
                 // Sort the vector by start row id to ensure we populate subsets in sorted order.
                 let mut vec = queues[shard_id].lock().unwrap();
@@ -973,23 +936,21 @@ impl BufferedSubset {
 }
 
 fn num_shards() -> usize {
-    let n_threads = rayon::current_num_threads();
+    let n_threads = parallel::current_num_threads();
     if n_threads == 1 { 1 } else { n_threads * 2 }
 }
 
 /// A thread pool specifically for parallel hash index construction.
 ///
-/// We use a separate thread pool here because callers can construct an index under a lock,
-/// and we do not want to take a long-running lock in the global thread pool without another
-/// way to get parallelism.
-///
-/// Earlier solutions using rayon::yield_now() were unreliable.
-static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(rayon::current_num_threads())
-        .build()
-        .unwrap()
-});
+/// Callers can construct indexes while holding database-level index locks. The
+/// separate pool preserves parallelism without tying up the caller's installed
+/// pool behind those locks.
+static INDEX_THREAD_POOL: Lazy<ThreadPool> =
+    Lazy::new(|| ThreadPool::new(parallel::current_num_threads().max(1)));
+
+fn run_in_index_thread_pool<R>(f: impl FnOnce() -> R) -> R {
+    INDEX_THREAD_POOL.install(f)
+}
 
 /// A simple free list used to reuse slots in a [`SubsetBuffer`].
 ///

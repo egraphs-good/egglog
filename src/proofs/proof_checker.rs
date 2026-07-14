@@ -20,6 +20,25 @@ use crate::{
 };
 use thiserror::Error;
 
+/// A side condition is a rule-body fact that is just a container-producing
+/// primitive applied to bound variables — `(= v (vec-of e))`, `(= (set-of a)
+/// (set-of b))`, etc. Its proof is a bare [`Justification::Eval`] marker and it
+/// is verified by re-evaluation in [`ProofStore::check_side_condition`] rather
+/// than by matching a premise proposition.
+pub(super) fn is_container_side_condition(fact: &ResolvedFact) -> bool {
+    fn is_container_primitive(expr: &ResolvedExpr) -> bool {
+        matches!(
+            expr,
+            ResolvedExpr::Call(_, ResolvedCall::Primitive(p), _)
+                if p.output().is_eq_container_sort()
+        )
+    }
+    match fact {
+        ResolvedFact::Eq(_, lhs, rhs) => is_container_primitive(lhs) || is_container_primitive(rhs),
+        ResolvedFact::Fact(expr) => is_container_primitive(expr),
+    }
+}
+
 /// Result of processing actions: terms bound to variables and propositions
 #[derive(Debug, Clone)]
 pub(crate) struct ActionContext {
@@ -206,13 +225,31 @@ fn add_subterm_reflexive_equalities(
     term_dag: &TermDag,
     propositions: &mut HashSet<Proposition>,
 ) {
+    add_subterm_reflexive_equalities_helper(
+        term_id,
+        term_dag,
+        propositions,
+        &mut Default::default(),
+    );
+}
+
+fn add_subterm_reflexive_equalities_helper(
+    term_id: TermId,
+    term_dag: &TermDag,
+    propositions: &mut HashSet<Proposition>,
+    seen: &mut HashSet<TermId>,
+) {
+    if !seen.insert(term_id) {
+        return;
+    }
+
     // Add reflexive equality for this term
     propositions.insert(Proposition::new(term_id, term_id));
 
     // Recursively add for all children
     if let Term::App(_, children) = term_dag.get(term_id) {
         for &child_id in children {
-            add_subterm_reflexive_equalities(child_id, term_dag, propositions);
+            add_subterm_reflexive_equalities_helper(child_id, term_dag, propositions, seen);
         }
     }
 }
@@ -437,6 +474,41 @@ pub enum ProofCheckErrorKind {
     /// Two rules have the same name
     #[error("Duplicate rule name '{rule_name}' found in the program")]
     DuplicateRuleName { rule_name: String },
+    /// Container-normalize proof: the normalized container term doesn't match the claim
+    #[error(
+        "Proof {proof_id}: container normalization error - normalizing {raw:?} gives {normalized:?}, but proof claims rhs {proof_rhs:?} (lhs ok: {lhs_ok})"
+    )]
+    ContainerNormalizeMismatch {
+        proof_id: ProofId,
+        raw: TermId,
+        normalized: TermId,
+        proof_rhs: TermId,
+        lhs_ok: bool,
+    },
+    /// Eval marker appeared outside a container side condition
+    #[error("Proof {proof_id}: Eval marker used outside a container side condition")]
+    EvalOutsideSideCondition { proof_id: ProofId },
+    /// A container side condition's two sides evaluate to different containers
+    #[error("Rule '{rule_name}': side condition {fact} does not hold ({lhs:?} != {rhs:?})")]
+    SideConditionMismatch {
+        rule_name: String,
+        fact: String,
+        lhs: TermId,
+        rhs: TermId,
+    },
+    /// A container side condition has no determined side to evaluate
+    #[error("Rule '{rule_name}': side condition {fact} has no bound side to evaluate")]
+    SideConditionUnbound { rule_name: String, fact: String },
+    /// Not in proof normal form: a primitive has a constructor/function argument
+    #[error(
+        "Rule '{rule_name}': primitive argument {arg} is not a variable, literal, or primitive (not in proof normal form)"
+    )]
+    PrimitiveNonNormalArg { rule_name: String, arg: String },
+    /// Not in proof normal form: a container primitive is not a side condition
+    #[error(
+        "Rule '{rule_name}': container primitive {prim} appears nested rather than as a side condition (not in proof normal form)"
+    )]
+    ContainerPrimitiveNotSideCondition { rule_name: String, prim: String },
 }
 
 /// Context needed for proof checking
@@ -569,35 +641,33 @@ impl ProofStore {
                     .into());
                 }
 
-                // Check each premise proof
-                let mut premise_propositions = Vec::new();
-                for &premise_id in premise_proofs {
-                    let prop = self.check_proof_with_context(premise_id, program, ctx)?;
-                    premise_propositions.push(prop);
-                }
-
-                let substitution_with_globals = ctx
+                let mut working_subst = ctx
                     .global_bindings
                     .iter()
                     .map(|(k, v)| (k.clone(), *v))
                     .chain(substitution.iter().map(|(k, v)| (k.clone(), *v)))
                     .collect::<HashMap<_, _>>();
 
-                // Verify that premises match the rule body under the substitution
-                for (fact, prop) in rule.body.iter().zip(premise_propositions.iter()) {
-                    self.check_fact_matches_proposition(
-                        fact,
-                        prop,
-                        &substitution_with_globals,
-                        name,
-                    )?;
+                // Verify each premise in order. A container side condition carries
+                // only an `Eval` marker, so re-evaluate it here with the rule's
+                // typed validator — this binds its output into the substitution for
+                // later facts. Every other fact is matched against its premise
+                // proposition.
+                for (fact, &premise_id) in rule.body.iter().zip(premise_proofs.iter()) {
+                    self.assert_body_proof_normal_form(fact, name)?;
+                    if is_container_side_condition(fact) {
+                        self.check_side_condition(fact, &mut working_subst, name)?;
+                    } else {
+                        let prop = self.check_proof_with_context(premise_id, program, ctx)?;
+                        self.check_fact_matches_proposition(fact, &prop, &working_subst, name)?;
+                    }
                 }
 
                 // Verify that the conclusion matches what the rule produces
                 self.check_rule_produces_equality(
                     rule,
                     substitution,
-                    &substitution_with_globals,
+                    &working_subst,
                     proof.proposition(),
                     name,
                 )?;
@@ -841,6 +911,34 @@ impl ProofStore {
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
+
+            Justification::ContainerNormalize { proof: inner_id } => {
+                // The sub-proof establishes `t1 = raw`; normalize `raw` to its
+                // canonical container form via the validator for its head.
+                let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
+                let raw = inner_prop.rhs;
+                let normalized = self.normalize_container(raw);
+                let lhs_ok = proof.lhs() == inner_prop.lhs;
+                if !lhs_ok || proof.rhs() != normalized {
+                    return Err(ProofCheckErrorKind::ContainerNormalizeMismatch {
+                        proof_id,
+                        raw,
+                        normalized,
+                        proof_rhs: proof.rhs(),
+                        lhs_ok,
+                    }
+                    .into());
+                }
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
+            }
+
+            Justification::Eval => {
+                // The `Eval` marker is the proof of a container side condition and
+                // is checked by re-evaluation in `check_side_condition` (driven by
+                // the rule body), never on its own. Reaching it here means it
+                // appeared outside a side condition, which is malformed.
+                Err(ProofCheckErrorKind::EvalOutsideSideCondition { proof_id }.into())
+            }
         };
 
         // Cache the result
@@ -851,7 +949,121 @@ impl ProofStore {
         result
     }
 
-    /// Check that a fact matches a proposition under a substitution  
+    /// Check a container side condition by re-evaluating it against the rule
+    /// body, rather than against a premise proposition. An unbound side is the
+    /// side condition's output and is bound; otherwise both sides must evaluate
+    /// to the same container. Extends `subst` with any bound output.
+    fn check_side_condition(
+        &mut self,
+        fact: &ResolvedFact,
+        subst: &mut HashMap<String, TermId>,
+        rule_name: &str,
+    ) -> Result<(), ProofCheckError> {
+        let ResolvedFact::Eq(_, lhs, rhs) = fact else {
+            // `is_container_side_condition` only flags `Eq` facts.
+            return Ok(());
+        };
+        let lhs_val = self.eval_side(lhs, subst, rule_name)?;
+        let rhs_val = self.eval_side(rhs, subst, rule_name)?;
+        match (lhs, lhs_val, rhs, rhs_val) {
+            // One side is an unbound variable: it is the side condition's output.
+            (ResolvedExpr::Var(_, v), None, _, Some(val))
+            | (_, Some(val), ResolvedExpr::Var(_, v), None) => {
+                subst.insert(v.name.clone(), val);
+                Ok(())
+            }
+            // Both sides determined: they must be the same container.
+            (_, Some(l), _, Some(r)) => {
+                if l != r {
+                    return Err(ProofCheckErrorKind::SideConditionMismatch {
+                        rule_name: rule_name.to_string(),
+                        fact: format!("{fact}"),
+                        lhs: l,
+                        rhs: r,
+                    }
+                    .into());
+                }
+                Ok(())
+            }
+            _ => Err(ProofCheckErrorKind::SideConditionUnbound {
+                rule_name: rule_name.to_string(),
+                fact: format!("{fact}"),
+            }
+            .into()),
+        }
+    }
+
+    /// Evaluate one side of a side condition: an unbound variable yields `None`
+    /// (it is an output to bind), anything else is evaluated with the rule's
+    /// typed primitive validators.
+    fn eval_side(
+        &mut self,
+        expr: &ResolvedExpr,
+        subst: &HashMap<String, TermId>,
+        rule_name: &str,
+    ) -> Result<Option<TermId>, ProofCheckError> {
+        match expr {
+            ResolvedExpr::Var(_, v) => Ok(subst.get(&v.name).copied()),
+            _ => {
+                let (term, _) = eval_expr_with_subst(rule_name, expr, &mut self.term_dag, subst)?;
+                Ok(Some(term))
+            }
+        }
+    }
+
+    /// Reject a rule-body fact that isn't in proof normal form: a primitive must
+    /// not have a constructor/function argument, and a container-producing
+    /// primitive must not appear nested (it must be its own side condition).
+    fn assert_body_proof_normal_form(
+        &self,
+        fact: &ResolvedFact,
+        rule_name: &str,
+    ) -> Result<(), ProofCheckError> {
+        fn check(expr: &ResolvedExpr, rule_name: &str) -> Result<(), ProofCheckError> {
+            let ResolvedExpr::Call(_, head, args) = expr else {
+                return Ok(());
+            };
+            for arg in args {
+                match head {
+                    ResolvedCall::Primitive(_)
+                        if matches!(arg, ResolvedExpr::Call(_, ResolvedCall::Func(_), _)) =>
+                    {
+                        return Err(ProofCheckErrorKind::PrimitiveNonNormalArg {
+                            rule_name: rule_name.to_string(),
+                            arg: format!("{arg}"),
+                        }
+                        .into());
+                    }
+                    ResolvedCall::Func(_)
+                        if matches!(
+                            arg,
+                            ResolvedExpr::Call(_, ResolvedCall::Primitive(p), _)
+                                if p.output().is_eq_container_sort()
+                        ) =>
+                    {
+                        return Err(ProofCheckErrorKind::ContainerPrimitiveNotSideCondition {
+                            rule_name: rule_name.to_string(),
+                            prim: format!("{arg}"),
+                        }
+                        .into());
+                    }
+                    _ => {}
+                }
+                check(arg, rule_name)?;
+            }
+            Ok(())
+        }
+        match fact {
+            ResolvedFact::Eq(_, lhs, rhs) => {
+                check(lhs, rule_name)?;
+                check(rhs, rule_name)?;
+            }
+            ResolvedFact::Fact(expr) => check(expr, rule_name)?,
+        }
+        Ok(())
+    }
+
+    /// Check that a fact matches a proposition under a substitution
     fn check_fact_matches_proposition(
         &mut self,
         fact: &ResolvedFact,

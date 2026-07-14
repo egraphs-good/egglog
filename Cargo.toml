@@ -142,6 +142,7 @@ log = { workspace = true }
 num = { workspace = true }
 ordered-float = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 dyn-clone = { workspace = true }
@@ -154,7 +155,6 @@ egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
 egglog-reports = { workspace = true }
-rayon = { workspace = true }
 serde_json = { workspace = true }
 
 [build-dependencies]

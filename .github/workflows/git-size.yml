@@ -1,0 +1,36 @@
+name: Git size budget
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  git-size:
+    name: Git size budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Measure compressed Git growth
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_SHA"
+
+          # Since egglog uses merge commits, measure GitHub's actual PR merge ref.
+          # This counts all objects that would become reachable by merging the PR,
+          # including large files added in an earlier PR commit and deleted later.
+          if ! git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/merge:refs/pr/merge"; then
+            echo "::warning title=Could not fetch PR merge ref::GitHub may not have created a merge ref, likely because the PR has conflicts."
+            exit 0
+          fi
+
+          python3 scripts/git-size-budget.py "$BASE_SHA" refs/pr/merge

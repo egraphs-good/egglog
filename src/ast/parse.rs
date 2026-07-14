@@ -111,6 +111,32 @@ fn map_fallible<T>(
         .collect::<Result<_, _>>()
 }
 
+/// Parse the `:internal-container-rebuild` annotation value (see
+/// [`ContainerRebuildSpec`]). The dual of its `Display`.
+fn parse_container_rebuild_spec(sexp: &Sexp) -> Result<ContainerRebuildSpec, ParseError> {
+    let (head, items, span) = sexp.expect_call("container-rebuild spec")?;
+    if head != "container-rebuild-spec" {
+        return error!(span, "expected (container-rebuild-spec ...)");
+    }
+    let (prim, proof_prim) = match items {
+        [prim] => (prim, None),
+        [prim, proof_prim] => (
+            prim,
+            Some(proof_prim.expect_atom("container rebuild proof primitive name")?),
+        ),
+        _ => {
+            return error!(
+                span,
+                "container-rebuild-spec needs a primitive name and an optional proof primitive name"
+            );
+        }
+    };
+    Ok(ContainerRebuildSpec {
+        internal_rebuild_prim: prim.expect_atom("container rebuild primitive name")?,
+        internal_rebuild_proof_prim: proof_prim,
+    })
+}
+
 pub trait Macro<T>: Send + Sync {
     fn name(&self) -> &str;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
@@ -267,10 +293,34 @@ impl Parser {
                         presort_and_args: None,
                         uf: None,
                         proof_func: None,
+                        container_rebuild: None,
+                        proof_constructors: None,
                         unionable: true,
                     }],
-                    [name, call @ Sexp::List(..)] => {
+                    [name, call @ Sexp::List(..), rest @ ..] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
+                        // Container sorts may carry :internal-proof-func (their
+                        // `<CSort>Proof` table) and an :internal-container-rebuild
+                        // spec (both emitted by the term/proof encoder).
+                        let mut proof_func = None;
+                        let mut container_rebuild = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":internal-proof-func", [pf]) => {
+                                    proof_func =
+                                        Some(pf.expect_atom("internal-proof-func function name")?);
+                                }
+                                (":internal-container-rebuild", [spec]) => {
+                                    container_rebuild = Some(parse_container_rebuild_spec(spec)?);
+                                }
+                                _ => {
+                                    return error!(
+                                        span,
+                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-proof-func <name>] [:internal-container-rebuild <spec>])"
+                                    );
+                                }
+                            }
+                        }
                         vec![Command::Sort {
                             span,
                             name: name.expect_atom("sort name")?,
@@ -279,27 +329,46 @@ impl Parser {
                                 map_fallible(args, self, Self::parse_expr)?,
                             )),
                             uf: None,
-                            proof_func: None,
+                            proof_func,
+                            container_rebuild,
+                            proof_constructors: None,
                             unionable: true,
                         }]
                     }
                     [name, rest @ ..] => {
-                        // Parse :internal-uf and :internal-proof-func annotations
+                        // Parse :internal-uf / :internal-proof-func and the
+                        // :internal-proof-names global proof-constructor record.
                         let mut uf = None;
                         let mut proof_func = None;
+                        let mut proof_constructors = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
-                                (":internal-uf", [uf_func]) => {
-                                    uf = Some(uf_func.expect_atom("uf function name")?);
+                                (":internal-uf", [uf_ctor]) => {
+                                    uf = Some((uf_ctor.expect_atom("uf constructor name")?, None));
+                                }
+                                (":internal-uf", [uf_ctor, uf_index]) => {
+                                    uf = Some((
+                                        uf_ctor.expect_atom("uf constructor name")?,
+                                        Some(uf_index.expect_atom("uf index function name")?),
+                                    ));
                                 }
                                 (":internal-proof-func", [pf]) => {
                                     proof_func =
                                         Some(pf.expect_atom("internal-proof-func function name")?);
                                 }
+                                (":internal-proof-names", [congr, trans, sym, normalize]) => {
+                                    proof_constructors = Some(ProofConstructorNames {
+                                        congr: congr.expect_atom("congr constructor")?,
+                                        trans: trans.expect_atom("trans constructor")?,
+                                        sym: sym.expect_atom("sym constructor")?,
+                                        normalize: normalize
+                                            .expect_atom("container-normalize constructor")?,
+                                    });
+                                }
                                 _ => {
                                     return error!(
                                         span,
-                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-function>)\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> (<container sort> <argument sort>*))"
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> :internal-proof-names <congr> <trans> <sym> <normalize>)\n(sort <name> (<container sort> <argument sort>*))"
                                     );
                                 }
                             }
@@ -310,6 +379,8 @@ impl Parser {
                             presort_and_args: None,
                             uf,
                             proof_func,
+                            container_rebuild: None,
+                            proof_constructors,
                             unionable: true,
                         }]
                     }
@@ -475,14 +546,31 @@ impl Parser {
 
                     let mut ruleset = String::new();
                     let mut name = String::new();
-                    let mut naive = false;
+                    // `:naive` and `:unsafe-seminaive` are mutually
+                    // exclusive; `eval_mode` is set at most once.
+                    let mut eval_mode: Option<RuleEvalMode> = None;
                     let mut no_decomp = false;
+                    let mut include_subsumed = false;
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":name", [s]) => name = s.expect_string("rule name")?,
-                            (":naive", []) => naive = true,
+                            (":naive", []) | (":unsafe-seminaive", []) => {
+                                let mode = if option.0 == ":naive" {
+                                    RuleEvalMode::Naive
+                                } else {
+                                    RuleEvalMode::UnsafeSeminaive
+                                };
+                                if eval_mode.is_some() {
+                                    return error!(
+                                        span,
+                                        ":naive and :unsafe-seminaive are mutually exclusive"
+                                    );
+                                }
+                                eval_mode = Some(mode);
+                            }
                             (":no-decomp", []) => no_decomp = true,
+                            (":internal-include-subsumed", []) => include_subsumed = true,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -494,8 +582,9 @@ impl Parser {
                             body,
                             name,
                             ruleset,
-                            naive,
+                            eval_mode: eval_mode.unwrap_or_default(),
                             no_decomp,
+                            include_subsumed,
                         },
                     }]
                 }

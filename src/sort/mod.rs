@@ -8,7 +8,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::core_relations;
 pub use core_relations::{
-    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, Rebuilder,
+    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, ValueRebuilder,
 };
 pub use egglog_bridge::ColumnTy;
 
@@ -82,6 +82,15 @@ pub trait Sort: Any + Send + Sync + Debug {
     // only eq_sort and eq_container_sort need to be canonicalized.
     fn is_eq_container_sort(&self) -> bool {
         false
+    }
+
+    /// For a container sort that supports proofs: its canonical constructor head
+    /// and the validator that canonicalizes the term form (e.g. `set-of` sorts
+    /// and dedups its elements). Proof checking looks this up by head to normalize
+    /// a container term. `None` (the default) means proofs are unsupported for
+    /// this container.
+    fn rebuild_container_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        None
     }
 
     /// Return the serialized name of the sort
