@@ -117,7 +117,8 @@
 //!
 //! ## Rules
 //!
-//! - [`rule()`] — add a rule whose RHS is egglog code.
+//! - [`run_rule!`] / [`run_egglog!`] — add a rule whose RHS is egglog code
+//!   (write it inline; `run_egglog!` also takes `:ruleset`).
 //! - [`rust_rule`] — add a rule whose RHS is a Rust closure
 //!   `Fn(WriteState, &[Value]) -> Option<()>`. Seminaive-safe.
 //! - [`rust_rule_full`] — same but the closure receives a
@@ -161,12 +162,9 @@ pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, Strin
 pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{Core, FullState, PureState, Read, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
-// NOTE: the `rule!` quasiquote is intentionally *not* re-exported here — it
-// would collide with the `rule()` helper fn below (macro vs value). Reach it as
-// `egglog::rule!` if needed; `command!`/`egglog!` can express rules too.
 pub use egglog::{
     action, actions, command, egglog, expr, query, resolve_action, resolve_actions,
-    resolve_command, resolve_egglog, resolve_expr, resolve_query, resolve_rule, run_action,
+    resolve_command, resolve_egglog, resolve_expr, resolve_query, resolve_rule, rule, run_action,
     run_actions, run_command, run_egglog, run_expr, run_query, run_rule, sexp, sexps, sort, vars,
 };
 
@@ -339,94 +337,13 @@ macro_rules! vars {
     };
 }
 
-// `expr!`/`fact!`/`query!`/`action!`/`actions!` — together with `command!`,
-// `egglog!`, `rule!`, `sexp!`, and `sexps!` — are token-tree quasiquotes that
-// route through the parser, so `?x`, `:field`, `...`, `#`-splices, and every
-// registered parser macro work. They live in the `egglog-quote` proc-macro
-// crate and are re-exported from the crate root; see there for the definitions.
-
-/// Add a rule to the e-graph whose right-hand side is made up of actions.
-/// ```
-/// use egglog::prelude::*;
-///
-/// let mut egraph = EGraph::default();
-/// egraph.parse_and_run_program(
-///     None,
-///     "
-/// (function fib (i64) i64 :no-merge)
-/// (set (fib 0) 0)
-/// (set (fib 1) 1)
-/// (rule (
-///     (= f0 (fib x))
-///     (= f1 (fib (+ x 1)))
-/// ) (
-///     (set (fib (+ x 2)) (+ f0 f1))
-/// ))
-/// (run 10)
-///     ",
-/// )?;
-///
-/// let big_number = 20;
-///
-/// // check that `(fib 20)` is not in the e-graph
-/// let results = egraph.query(
-///     vars![f: i64],
-///     query!((= (fib #big_number) f))?,
-/// )?;
-///
-/// assert!(results.is_empty());
-///
-/// let ruleset = "custom_ruleset";
-/// add_ruleset(&mut egraph, ruleset)?;
-///
-/// // add the rule from `build_test_database` to the egraph
-/// rule(
-///     &mut egraph,
-///     ruleset,
-///     query!(
-///         (= f0 (fib x))
-///         (= f1 (fib (+ x 1)))
-///     )?,
-///     actions!(
-///         (set (fib (+ x 2)) (+ f0 f1))
-///     )?,
-/// )?;
-///
-/// // run that rule 10 times
-/// for _ in 0..10 {
-///     run_ruleset(&mut egraph, ruleset)?;
-/// }
-///
-/// // check that `(fib 20)` is now in the e-graph
-/// let results = egraph.query(
-///     vars![f: i64],
-///     query!((= (fib #big_number) f))?,
-/// )?;
-///
-/// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
-/// assert_eq!(f, [6765]);
-///
-/// # Ok::<(), egglog::Error>(())
-/// ```
-pub fn rule(
-    egraph: &mut EGraph,
-    ruleset: &str,
-    facts: Facts<String, String>,
-    actions: Actions,
-) -> Result<Vec<CommandOutput>, Error> {
-    let rule = Rule {
-        span: span!(),
-        head: actions,
-        body: facts.0,
-        name: "".into(),
-        ruleset: ruleset.into(),
-        eval_mode: RuleEvalMode::Seminaive,
-        no_decomp: false,
-        include_subsumed: false,
-    };
-
-    egraph.run_program(vec![Command::Rule { rule }])
-}
+// `expr!`/`query!`/`action!`/`actions!`, `command!`/`egglog!`/`rule!`, and
+// `sexp!`/`sexps!` are token-tree quasiquotes that route through the parser, so
+// `?x`, `:field`, `...`, `#`-splices, and every registered parser macro work.
+// Each parsing macro also has `resolve_*!` / `run_*!` e-graph variants — e.g.
+// add a rule with `run_rule!(egraph, (<facts>) (<actions>))` or
+// `run_egglog!(egraph, (rule … :ruleset r))`. They live in the `egglog-quote`
+// crate and are re-exported from the crate root.
 
 #[derive(Clone)]
 struct RustRuleRhs<F>
@@ -1025,14 +942,12 @@ mod tests {
         add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
-        rule(
+        run_egglog!(
             &mut egraph,
-            ruleset,
-            query!(
-                (= f0 (fib x))
-                (= f1 (fib (+ x 1)))
-            )?,
-            actions!((set (fib (+ x 2)) (+ f0 f1)))?,
+            (rule
+                ((= f0 (fib x)) (= f1 (fib (+ x 1))))
+                ((set (fib (+ x 2)) (+ f0 f1)))
+                :ruleset #ruleset)
         )?;
 
         // run that rule 10 times
@@ -1058,24 +973,21 @@ mod tests {
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
 
-        rule(
+        run_egglog!(
             &mut egraph,
-            ruleset,
-            query!(
-                (fib 5)
-                (fib x)
-                (= f1 (fib (+ x 1)))
-                (= 3 #(1 + 2))
-            )?,
-            actions!(
-                (let y (+ x 2))
-                (set (fib (+ x 2)) (+ f1 f1))
-                (delete (fib 0))
-                (subsume (Two (One) (One)))
-                (union (One) (Two (One) (One)))
-                (panic "message")
-                (+ 6 87)
-            )?,
+            (rule
+                ((fib 5)
+                 (fib x)
+                 (= f1 (fib (+ x 1)))
+                 (= 3 #(1 + 2)))
+                ((let y (+ x 2))
+                 (set (fib (+ x 2)) (+ f1 f1))
+                 (delete (fib 0))
+                 (subsume (Two (One) (One)))
+                 (union (One) (Two (One) (One)))
+                 (panic "message")
+                 (+ 6 87))
+                :ruleset #ruleset)
         )?;
 
         Ok(())
