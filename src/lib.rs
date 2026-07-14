@@ -2942,6 +2942,32 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// The primary source span this error is anchored to, if one is available.
+    ///
+    /// Handy for mapping an error back to its location in the source — e.g.
+    /// pointing a compile-time diagnostic at the offending token. Errors with
+    /// no natural location (backend, extraction, I/O-format) return `None`.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Error::ParseError(e) => Some(e.0.clone()),
+            Error::TypeError(e) => e.span(),
+            Error::TypeErrors(errors) => errors.iter().find_map(TypeError::span),
+            Error::CheckError(_, span)
+            | Error::NoSuchRuleset(_, span)
+            | Error::CombinedRulesetError(_, span)
+            | Error::Pop(span)
+            | Error::ExpectFail(span)
+            | Error::SubsumeMergeError(_, span)
+            | Error::CommandAlreadyExists(_, span)
+            | Error::Shadowing(_, span, _) => Some(span.clone()),
+            Error::IoError(_, _, span) => Some(span.clone()),
+            Error::ProofError { span, .. } => Some(span.clone()),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::constraint::SimpleTypeConstraint;

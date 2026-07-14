@@ -6,10 +6,10 @@
 //! each macro produces, the `#` / `#..` / `:#` splice forms, and examples —
 //! lives in `egglog::prelude`. The doc on each macro below notes its signature.
 
+use egglog_ast::tokens::atom_run;
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
-use std::iter::Peekable;
 
 /// Parse one egglog expression: `expr!([parser,] <egglog>)` → `Result<Expr, ParseError>`.
 ///
@@ -632,7 +632,7 @@ fn sexp_seq(ts: TokenStream2) -> Vec<Child> {
             // so `?x`, `:no-merge`, `-1.0`, `>=` become single atoms while
             // space-separated tokens like `(+ 6 87)` stay separate.
             first => {
-                let atom = atom_run(first.clone(), &mut it);
+                let atom = atom_run(first.clone(), &mut it).0;
                 out.push(Child::Single(
                     quote!(::egglog::ast::atom_to_sexp(#atom, __span.clone())),
                 ));
@@ -640,43 +640,4 @@ fn sexp_seq(ts: TokenStream2) -> Vec<Child> {
         }
     }
     out
-}
-
-/// The source text of a single token (for atoms): a punct's char, an
-/// identifier's name, or a literal's text.
-fn tt_str(tt: &TokenTree) -> String {
-    match tt {
-        TokenTree::Punct(p) => p.as_char().to_string(),
-        TokenTree::Ident(i) => i.to_string(),
-        TokenTree::Literal(l) => l.to_string(),
-        TokenTree::Group(g) => g.to_string(),
-    }
-}
-
-/// Reassemble one egglog atom starting at `first` by absorbing every following
-/// token that begins exactly where the previous one ended — i.e. with no
-/// whitespace between them. This mirrors egglog's tokenizer (an atom is a
-/// maximal run of non-space, non-paren characters): `?x`, `:no-merge`, `-1.0`,
-/// `>=`, `my-ruleset` all become single atoms, while `(+ 6 87)` stays three
-/// tokens because the spaces break the run.
-fn atom_run(first: TokenTree, it: &mut Peekable<impl Iterator<Item = TokenTree>>) -> String {
-    let mut s = tt_str(&first);
-    let mut end = first.span().end();
-    while let Some(next) = it.peek() {
-        if matches!(next, TokenTree::Group(_)) {
-            break;
-        }
-        if let TokenTree::Literal(l) = next
-            && l.to_string().starts_with('"')
-        {
-            break; // a string literal is its own token, never glued
-        }
-        if next.span().start() != end {
-            break; // whitespace between tokens ends the atom
-        }
-        s.push_str(&tt_str(next));
-        end = next.span().end();
-        it.next();
-    }
-    s
 }

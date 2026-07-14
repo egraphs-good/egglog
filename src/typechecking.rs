@@ -1241,6 +1241,38 @@ pub enum TypeError {
     GlobalMissingPrefix { name: String, span: Span },
 }
 
+impl TypeError {
+    /// The source span this type error is anchored to, if the variant carries
+    /// one.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            TypeError::Arity { expr, .. }
+            | TypeError::Mismatch { expr, .. }
+            | TypeError::InferenceFailure(expr) => Some(expr.span()),
+            TypeError::Unbound(_, span)
+            | TypeError::Ungrounded(_, span)
+            | TypeError::UndefinedSort(_, span)
+            | TypeError::UnboundFunction(_, span)
+            | TypeError::ProveExistsRequiresConstructor(_, span)
+            | TypeError::FunctionAlreadyBound(_, span)
+            | TypeError::SortAlreadyBound(_, span)
+            | TypeError::PrimitiveAlreadyBound(_, span)
+            | TypeError::PresortNotFound(_, span)
+            | TypeError::AlreadyDefined(_, span)
+            | TypeError::ConstructorOutputNotSort(_, span)
+            | TypeError::LookupInRuleDisallowed(_, span)
+            | TypeError::SetConstructorDisallowed(_, span)
+            | TypeError::NonEqsortUnion(_, span)
+            | TypeError::NonUnionableSort(_, span)
+            | TypeError::TermConstructorNoInputs(_, span) => Some(span.clone()),
+            TypeError::NonGlobalPrefixed { span, .. }
+            | TypeError::GlobalMissingPrefix { span, .. } => Some(span.clone()),
+            TypeError::AllAlternativeFailed(errors) => errors.iter().find_map(TypeError::span),
+            TypeError::FunctionTypeMismatch(..) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{EGraph, Error, typechecking::TypeError};

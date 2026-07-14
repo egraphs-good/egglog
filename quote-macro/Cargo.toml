@@ -14,3 +14,6 @@ proc-macro = true
 [dependencies]
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 quote = { workspace = true }
+# Shared token → egglog-atom rendering (also used by `egglog-static`), so both
+# crates reconstruct atoms identically. Not `egglog` itself, so no cycle.
+egglog-ast = { workspace = true, features = ["tokens"] }

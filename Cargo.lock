@@ -508,6 +508,7 @@ name = "egglog-ast"
 version = "2.0.0"
 dependencies = [
  "ordered-float",
+ "proc-macro2",
 ]
 
 [[package]]
@@ -587,6 +588,7 @@ version = "2.0.0"
 name = "egglog-quote"
 version = "2.0.0"
 dependencies = [
+ "egglog-ast",
  "proc-macro2",
  "quote",
 ]
@@ -602,6 +604,16 @@ dependencies = [
  "serde",
  "serde_json",
  "web-time",
+]
+
+[[package]]
+name = "egglog-static"
+version = "2.0.0"
+dependencies = [
+ "egglog",
+ "egglog-ast",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
