@@ -424,13 +424,13 @@ impl Default for EGraph {
             proof_state,
             proof_check_program: vec![],
         };
-        add_base_sort(&mut eg, UnitSort, span!()).unwrap();
-        add_base_sort(&mut eg, StringSort, span!()).unwrap();
-        add_base_sort(&mut eg, BoolSort, span!()).unwrap();
-        add_base_sort(&mut eg, I64Sort, span!()).unwrap();
-        add_base_sort(&mut eg, F64Sort, span!()).unwrap();
-        add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
-        add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
+        add_base_sort(&mut eg, UnitSort).unwrap();
+        add_base_sort(&mut eg, StringSort).unwrap();
+        add_base_sort(&mut eg, BoolSort).unwrap();
+        add_base_sort(&mut eg, I64Sort).unwrap();
+        add_base_sort(&mut eg, F64Sort).unwrap();
+        add_base_sort(&mut eg, BigIntSort).unwrap();
+        add_base_sort(&mut eg, BigRatSort).unwrap();
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();

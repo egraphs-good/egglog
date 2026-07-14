@@ -631,72 +631,6 @@ pub fn rust_rule_full(
     egraph.run_program(vec![Command::Rule { rule }])
 }
 
-/// Declare a new sort.
-pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Sort {
-        span: span!(),
-        name: name.to_owned(),
-        presort_and_args: None,
-        uf: None,
-        proof_func: None,
-        container_rebuild: None,
-        proof_constructors: None,
-        unionable: true,
-    }])
-}
-
-/// Declare a new function table.
-pub fn add_function(
-    egraph: &mut EGraph,
-    name: &str,
-    schema: Schema,
-    merge: Option<GenericExpr<String, String>>,
-) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Function {
-        span: span!(),
-        name: name.to_owned(),
-        schema,
-        merge,
-        hidden: false,
-        let_binding: false,
-        term_constructor: None,
-        unextractable: false,
-    }])
-}
-
-/// Declare a new constructor table.
-pub fn add_constructor(
-    egraph: &mut EGraph,
-    name: &str,
-    schema: Schema,
-    cost: Option<DefaultCost>,
-    unextractable: bool,
-) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Constructor {
-        span: span!(),
-        name: name.to_owned(),
-        schema,
-        cost,
-        unextractable,
-        hidden: false,
-        let_binding: false,
-        term_constructor: None,
-    }])
-}
-
-/// Declare a new relation table.
-pub fn add_relation(
-    egraph: &mut EGraph,
-    name: &str,
-    inputs: Vec<String>,
-) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Relation {
-        span: span!(),
-        name: name.to_owned(),
-        inputs,
-    }])
-}
-
 // (The old `datatype!` macro was removed — it's subsumed by
 // `run_egglog!(egraph, (datatype ...))`, which parses, typechecks, and
 // registers the datatype the same way. Use `egglog!((datatype ...))` for the
@@ -868,20 +802,15 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
 }
 
 /// Add a [`BaseSort`] to the e-graph
-pub fn add_base_sort(
-    egraph: &mut EGraph,
-    base_sort: impl BaseSort,
-    span: Span,
-) -> Result<(), TypeError> {
-    egraph.add_sort(BaseSortImpl(base_sort), span)
+pub fn add_base_sort(egraph: &mut EGraph, base_sort: impl BaseSort) -> Result<(), TypeError> {
+    egraph.add_sort(BaseSortImpl(base_sort), span!())
 }
 
 pub fn add_container_sort(
     egraph: &mut EGraph,
     container_sort: impl ContainerSort,
-    span: Span,
 ) -> Result<(), TypeError> {
-    egraph.add_sort(ContainerSortImpl(container_sort), span)
+    egraph.add_sort(ContainerSortImpl(container_sort), span!())
 }
 
 #[cfg(test)]
