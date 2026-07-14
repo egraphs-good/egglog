@@ -1,10 +1,11 @@
 //! Token-tree quasiquotes for writing egglog inline in Rust.
 //!
-//! Write egglog as ordinary Rust tokens (no quotes); these macros rebuild the
-//! s-expression and run it through the real parser, so every registered parser
-//! macro fires (named args, `for`, `...`) and `?x`, `:field`, negative
-//! literals, dashed atoms (`:no-merge`), and operators all work. They are
-//! re-exported from `egglog` and `egglog::prelude`.
+//! Write egglog directly in your Rust source — the same syntax you'd put in a
+//! `.egg` file — and these macros parse it into `Command` / `Expr` / `Fact`
+//! values. Parsing goes through egglog's own parser, so `?x`, `:field`, `...`,
+//! negative literals, dashed atoms (`:no-merge`), operators, and every
+//! registered parser macro all behave just as they do in egglog text. The
+//! macros are re-exported from `egglog` and `egglog::prelude`.
 //!
 //! # The three variants
 //!
@@ -234,7 +235,7 @@ pub fn run_rule(input: TokenStream) -> TokenStream {
 
 /// Build an *un-parsed* s-expression: `sexp!(<egglog>)` → `Sexp` (no parser
 /// argument). Supports `#` / `#..` / `:#` splices, and is meant to be
-/// `#`-spliced into a typed quasiquote later (a `Sexp` splices as identity).
+/// `#`-spliced into another quasiquote later (where a `Sexp` is used as-is).
 ///
 /// ```ignore
 /// let kind = "MyOp";

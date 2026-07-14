@@ -42,27 +42,26 @@ global name to it (`(let $root ...)`), resolve the global with
 [`extract`] module has the full extractor API.
 
 # Writing egglog inline from Rust
-Write egglog as ordinary Rust tokens with the quasiquote macros — [`expr!`],
-[`query!`], [`action!`]/[`actions!`], [`command!`], [`egglog!`], and [`rule!`]
-parse to AST (`Expr` / `Facts` / `Command` / …), splicing Rust values in with
-`#x`, `#..xs`, and `:#field`; [`sexp!`] builds an un-parsed fragment for
-splicing. Each parsing macro also has two e-graph-aware variants: `resolve_*!`
-typechecks against an e-graph without running (e.g. [`resolve_egglog!`] →
-`Vec<ResolvedCommand>`), and `run_*!` runs it (e.g. [`run_egglog!`] →
-`Vec<CommandOutput>`, [`run_query!`] → query matches, [`run_expr!`] →
-`(sort, value)`). All are re-exported from [`prelude`].
+The quasiquote macros let you write egglog right in your Rust source:
+[`egglog!`] for a whole program, [`expr!`] / [`query!`] / [`command!`] /
+[`rule!`] / [`action!`] for a single form. Splice Rust values in with `#`, and
+reach for the `resolve_*!` / `run_*!` variants to typecheck or execute against
+an e-graph.
 
 ```
 use egglog::prelude::*;
 let mut egraph = EGraph::default();
-egraph.run_program(egglog!(
+run_egglog!(
+    &mut egraph,
     (datatype Math (Num i64) (Add Math Math))
     (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
-    (let start (Add (Num 1) (Num 2)))
-    (run 1)
-    (check (= start (Num 3)))
-)?)?;
+)?;
+
 let n = 2;
 assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
 # Ok::<(), egglog::Error>(())
 ```
+
+For the full reference — every macro, the parse / `resolve_*` / `run_*`
+variants, and the splice forms (`#x`, `#..xs`, `:#field`) — see the
+[`egglog_quote`] crate.

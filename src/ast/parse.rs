@@ -191,9 +191,9 @@ pub fn keyword_to_sexp(name: impl std::fmt::Display, span: Span) -> Sexp {
 
 /// Values that can be spliced into any quasiquote (`expr!`, `egglog!`, `sexp!`,
 /// …) via `#x` / `#(expr)`, or spread into a list with `#..xs` where each
-/// element is `ToSexp`. Implemented for [`Sexp`] (identity — no round-trip), a
-/// built [`Expr`] (structural), `&str`/`String` (an atom), and `i64` (an int
-/// literal).
+/// element is `ToSexp`. Implemented for [`Sexp`] (used as-is), a built [`Expr`]
+/// (converted structurally, not through its printed form), `&str`/`String` (an
+/// atom), and `i64` (an int literal).
 pub trait ToSexp {
     fn to_sexp(self, span: Span) -> Sexp;
 }
@@ -224,8 +224,8 @@ impl ToSexp for Expr {
     }
 }
 
-/// Structural (not textual) conversion of an already-built [`Expr`] into a
-/// [`Sexp`], so it can be spliced into a quasiquote without a display round-trip.
+/// Convert an already-built [`Expr`] into a [`Sexp`] structurally, so it can be
+/// spliced into a quasiquote directly rather than printed to text and reparsed.
 fn expr_to_sexp(e: &Expr, span: Span) -> Sexp {
     match e {
         Expr::Lit(_, lit) => Sexp::Literal(lit.clone(), span),
