@@ -95,7 +95,7 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     rule(
         &mut egraph_normal,
         "my_rules",
-        facts![(= (Add a b) e)].unwrap(),
+        query![(= (Add a b) e)].unwrap(),
         actions![(union e (Add b a))].unwrap(),
     )
     .unwrap();
@@ -118,7 +118,7 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     rule(
         &mut egraph_proofs,
         "my_rules",
-        facts![(= (Add a b) e)].unwrap(),
+        query![(= (Add a b) e)].unwrap(),
         actions![(union e (Add b a))].unwrap(),
     )
     .unwrap();

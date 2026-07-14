@@ -38,6 +38,7 @@ macro_rules! error {
     };
 }
 
+#[derive(Clone)]
 pub enum Sexp {
     // Will never contain `Literal::Unit`, as this
     // will be parsed as an empty `Sexp::List`.
@@ -153,7 +154,7 @@ fn map_fallible<T>(
 /// Classify an atom's text into a [`Sexp`], matching the lexer used by
 /// [`Parser`]: `true`/`false` → bool, integer → int, `NaN`/`inf`/`-inf` and
 /// finite floats → float, everything else → an atom. Exposed so token-based
-/// builders (the `expr!`/`fact!` quasiquotes) classify atoms identically to
+/// builders (the `expr!`/`query!` quasiquotes) classify atoms identically to
 /// parsing the same text.
 pub fn atom_to_sexp(s: &str, span: Span) -> Sexp {
     if s == "true" {

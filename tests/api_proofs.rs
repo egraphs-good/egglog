@@ -19,7 +19,7 @@ fn rust_rule_with_proofs_enabled_errors() {
         "test_rule",
         "r",
         vars![x: i64],
-        facts![(= y (f x))].unwrap(),
+        query![(= y (f x))].unwrap(),
         |_, _| Some(()),
     );
 
@@ -42,7 +42,7 @@ fn rust_rule_full_with_proofs_enabled_errors() {
         "test_rule",
         "r",
         vars![x: i64],
-        facts![(= y (f x))].unwrap(),
+        query![(= y (f x))].unwrap(),
         |_, _| Some(()),
     );
 
@@ -77,7 +77,7 @@ fn query_with_proofs_enabled_errors_with_query_api_name() {
     eg.parse_and_run_program(None, "(function f (i64) i64 :merge new)")
         .unwrap();
 
-    let result = eg.query(vars![x: i64], facts![(= y (f x))].unwrap());
+    let result = eg.query(vars![x: i64], query![(= y (f x))].unwrap());
 
     let err = result.expect_err("EGraph::query should fail under proofs");
     assert!(

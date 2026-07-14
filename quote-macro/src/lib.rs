@@ -6,24 +6,30 @@
 //! literals, dashed atoms (`:no-merge`), and operators all work. They are
 //! re-exported from `egglog` and `egglog::prelude`.
 //!
-//! # Macros
+//! # The three variants
 //!
-//! Each parses one grammar category and returns a `Result` (except `sexp!` /
-//! `sexps!`, which don't parse):
+//! Every category comes in three flavors. The **parse** macro takes an
+//! *optional* leading `parser,` (a fresh default `Parser` if omitted) and
+//! returns unresolved AST. The **`resolve_*`** and **`run_*`** macros each take
+//! an e-graph as a required first argument: `resolve_*` typechecks the body
+//! against the e-graph (no execution), `run_*` executes it.
 //!
-//! | Macro | Produces |
-//! |---|---|
-//! | `expr!` | one `Expr` |
-//! | `fact!` / `facts!` | one `Fact` / a `Facts` |
-//! | `action!` / `actions!` | a `Vec<Action>` / an `Actions` |
-//! | `command!` | a `Vec<Command>` (one command) |
-//! | `egglog!` | a `Vec<Command>` (a whole program — run with `egraph.run_program`) |
-//! | `rule!` | a `Vec<Command>` (sugar for `(rule (<facts>) (<actions>))`) |
-//! | `sexp!` / `sexps!` | a raw `Sexp` / `Vec<Sexp>`, un-parsed (for splicing) |
+//! | category | parse (`[parser,] …`) | `resolve_…!(eg, …)` | `run_…!(eg, …)` |
+//! |---|---|---|---|
+//! | expression | `expr!` → `Expr` | `resolve_expr!` → `ResolvedExpr` | `run_expr!` → `(ArcSort, Value)` |
+//! | query | `query!` → `Facts` | `resolve_query!` → `Vec<ResolvedFact>` | `run_query!` → `Vec<HashMap<String, Value>>` (matches) |
+//! | action(s) | `action!` / `actions!` → `Vec<Action>` / `Actions` | `resolve_action(s)!` → `Vec<ResolvedCommand>` | `run_action(s)!` → `Vec<CommandOutput>` |
+//! | command | `command!` → `Vec<Command>` | `resolve_command!` → `Vec<ResolvedCommand>` | `run_command!` → `Vec<CommandOutput>` |
+//! | program | `egglog!` → `Vec<Command>` | `resolve_egglog!` → `Vec<ResolvedCommand>` | `run_egglog!` → `Vec<CommandOutput>` |
+//! | rule | `rule!` → `Vec<Command>` | `resolve_rule!` → `Vec<ResolvedCommand>` | `run_rule!` → `Vec<CommandOutput>` |
 //!
-//! A leading `parser,` is optional: with it, parsing uses your `Parser` (and
-//! its registered macros/sorts); without it, a fresh default `Parser`.
-//! (`sexp!` / `sexps!` never take one.)
+//! Parse macros return `Result<_, ParseError>`; the `resolve_*` / `run_*`
+//! macros return `Result<_, egglog::Error>`. `run_query!` derives the query
+//! variables (and their sorts) from the facts, so it needs no explicit `vars`.
+//!
+//! `sexp!` / `sexps!` are separate: they build a raw `Sexp` / `Vec<Sexp>`
+//! *without* parsing (no parser, no e-graph) — for `#`-splicing into another
+//! quasiquote.
 //!
 //! # Splices
 //!
@@ -62,16 +68,41 @@ pub fn expr(input: TokenStream) -> TokenStream {
     build(input, Method::Expr)
 }
 
-/// Parse one egglog fact (a query atom): `fact!([parser,] <egglog>)` → `Result<Fact, ParseError>`.
+/// Resolve one expression against an e-graph: `resolve_expr!(egraph, <expr>)` →
+/// `Result<ResolvedExpr, Error>` (typecheck, free names = globals, no eval).
 #[proc_macro]
-pub fn fact(input: TokenStream) -> TokenStream {
-    build(input, Method::Fact)
+pub fn resolve_expr(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveExpr)
 }
 
-/// Parse a sequence of facts: `facts!([parser,] <egglog fact>*)` → `Result<Facts, ParseError>`.
+/// Evaluate one expression against an e-graph: `run_expr!(egraph, <expr>)` →
+/// `Result<(ArcSort, Value), Error>` (via `eval_expr`).
 #[proc_macro]
-pub fn facts(input: TokenStream) -> TokenStream {
+pub fn run_expr(input: TokenStream) -> TokenStream {
+    build(input, Method::RunExpr)
+}
+
+/// Parse a query — a sequence of facts (query atoms):
+/// `query!([parser,] <fact>*)` → `Result<Facts, ParseError>`.
+#[proc_macro]
+pub fn query(input: TokenStream) -> TokenStream {
     build(input, Method::Facts)
+}
+
+/// Resolve a query against an e-graph: `resolve_query!(egraph, <fact>*)` →
+/// `Result<Vec<ResolvedFact>, Error>` (typecheck the query body, no run).
+#[proc_macro]
+pub fn resolve_query(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveQuery)
+}
+
+/// Run a query against an e-graph: `run_query!(egraph, <fact>*)` →
+/// `Result<Vec<HashMap<String, Value>>, Error>` — one map (var name → value)
+/// per match. Query variables (and their sorts) are derived from the facts, so
+/// no explicit `vars` list is needed.
+#[proc_macro]
+pub fn run_query(input: TokenStream) -> TokenStream {
+    build(input, Method::RunQuery)
 }
 
 /// Parse one egglog action: `action!([parser,] <egglog action>)` → `Result<Vec<Action>, ParseError>`.
@@ -86,12 +117,54 @@ pub fn actions(input: TokenStream) -> TokenStream {
     build(input, Method::Actions)
 }
 
+/// Resolve one action against an e-graph, as a top-level action command:
+/// `resolve_action!(egraph, <action>)` → `Result<Vec<ResolvedCommand>, Error>`.
+#[proc_macro]
+pub fn resolve_action(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveCommand)
+}
+
+/// Run one action against an e-graph, as a top-level action command:
+/// `run_action!(egraph, <action>)` → `Result<Vec<CommandOutput>, Error>`.
+#[proc_macro]
+pub fn run_action(input: TokenStream) -> TokenStream {
+    build(input, Method::RunCommand)
+}
+
+/// Resolve a sequence of actions against an e-graph, as top-level action
+/// commands: `resolve_actions!(egraph, <action>*)` → `Result<Vec<ResolvedCommand>, Error>`.
+#[proc_macro]
+pub fn resolve_actions(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveProgram)
+}
+
+/// Run a sequence of actions against an e-graph, as top-level action commands:
+/// `run_actions!(egraph, <action>*)` → `Result<Vec<CommandOutput>, Error>`.
+#[proc_macro]
+pub fn run_actions(input: TokenStream) -> TokenStream {
+    build(input, Method::RunProgram)
+}
+
 /// Parse one egglog command: `command!([parser,] <egglog command>)` → `Result<Vec<Command>, ParseError>`.
 ///
 /// Returns a `Vec` because a single surface command may desugar into several.
 #[proc_macro]
 pub fn command(input: TokenStream) -> TokenStream {
     build(input, Method::Command)
+}
+
+/// Resolve one command against an e-graph: `resolve_command!(egraph, <command>)`
+/// → `Result<Vec<ResolvedCommand>, Error>` (typecheck, no execution).
+#[proc_macro]
+pub fn resolve_command(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveCommand)
+}
+
+/// Run one command against an e-graph: `run_command!(egraph, <command>)` →
+/// `Result<Vec<CommandOutput>, Error>`.
+#[proc_macro]
+pub fn run_command(input: TokenStream) -> TokenStream {
+    build(input, Method::RunCommand)
 }
 
 /// Parse a whole program: `egglog!([parser,] <egglog command>*)` → `Result<Vec<Command>, ParseError>`.
@@ -111,6 +184,31 @@ pub fn egglog(input: TokenStream) -> TokenStream {
     build(input, Method::Program)
 }
 
+/// Resolve a program against an e-graph: `resolve_egglog!(egraph, <commands>)`
+/// → `Result<Vec<ResolvedCommand>, Error>`. Parses with the e-graph's parser
+/// and typechecks (so you get type errors here), but **does not run** anything.
+///
+/// ```ignore
+/// let resolved = resolve_egglog!(egraph, (rule ((= x (Foo)))((delete x))))?;
+/// ```
+#[proc_macro]
+pub fn resolve_egglog(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveProgram)
+}
+
+/// Run a program against an e-graph: `run_egglog!(egraph, <commands>)` →
+/// `Result<Vec<CommandOutput>, Error>`. Parses with the e-graph's parser,
+/// resolves, and executes — i.e. `egraph.run_program(egglog!(..)?)` with the
+/// parse using the e-graph's own parser.
+///
+/// ```ignore
+/// run_egglog!(egraph, (datatype Math (Num i64) (Add Math Math)))?;
+/// ```
+#[proc_macro]
+pub fn run_egglog(input: TokenStream) -> TokenStream {
+    build(input, Method::RunProgram)
+}
+
 /// Build one rule command: `rule!([parser,] (<facts>) (<actions>))` → `Result<Vec<Command>, ParseError>`.
 ///
 /// Sugar for the `(rule (<facts>) (<actions>))` command — the two groups are
@@ -118,6 +216,20 @@ pub fn egglog(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn rule(input: TokenStream) -> TokenStream {
     build(input, Method::Rule)
+}
+
+/// Resolve a rule against an e-graph: `resolve_rule!(egraph, (<facts>) (<actions>))`
+/// → `Result<Vec<ResolvedCommand>, Error>` (typecheck, no execution).
+#[proc_macro]
+pub fn resolve_rule(input: TokenStream) -> TokenStream {
+    build(input, Method::ResolveRule)
+}
+
+/// Run a rule against an e-graph: `run_rule!(egraph, (<facts>) (<actions>))` →
+/// `Result<Vec<CommandOutput>, Error>`.
+#[proc_macro]
+pub fn run_rule(input: TokenStream) -> TokenStream {
+    build(input, Method::RunRule)
 }
 
 /// Build an *un-parsed* s-expression: `sexp!(<egglog>)` → `Sexp` (no parser
@@ -147,7 +259,6 @@ pub fn sexps(input: TokenStream) -> TokenStream {
 #[derive(Clone, Copy)]
 enum Method {
     Expr,
-    Fact,
     Command,
     Action,
     Facts,
@@ -157,6 +268,23 @@ enum Method {
     /// Build a `Sexp` (or `Vec<Sexp>`) without parsing — for splicing.
     Sexp,
     Sexps,
+    /// Egraph-context command-family variants: parse the body with the
+    /// e-graph's own parser into a `Vec<Command>`, then resolve (→
+    /// `Vec<ResolvedCommand>`) or run (→ `Vec<CommandOutput>`) against it.
+    ResolveProgram,
+    RunProgram,
+    ResolveCommand,
+    RunCommand,
+    ResolveRule,
+    RunRule,
+    /// Egraph-context expression variants: parse one expression, then resolve
+    /// (→ `ResolvedExpr`, no eval) or run (→ `(ArcSort, Value)` via `eval_expr`).
+    ResolveExpr,
+    RunExpr,
+    /// Egraph-context query variants: parse the body as facts, then resolve (→
+    /// `Vec<ResolvedFact>`) or run (→ query matches) against the e-graph.
+    ResolveQuery,
+    RunQuery,
 }
 
 fn build(input: TokenStream, method: Method) -> TokenStream {
@@ -180,6 +308,132 @@ fn build(input: TokenStream, method: Method) -> TokenStream {
         return out.into();
     }
 
+    // Command-family egraph-context variants (`resolve_egglog!`/`run_egglog!`,
+    // `resolve_command!`/`run_command!`, `resolve_rule!`/`run_rule!`): a
+    // REQUIRED e-graph, then the egglog body. Parse the body with the e-graph's
+    // own parser (so its registered sorts/macros are in scope) into a
+    // `Vec<Command>`, then resolve (→ `Vec<ResolvedCommand>`, no execution) or
+    // run (→ `Vec<CommandOutput>`) against it.
+    if let Method::ResolveProgram
+    | Method::RunProgram
+    | Method::ResolveCommand
+    | Method::RunCommand
+    | Method::ResolveRule
+    | Method::RunRule = method
+    {
+        let (ctx, body) = split_parser(input.into());
+        let Some(ctx) = ctx else {
+            return quote!(compile_error!(
+                "this macro needs an e-graph first, e.g. `run_egglog!(egraph, ..)` / `resolve_egglog!(egraph, ..)`"
+            ))
+            .into();
+        };
+        let items = build_items(&sexp_seq(body));
+        // How the parsed forms become a `Vec<Command>` (mirrors the parse-only
+        // variants): a whole program, a single command, or a `(rule …)` wrap.
+        let cmds_build = match method {
+            Method::ResolveCommand | Method::RunCommand => quote! {
+                assert_eq!(__sexps.len(), 1, "this macro expects exactly one command");
+                __cmds.extend(__eg.parser.parse_command(&__sexps[0])?);
+            },
+            Method::ResolveRule | Method::RunRule => quote! {
+                assert_eq!(__sexps.len(), 2, "rule macros expect `(<facts>) (<actions>)`");
+                let __r = ::egglog::ast::Sexp::List(
+                    ::std::vec![
+                        ::egglog::ast::Sexp::Atom("rule".to_string(), __span.clone()),
+                        __sexps[0].clone(),
+                        __sexps[1].clone(),
+                    ],
+                    __span.clone(),
+                );
+                __cmds.extend(__eg.parser.parse_command(&__r)?);
+            },
+            // Program (`egglog!`): every form is a command.
+            _ => quote! {
+                for __s in &__sexps {
+                    __cmds.extend(__eg.parser.parse_command(__s)?);
+                }
+            },
+        };
+        let finish = match method {
+            Method::ResolveProgram | Method::ResolveCommand | Method::ResolveRule => {
+                quote!(__eg.resolve_commands(__cmds))
+            }
+            _ => quote!(__eg.run_program(__cmds)),
+        };
+        return quote! {{
+            let __eg = &mut (#ctx);
+            let __span = ::egglog::span!();
+            let __sexps: ::std::vec::Vec<::egglog::ast::Sexp> = #items;
+            (|| -> ::std::result::Result<_, ::egglog::Error> {
+                let mut __cmds: ::std::vec::Vec<::egglog::ast::Command> = ::std::vec::Vec::new();
+                #cmds_build
+                #finish
+            })()
+        }}
+        .into();
+    }
+
+    // Egraph-context expression variants (`resolve_expr!` / `run_expr!`): parse
+    // one expression with the e-graph's parser, then resolve it to a
+    // `ResolvedExpr` (no eval) or evaluate it to `(ArcSort, Value)`.
+    if let Method::ResolveExpr | Method::RunExpr = method {
+        let (ctx, body) = split_parser(input.into());
+        let Some(ctx) = ctx else {
+            return quote!(compile_error!(
+                "this macro needs an e-graph first, e.g. `run_expr!(egraph, ..)` / `resolve_expr!(egraph, ..)`"
+            ))
+            .into();
+        };
+        let items = build_items(&sexp_seq(body));
+        let op = match method {
+            Method::ResolveExpr => quote!(__eg.resolve_expr(&__e)),
+            _ => quote!(__eg.eval_expr(&__e)),
+        };
+        return quote! {{
+            let __eg = &mut (#ctx);
+            let __span = ::egglog::span!();
+            let __sexps: ::std::vec::Vec<::egglog::ast::Sexp> = #items;
+            (|| -> ::std::result::Result<_, ::egglog::Error> {
+                assert_eq!(__sexps.len(), 1, "expr macros expect exactly one expression");
+                let __e = __eg.parser.parse_expr(&__sexps[0])?;
+                #op
+            })()
+        }}
+        .into();
+    }
+
+    // Egraph-context query variants (`resolve_query!` / `run_query!`): parse the
+    // body as facts with the e-graph's parser, then resolve them to
+    // `Vec<ResolvedFact>` (no run) or run the query and return the matches.
+    if let Method::ResolveQuery | Method::RunQuery = method {
+        let (ctx, body) = split_parser(input.into());
+        let Some(ctx) = ctx else {
+            return quote!(compile_error!(
+                "this macro needs an e-graph first, e.g. `run_query!(egraph, ..)` / `resolve_query!(egraph, ..)`"
+            ))
+            .into();
+        };
+        let items = build_items(&sexp_seq(body));
+        let op = match method {
+            Method::ResolveQuery => quote!(__eg.resolve_facts(&__facts)),
+            _ => quote!(__eg.query_all(::egglog::ast::Facts(__facts))),
+        };
+        return quote! {{
+            let __eg = &mut (#ctx);
+            let __span = ::egglog::span!();
+            let __sexps: ::std::vec::Vec<::egglog::ast::Sexp> = #items;
+            (|| -> ::std::result::Result<_, ::egglog::Error> {
+                let mut __facts: ::std::vec::Vec<::egglog::ast::Fact> = ::std::vec::Vec::new();
+                for __s in &__sexps {
+                    __facts.push(__eg.parser.parse_fact(__s)?);
+                }
+                #op
+            })()
+        }}
+        .into();
+    }
+
     let (parser_opt, body) = split_parser(input.into());
     // With an explicit parser (which may have registered macros — named args,
     // `for`, …) use it; otherwise a fresh default parser handles built-in syntax.
@@ -193,13 +447,9 @@ fn build(input: TokenStream, method: Method) -> TokenStream {
     let items = build_items(&sexp_seq(body));
 
     // Single-form quasiquotes parse `__sexps[0]`; the plural ones map over all.
-    let single = matches!(
-        method,
-        Method::Expr | Method::Fact | Method::Command | Method::Action
-    );
+    let single = matches!(method, Method::Expr | Method::Command | Method::Action);
     let result = match method {
         Method::Expr => quote!(__parser.parse_expr(&__sexps[0])),
-        Method::Fact => quote!(__parser.parse_fact(&__sexps[0])),
         Method::Command => quote!(__parser.parse_command(&__sexps[0])),
         Method::Action => quote!(__parser.parse_action(&__sexps[0])),
         Method::Program => quote! {
@@ -235,7 +485,20 @@ fn build(input: TokenStream, method: Method) -> TokenStream {
                 .collect::<::std::result::Result<::std::vec::Vec<::std::vec::Vec<_>>, _>>()
                 .map(|__vs| ::egglog::ast::GenericActions(__vs.into_iter().flatten().collect()))
         },
-        Method::Sexp | Method::Sexps => unreachable!("handled before parsing"),
+        Method::Sexp
+        | Method::Sexps
+        | Method::ResolveProgram
+        | Method::RunProgram
+        | Method::ResolveCommand
+        | Method::RunCommand
+        | Method::ResolveRule
+        | Method::RunRule
+        | Method::ResolveExpr
+        | Method::RunExpr
+        | Method::ResolveQuery
+        | Method::RunQuery => {
+            unreachable!("handled before parsing")
+        }
     };
     let check = if single {
         quote!(assert_eq!(__sexps.len(), 1, "this egglog quasiquote expects exactly one form");)

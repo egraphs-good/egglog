@@ -42,11 +42,15 @@ global name to it (`(let $root ...)`), resolve the global with
 [`extract`] module has the full extractor API.
 
 # Writing egglog inline from Rust
-The [`expr!`], [`fact!`], [`action!`], [`command!`], [`egglog!`], and [`rule!`]
-macros let you write egglog as Rust tokens and get back parsed `Command` /
-`Expr` / `Fact` values; splice Rust values in with `#x`, `#..xs`, and
-`:#field`, and build un-parsed fragments with [`sexp!`]. See [`egglog!`] for
-the syntax (all re-exported from [`prelude`]).
+Write egglog as ordinary Rust tokens with the quasiquote macros — [`expr!`],
+[`query!`], [`action!`]/[`actions!`], [`command!`], [`egglog!`], and [`rule!`]
+parse to AST (`Expr` / `Facts` / `Command` / …), splicing Rust values in with
+`#x`, `#..xs`, and `:#field`; [`sexp!`] builds an un-parsed fragment for
+splicing. Each parsing macro also has two e-graph-aware variants: `resolve_*!`
+typechecks against an e-graph without running (e.g. [`resolve_egglog!`] →
+`Vec<ResolvedCommand>`), and `run_*!` runs it (e.g. [`run_egglog!`] →
+`Vec<CommandOutput>`, [`run_query!`] → query matches, [`run_expr!`] →
+`(sort, value)`). All are re-exported from [`prelude`].
 
 ```
 use egglog::prelude::*;

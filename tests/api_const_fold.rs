@@ -43,7 +43,7 @@ fn install_const_fold_rule(eg: &mut EGraph) -> Result<(), Error> {
         "fold_add",
         ruleset,
         vars![sum: (expr_sort.clone()), lhs: (expr_sort.clone()), rhs: (expr_sort), a: i64, b: i64],
-        facts![
+        query![
             (= sum (Add lhs rhs))
             (= lhs (Num a))
             (= rhs (Num b))
