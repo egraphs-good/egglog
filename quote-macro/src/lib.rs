@@ -1,56 +1,10 @@
-//! Token-tree quasiquotes for writing egglog inline in Rust.
+//! Procedural macros backing egglog's quasiquotes — `expr!`, `query!`,
+//! `command!`, `egglog!`, `rule!`, `action!`/`actions!`, `sexp!`/`sexps!`, and
+//! their `resolve_*!` / `run_*!` variants.
 //!
-//! Write egglog directly in your Rust source — the same syntax you'd put in a
-//! `.egg` file — and these macros parse it into `Command` / `Expr` / `Fact`
-//! values. Parsing goes through egglog's own parser, so `?x`, `:field`, `...`,
-//! negative literals, dashed atoms (`:no-merge`), operators, and every
-//! registered parser macro all behave just as they do in egglog text. The
-//! macros are re-exported from `egglog` and `egglog::prelude`.
-//!
-//! # The three variants
-//!
-//! Every category comes in three flavors. The **parse** macro takes an
-//! *optional* leading `parser,` (a fresh default `Parser` if omitted) and
-//! returns unresolved AST. The **`resolve_*`** and **`run_*`** macros each take
-//! an e-graph as a required first argument: `resolve_*` typechecks the body
-//! against the e-graph (no execution), `run_*` executes it.
-//!
-//! | category | parse (`[parser,] …`) | `resolve_…!(eg, …)` | `run_…!(eg, …)` |
-//! |---|---|---|---|
-//! | expression | `expr!` → `Expr` | `resolve_expr!` → `ResolvedExpr` | `run_expr!` → `(ArcSort, Value)` |
-//! | query | `query!` → `Facts` | `resolve_query!` → `Vec<ResolvedFact>` | `run_query!` → `Vec<HashMap<String, Value>>` (matches) |
-//! | action(s) | `action!` / `actions!` → `Vec<Action>` / `Actions` | `resolve_action(s)!` → `Vec<ResolvedCommand>` | `run_action(s)!` → `Vec<CommandOutput>` |
-//! | command | `command!` → `Vec<Command>` | `resolve_command!` → `Vec<ResolvedCommand>` | `run_command!` → `Vec<CommandOutput>` |
-//! | program | `egglog!` → `Vec<Command>` | `resolve_egglog!` → `Vec<ResolvedCommand>` | `run_egglog!` → `Vec<CommandOutput>` |
-//! | rule | `rule!` → `Vec<Command>` | `resolve_rule!` → `Vec<ResolvedCommand>` | `run_rule!` → `Vec<CommandOutput>` |
-//!
-//! Parse macros return `Result<_, ParseError>`; the `resolve_*` / `run_*`
-//! macros return `Result<_, egglog::Error>`. `run_query!` derives the query
-//! variables (and their sorts) from the facts, so it needs no explicit `vars`.
-//!
-//! `sexp!` / `sexps!` are separate: they build a raw `Sexp` / `Vec<Sexp>`
-//! *without* parsing (no parser, no e-graph) — for `#`-splicing into another
-//! quasiquote.
-//!
-//! # Splices
-//!
-//! | Form | Meaning |
-//! |---|---|
-//! | `#x` / `#(expr)` | one value implementing `egglog::ast::ToSexp` |
-//! | `#..xs` | spread (Racket's `,@`): extend the list with each element of `xs: IntoIterator<Item: ToSexp>` |
-//! | `:#field` / `:#(expr)` | a runtime keyword — the value becomes the atom `:<value>` |
-//!
-//! `#` also works in head position, so the head can be a runtime value:
-//! `expr!((#head 5))`. `ToSexp` covers `Sexp` (identity), `Expr` (structural),
-//! `&str`/`String` (atom), and `i64`; build a `Sexp` fragment with `sexp!` to
-//! `#`-splice it into a typed quasiquote later.
-//!
-//! ```ignore
-//! let a = 2;
-//! let e = expr!((Add (Num #a) ?x))?;                 // (Add (Num 2) ?x)
-//! let fields = vec!["?a", "?b"];
-//! let prog = egglog!(p, (rule ((= l (#kind #..fields))) ((union l r))))?;
-//! ```
+//! These are re-exported from the `egglog` crate; the user-facing guide — what
+//! each macro produces, the `#` / `#..` / `:#` splice forms, and examples —
+//! lives in `egglog::prelude`. The doc on each macro below notes its signature.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
@@ -63,7 +17,7 @@ use std::iter::Peekable;
 /// let x = expr!((+ ?a 1))?;                 // default parser
 /// let y = expr!(my_parser, (Mul :shape ?s ...))?;
 /// ```
-/// See the module-level docs for the parser argument and the `#` / `#..` / `:#` splices.
+/// See `egglog::prelude` for the parser argument, the `#` / `#..` / `:#` splices, and the `resolve_*!` / `run_*!` variants.
 #[proc_macro]
 pub fn expr(input: TokenStream) -> TokenStream {
     build(input, Method::Expr)
@@ -179,7 +133,7 @@ pub fn run_command(input: TokenStream) -> TokenStream {
 ///     (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
 /// )?)?;
 /// ```
-/// See the module-level docs for the parser argument and the `#` / `#..` / `:#` splices.
+/// See `egglog::prelude` for the parser argument, the `#` / `#..` / `:#` splices, and the `resolve_*!` / `run_*!` variants.
 #[proc_macro]
 pub fn egglog(input: TokenStream) -> TokenStream {
     build(input, Method::Program)

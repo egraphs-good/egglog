@@ -4,23 +4,53 @@
 //! use egglog::prelude::*;
 //! ```
 //!
-//! Most workflows are best expressed as an egglog program parsed and
-//! run via [`crate::EGraph::parse_and_run_program`]: declare your
-//! sorts, functions, and rules once in egglog text, then call into
-//! the database from Rust around it.
+//! # Writing egglog inline
+//!
+//! The quasiquote macros let you write egglog directly in Rust rather than as
+//! a string — with parse and type errors reported at the call site, and Rust
+//! values spliced in. [`egglog!`] takes a whole program; [`expr!`], [`query!`],
+//! [`command!`], [`rule!`], and [`action!`] each take a single form. `?x`,
+//! `:field`, `...`, and any sorts or macros you've registered all work exactly
+//! as they do in egglog text.
+//!
+//! Each parsing macro has three forms — parse it, or, against an e-graph,
+//! `resolve_*!` it (typecheck, no run) or `run_*!` it (run):
+//!
+//! |         | parse       | `resolve_…!(egraph, …)` | `run_…!(egraph, …)`        |
+//! |---------|-------------|-------------------------|----------------------------|
+//! | expr    | [`expr!`]    | [`resolve_expr!`]    | [`run_expr!`] → `(sort, value)`  |
+//! | query   | [`query!`]   | [`resolve_query!`]   | [`run_query!`] → matches         |
+//! | actions | [`action!`] / [`actions!`] | [`resolve_action!`] | [`run_action!`] → outputs |
+//! | command | [`command!`] | [`resolve_command!`] | [`run_command!`] → outputs      |
+//! | program | [`egglog!`]  | [`resolve_egglog!`]  | [`run_egglog!`] → outputs        |
+//! | rule    | [`rule!`]    | [`resolve_rule!`]    | [`run_rule!`] → outputs          |
+//!
+//! Splice Rust values in with `#`:
+//!
+//! - `#x` / `#(expr)` — one value: a `&str`/`String` (becomes an atom), an
+//!   `i64`, a built [`Expr`], or a [`sexp!`] fragment.
+//! - `#..xs` — spread each item of an iterator into the enclosing list.
+//! - `:#field` — a runtime keyword: the value becomes `:<value>`.
+//!
+//! [`sexp!`] builds a fragment to splice into a macro later.
 //!
 //! ```
 //! use egglog::prelude::*;
-//! let mut eg = EGraph::default();
-//! eg.parse_and_run_program(
-//!     None,
-//!     "(datatype Math (Num i64) (Add Math Math))
-//!      (Add (Num 1) (Num 2))",
+//! let mut egraph = EGraph::default();
+//! run_egglog!(
+//!     &mut egraph,
+//!     (datatype Math (Num i64) (Add Math Math))
+//!     (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
 //! )?;
+//!
+//! let n = 2;
+//! assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
 //! # Ok::<(), egglog::Error>(())
 //! ```
 //!
-//! Three cases need a Rust escape from the language:
+//! For a whole program kept in a file or a large string, use
+//! [`crate::EGraph::parse_and_run_program`]. The rest of this module is Rust
+//! escape hatches for when the language isn't enough:
 //!
 //! 1. **Driving the e-graph database directly** — building rows,
 //!    looking them up, iterating tables, running ad-hoc queries from

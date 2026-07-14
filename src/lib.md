@@ -62,6 +62,6 @@ assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
 # Ok::<(), egglog::Error>(())
 ```
 
-For the full reference — every macro, the parse / `resolve_*` / `run_*`
-variants, and the splice forms (`#x`, `#..xs`, `:#field`) — see the
-[`egglog_quote`] crate.
+See [`prelude`] for the full guide — every macro, the parse / `resolve_*` /
+`run_*` variants, and the splice forms — alongside the rest of the Rust API
+(custom rules, primitives, and sorts).
