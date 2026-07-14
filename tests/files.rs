@@ -35,28 +35,6 @@ impl Run {
         }
     }
 
-    /// Extraction results may differ slightly due to the proof encoding when multiple
-    /// solutions have the same cost. Snapshot only the extracted cost so shared
-    /// snapshots still verify that normal and proof modes find equally good solutions.
-    fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
-        outputs
-            .iter()
-            .filter_map(|output| match output {
-                // Skip OverallStatistics - contains non-deterministic Duration timing data
-                CommandOutput::OverallStatistics(_) => None,
-                // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
-                CommandOutput::PrintFunction(..) => None,
-                CommandOutput::ExtractBest(_, cost, _) => {
-                    Some(format!("(extraction-costs {cost})\n"))
-                }
-                CommandOutput::ExtractVariants(..) => None,
-                // All other variants use normal Display formatting
-                other => Some(other.to_string()),
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
@@ -102,7 +80,7 @@ impl Run {
                     // so all variants compare against the same expected output
                     let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
                     let snapshot_content_across_treatments =
-                        self.outputs_to_snapshot_preserved_across_treatments(outputs);
+                        CommandOutput::snapshot_stable_under_proof_encoding(outputs);
 
                     if self.should_assert_snapshot_across_treatments(
                         &snapshot_content_across_treatments,
@@ -123,7 +101,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proof_testing {
+        let egraph = if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.proofs {
             EGraph::new_with_proofs()
@@ -131,7 +109,8 @@ impl Run {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
-        }
+        };
+        egraph.with_num_threads(self.threads)
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs
@@ -212,20 +191,7 @@ impl Run {
     fn into_trial(self) -> Trial {
         let name = self.name().to_string();
         Trial::test(name, move || {
-            // We use a local rayon pool here because `build_global()` can only
-            // be called once per process, but libtest-mimic runs many trials
-            // (with different thread counts) in the same process.
-            // The threads == 1 case also goes through pool.install so the trial
-            // doesn't fall through to the default global rayon pool (which uses
-            // num_cpus threads and would make "single-threaded" tests
-            // nondeterministic).
-            // TODO: when we move to per-EGraph local thread pools, replace this
-            // with `egraph.with_num_threads()` and remove the explicit pool.
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(self.threads)
-                .build()
-                .expect("failed to build rayon thread pool");
-            pool.install(|| self.run());
+            self.run();
             Ok(())
         })
     }

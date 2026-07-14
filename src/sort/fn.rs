@@ -54,7 +54,7 @@ impl Hash for FunctionContainer {
 }
 
 impl ContainerValue for FunctionContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         let mut changed = false;
         for (s, old) in &mut self.1 {
             if s.is_eq_sort() || s.is_eq_container_sort() {

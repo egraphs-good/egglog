@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Fn 1)
+ (Init 1)
+ (Init2 1)
+ (matched 0))

@@ -70,9 +70,21 @@ where
         } else {
             "".into()
         };
-        let naive = if self.naive { " :naive" } else { "" };
+        let eval_mode = match self.eval_mode {
+            RuleEvalMode::Seminaive => "",
+            RuleEvalMode::Naive => " :naive",
+            RuleEvalMode::UnsafeSeminaive => " :unsafe-seminaive",
+        };
         let no_decomp = if self.no_decomp { " :no-decomp" } else { "" };
-        write!(f, ")\n{indent} {ruleset} {name}{naive}{no_decomp})")
+        let include_subsumed = if self.include_subsumed {
+            " :internal-include-subsumed"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            ")\n{indent} {ruleset} {name}{eval_mode}{no_decomp}{include_subsumed})"
+        )
     }
 }
 
@@ -159,37 +171,6 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_nullary_call_without_trailing_space() {
-        let expr = GenericExpr::<String, String>::Call(Span::Panic, "foo".into(), vec![]);
-
-        assert_eq!(expr.to_string(), "(foo)");
-    }
-
-    #[test]
-    fn display_nullary_change_without_trailing_space() {
-        let delete = GenericAction::<String, String>::Change(
-            Span::Panic,
-            Change::Delete,
-            "foo".into(),
-            vec![],
-        );
-        let subsume = GenericAction::<String, String>::Change(
-            Span::Panic,
-            Change::Subsume,
-            "foo".into(),
-            vec![],
-        );
-
-        assert_eq!(delete.to_string(), "(delete (foo))");
-        assert_eq!(subsume.to_string(), "(subsume (foo))");
-    }
-}
-
 impl<Head, Leaf> Default for GenericActions<Head, Leaf>
 where
     Head: Clone + Display,
@@ -220,8 +201,9 @@ where
                 .collect(),
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
-            naive: self.naive,
+            eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -236,8 +218,9 @@ where
             body: self.body,
             name: self.name,
             ruleset: self.ruleset,
-            naive: self.naive,
+            eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -261,8 +244,9 @@ where
                 .collect(),
             name: self.name,
             ruleset: self.ruleset,
-            naive: self.naive,
+            eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
+            include_subsumed: self.include_subsumed,
         }
     }
 
@@ -774,5 +758,36 @@ impl Display for Literal {
             Literal::String(s) => write!(f, "\"{s}\""),
             Literal::Unit => write!(f, "()"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_nullary_call_without_trailing_space() {
+        let expr = GenericExpr::<String, String>::Call(Span::Panic, "foo".into(), vec![]);
+
+        assert_eq!(expr.to_string(), "(foo)");
+    }
+
+    #[test]
+    fn display_nullary_change_without_trailing_space() {
+        let delete = GenericAction::<String, String>::Change(
+            Span::Panic,
+            Change::Delete,
+            "foo".into(),
+            vec![],
+        );
+        let subsume = GenericAction::<String, String>::Change(
+            Span::Panic,
+            Change::Subsume,
+            "foo".into(),
+            vec![],
+        );
+
+        assert_eq!(delete.to_string(), "(delete (foo))");
+        assert_eq!(subsume.to_string(), "(subsume (foo))");
     }
 }

@@ -10,6 +10,7 @@ pub(crate) mod dependency_graph;
 pub(crate) mod free_join;
 pub(crate) mod hash_index;
 pub(crate) mod offsets;
+pub(crate) mod parallel;
 pub(crate) mod parallel_heuristics;
 pub(crate) mod pool;
 pub(crate) mod query;
@@ -40,7 +41,7 @@ pub use row_buffer::TaggedRowBuffer;
 pub use table::{MergeFn, SortedWritesTable};
 pub use table_spec::{
     ColumnId, Constraint, MutationBuffer, Offset, Rebuilder, Row, Table, TableChange, TableSpec,
-    TableVersion, WrappedTable,
+    TableVersion, ValueRebuilder, WrappedTable,
 };
 pub use uf::DisplacedTable;
 

@@ -23,6 +23,44 @@ pub struct TermDag {
     nodes: IndexSet<Term>,
 }
 
+/// A [`TermId`] paired with its [`TermDag`] so it can be ordered by
+/// [`TermDag::ast_cmp`], for use in ordered collections like
+/// `BTreeMap`/`BTreeSet` (see [`TermDag::ord_term`]). Only compare wrappers
+/// from the same [`TermDag`].
+#[derive(Copy, Clone)]
+pub struct OrdTerm<'a> {
+    termdag: &'a TermDag,
+    id: TermId,
+}
+
+impl OrdTerm<'_> {
+    /// The wrapped [`TermId`].
+    pub fn id(&self) -> TermId {
+        self.id
+    }
+}
+
+impl PartialEq for OrdTerm<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        // Terms are hashconsed, so id equality is structural equality.
+        self.id == other.id
+    }
+}
+
+impl Eq for OrdTerm<'_> {}
+
+impl PartialOrd for OrdTerm<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrdTerm<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.termdag.ast_cmp(self.id, other.id)
+    }
+}
+
 const MAX_PRETTY_LINE_WIDTH: usize = 80;
 const PRETTY_INDENT_STEP: usize = 2;
 const MIN_SHARED_TERM_SIZE: usize = 4;
@@ -122,6 +160,65 @@ impl TermDag {
     /// Panics if the id is not valid.
     pub fn get(&self, id: TermId) -> &Term {
         self.nodes.get_index(id).unwrap()
+    }
+
+    /// A deterministic total order on terms by their AST *structure*, rather
+    /// than by insertion order (which is what comparing raw [`TermId`]s would
+    /// give). Literals order among themselves by value, variables by name, and
+    /// applications by head symbol, then arity, then children left-to-right;
+    /// across kinds, `Lit < Var < App`.
+    ///
+    /// Useful for canonicalizing the elements of an unordered structure (e.g. a
+    /// set or multiset) into a stable, reproducible term order.
+    ///
+    /// `App` children are compared structurally, not by raw [`TermId`] order,
+    /// so [`Term`] does not derive `Ord` and the leaf arms are written out
+    /// rather than calling `l.cmp(r)`. Uses an explicit worklist because terms
+    /// can be deeply nested.
+    pub fn ast_cmp(&self, a: TermId, b: TermId) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let mut worklist = vec![(a, b)];
+        while let Some((a, b)) = worklist.pop() {
+            if a == b {
+                // Hashconsed: identical ids are structurally equal.
+                continue;
+            }
+            let ord = match (self.get(a), self.get(b)) {
+                (Term::Lit(x), Term::Lit(y)) => x.cmp(y),
+                (Term::Lit(_), _) => Ordering::Less,
+                (_, Term::Lit(_)) => Ordering::Greater,
+                (Term::Var(x), Term::Var(y)) => x.cmp(y),
+                (Term::Var(_), _) => Ordering::Less,
+                (_, Term::Var(_)) => Ordering::Greater,
+                (Term::App(hx, ax), Term::App(hy, ay)) => {
+                    match hx.cmp(hy).then_with(|| ax.len().cmp(&ay.len())) {
+                        Ordering::Equal => {
+                            // Children compare left to right: push reversed so
+                            // the leftmost pair pops first.
+                            worklist.extend(ax.iter().copied().zip(ay.iter().copied()).rev());
+                            continue;
+                        }
+                        ord => ord,
+                    }
+                }
+            };
+            if ord.is_ne() {
+                return ord;
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Sort child terms in place by [`ast_cmp`](Self::ast_cmp). A reusable
+    /// building block for canonicalizing container elements.
+    pub fn sort_terms_by_ast(&self, terms: &mut [TermId]) {
+        terms.sort_by(|a, b| self.ast_cmp(*a, *b));
+    }
+
+    /// Wrap `id` so it is ordered by [`ast_cmp`](Self::ast_cmp), e.g. as a key
+    /// in a `BTreeMap`/`BTreeSet` when canonicalizing container terms.
+    pub fn ord_term(&self, id: TermId) -> OrdTerm<'_> {
+        OrdTerm { termdag: self, id }
     }
 
     /// Make and return a [`Term::App`] with the given head symbol and children,
@@ -463,6 +560,35 @@ mod tests {
         let mut td = TermDag::default();
         let t = td.expr_to_term(&e);
         (td, t)
+    }
+
+    #[test]
+    fn test_ast_cmp() {
+        use std::cmp::Ordering;
+        let mut td = TermDag::default();
+        let i1 = td.lit(Literal::Int(1));
+        let i2 = td.lit(Literal::Int(2));
+        let vx = td.var("x".into());
+        let f_i1 = td.app("f".into(), vec![i1]);
+        let f_i2 = td.app("f".into(), vec![i2]);
+        let g_i1 = td.app("g".into(), vec![i1]);
+        let f_i1_i1 = td.app("f".into(), vec![i1, i1]);
+
+        // Cross-kind: Lit < Var < App.
+        assert_eq!(td.ast_cmp(i1, vx), Ordering::Less);
+        assert_eq!(td.ast_cmp(vx, f_i1), Ordering::Less);
+        assert_eq!(td.ast_cmp(i1, f_i1), Ordering::Less);
+        // Literals by value.
+        assert_eq!(td.ast_cmp(i1, i2), Ordering::Less);
+        // Apps: same head, compare children.
+        assert_eq!(td.ast_cmp(f_i1, f_i2), Ordering::Less);
+        // Apps: by head symbol first.
+        assert_eq!(td.ast_cmp(f_i1, g_i1), Ordering::Less);
+        // Apps: by arity when head equal and shorter is a prefix.
+        assert_eq!(td.ast_cmp(f_i1, f_i1_i1), Ordering::Less);
+        // Reflexive / total.
+        assert_eq!(td.ast_cmp(f_i1, f_i1), Ordering::Equal);
+        assert_eq!(td.ast_cmp(f_i2, f_i1), Ordering::Greater);
     }
 
     #[test]

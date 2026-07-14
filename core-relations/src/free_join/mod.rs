@@ -13,7 +13,6 @@ use crate::{
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
 use egglog_concurrency::{NotificationList, ResettableOnceLock};
-use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
@@ -25,6 +24,7 @@ use crate::{
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
+    parallel,
     parallel_heuristics::parallelize_db_level_op,
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
@@ -314,8 +314,8 @@ pub struct Database {
 impl Database {
     /// Create an empty Database.
     ///
-    /// Queries are executed using the current rayon thread pool, which defaults to the global
-    /// thread pool.
+    /// Queries use the currently installed egglog thread pool. If no pool is
+    /// installed, queries run single-threaded.
     pub fn new() -> Database {
         Database::default()
     }
@@ -420,7 +420,7 @@ impl Database {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
             let view = self.read_only_view();
-            tables.par_iter_mut().for_each(|(id, info)| {
+            parallel::for_each_mut(&mut tables, |_, (id, info)| {
                 if run(*id, info, &view) {
                     self.notification_list.notify(*id);
                 }
@@ -447,6 +447,18 @@ impl Database {
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState) -> R) -> R {
         let mut state = ExecutionState::new(self.read_only_view(), Default::default());
         f(&mut state)
+    }
+
+    /// Like [`Database::with_execution_state`], but also reports whether `f`
+    /// staged any mutation through the execution state. Callers can use the
+    /// flag to skip a subsequent `merge_all` when the closure was read-only.
+    pub fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState) -> R,
+    ) -> (R, bool) {
+        let mut state = ExecutionState::new(self.read_only_view(), Default::default());
+        let result = f(&mut state);
+        (result, state.changed)
     }
 
     pub(crate) fn read_only_view(&self) -> DbView<'_> {
@@ -548,14 +560,12 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    tables_merging
-                        .par_iter_mut()
-                        .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                        })
-                        .max()
-                        .unwrap_or(false)
+                    parallel::map_dense_id_map_mut(&mut tables_merging, |_, (info, buffers)| {
+                        let mut es = ExecutionState::new(db, mem::take(buffers));
+                        info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                    })
+                    .into_iter()
+                    .any(|changed| changed)
                 } else {
                     tables_merging
                         .iter_mut()
@@ -816,17 +826,14 @@ impl Database {
     }
 
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
-        plan::plan_query(query)
+        plan::plan_query(query, ColumnCardEst::new(self))
     }
 }
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Clean up the ambient thread pool.
-        //
-        // Calling mem::forget on the egraph can result in much faster execution times.
+        // Clean up this thread's ambient memory pool.
         with_pool_set(PoolSet::clear);
-        rayon::broadcast(|_| with_pool_set(PoolSet::clear));
     }
 }
 
@@ -873,4 +880,104 @@ fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> Has
             .needs_refresh(table_info.table.as_ref())
     );
     index
+}
+
+#[derive(Clone)]
+pub struct ColumnCardEst<'a> {
+    db: &'a Database,
+}
+
+impl ColumnCardEst<'_> {
+    pub fn new(db: &Database) -> ColumnCardEst<'_> {
+        ColumnCardEst { db }
+    }
+
+    pub fn col_uniqueness(&self, table: TableId, col: ColumnId) -> ColUniqueness {
+        let col_idx = get_column_index_from_tableinfo(&self.db.tables[table], col);
+        let table = &self.db.tables[table].table;
+        ColUniqueness {
+            col_size: col_idx.get().unwrap().len(),
+            table_size: table.len(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ColumnCardEst<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnCardEst").finish_non_exhaustive()
+    }
+}
+
+/// A coarse cardinality estimate for a column of a table, used by the query
+/// planner to decide which variable to eliminate next during tree
+/// decomposition.
+///
+/// `table_size` is the number of rows in the (sub)table and `col_size` is the
+/// number of distinct values in the column. Their ratio
+/// (`table_size / col_size`) approximates the average number of rows that share
+/// a given value of the column: a smaller ratio means the column is closer to
+/// being unique and therefore cheaper to join on. [`ColUniqueness`] is ordered
+/// by this ratio (see the [`Ord`] impl), so the planner prefers variables with
+/// the most selective (most unique) columns.
+#[derive(Copy, Clone, Debug)]
+pub struct ColUniqueness {
+    table_size: usize,
+    col_size: usize,
+}
+
+impl Default for ColUniqueness {
+    fn default() -> ColUniqueness {
+        ColUniqueness {
+            table_size: 1,
+            col_size: 1,
+        }
+    }
+}
+
+impl ColUniqueness {
+    #[allow(dead_code)] // not yet wired up into the planner
+    fn scale(&self, subset_size: usize) -> ColUniqueness {
+        if self.table_size == 0 || subset_size == 0 {
+            return ColUniqueness {
+                table_size: 0,
+                col_size: 0,
+            };
+        }
+        ColUniqueness {
+            table_size: subset_size,
+            col_size: self.col_size.saturating_mul(subset_size) / self.table_size,
+        }
+    }
+    fn join(&self, other: &ColUniqueness) -> ColUniqueness {
+        ColUniqueness {
+            table_size: self.table_size.saturating_mul(other.table_size),
+            col_size: self.col_size.max(other.col_size),
+        }
+    }
+
+    #[allow(dead_code)] // not yet wired up into the planner
+    fn col_size(&self) -> usize {
+        self.col_size
+    }
+}
+
+impl PartialEq for ColUniqueness {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for ColUniqueness {}
+
+impl PartialOrd for ColUniqueness {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ColUniqueness {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.table_size.saturating_mul(other.col_size))
+            .cmp(&(other.table_size.saturating_mul(self.col_size)))
+    }
 }

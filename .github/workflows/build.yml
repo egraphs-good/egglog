@@ -31,7 +31,7 @@ jobs:
           tool: nextest,cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - run: make coverage
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           fail_ci_if_error: true
@@ -89,6 +89,10 @@ jobs:
           - rust_rule_insert_loop
           - rust_rule_tableaction_hot_path
           - factoring-multisets
+          # CodSpeed filters by substring; `math` would also run
+          # `math-microbenchmark` and `proof_testing_math`.
+          - math_normal
+          - proof_testing_math
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4

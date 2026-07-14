@@ -1,15 +1,5 @@
-//! # egglog
-//! egglog is a language specialized for writing equality saturation
-//! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
-//! egglog is faster and more general than egg.
-//!
-//! # Documentation
-//! Documentation for the egglog language can be found here: [`Command`].
-//!
-//! # Tutorial
-//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
-//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
-//!
+#![doc = include_str!("lib.md")]
+pub mod api;
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
@@ -40,8 +30,8 @@ use core::CoreActionContext;
 use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
-pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
-use core_relations::{ExternalFunctionId, make_external_func};
+pub use core_relations::{BaseValue, ContainerValue, Value};
+use core_relations::{ExecutionState, ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
@@ -49,21 +39,28 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
+use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-pub use exec_state::{Context, Core, FullState, PureState, Read, ReadState, Write, WriteState};
+pub use exec_state::{
+    Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
+};
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
+
+/// Read-only proof reconstruction API.
+pub mod proof {
+    pub use crate::proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition};
+}
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
+use std::any::{Any, TypeId};
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -71,9 +68,8 @@ use std::io::{Read as _, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
-pub use termdag::{Term, TermDag, TermId};
+pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
@@ -161,6 +157,28 @@ pub enum CommandOutput {
     RunSchedule(RunReport),
     /// A user defined output
     UserDefined(Arc<dyn UserDefinedCommandOutput>),
+}
+
+impl CommandOutput {
+    /// Render command outputs to a string that is identical whether the program
+    /// ran normally or under proof encoding (`--proofs`). Drops outputs that
+    /// legitimately differ or are non-deterministic (timing, `PrintFunction`
+    /// per #793, extraction variants) and reduces `ExtractBest` to its cost.
+    pub fn snapshot_stable_under_proof_encoding(outputs: &[CommandOutput]) -> String {
+        outputs
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::OverallStatistics(_) => None,
+                CommandOutput::PrintFunction(..) => None,
+                CommandOutput::ExtractBest(_, cost, _) => {
+                    Some(format!("(extraction-costs {cost})\n"))
+                }
+                CommandOutput::ExtractVariants(..) => None,
+                other => Some(other.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
 }
 
 impl std::fmt::Display for CommandOutput {
@@ -257,6 +275,12 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
+trait ExtensionStateValue: Any + dyn_clone::DynClone + Send + Sync {}
+
+impl<T> ExtensionStateValue for T where T: Any + Clone + Send + Sync {}
+
+dyn_clone::clone_trait_object!(ExtensionStateValue);
+
 #[derive(Clone)]
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
@@ -275,6 +299,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
     strict_mode: bool,
     warned_about_global_prefix: bool,
     /// Registry for command-level macros
@@ -385,6 +410,7 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            extension_state: Default::default(),
             strict_mode: false,
             warned_about_global_prefix: false,
             command_macros: Default::default(),
@@ -471,6 +497,14 @@ struct ResolvedNCommandsWithOutput {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Create a new e-graph configured with `num_threads`.
+    ///
+    /// Passing `1` keeps execution serial. Passing `0` uses available
+    /// parallelism.
+    pub fn new(num_threads: usize) -> Self {
+        EGraph::default().with_num_threads(num_threads)
+    }
+
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
@@ -495,6 +529,7 @@ impl EGraph {
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    #[cfg(feature = "bin")]
     pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self
@@ -503,6 +538,7 @@ impl EGraph {
     /// Enable proof generation on this e-graph.
     /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    #[cfg(feature = "bin")]
     pub(crate) fn with_proofs_enabled(mut self) -> Self {
         self = self.with_term_encoding_enabled();
         self.proof_state.proofs_enabled = true;
@@ -515,39 +551,53 @@ impl EGraph {
         self
     }
 
-    /// Set the number of threads used for parallel operations.
+    /// Return a copy of this e-graph configured with `num_threads`.
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.set_num_threads(num_threads);
+        self
+    }
+
+    /// Set the number of threads used by this e-graph.
     ///
-    /// This is a helper that simply configures the global rayon thread pool. It can only be called
-    /// once per process; subsequent calls will be ignored.
-    ///
-    /// # Panics
-    ///
-    /// Panics on wasm if `num_threads > 1`.
-    pub fn set_num_threads(num_threads: usize) {
-        #[cfg(target_family = "wasm")]
-        if num_threads > 1 {
-            panic!("cannot use more than 1 thread on wasm");
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // This will fail silently if the global pool has already been configured.
-            let err = rayon::ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build_global();
-            // print log if successful
-            if matches!(err, Ok(())) {
-                log::info!("Initialize global thread pool with  {num_threads} threads");
-            } else {
-                log::warn!(
-                    "Failed to initialize global thread pool with {num_threads} threads. This may be because the thread pool was already initialized with a different number of threads. Error: {err:?}"
-                );
-            }
+    /// Passing `1` keeps execution serial. Passing `0` uses available
+    /// parallelism.
+    pub fn set_num_threads(&mut self, num_threads: usize) {
+        self.backend.set_num_threads(num_threads);
+        if let Some(original) = &mut self.proof_state.original_typechecking {
+            original.set_num_threads(num_threads);
         }
     }
 
-    /// Return the number of threads in the rayon thread pool.
+    /// Return the number of threads configured for this e-graph.
     pub fn num_threads(&self) -> usize {
-        rayon::current_num_threads()
+        self.backend.num_threads()
+    }
+
+    /// Return extension-owned state stored on this e-graph.
+    ///
+    /// Extension state is keyed by Rust type and follows the same lifecycle as
+    /// the rest of the e-graph: cloning an [`EGraph`] clones the state, and
+    /// `push`/`pop` snapshots and restores it.
+    pub fn extension_state<T>(&self) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        let value = self.extension_state.get(&TypeId::of::<T>())?;
+        (value.as_ref() as &dyn Any).downcast_ref()
+    }
+
+    /// Return mutable extension-owned state, inserting `T::default()` when absent.
+    pub fn extension_state_or_default<T>(&mut self) -> &mut T
+    where
+        T: Default + Clone + Send + Sync + 'static,
+    {
+        let value = self
+            .extension_state
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()));
+        (value.as_mut() as &mut dyn Any)
+            .downcast_mut()
+            .expect("extension state entry must have the requested type")
     }
 
     /// Add a user-defined command to the e-graph
@@ -733,7 +783,7 @@ impl EGraph {
                             .read()
                             .unwrap()
                             .default_panic_id(),
-                    );
+                    )?;
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
                 }
@@ -938,11 +988,22 @@ impl EGraph {
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
+                let mut i = 0usize;
                 loop {
+                    i += 1;
+                    log::debug!(
+                        "Saturate iteration {i} start: {}",
+                        Self::schedule_for_log(sched)
+                    );
                     let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
+                    log::debug!(
+                        "Saturate iteration {i} end: {}",
+                        Self::run_report_debug_summary(&rec)
+                    );
                     report.union(rec);
                     if !updated {
+                        log::debug!("Saturate reached fixpoint after {i} iteration(s)");
                         break;
                     }
                 }
@@ -964,6 +1025,10 @@ impl EGraph {
 
         let GenericRunConfig { ruleset, until } = config;
 
+        if !self.rulesets.contains_key(ruleset) {
+            return Err(Error::NoSuchRuleset(ruleset.clone(), span.clone()));
+        }
+
         if let Some(facts) = until
             && self.check_facts(span, facts).is_ok()
         {
@@ -978,10 +1043,53 @@ impl EGraph {
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
-            log::debug!("database size: {}", self.num_tuples());
+            log::debug!(
+                "Finished ruleset {ruleset}: database size {}, {}",
+                self.num_tuples(),
+                Self::run_report_debug_summary(&report)
+            );
         }
 
         Ok(report)
+    }
+
+    fn run_report_debug_summary(report: &RunReport) -> String {
+        let mut rules = report
+            .num_matches_per_rule
+            .iter()
+            .filter(|(_, matches)| **matches > 0)
+            .collect::<Vec<_>>();
+        rules.sort_by(|(_, left), (_, right)| right.cmp(left));
+
+        let top_rules = rules
+            .into_iter()
+            .take(5)
+            .map(|(rule, matches)| {
+                format!("{}={matches}", Self::truncate_for_log(rule.as_ref(), 80))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            "updated={}, can_stop={}, iterations={}, top_matches=[{}]",
+            report.updated,
+            report.can_stop,
+            report.iterations.len(),
+            top_rules
+        )
+    }
+
+    fn schedule_for_log(sched: &ResolvedSchedule) -> String {
+        Self::truncate_for_log(&sched.to_string(), 160)
+    }
+
+    fn truncate_for_log(s: &str, limit: usize) -> String {
+        let mut s = s.replace('\n', " ");
+        if s.len() > limit {
+            s.truncate(limit);
+            s.push_str("...");
+        }
+        s
     }
 
     /// Runs a ruleset for an iteration.
@@ -1035,17 +1143,23 @@ impl EGraph {
         // evaluation. This widens primitive-context selection from
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
-        let seminaive = self.seminaive && !rule.naive;
+        let seminaive = self.seminaive && !rule.eval_mode.is_naive();
         // The `:no-decomp` rule option (and the global `--no-decomp`
         // flag) skips tree-decomposition in query planning, forcing
         // the single-bag fast path.
         let no_decomp = self.no_decomp || rule.no_decomp;
+        let requires_read_context = !seminaive
+            || matches!(
+                rule.eval_mode,
+                RuleEvalMode::Naive | RuleEvalMode::UnsafeSeminaive
+            );
 
         let rule_id = {
             let mut rb = self.backend.new_rule(&rule.name, seminaive);
             rb.set_no_decomp(no_decomp);
-            let mut translator = BackendRule::new(rb, &self.functions, &self.type_info, seminaive);
-            translator.query(query, false);
+            let mut translator =
+                BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
+            translator.query(query, rule.include_subsumed);
             translator.actions(actions)?;
             translator.build()
         };
@@ -1083,7 +1197,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -1107,21 +1221,52 @@ impl EGraph {
         self.functions.iter()
     }
 
-    /// Read the contents of the given function.
-    /// The callback f is called with each row and its subsumption status.
-    ///
-    /// Raises an error if the function does not exist.
-    pub fn function_for_each(
+    /// Run a read-only closure against the e-graph. The closure receives
+    /// a [`ReadState`], so it can read but not write. Because this
+    /// borrows `&self`, the closure and its callbacks may also call other
+    /// `&self` methods such as [`EGraph::value_to_base`].
+    pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        self.backend
+            .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
+            .0
+    }
+
+    /// Call `f` on each [`FunctionEntry`] of a function table. Top-level
+    /// form of [`Read::function_entries`]; errors if `name` is a
+    /// constructor or unregistered.
+    pub fn function_entries(
         &self,
-        func_name: &str,
-        f: impl FnMut(FunctionRow<'_>),
+        name: &str,
+        f: impl FnMut(FunctionEntry<'_>),
     ) -> Result<(), Error> {
-        let func = self
-            .functions
-            .get(func_name)
-            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
-        self.backend.for_each(func.backend_id, f);
-        Ok(())
+        self.read(|rs| rs.function_entries(name, f))
+    }
+
+    /// Like [`EGraph::function_entries`], but stops when `f` returns `false`.
+    pub fn function_entries_while(
+        &self,
+        name: &str,
+        f: impl FnMut(FunctionEntry<'_>) -> bool,
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.function_entries_while(name, f))
+    }
+
+    /// Call `f` on each [`Enode`] of a constructor / relation table.
+    /// Top-level form of [`Read::constructor_enodes`]; errors if `name`
+    /// is a function or unregistered.
+    pub fn constructor_enodes(&self, name: &str, f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
+        self.read(|rs| rs.constructor_enodes(name, f))
+    }
+
+    /// Like [`EGraph::constructor_enodes`], but stops when `f` returns `false`.
+    pub fn constructor_enodes_while(
+        &self,
+        name: &str,
+        f: impl FnMut(Enode<'_>) -> bool,
+    ) -> Result<(), Error> {
+        self.read(|rs| rs.constructor_enodes_while(name, f))
     }
 
     /// Remove every row from the named function in bulk.
@@ -1170,6 +1315,134 @@ impl EGraph {
         Ok((sort, value))
     }
 
+    /// Typecheck an expression under explicit local bindings, an expected
+    /// output sort, and a primitive call context.
+    ///
+    /// `bindings` contains the local variables in scope while resolving `expr`.
+    /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
+    /// tied to that binding. `output_sort` constrains overload resolution and
+    /// output-type inference for the expression. Global references are rewritten
+    /// into the same zero-argument function calls used during command execution.
+    /// `context` should match the runtime context where the resolved expression
+    /// will be evaluated.
+    pub fn typecheck_expr_with_bindings_and_output(
+        &mut self,
+        expr: &Expr,
+        bindings: &[(String, Span, ArcSort)],
+        output_sort: ArcSort,
+        context: Context,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let mut binding_map = IndexMap::default();
+        binding_map.reserve(bindings.len());
+        for (name, span, sort) in bindings {
+            if binding_map
+                .insert(name.as_str(), (span.clone(), sort.clone()))
+                .is_some()
+            {
+                return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
+            }
+        }
+        let resolved = self.type_info.typecheck_expr_with_output(
+            &mut self.parser.symbol_gen,
+            expr,
+            &binding_map,
+            output_sort,
+            context,
+        )?;
+        Ok(remove_globals::remove_globals_expr(resolved))
+    }
+
+    /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
+    ///
+    /// The returned expression must be evaluated with the returned bindings in
+    /// scope before any caller-supplied local bindings. This lets direct
+    /// execution-state evaluation use the same hidden `ResolvedFunction` value
+    /// that backend rule lowering injects for `unstable-fn`.
+    ///
+    /// For example, a resolved body like `(unstable-app (unstable-fn "f") _0)`
+    /// cannot evaluate the string literal `"f"` directly. This helper replaces
+    /// the `(unstable-fn "f")` sub-expression with a fresh hidden variable and
+    /// returns a binding from that variable to the prepared function value.
+    pub fn prepare_unstable_fn_targets_for_eval(
+        &mut self,
+        expr: &ResolvedExpr,
+    ) -> Result<(ResolvedExpr, Vec<(String, Value)>), Error> {
+        let mut bindings = Vec::new();
+        let expr = self.prepare_unstable_fn_targets_for_eval_inner(expr, &mut bindings)?;
+        Ok((expr, bindings))
+    }
+
+    fn prepare_unstable_fn_targets_for_eval_inner(
+        &mut self,
+        expr: &ResolvedExpr,
+        bindings: &mut Vec<(String, Value)>,
+    ) -> Result<ResolvedExpr, Error> {
+        match expr {
+            ResolvedExpr::Lit(..) | ResolvedExpr::Var(..) => Ok(expr.clone()),
+            ResolvedExpr::Call(span, resolved_call, children) => {
+                if let ResolvedCall::Primitive(prim) = resolved_call
+                    && prim.name() == "unstable-fn"
+                {
+                    let Some(ResolvedExpr::Lit(target_span, Literal::String(name))) =
+                        children.first()
+                    else {
+                        return Err(Error::BackendError(format!(
+                            "{}\nunstable-fn requires a literal string function name",
+                            children
+                                .first()
+                                .map(ResolvedExpr::span)
+                                .unwrap_or_else(|| Span::Panic)
+                        )));
+                    };
+                    let panic_id = self.backend.new_panic(format!(
+                        "unstable-fn over `{name}` was applied in a context where its wrapped \
+                         function is not valid for this call site, if in a rule, add :naive."
+                    ));
+                    let resolved_function = resolve_function_container_target_with_context(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        name,
+                        prim,
+                        panic_id,
+                    )?;
+                    let fn_value = self.backend.base_values().get(resolved_function);
+                    let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
+                    bindings.push((binding_name.clone(), fn_value));
+                    let mut prepared_children = Vec::with_capacity(children.len());
+                    prepared_children.push(ResolvedExpr::Var(
+                        target_span.clone(),
+                        ResolvedVar {
+                            name: binding_name,
+                            sort: children[0].output_type(),
+                            is_global_ref: false,
+                        },
+                    ));
+                    for child in &children[1..] {
+                        prepared_children.push(
+                            self.prepare_unstable_fn_targets_for_eval_inner(child, bindings)?,
+                        );
+                    }
+                    return Ok(ResolvedExpr::Call(
+                        span.clone(),
+                        resolved_call.clone(),
+                        prepared_children,
+                    ));
+                }
+
+                let prepared_children = children
+                    .iter()
+                    .map(|child| self.prepare_unstable_fn_targets_for_eval_inner(child, bindings))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ResolvedExpr::Call(
+                    span.clone(),
+                    resolved_call.clone(),
+                    prepared_children,
+                ))
+            }
+        }
+    }
+
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
         let unit_id = self.backend.base_values().get_ty::<()>();
         let unit_val = self.backend.base_values().get(());
@@ -1188,7 +1461,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
-            false, // global action context
+            true, // global action: Read/Full contexts (may read the DB)
         );
 
         let result_var = ResolvedVar {
@@ -1254,8 +1527,9 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
-            naive: false,
+            eval_mode: RuleEvalMode::default(),
             no_decomp: false,
+            include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1277,7 +1551,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
-            false, // global query context
+            true, // global query: Read context (may read the DB)
         );
         translator.query(&query, true);
         translator
@@ -1311,11 +1585,17 @@ impl EGraph {
                 name,
                 uf,
                 proof_func,
+                proof_constructors,
                 ..
             } => {
-                // If the sort has a :internal-uf field, store the mapping for extraction
-                if let Some(uf_name) = uf {
-                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                // Restore the sort's UF tables into proof_state: the constructor
+                // for extraction's `find_canonical`, the index for container
+                // rebuild's leader lookups.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_ctor);
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state.uf_function.insert(name.clone(), uf_index);
+                    }
                 }
                 // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
                 // This annotation is set by proof instrumentation and consumed here.
@@ -1323,6 +1603,16 @@ impl EGraph {
                     self.proof_state
                         .proof_func_parent
                         .insert(name.clone(), proof_func_name);
+                }
+                // The Proof sort's :internal-proof-names records the global proof
+                // constructors; restore them so container rebuild can recover them.
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr;
+                    names.eq_trans_constructor = pc.trans;
+                    names.eq_sym_constructor = pc.sym;
+                    names.container_normalize_constructor = pc.normalize;
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -1676,9 +1966,10 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if let Err(reason) =
-                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
-                {
+                if let Err(reason) = command_supports_proof_encoding(
+                    &command.to_command(),
+                    &original_typechecking.type_info,
+                ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
@@ -1728,7 +2019,7 @@ impl EGraph {
                 let desugared =
                     desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
                 for cmd in &desugared {
-                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                    log::trace!("Desugared term encoding: {}", cmd.to_command());
                 }
 
                 // Now typecheck using self, adding term type information.
@@ -1762,17 +2053,23 @@ impl EGraph {
         for before_expanded_command in program {
             // First do user-provided macro expansion for this command,
             // which may rely on type information from previous commands.
+            let macro_type_info = self
+                .proof_state
+                .original_typechecking
+                .as_ref()
+                .map(|egraph| &egraph.type_info)
+                .unwrap_or(&self.type_info);
             let macro_expanded = self.command_macros.apply(
                 before_expanded_command,
                 &mut self.parser.symbol_gen,
-                &self.type_info,
+                macro_type_info,
             )?;
 
             for command in macro_expanded {
                 // handle include specially- we keep them as-is for desugaring
                 if let Command::Include(span, file) = &command {
                     let s = std::fs::read_to_string(file)
-                        .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                        .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()))?;
                     let included_program = self
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
@@ -1913,6 +2210,7 @@ impl EGraph {
     }
 
     /// Convert from an egglog value to a Rust type.
+    /// This method assumes `x` belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
     }
@@ -1950,19 +2248,6 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
-    /// Lookup a tuple in afunction in the e-graph.
-    ///
-    /// Returns `None` if the tuple does not exist.
-    /// `panics` if the function does not exist.
-    pub fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
-        let func = self
-            .functions
-            .get(name)
-            .unwrap_or_else(|| panic!("Could not find function {name}"))
-            .backend_id;
-        self.backend.lookup_id(func, key)
-    }
-
     /// Get a function by name.
     ///
     /// Returns `None` if the function does not exist.
@@ -1994,27 +2279,7 @@ impl EGraph {
         ))
     }
 
-    /// Run a closure with full read-write access to the database, then flush
-    /// pending writes.
-    ///
-    /// This is the top-level equivalent of [`FullPrim::apply`], and the closure receives a
-    ///  [`FullState`].
-    ///
-    /// Pending writes staged inside the closure are flushed (and the
-    /// union-find rebuilt if necessary) before this method returns.
-    pub fn with_full_state<R>(&mut self, f: impl FnOnce(FullState<'_, '_>) -> R) -> R {
-        // Clone the Arc so the guard is not lifetime-tied to &self.backend,
-        // allowing flush_updates(&mut self.backend) after the closure.
-        let registry_arc = self.backend.action_registry().clone();
-        let registry_guard = registry_arc.read().unwrap();
-        let result = self
-            .backend
-            .with_execution_state(|es| f(FullState::wrap(es, &registry_guard, Context::Full)));
-        drop(registry_guard);
-        self.backend.flush_updates();
-        result
-    }
-
+    /// Set the report verbosity level for rule execution output.
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.backend.set_report_level(level);
     }
@@ -2026,18 +2291,148 @@ impl EGraph {
         self.backend.dump_debug_info();
     }
 
-    /// Get the canonical representation for `val` based on type.
-    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
-        self.backend
-            .get_canon_repr(val, sort.column_ty(&self.backend))
+    /// Run `f` with a [`FullState`] handle on this EGraph's database
+    /// — the same handle a `:naive` rule's `add_rust_rule_full`
+    /// callback receives. Use to drive name-indexed reads / writes
+    /// (`fs.set`, `fs.add`, `fs.lookup`, `fs.eclass_of`,
+    /// `fs.contains`, `fs.remove`, …) from outside a rule.
+    ///
+    /// # Flush semantics
+    ///
+    /// Pending writes flush once, **after** `f` returns. Two
+    /// consequences:
+    ///
+    /// 1. A `set` / `add` / `remove` inside the closure is *not*
+    ///    visible to a subsequent `lookup` / `contains` / `eclass_of`
+    ///    in the **same** closure. Split write-then-read into separate
+    ///    `update` calls.
+    /// 2. Conversely, batching multiple writes in one closure is the
+    ///    fast path — only one flush + rebuild happens, regardless of
+    ///    how many writes occurred.
+    /// 3. A closure that only reads (e.g. `lookup`, `constructor_enodes`)
+    ///    stages nothing, so the flush is skipped entirely — a read
+    ///    costs no more than a direct backend scan.
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::prelude::*;
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)")?;
+    /// eg.update(|mut fs| fs.set("f", (1_i64,), 42_i64))?;
+    /// let got = eg.update(|fs| fs.lookup("f", 1_i64))?;
+    /// let got: Option<i64> = got.map(|v| eg.value_to_base::<i64>(v));
+    /// assert_eq!(got, Some(42));
+    /// # Ok::<(), egglog::Error>(())
+    /// ```
+    pub fn update<R>(
+        &mut self,
+        f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        if self.are_proofs_enabled() {
+            return Err(Error::ProofsIncompatibleApi {
+                api: "EGraph::update",
+                reason: "writes inside the closure bypass the proof-encoding pipeline,\n\
+                         so any rule derivations resting on them would be unverifiable.",
+            });
+        }
+        self.update_unchecked(f)
     }
 
-    /// Create a new union action that can be used to union two values.
-    pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
-        UnionAction::new(&self.backend)
+    /// Internal version of [`EGraph::update`] without the proofs
+    /// check. Used by proof-system internals that need to read the
+    /// e-graph while the proof system itself is enabled.
+    pub(crate) fn update_unchecked<R>(
+        &mut self,
+        f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let registry = self.backend.action_registry().clone();
+        let guard = registry.read().unwrap();
+        let (result, changed) = self
+            .backend
+            .with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
+        drop(guard);
+        // A read-only closure stages nothing, so `flush_updates` would only do
+        // a no-op merge plus a spurious timestamp bump and rebuild check. Skip
+        // it unless the closure actually wrote, keeping reads as cheap as a
+        // direct backend scan.
+        if changed {
+            self.backend.flush_updates();
+        }
+        result
+    }
+
+    /// Run a pattern query: bind the variables in `vars` against
+    /// `facts` and return one [`HashMap`] per match, keyed by variable
+    /// name. Values stay raw — convert via [`EGraph::value_to_base`].
+    ///
+    /// With zero vars, returns at most one empty map (so `.len()` is 1
+    /// if the body matched, 0 if it didn't).
+    pub fn query(
+        &mut self,
+        vars: &[(&str, ArcSort)],
+        facts: ast::Facts<String, String>,
+    ) -> Result<Vec<HashMap<String, Value>>, Error> {
+        // Fail fast under proofs — otherwise the failure would
+        // surface through `rust_rule`'s check below with a misleading
+        // api: "rust_rule" in the error message.
+        if self.are_proofs_enabled() {
+            return Err(Error::ProofsIncompatibleApi {
+                api: "EGraph::query",
+                reason: "the underlying rust_rule callback has no proof-encoding validator,\n\
+                         so query matches cannot be verified.",
+            });
+        }
+        use std::sync::{Arc, Mutex};
+        let names: Arc<[String]> = vars.iter().map(|(n, _)| (*n).to_owned()).collect();
+        let results: Arc<Mutex<Vec<HashMap<String, Value>>>> = Arc::new(Mutex::new(Vec::new()));
+        let results_weak = Arc::downgrade(&results);
+        let names_for_cb = names.clone();
+
+        let ruleset = self.parser.symbol_gen.fresh("query_ruleset");
+        prelude::add_ruleset(self, &ruleset)?;
+        // From here on, we OWN the ruleset and the rule and have to
+        // clean them up on every exit path. Run the rest in a closure
+        // and tear down before propagating.
+        let outcome = (|| -> Result<_, Error> {
+            prelude::rust_rule(self, "query", &ruleset, vars, facts, move |_, values| {
+                let arc = results_weak.upgrade().unwrap();
+                let mut results = arc.lock().unwrap();
+                let map: HashMap<String, Value> = names_for_cb
+                    .iter()
+                    .zip(values.iter().copied())
+                    .map(|(n, v)| (n.clone(), v))
+                    .collect();
+                results.push(map);
+                Some(())
+            })?;
+            prelude::run_ruleset(self, &ruleset)?;
+            Ok(())
+        })();
+
+        // Tear the temporary rule + ruleset down whether the body
+        // succeeded or not.
+        if let Some(Ruleset::Rules(rules)) = self.rulesets.swap_remove(&ruleset) {
+            for (_, rule) in rules {
+                self.backend.free_rule(rule.1);
+            }
+        }
+        outcome?;
+
+        let Some(mutex) = Arc::into_inner(results) else {
+            panic!("`results_weak` outlived the callback");
+        };
+        Ok(mutex.into_inner().unwrap())
     }
 }
 
+pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, RawValues};
+
+/// Build the runtime value backing a resolved `(unstable-fn name)` target.
+///
+/// For table-backed functions, this captures the table action that
+/// `unstable-app` will call later. For primitive targets, this bakes one
+/// dispatch id per runtime context so application can choose the entrypoint
+/// matching the primitive body's current call-site context.
 fn resolve_function_container_target_with_context(
     backend: &egglog_bridge::EGraph,
     functions: &IndexMap<String, Function>,
@@ -2045,17 +2440,17 @@ fn resolve_function_container_target_with_context(
     name: &str,
     primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
-) -> ResolvedFunction {
-    let Some(target_function) = type_info
+) -> Result<ResolvedFunction, Error> {
+    let target_function = type_info
         .get_sorts::<FunctionSort>()
         .into_iter()
         .find(|function| function.name() == primitive.output().name())
-    else {
-        panic!(
-            "`unstable-fn` output sort `{}` is not a function sort",
-            primitive.output().name()
-        );
-    };
+        .ok_or_else(|| {
+            Error::BackendError(format!(
+                "`unstable-fn` output sort `{}` is not a function sort",
+                primitive.output().name()
+            ))
+        })?;
 
     let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
     let remaining_inputs = target_function.inputs();
@@ -2064,7 +2459,7 @@ fn resolve_function_container_target_with_context(
     let id = if let Some(func) = functions.get(name) {
         let func_type = type_info
             .get_func_type(name)
-            .unwrap_or_else(|| panic!("No resolution for {name:?}"));
+            .ok_or_else(|| Error::BackendError(format!("No resolution for {name:?}")))?;
         let expected_inputs = partial_arcsorts
             .iter()
             .chain(remaining_inputs)
@@ -2087,13 +2482,13 @@ fn resolve_function_container_target_with_context(
                 .map(|sort| sort.name())
                 .collect::<Vec<_>>()
                 .join(", ");
-            panic!(
+            return Err(Error::BackendError(format!(
                 "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
                 expected_input_names,
                 output.name(),
                 actual_input_names,
                 func_type.output.name(),
-            );
+            )));
         }
 
         let action = egglog_bridge::TableAction::new(backend, func.backend_id);
@@ -2112,18 +2507,23 @@ fn resolve_function_container_target_with_context(
             .iter()
             .filter(|primitive| primitive.accept(&signature, type_info))
             .collect();
-        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
+        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
+        for runtime_ctx in Context::ALL {
             let mut ids = candidates
                 .iter()
                 .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
+            // The first `next` finds the candidate for this runtime context;
+            // the second detects whether there is more than one such candidate.
             match (ids.next(), ids.next()) {
-                (None, _) => None,
-                (Some(id), None) => Some(id),
-                (Some(_), Some(_)) => panic!(
-                    "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                ),
+                (None, _) => {}
+                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
+                (Some(_), Some(_)) => {
+                    return Err(Error::BackendError(format!(
+                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
+                    )));
+                }
             }
-        });
+        }
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
             let (output_sort, input_sorts) = signature
                 .split_last()
@@ -2133,24 +2533,24 @@ fn resolve_function_container_target_with_context(
                 .map(|sort| sort.name())
                 .collect::<Vec<_>>()
                 .join(", ");
-            panic!(
+            return Err(Error::BackendError(format!(
                 "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
                  context ids: {context_ids:?}",
                 input_names,
                 output_sort.name(),
-            );
+            )));
         }
         ResolvedFunctionId::Primitive { context_ids }
     } else {
-        panic!("No resolution for {name:?}");
+        return Err(Error::BackendError(format!("No resolution for {name:?}")));
     };
 
-    ResolvedFunction {
+    Ok(ResolvedFunction {
         id,
         partial_arcsorts,
         name: name.to_owned(),
         panic_id,
-    }
+    })
 }
 
 struct BackendRule<'a> {
@@ -2158,14 +2558,11 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// `true` for a regular seminaive rule; `false` for any of:
-    /// (a) global one-shots (`eval`, `check`, top-level actions),
-    /// (b) rules with the `:naive` option,
-    /// (c) `EGraph::seminaive == false` (the global opt-out).
-    /// Combined with whether we're in the query or action phase, this
-    /// picks the [`crate::Context`] used to select a primitive's
-    /// context-specific runtime id at each call site.
-    seminaive: bool,
+    /// Whether primitives may read the database. When true the per-phase
+    /// [`crate::Context`] widens from `Pure`/`Write` to `Read`/`Full` (query
+    /// gains reads, action gains reads on top of writes). True for `:naive` /
+    /// `:unsafe-seminaive` rules and a non-seminaive EGraph.
+    requires_read_context: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -2173,13 +2570,13 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
-        seminaive: bool,
+        requires_read_context: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
-            seminaive,
+            requires_read_context,
             entries: Default::default(),
         }
     }
@@ -2191,10 +2588,10 @@ impl<'a> BackendRule<'a> {
     /// this to [`Context::Read`] so reads from primitives are
     /// admissible.
     fn query_context(&self) -> crate::Context {
-        if self.seminaive {
-            crate::Context::Pure
-        } else {
+        if self.requires_read_context {
             crate::Context::Read
+        } else {
+            crate::Context::Pure
         }
     }
 
@@ -2204,10 +2601,10 @@ impl<'a> BackendRule<'a> {
     /// widens to [`Context::Full`] so writes and reads are both
     /// admissible.
     fn action_context(&self) -> crate::Context {
-        if self.seminaive {
-            crate::Context::Write
-        } else {
+        if self.requires_read_context {
             crate::Context::Full
+        } else {
+            crate::Context::Write
         }
     }
 
@@ -2247,6 +2644,11 @@ impl<'a> BackendRule<'a> {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
+            // Pre-register a panic id used by `FunctionContainer::apply`
+            // when the wrapped function is applied in a context that
+            // doesn't admit it. Triggered at runtime via the egglog
+            // panic side channel so misuse surfaces as an `Err` from
+            // `run_rules` rather than a thread unwind.
             let panic_id = self.rb.new_panic(format!(
                 "unstable-fn over `{name}` was applied in a context where its wrapped \
                  function is not valid for this call site, if in a rule, add :naive."
@@ -2258,7 +2660,8 @@ impl<'a> BackendRule<'a> {
                 name,
                 prim,
                 panic_id,
-            );
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
@@ -2398,6 +2801,8 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
+    #[error(transparent)]
+    ApiError(#[from] crate::api::ApiError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]
@@ -2442,6 +2847,14 @@ pub enum Error {
     UnsupportedProofCommand {
         command: String,
         reason: ProofEncodingUnsupportedReason,
+    },
+    #[error(
+        "`{api}` is incompatible with proof mode: {reason} \
+         Disable proofs or make the operation a command in the syntax of the egglog language and use `EGraph::parse_and_run`."
+    )]
+    ProofsIncompatibleApi {
+        api: &'static str,
+        reason: &'static str,
     },
 }
 
@@ -2497,6 +2910,26 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FullOnly;
+
+    impl Primitive for FullOnly {
+        fn name(&self) -> &str {
+            "full-only"
+        }
+
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+            SimpleTypeConstraint::new(self.name(), vec![I64Sort.to_arcsort()], span.clone())
+                .into_box()
+        }
+    }
+
+    impl FullPrim for FullOnly {
+        fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+            Some(state.base_values().get::<i64>(1))
+        }
+    }
+
     #[test]
     fn test_user_defined_primitive() {
         let mut egraph = EGraph::default();
@@ -2523,6 +2956,236 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn proof_support_accepts_container_sort_declarations() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XPair (Pair X i64))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XFn (UnstableFn (X) X))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_rejects_unstable_fn_primitives_without_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype X (x))
+                (sort XFn (UnstableFn (X) X))
+                (function id (X) X :merge old)
+                (let f (unstable-fn "id"))
+                "#,
+            )
+            .unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_accepts_set_primitive_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (function Shared () ISet :merge (set-intersect old new))
+
+                (check (= (set-insert (set-empty) 1) (set-of 1)))
+                (check (= (set-remove (set-of 1 2) 2) (set-of 1)))
+                (check (= (set-length (set-of 1 2)) 2))
+                (check (set-contains (set-of 1 2) 1))
+                (check (set-not-contains (set-of 1 2) 3))
+                (check (= (set-union (set-of 1) (set-of 2)) (set-of 1 2)))
+                (check (= (set-diff (set-of 1 2) (set-of 2)) (set-of 1)))
+                (check (= (set-intersect (set-of 1 2) (set-of 2 3)) (set-of 2)))
+                "#,
+            )
+            .unwrap();
+
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    /// `set-get` indexes the runtime value order, which the proof checker
+    /// cannot reproduce from terms, so it has no validator.
+    #[test]
+    fn proof_support_rejects_set_get() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (check (= (set-get (set-of 1 2) 0) 1))
+                "#,
+            )
+            .unwrap();
+
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rejects_mismatch() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(+ 1 2)").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap();
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                BoolSort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::Mismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected.name(), BoolSort.name());
+                assert_eq!(actual.name(), I64Sort.name());
+            }
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+
+        let literal = parser.get_expr_from_string(None, "1").unwrap();
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &literal,
+                &[],
+                BoolSort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::Mismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected.name(), BoolSort.name());
+                assert_eq!(actual.name(), I64Sort.name());
+            }
+            other => panic!("expected literal mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_uses_explicit_bindings() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(+ x 2)").unwrap();
+        let bindings = vec![("x".to_string(), span!(), I64Sort.to_arcsort())];
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &bindings,
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap();
+
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_uses_context() {
+        let mut egraph = EGraph::default();
+        egraph.add_full_primitive(FullOnly, None);
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Full,
+            )
+            .unwrap();
+        assert_eq!(resolved.output_type().name(), I64Sort.name());
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+        match err {
+            TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
+            other => panic!("expected unbound function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rejects_duplicate_bindings() {
+        let mut egraph = EGraph::default();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "x").unwrap();
+        let bindings = vec![
+            ("x".to_string(), span!(), I64Sort.to_arcsort()),
+            ("x".to_string(), span!(), BoolSort.to_arcsort()),
+        ];
+
+        let err = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &bindings,
+                I64Sort.to_arcsort(),
+                Context::Pure,
+            )
+            .unwrap_err();
+
+        match err {
+            TypeError::AlreadyDefined(name, _) => assert_eq!(name, "x"),
+            other => panic!("expected duplicate binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_rewrites_globals() {
+        let mut egraph = EGraph::default();
+        egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
+        let mut parser = crate::ast::Parser::default();
+        let expr = parser.get_expr_from_string(None, "$x").unwrap();
+
+        let resolved = egraph
+            .typecheck_expr_with_bindings_and_output(
+                &expr,
+                &[],
+                I64Sort.to_arcsort(),
+                Context::Read,
+            )
+            .unwrap();
+
+        match resolved {
+            ResolvedExpr::Call(_, ResolvedCall::Func(func), children) => {
+                assert_eq!(func.name, "$x");
+                assert!(children.is_empty());
+                assert_eq!(func.output.name(), I64Sort.name());
+            }
+            other => panic!("expected global function call rewrite, got {other:?}"),
+        }
+    }
+
     // Test that an `EGraph` is `Send` & `Sync`
     #[test]
     fn test_egraph_send_sync() {
@@ -2534,6 +3197,26 @@ mod tests {
         }
         let egraph = EGraph::default();
         assert!(is_send(&egraph) && is_sync(&egraph));
+    }
+
+    #[test]
+    fn test_extension_state_clones_and_restores_with_egraph() {
+        let mut egraph = EGraph::default();
+        assert_eq!(egraph.extension_state::<usize>(), None);
+        assert_eq!(egraph.clone().extension_state::<usize>(), None);
+
+        *egraph.extension_state_or_default::<usize>() = 1;
+
+        let mut cloned = egraph.clone();
+        assert_eq!(cloned.extension_state::<usize>(), Some(&1));
+        *cloned.extension_state_or_default::<usize>() = 2;
+        assert_eq!(egraph.extension_state::<usize>(), Some(&1));
+
+        egraph.push();
+        *egraph.extension_state_or_default::<usize>() = 3;
+        egraph.pop().unwrap();
+
+        assert_eq!(egraph.extension_state::<usize>(), Some(&1));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
@@ -2644,5 +3327,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res[0].to_string(), "(expensive)\n");
+    }
+
+    #[test]
+    fn test_run_undefined_ruleset_errors() {
+        let mut egraph = EGraph::default();
+        let err = egraph
+            .parse_and_run_program(None, "(ruleset test)\n(run test2 1)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "test2"));
     }
 }

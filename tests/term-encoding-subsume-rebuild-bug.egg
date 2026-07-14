@@ -1,0 +1,16 @@
+;; verify that rebuilt things stay subsumed
+(datatype X)
+
+(constructor Init () X)
+(constructor Init2 () X)
+(constructor Fn (X) X)
+
+(Init2)
+(Fn (Init))
+(subsume (Fn (Init)))
+(union (Init2) (Init))
+
+(relation matched ())
+(rule ((Fn (Init2))) ((matched)))
+(run 1)
+(fail (check (matched)))

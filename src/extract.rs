@@ -18,7 +18,7 @@ pub trait CostModel<C: Cost> {
     fn fold(&self, head: &str, children_cost: &[C], head_cost: C) -> C;
 
     /// The cost of an enode (without the cost of children)
-    fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C;
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, enode: &Enode<'_>) -> C;
 
     /// The cost of a container value given the costs of its elements.
     ///
@@ -113,12 +113,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
         children_cost.iter().fold(head_cost, |s, c| s.combine(c))
     }
 
-    fn enode_cost(
-        &self,
-        egraph: &EGraph,
-        func: &Function,
-        _row: &egglog_bridge::FunctionRow,
-    ) -> DefaultCost {
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, _enode: &Enode<'_>) -> DefaultCost {
         func.extraction_head_cost(egraph)
     }
 }
@@ -139,24 +134,6 @@ pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
 }
 
-/// Options for configuring extraction behavior.
-struct ExtractionOptions<C: Cost> {
-    /// The cost model to use for extraction.
-    cost_model: Box<dyn CostModel<C>>,
-    /// Root sorts to extract from. If None, all extractable root sorts are used.
-    rootsorts: Option<Vec<ArcSort>>,
-    /// Whether to respect the unextractable flag on constructors.
-    /// When true, constructors marked as unextractable will not be used during extraction.
-    respect_unextractable: bool,
-    /// Whether to skip view tables (those with term_constructor annotations).
-    /// When true, view tables are skipped, which is useful for proof extraction
-    /// where we need to extract from the original term tables with their original names.
-    skip_view_tables: bool,
-    /// Whether to respect the hidden flag on constructors.
-    /// When true, constructors marked as hidden will not be used during extraction.
-    respect_hidden: bool,
-}
-
 impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
@@ -169,62 +146,23 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
-        // For user extraction: respect unextractable and hidden, but use view tables (they have better names)
-        Self::compute_costs_from_rootsorts_internal(
-            egraph,
-            ExtractionOptions {
-                cost_model: Box::new(cost_model),
-                rootsorts,
-                respect_unextractable: true,
-                skip_view_tables: false,
-                respect_hidden: true,
-            },
-        )
-    }
-
-    /// Like `compute_costs_from_rootsorts`, but ignores the unextractable and hidden flags.
-    /// This is used for proof extraction where we need to extract proofs even
-    /// from terms that are marked unextractable (like global let bindings).
-    /// Also skips view tables (those with term_constructor) since proofs need
-    /// to extract from the original term tables with their original names.
-    pub(crate) fn compute_costs_from_rootsorts_allow_unextractable(
-        rootsorts: Option<Vec<ArcSort>>,
-        egraph: &EGraph,
-        cost_model: impl CostModel<C> + 'static,
-    ) -> Self {
-        Self::compute_costs_from_rootsorts_internal(
-            egraph,
-            ExtractionOptions {
-                cost_model: Box::new(cost_model),
-                rootsorts,
-                respect_unextractable: false,
-                skip_view_tables: true,
-                respect_hidden: false,
-            },
-        )
-    }
-
-    fn compute_costs_from_rootsorts_internal(
-        egraph: &EGraph,
-        options: ExtractionOptions<C>,
-    ) -> Self {
         // We filter out tables unreachable from the root sorts
-        let extract_all_sorts = options.rootsorts.is_none();
+        let extract_all_sorts = rootsorts.is_none();
 
-        let mut rootsorts = options.rootsorts.unwrap_or_default();
+        let mut rootsorts = rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
-        // Only include constructors (not regular functions) and respect unextractable flag
+        // Only include constructors (not regular functions), and respect the user-facing
+        // hidden and unextractable flags.
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
-            let unextractable = func.1.decl.unextractable && options.respect_unextractable;
-            let should_skip_view =
-                options.skip_view_tables && func.1.decl.term_constructor.is_some();
-            let hidden = func.1.decl.internal_hidden && options.respect_hidden;
+            let unextractable = func.1.decl.unextractable;
+            let hidden = func.1.decl.internal_hidden;
 
-            // only extract constructors (and functions with term_constructor), skip view tables when requested for proof extraction, and respect unextractable/hidden flag
+            // Only extract constructors and view tables, which reconstruct as their
+            // term_constructor. Proof extraction uses its own root-directed extractor
+            // and does not need alternate behavior here.
             if !unextractable
-                && !should_skip_view
                 && !hidden
                 && (func.1.decl.subtype == FunctionSubtype::Constructor
                     || func.1.decl.term_constructor.is_some())
@@ -304,7 +242,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut extractor = Extractor {
             rootsorts,
             funcs,
-            cost_model: options.cost_model,
+            cost_model: Box::new(cost_model),
             costs,
             topo_rnk_cnt: 0,
             topo_rnk,
@@ -342,7 +280,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     fn compute_cost_hyperedge(
         &self,
         egraph: &EGraph,
-        row: &egglog_bridge::FunctionRow,
+        row: &egglog_bridge::ScanEntry,
         func: &Function,
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
@@ -352,10 +290,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
         let head_name = func.extraction_term_name();
+        let output_idx = func.extraction_output_index();
+        let enode = Enode {
+            children: &row.vals[..output_idx],
+            eclass: row.vals[output_idx],
+            subsumed: row.subsumed,
+        };
         Some(self.cost_model.fold(
             head_name,
             &ch_costs,
-            self.cost_model.enode_cost(egraph, func, row),
+            self.cost_model.enode_cost(egraph, func, &enode),
         ))
     }
 
@@ -380,7 +324,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     fn compute_topo_rnk_hyperedge(
         &self,
         egraph: &EGraph,
-        row: &egglog_bridge::FunctionRow,
+        row: &egglog_bridge::ScanEntry,
         func: &Function,
     ) -> usize {
         let sorts = &func.schema.input;
@@ -417,7 +361,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let target_sort = func.extraction_output_sort();
 
                 let output_idx = func.extraction_output_index();
-                let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
+                let relax_hyperedge = |row: egglog_bridge::ScanEntry| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
                         let mut updated = false;
@@ -464,7 +408,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let target_sort = func.extraction_output_sort();
             let output_idx = func.extraction_output_index();
 
-            let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
+            let save_best_parent_edge = |row: egglog_bridge::ScanEntry| {
                 if !row.subsumed {
                     let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
@@ -634,7 +578,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut canonical = value;
         egraph
             .backend
-            .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+            .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry| {
                 // UF table has (child, parent) as inputs
                 if row.vals[0] == value {
                     canonical = row.vals[1];
@@ -684,7 +628,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let func = egraph.functions.get(func_name).unwrap();
                 let output_idx = func.extraction_output_index();
 
-                let find_root_variants = |row: egglog_bridge::FunctionRow| {
+                let find_root_variants = |row: egglog_bridge::ScanEntry| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
                         if *target == canonical_value {
@@ -884,7 +828,7 @@ impl EGraph {
             None
         };
 
-        let extract_row = |row: egglog_bridge::FunctionRow| {
+        let extract_row = |row: egglog_bridge::ScanEntry| {
             if inputs.len() < n {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();

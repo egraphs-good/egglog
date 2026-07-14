@@ -349,9 +349,9 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, true),
             &egraph.functions,
             &egraph.type_info,
-            true, // seminaive rule context
+            false, // seminaive query: Pure/Write contexts
         );
-        qrule_builder.query(&rule.body, true);
+        qrule_builder.query(&rule.body, false);
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -369,7 +369,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
-            false, // seminaive off for scheduler action rule
+            true, // action rule reads the DB: Read/Full contexts
         );
         let mut entries = free_vars
             .iter()
@@ -476,6 +476,37 @@ mod test {
         }
 
         assert_eq!(iter, 12);
+    }
+
+    #[test]
+    fn test_scheduler_does_not_apply_fresh_subsumed_matches() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(FirstNScheduler { n: 10 }));
+        let input = r#"
+        (ruleset analysis)
+        (ruleset test)
+        (datatype Math
+          (Add Math Math)
+          (Mul Math Math)
+          (Num i64))
+        (relation Hit (i64))
+        (let expr (Add (Mul (Num 0) (Num 1)) (Num 2)))
+        (rewrite (Mul (Num 0) x) (Num 0) :subsume :ruleset analysis)
+        (rewrite (Add (Num 0) x) x :subsume :ruleset analysis)
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a)) :ruleset test :name "hit-subsumed-affine")
+        (run-schedule (saturate (run analysis)))
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let report = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(egraph.get_size("Hit"), 0);
+        assert!(
+            !report.updated,
+            "subsumed rows should not be collected as fresh scheduler matches"
+        );
     }
 
     #[derive(Clone, Default)]

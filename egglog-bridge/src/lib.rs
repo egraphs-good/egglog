@@ -23,6 +23,7 @@ use crate::core_relations::{
     WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
+use egglog_concurrency::ThreadPool;
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -133,23 +134,82 @@ pub struct EGraph {
     /// [`WriteState`] / [`FullState`] can resolve table actions at
     /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
+    threads: usize,
+    thread_pool: Option<Arc<ThreadPool>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
+fn normalize_thread_count(threads: usize) -> usize {
+    #[cfg(target_family = "wasm")]
+    {
+        if threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        1
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if threads == 0 {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+        } else {
+            threads
+        }
+    }
+}
+
+fn install_thread_pool<R>(thread_pool: Option<Arc<ThreadPool>>, f: impl FnOnce() -> R) -> R {
+    match thread_pool {
+        Some(thread_pool) => thread_pool.install(f),
+        None => egglog_concurrency::without_current_pool(f),
+    }
+}
+
 impl Default for EGraph {
     fn default() -> Self {
-        let mut db = Database::new();
-        let uf_table = db.add_table_named(
-            DisplacedTable::default(),
-            "$uf".into(),
-            iter::empty(),
-            iter::empty(),
-        );
-        let id_counter = db.add_counter();
-        let ts_counter = db.add_counter();
-        // Start the timestamp counter at 1.
-        db.inc_counter(ts_counter);
+        Self::new(1)
+    }
+}
+
+/// Properties of a function added to an [`EGraph`].
+pub struct FunctionConfig {
+    /// The function's schema. The last column in the schema is the return type.
+    pub schema: Vec<ColumnTy>,
+    /// The behavior of the function when lookups are made on keys not currently present.
+    pub default: DefaultVal,
+    /// How to resolve FD conflicts for the function.
+    pub merge: MergeFn,
+    /// The function's name
+    pub name: String,
+    /// Whether or not subsumption is enabled for this function.
+    pub can_subsume: bool,
+}
+
+impl EGraph {
+    /// Create an e-graph configured to use `threads` worker threads.
+    ///
+    /// Passing `1` keeps execution serial and does not allocate a thread pool.
+    /// Passing `0` uses the host's available parallelism.
+    pub fn new(threads: usize) -> Self {
+        let threads = normalize_thread_count(threads);
+        let thread_pool = (threads > 1).then(|| Arc::new(ThreadPool::new(threads)));
+        let (mut db, uf_table, id_counter, ts_counter) =
+            install_thread_pool(thread_pool.clone(), || {
+                let mut db = Database::new();
+                let uf_table = db.add_table_named(
+                    DisplacedTable::default(),
+                    "$uf".into(),
+                    iter::empty(),
+                    iter::empty(),
+                );
+                let id_counter = db.add_counter();
+                let ts_counter = db.add_counter();
+                // Start the timestamp counter at 1.
+                db.inc_counter(ts_counter);
+                (db, uf_table, id_counter, ts_counter)
+            });
 
         // Register a default panic external function so the typed
         // state wrappers' `panic()` method has an id to call. This
@@ -184,25 +244,35 @@ impl Default for EGraph {
             panic_funcs,
             report_level: Default::default(),
             action_registry,
+            threads,
+            thread_pool,
         }
     }
-}
 
-/// Properties of a function added to an [`EGraph`].
-pub struct FunctionConfig {
-    /// The function's schema. The last column in the schema is the return type.
-    pub schema: Vec<ColumnTy>,
-    /// The behavior of the function when lookups are made on keys not currently present.
-    pub default: DefaultVal,
-    /// How to resolve FD conflicts for the function.
-    pub merge: MergeFn,
-    /// The function's name
-    pub name: String,
-    /// Whether or not subsumption is enabled for this function.
-    pub can_subsume: bool,
-}
+    /// Return a copy of this e-graph configured with a different thread count.
+    pub fn with_num_threads(mut self, threads: usize) -> Self {
+        self.set_num_threads(threads);
+        self
+    }
 
-impl EGraph {
+    /// Set the number of worker threads used by this e-graph.
+    ///
+    /// Passing `1` disables the pool. Passing `0` uses available parallelism.
+    pub fn set_num_threads(&mut self, threads: usize) {
+        let threads = normalize_thread_count(threads);
+        self.threads = threads;
+        self.thread_pool = (threads > 1).then(|| Arc::new(ThreadPool::new(threads)));
+    }
+
+    /// Return the configured thread count.
+    pub fn num_threads(&self) -> usize {
+        self.threads
+    }
+
+    fn thread_pool(&self) -> Option<Arc<ThreadPool>> {
+        self.thread_pool.clone()
+    }
+
     fn next_ts(&self) -> Timestamp {
         Timestamp::from_usize(self.db.read_counter(self.timestamp_counter))
     }
@@ -426,7 +496,7 @@ impl EGraph {
     /// Read the contents of the given function.
     ///
     /// The callback `f` is called with each row and its subsumption status.
-    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
+    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(ScanEntry<'_>)) {
         self.for_each_while(table, |row| {
             f(row);
             true
@@ -435,7 +505,7 @@ impl EGraph {
 
     /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
     /// the function returns early and stops reading rows from the table.
-    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>) -> bool) {
+    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -455,7 +525,7 @@ impl EGraph {
                 for (_, row) in $buf.non_stale() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                    if !f(FunctionRow {
+                    if !f(ScanEntry {
                         vals: &row[0..schema_math.func_cols],
                         subsumed,
                     }) {
@@ -533,13 +603,15 @@ impl EGraph {
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
         let merge_fn = merge.to_callback(schema_math, &name, self);
-        let table = SortedWritesTable::new(
-            n_args,
-            n_cols,
-            Some(ColumnId::from_usize(schema.len())),
-            to_rebuild,
-            merge_fn,
-        );
+        let table = install_thread_pool(self.thread_pool(), || {
+            SortedWritesTable::new(
+                n_args,
+                n_cols,
+                Some(ColumnId::from_usize(schema.len())),
+                to_rebuild,
+                merge_fn,
+            )
+        });
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
             table,
@@ -585,7 +657,8 @@ impl EGraph {
     ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
-        self.run_rules_inner(rules)
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.run_rules_inner(rules))
     }
 
     fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
@@ -624,7 +697,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        let do_parallel = rayon::current_num_threads() > 1;
+        let do_parallel = egglog_concurrency::current_num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
@@ -934,18 +1007,36 @@ impl EGraph {
     /// # Seminaive-safety trust boundary
     ///
     /// This method hands out a raw `&mut ExecutionState`, which bypasses
-    /// the typed state wrappers (`PureState`, `WriteState`, `ReadState`,
-    /// `FullState`) that the egglog crate uses to enforce #772's
-    /// seminaive-safety model. Treat it as top-level / global-action
-    /// context: appropriate for one-shot database manipulation from
-    /// outside any rule, not for use inside primitive implementations.
+    /// the egglog crate's `Read` / `Write` capability wrappers
+    /// (`PureState`, `WriteState`, `ReadState`, `FullState`) that
+    /// enforce #772's seminaive-safety model. Treat it as top-level
+    /// / global-action context: appropriate for one-shot database
+    /// manipulation from outside any rule, not for use inside
+    /// primitive implementations.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
-        self.db.with_execution_state(f)
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.db.with_execution_state(f))
+    }
+
+    /// Like [`EGraph::with_execution_state`], but also reports whether `f`
+    /// staged any mutation. A read-only closure leaves the flag `false`, so
+    /// callers can skip a [`EGraph::flush_updates`] that would otherwise be a
+    /// no-op merge plus a spurious timestamp bump.
+    pub fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> (R, bool) {
+        self.db.with_execution_state_tracked(f)
     }
 
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.flush_updates_inner())
+    }
+
+    fn flush_updates_inner(&mut self) -> bool {
         let uf_size_before = self.db.get_table(self.uf_table).len();
         let updated = self.db.merge_all();
         self.inc_ts();
@@ -1245,6 +1336,16 @@ impl ResolvedMergeFn {
     }
 }
 
+/// Coarse classification of a table — `Constructor` mints a fresh
+/// eclass id when a row is missed; `Function` does not. Mirrors the
+/// `FunctionSubtype` split on the egglog side without dragging that
+/// type into the bridge crate.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TableKind {
+    Function,
+    Constructor,
+}
+
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
@@ -1254,6 +1355,7 @@ pub struct TableAction {
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
+    kind: TableKind,
 }
 
 impl TableAction {
@@ -1261,6 +1363,10 @@ impl TableAction {
     /// This requires access to the `egglog_bridge::EGraph`.
     pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
         let func_info = &egraph.funcs[func];
+        let kind = match &func_info.default_val {
+            DefaultVal::FreshId => TableKind::Constructor,
+            DefaultVal::Fail | DefaultVal::Const(_) => TableKind::Function,
+        };
         TableAction {
             table: func_info.table,
             table_math: SchemaMath {
@@ -1273,7 +1379,20 @@ impl TableAction {
                 DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
             },
             timestamp: egraph.timestamp_counter,
+            kind,
         }
+    }
+
+    /// Whether this table is a `Function` (no auto-insert) or a
+    /// `Constructor` (mints a fresh eclass id on miss).
+    pub fn kind(&self) -> TableKind {
+        self.kind
+    }
+
+    /// Number of input columns (schema minus the trailing output
+    /// column).
+    pub fn input_arity(&self) -> usize {
+        self.table_math.func_cols - 1
     }
 
     /// Look up a row and return its return-value column, or `None` if the
@@ -1292,6 +1411,47 @@ impl TableAction {
     /// Return the current number of rows in this table.
     pub fn row_count(&self, state: &ExecutionState) -> usize {
         state.get_table(self.table).len()
+    }
+
+    /// Iterate this table's rows, calling `f` on each function row.
+    /// Mirrors [`EGraph::for_each`] but reaches the table through an
+    /// [`ExecutionState`] — so it's callable from primitive bodies via
+    /// the typed `Read`-style API.
+    pub fn for_each(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>)) {
+        self.for_each_while(state, |row| {
+            f(row);
+            true
+        });
+    }
+
+    /// Like [`TableAction::for_each`], but stops as soon as `f`
+    /// returns `false`.
+    pub fn for_each_while(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
+        let schema_math = self.table_math;
+        let imp = state.get_table(self.table);
+        let all = imp.all();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new(imp.spec().arity());
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    let subsumed =
+                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                    if !f(ScanEntry {
+                        vals: &row[0..schema_math.func_cols],
+                        subsumed,
+                    }) {
+                        return;
+                    }
+                }
+                $buf.clear();
+            };
+        }
+        while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 32, &mut buf) {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
     }
 
     /// Look up a row, inserting the configured default value if absent.
@@ -1551,7 +1711,8 @@ struct SchemaMath {
 /// A struct containing possible non-key portions of a table row. To be used with
 /// [`SchemaMath::write_table_row`].
 ///
-/// This is not to be confused with [`FunctionRow`], which is higher-level and for public uses.
+/// This is the write side (building a row); [`ScanEntry`] is the
+/// read side (a row yielded by a table scan).
 struct RowVals<T> {
     /// The timestamp for the row.
     timestamp: T,
@@ -1562,9 +1723,14 @@ struct RowVals<T> {
     ret_val: Option<T>,
 }
 
-/// A struct representing the content of a row in a function table
+/// A raw row yielded by a table scan; `vals` includes the trailing
+/// output/eclass column.
+///
+/// Public so the `egglog` crate can consume it, but **do not re-export
+/// it from `egglog`'s public API** — the user-facing row types are
+/// `egglog::FunctionEntry` and `egglog::Enode`.
 #[derive(Clone, Debug)]
-pub struct FunctionRow<'a> {
+pub struct ScanEntry<'a> {
     pub vals: &'a [Value],
     pub subsumed: bool,
 }

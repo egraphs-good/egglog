@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use clap::Parser;
 use env_logger::Env;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
@@ -90,6 +91,8 @@ pub fn cli(mut egraph: EGraph) {
 
     let args = Args::parse();
 
+    egraph.set_num_threads(args.threads);
+
     if args.term_encoding {
         egraph = egraph.with_term_encoding_enabled();
     }
@@ -103,7 +106,6 @@ pub fn cli(mut egraph: EGraph) {
         egraph = egraph.with_proof_testing();
     }
 
-    EGraph::set_num_threads(args.threads);
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
     egraph.no_decomp = args.no_decomp;
@@ -402,6 +404,21 @@ mod tests {
 
         let input = "xyz";
         let mut output: Vec<u8> = Vec::new();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive, false)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "(error)\n");
+
+        let missing_include = std::env::temp_dir().join(format!(
+            "egglog_missing_include_{}_{}.egg",
+            std::process::id(),
+            "repl_test"
+        ));
+        let input = format!(
+            "(include \"{}\")",
+            missing_include.to_string_lossy().replace('\\', "/")
+        );
+        let mut output = Vec::new();
         egraph
             .repl_with(input.as_bytes(), &mut output, RunMode::Interactive, false)
             .unwrap();
