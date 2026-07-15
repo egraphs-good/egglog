@@ -1,6 +1,47 @@
 use egglog::EGraph;
 use egglog::ast::Command;
-use egglog_static::{egglog_static, run_egglog_static};
+use egglog_static::{egglog_header, egglog_static, run_egglog_static};
+
+// Two independent, self-contained schemas, as if declared in (and exported
+// from) separate crates. Each is typechecked at its own `egglog_header!` site.
+egglog_header!(math_schema
+    (datatype Math (Num i64) (Add Math Math))
+);
+egglog_header!(seen_schema
+    (relation seen (i64))
+);
+
+#[test]
+fn single_header_checks_a_fragment() {
+    let fragment: Vec<Command> = egglog_static!(math_schema;
+        (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
+    )
+    .unwrap();
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))")
+        .unwrap();
+    egraph.run_program(fragment).unwrap();
+}
+
+#[test]
+fn composed_headers_pool_their_declarations() {
+    // The fragment uses `Add`/`Num` (from `math_schema`) *and* `seen` (from
+    // `seen_schema`) — it only typechecks with both schemas in scope.
+    let fragment: Vec<Command> = egglog_static!(math_schema, seen_schema;
+        (rule ((= e (Add (Num a) (Num b)))) ((seen a)))
+    )
+    .unwrap();
+
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "(datatype Math (Num i64) (Add Math Math)) (relation seen (i64))",
+        )
+        .unwrap();
+    egraph.run_program(fragment).unwrap();
+}
 
 #[test]
 fn hands_back_checked_commands_to_run_elsewhere() {

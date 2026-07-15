@@ -1296,4 +1296,21 @@ mod test {
             _ => panic!("Expected arity mismatch, got: {res:?}"),
         }
     }
+
+    #[test]
+    fn error_span_locates_the_offending_source() {
+        use crate::ast::Span;
+        let mut egraph = EGraph::default();
+        // `Nonexistent` is not a declared sort.
+        let err = egraph
+            .resolve_program(None, "(relation r (Nonexistent))")
+            .unwrap_err();
+        match err.span() {
+            Some(Span::Egglog(s)) => {
+                let quoted = &s.file.contents[s.i..s.j];
+                assert!(quoted.contains("Nonexistent"), "span text: {quoted}");
+            }
+            _ => panic!("expected an egglog span from {err:?}"),
+        }
+    }
 }

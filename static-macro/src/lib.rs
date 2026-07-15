@@ -1,6 +1,6 @@
 //! Compile-time-checked egglog programs.
 //!
-//! Both macros write an egglog program directly in Rust and **check it while
+//! These macros write an egglog program directly in Rust and **check it while
 //! your crate compiles** — a parse or type error in the program becomes a build
 //! error at the macro call site, so you never ship a program that fails to
 //! typecheck. They differ in what they hand back:
@@ -10,6 +10,11 @@
 //!   several, or to inspect).
 //! - [`run_egglog_static!`] → `Result<EGraph, egglog::Error>` — a fresh
 //!   [`EGraph`](egglog::EGraph) with the program already run into it.
+//!
+//! For egglog split across crates, [`egglog_header!`] declares a reusable schema
+//! (checked once, where it's declared) as an exported handle; then list the
+//! schema names in [`egglog_static!`] — `egglog_static!(math, seen; <program>)`
+//! — to check a fragment against them.
 //!
 //! ```
 //! use egglog::EGraph;
@@ -31,16 +36,13 @@
 //! existing e-graph, use the quasiquote macros in the `egglog-quote` crate
 //! (`egglog!`, `run_egglog!`, `expr!`, …).
 //!
-//! Checking runs egglog's own parser and typechecker at macro-expansion time:
-//! declarations are registered and every form is resolved, but rules are **not**
-//! run, so a nonterminating `(run …)` costs nothing at build time. Because a
-//! resolved program holds sort handles bound to the e-graph it was checked in,
-//! the check is a build-time gate only — the commands handed back are
-//! *unresolved* and re-typecheck against whatever e-graph you run them in.
+//! Checking does not run rules, so a nonterminating `(run …)` costs nothing at
+//! build time. The commands handed back are unresolved and re-typecheck against
+//! whatever e-graph you run them in.
 
 use egglog_ast::tokens::atom_run;
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Span, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::{Delimiter, Ident, Span, TokenStream as TokenStream2, TokenTree};
 use quote::{quote, quote_spanned};
 
 /// Write an egglog program checked at compile time; expand to the program's
@@ -66,23 +68,68 @@ use quote::{quote, quote_spanned};
 /// let mut egraph = EGraph::default();
 /// egraph.run_program(program).unwrap();
 /// ```
+///
+/// # Against schemas from elsewhere
+///
+/// Prefix the program with a list of [`egglog_header!`] schema names and a `;`
+/// to check it with those declarations in scope (they're in scope but not
+/// returned — only the program's commands come back). This is how egglog split
+/// across crates typechecks: each schema is declared once with `egglog_header!`,
+/// and every fragment lists the schemas it needs.
+///
+/// ```
+/// # use egglog::ast::Command;
+/// # use egglog_static::{egglog_header, egglog_static};
+/// egglog_header!(math (datatype Math (Num i64) (Add Math Math)));
+/// egglog_header!(seen (relation seen (i64)));
+///
+/// // The fragment uses `Add`/`Num` (from `math`) and `seen` (from `seen`);
+/// // list the schemas in dependency order.
+/// let fragment: Vec<Command> = egglog_static!(math, seen;
+///     (rule ((= e (Add (Num a) (Num b)))) ((seen a)))
+/// )
+/// .unwrap();
+/// # let _ = fragment;
+/// ```
 #[proc_macro]
 pub fn egglog_static(input: TokenStream) -> TokenStream {
-    let src = match check(input) {
-        Ok(src) => src,
-        Err(err) => return err,
+    let input = TokenStream2::from(input);
+
+    // Internal form emitted by the schema machinery (`egglog_header!` +
+    // `egglog_static!(a, b; …)`): `@egglog_checked [ <declarations> ] <program>`
+    // checks the program with the pooled declarations in scope but returns only
+    // the program's commands. Not written by hand — if you have declarations,
+    // just make them part of the program.
+    if let Some(rest) = strip_checked_marker(&input) {
+        let (declarations, program) = match split_declarations(rest) {
+            Ok(split) => split,
+            Err((span, msg)) => return compile_error_at(span, &msg),
+        };
+        return match check_with(declarations, program) {
+            Ok(program_src) => emit_commands(&program_src),
+            Err((span, msg)) => compile_error_at(span, &msg),
+        };
+    }
+
+    let (headers, program) = match split_header_prefix(input) {
+        Ok(split) => split,
+        Err((span, msg)) => return compile_error_at(span, &msg),
     };
-    // Runtime: re-parse the (already-checked) source into unresolved commands.
-    quote! {{
-        let mut __parser = ::egglog::ast::Parser::default();
-        ::egglog::ast::Parser::get_program_from_string(
-            &mut __parser,
-            ::core::option::Option::None,
-            #src,
-        )
-        .map_err(::egglog::Error::from)
-    }}
-    .into()
+
+    // `<h1>, <h2>, … ; <program>`: hand off to the first header in compose mode;
+    // the header macros pool their declarations and end back here (inline form).
+    if let Some((first, rest)) = headers.split_first() {
+        return quote! {
+            #first!( @egglog_compose {} [ #(#rest)* ] { #program } )
+        }
+        .into();
+    }
+
+    // `<program>`: check the whole program on its own.
+    match check(program) {
+        Ok(src) => emit_commands(&src),
+        Err((span, msg)) => compile_error_at(span, &msg),
+    }
 }
 
 /// Write an egglog program checked at compile time; expand to a fresh
@@ -93,9 +140,9 @@ pub fn egglog_static(input: TokenStream) -> TokenStream {
 /// (a failed `check`, `panic`, …). See the [crate docs](crate) for details.
 #[proc_macro]
 pub fn run_egglog_static(input: TokenStream) -> TokenStream {
-    let src = match check(input) {
+    let src = match check(input.into()) {
         Ok(src) => src,
-        Err(err) => return err,
+        Err((span, msg)) => return compile_error_at(span, &msg),
     };
     // Runtime: build a fresh e-graph and run the (already-checked) program,
     // handing back the populated e-graph.
@@ -111,6 +158,93 @@ pub fn run_egglog_static(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Define a reusable, compile-time-checked egglog *header* (schema).
+///
+/// `egglog_header!(<name> <declarations>)` typechecks `<declarations>` (sorts,
+/// constructors, functions, …) **here** — so a broken schema is a build error at
+/// this call, not at each use — then generates a schema *handle* macro `<name>`.
+/// Pass that name to [`egglog_static!`] to check a program against the schema:
+/// `egglog_static!(<name>; <program>)`, or list several with
+/// `egglog_static!(a, b; <program>)`. You don't call `<name>!` directly.
+///
+/// The handle is `#[macro_export]`ed, so a schema can be declared in one crate
+/// and used from others (`use my_schema_crate::math;`). Crates that use it need
+/// `egglog-static` and `egglog` as dependencies.
+///
+/// ```
+/// use egglog::ast::Command;
+/// use egglog_static::{egglog_header, egglog_static};
+///
+/// // Declare the schema once (checked right here).
+/// egglog_header!(math
+///     (datatype Math (Num i64) (Add Math Math))
+///     (function lower (Math) i64 :no-merge)
+/// );
+///
+/// // Check fragments against it via `egglog_static!`.
+/// let fragment: Vec<Command> = egglog_static!(math;
+///     (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
+/// )
+/// .unwrap();
+/// # let _ = fragment;
+/// ```
+#[proc_macro]
+pub fn egglog_header(input: TokenStream) -> TokenStream {
+    let mut it = TokenStream2::from(input).into_iter();
+    let name = match it.next() {
+        Some(TokenTree::Ident(id)) => id,
+        other => {
+            let span = other.map(|t| t.span()).unwrap_or_else(Span::call_site);
+            return compile_error_at(
+                span,
+                "egglog_header! expects a macro name first, e.g. \
+                 `egglog_header!(math (datatype …))`",
+            );
+        }
+    };
+    let declarations: TokenStream2 = it.collect();
+
+    // Typecheck the declarations here, so a broken schema errors at the header.
+    let mut src = String::new();
+    let mut segments = Vec::new();
+    if let Err((span, msg)) = render(declarations.clone(), &mut src, &mut segments) {
+        return compile_error_at(span, &msg);
+    }
+    if let Err((span, msg)) = typecheck(&src, &segments) {
+        return compile_error_at(span, &msg);
+    }
+
+    // The handle is driven by `egglog_static!(a, b, …; …)`: its `@egglog_compose`
+    // arms pool each schema's declarations into an accumulator, then hand off to
+    // the next schema, finally landing in `egglog_static!([ pooled ] program)`.
+    // Calling the handle directly is a mistake, so the last arm says so. (`$…`
+    // below is emitted verbatim into the generated `macro_rules!`.)
+    let doc = format!(
+        "egglog schema handle generated by `egglog_header!`. Pass it to \
+         `egglog_static!({name}; <program>)` to check a program against this schema."
+    );
+    let direct_use = format!(
+        "`{name}!` is an egglog schema handle — use `egglog_static!({name}; <program>)` \
+         to check a program against it"
+    );
+    quote! {
+        #[doc = #doc]
+        #[macro_export]
+        macro_rules! #name {
+            (@egglog_compose { $($__acc:tt)* } [] { $($__prog:tt)* }) => {
+                ::egglog_static::egglog_static!( @egglog_checked [ $($__acc)* #declarations ] $($__prog)* )
+            };
+            (@egglog_compose { $($__acc:tt)* } [ $__next:ident $($__rest:ident)* ] { $($__prog:tt)* }) => {
+                $__next!( @egglog_compose { $($__acc)* #declarations } [ $($__rest)* ] { $($__prog)* } )
+            };
+            ($($__other:tt)*) => {
+                ::core::compile_error!(#direct_use)
+            };
+        }
+    }
+    .into()
+}
+
 /// A rendered atom or list: the byte range it occupies in the source string,
 /// and the `proc_macro2` span of the token(s) it came from. Used to point a
 /// diagnostic at the offending token when egglog reports an error at a byte
@@ -121,25 +255,121 @@ struct Segment {
     span: Span,
 }
 
-/// Render the macro input to egglog source and typecheck it at expansion time.
-/// On success returns the source (to embed in the expansion); on failure
-/// returns a `compile_error!` token stream to emit in place.
-fn check(input: TokenStream) -> Result<String, TokenStream> {
+/// A diagnostic: a span to point at and a message. Converted to a
+/// `compile_error!` only at the proc-macro boundary, so the checking logic
+/// stays unit-testable.
+type Fail = (Span, String);
+
+/// Render the macro input to egglog source and typecheck it at expansion time,
+/// returning the source to embed in the expansion.
+fn check(input: TokenStream2) -> Result<String, Fail> {
     let mut src = String::new();
     let mut segments = Vec::new();
-    if let Err((span, msg)) = render(input.into(), &mut src, &mut segments) {
-        return Err(compile_error_at(span, &msg));
-    }
-    // Parse + typecheck in a throwaway e-graph, registering declarations but
-    // running nothing.
-    let mut egraph = egglog::EGraph::default();
-    if let Err(e) = egraph.resolve_program(None, &src) {
-        // Point the diagnostic at the offending token, falling back to the
-        // whole call site if the error carries no usable location.
-        let span = error_span(&e, &segments).unwrap_or_else(Span::call_site);
-        return Err(compile_error_at(span, &format!("egglog_static!: {e}")));
-    }
+    render(input, &mut src, &mut segments)?;
+    typecheck(&src, &segments)?;
     Ok(src)
+}
+
+/// Like [`check`], but the program is typechecked with `declarations` (a schema
+/// — sorts, constructors, functions, …) in scope. Only the program's source is
+/// returned; the declarations aren't, so a fragment in one crate can be checked
+/// against types declared in another without re-emitting them.
+fn check_with(declarations: TokenStream2, program: TokenStream2) -> Result<String, Fail> {
+    let mut src = String::new();
+    let mut segments = Vec::new();
+    render(declarations, &mut src, &mut segments)?;
+    src.push('\n');
+    let program_start = src.len();
+    render(program, &mut src, &mut segments)?;
+    typecheck(&src, &segments)?;
+    Ok(src[program_start..].to_string())
+}
+
+/// Parse + typecheck `src` in a throwaway e-graph (registering declarations but
+/// running nothing). On failure, points at the offending token, falling back to
+/// the call site if the error has no usable location.
+fn typecheck(src: &str, segments: &[Segment]) -> Result<(), Fail> {
+    let mut egraph = egglog::EGraph::default();
+    if let Err(e) = egraph.resolve_program(None, src) {
+        let span = error_span(&e, segments).unwrap_or_else(Span::call_site);
+        return Err((span, format!("egglog_static!: {e}")));
+    }
+    Ok(())
+}
+
+/// Split an optional leading `h1, h2, … ;` header-name list from the program
+/// that follows. With no top-level `;`, there are no headers and the whole
+/// input is the program.
+fn split_header_prefix(input: TokenStream2) -> Result<(Vec<Ident>, TokenStream2), Fail> {
+    let has_semi = input
+        .clone()
+        .into_iter()
+        .any(|tt| matches!(&tt, TokenTree::Punct(p) if p.as_char() == ';'));
+    if !has_semi {
+        return Ok((Vec::new(), input));
+    }
+    let mut headers = Vec::new();
+    let mut it = input.into_iter();
+    for tt in it.by_ref() {
+        match tt {
+            TokenTree::Punct(ref p) if p.as_char() == ';' => break,
+            TokenTree::Punct(ref p) if p.as_char() == ',' => {}
+            TokenTree::Ident(id) => headers.push(id),
+            other => {
+                return Err((
+                    other.span(),
+                    "expected header names (identifiers) before `;`, e.g. \
+                     `egglog_static!(math, seen; <program>)`"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok((headers, it.collect()))
+}
+
+/// If the input begins with the internal `@egglog_checked` marker, return the
+/// tokens after it; otherwise `None`.
+fn strip_checked_marker(input: &TokenStream2) -> Option<TokenStream2> {
+    let mut it = input.clone().into_iter();
+    match (it.next(), it.next()) {
+        (Some(TokenTree::Punct(p)), Some(TokenTree::Ident(id)))
+            if p.as_char() == '@' && id == "egglog_checked" =>
+        {
+            Some(it.collect())
+        }
+        _ => None,
+    }
+}
+
+/// Expand to `Result<Vec<Command>, egglog::Error>` that re-parses `src` (already
+/// checked at expansion time) into unresolved commands.
+fn emit_commands(src: &str) -> TokenStream {
+    quote! {{
+        let mut __parser = ::egglog::ast::Parser::default();
+        ::egglog::ast::Parser::get_program_from_string(
+            &mut __parser,
+            ::core::option::Option::None,
+            #src,
+        )
+        .map_err(::egglog::Error::from)
+    }}
+    .into()
+}
+
+/// Split a leading `[ … ]` declarations group from the program that follows
+/// (the internal `@egglog_checked` form).
+fn split_declarations(input: TokenStream2) -> Result<(TokenStream2, TokenStream2), Fail> {
+    let mut it = input.into_iter();
+    match it.next() {
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => {
+            Ok((g.stream(), it.collect()))
+        }
+        other => {
+            let span = other.map(|t| t.span()).unwrap_or_else(Span::call_site);
+            Err((span, "expected a `[ … ]` declarations group".to_string()))
+        }
+    }
 }
 
 /// Map an egglog error back to the `proc_macro2` span of the token it points
@@ -167,9 +397,11 @@ fn map_offset(segments: &[Segment], i: usize, j: usize) -> Option<Span> {
         .map(|s| s.span)
 }
 
-/// Emit a `compile_error!` pointing at `span`.
+/// Emit a `compile_error!` pointing at `span`. Brace-delimited so it's valid in
+/// both expression position (the `egglog_static!` family) and item position
+/// (`egglog_header!`, which expands to a `macro_rules!` item).
 fn compile_error_at(span: Span, msg: &str) -> TokenStream {
-    quote_spanned! { span => compile_error!(#msg) }.into()
+    quote_spanned! { span => compile_error! { #msg } }.into()
 }
 
 /// Render a token stream as egglog source text. Lists become parenthesized;
@@ -177,11 +409,7 @@ fn compile_error_at(span: Span, msg: &str) -> TokenStream {
 /// egglog's tokenizer), so `my-ruleset`, `:no-merge`, and `-1.0` survive as
 /// single atoms while space-separated tokens stay apart. A `#` (splice) is
 /// rejected — a compile-time program has no runtime values to splice.
-fn render(
-    ts: TokenStream2,
-    out: &mut String,
-    segments: &mut Vec<Segment>,
-) -> Result<(), (Span, String)> {
+fn render(ts: TokenStream2, out: &mut String, segments: &mut Vec<Segment>) -> Result<(), Fail> {
     let mut it = ts.into_iter().peekable();
     let mut first = true;
     while let Some(tt) = it.next() {
@@ -236,4 +464,95 @@ fn render(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(s: &str) -> TokenStream2 {
+        s.parse().unwrap()
+    }
+
+    fn render_str(input: &str) -> Result<String, Fail> {
+        let mut src = String::new();
+        let mut segments = Vec::new();
+        render(ts(input), &mut src, &mut segments)?;
+        Ok(src)
+    }
+
+    #[test]
+    fn render_glues_adjacent_tokens_into_egglog_atoms() {
+        // `?x`, `:no-merge`, `my-ruleset`, and `-1` must survive as single atoms.
+        assert_eq!(render_str("(f ?x)").unwrap(), "(f ?x)");
+        assert_eq!(
+            render_str("(function f (i64) i64 :no-merge)").unwrap(),
+            "(function f (i64) i64 :no-merge)"
+        );
+        assert_eq!(
+            render_str("(ruleset my-ruleset)").unwrap(),
+            "(ruleset my-ruleset)"
+        );
+        assert_eq!(render_str("(set (f 0) -1)").unwrap(), "(set (f 0) -1)");
+    }
+
+    #[test]
+    fn render_rejects_splices() {
+        let (_span, msg) = render_str("(Num #x)").unwrap_err();
+        assert!(msg.contains("splice"), "{msg}");
+    }
+
+    #[test]
+    fn check_accepts_valid_and_reports_type_errors() {
+        assert!(check(ts("(datatype Math (Num i64))")).is_ok());
+
+        let (_span, msg) = check(ts("(relation r (Nonexistent))")).unwrap_err();
+        assert!(msg.contains("Undefined sort Nonexistent"), "{msg}");
+    }
+
+    #[test]
+    fn check_with_uses_declarations_in_scope() {
+        let decls = ts("(datatype Math (Num i64) (Add Math Math))");
+
+        let ok = ts("(rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))");
+        assert!(check_with(decls.clone(), ok).is_ok());
+
+        // `Mul` is in neither the declarations nor the fragment -> error.
+        let bad = ts("(rule ((= e (Add (Num a) (Num b)))) ((union e (Mul (Num 1) (Num 2)))))");
+        let (_span, msg) = check_with(decls, bad).unwrap_err();
+        assert!(msg.contains("Mul"), "{msg}");
+    }
+
+    #[test]
+    fn header_prefix_splits_on_semicolon() {
+        let (headers, program) = split_header_prefix(ts("a, b, c; (run 1)")).unwrap();
+        let names: Vec<_> = headers.iter().map(|i| i.to_string()).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+        assert!(!program.is_empty());
+
+        // No top-level `;` -> no headers, whole input is the program.
+        let (none, _) = split_header_prefix(ts("(datatype Math (Num i64))")).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn checked_marker_is_recognized() {
+        assert!(strip_checked_marker(&ts("@egglog_checked [x] (y)")).is_some());
+        assert!(strip_checked_marker(&ts("(datatype Math (Num i64))")).is_none());
+    }
+
+    #[test]
+    fn error_offset_maps_to_the_innermost_token() {
+        // Render (no reformatting here), then map a source byte offset back to a
+        // token span: offset of `y` should select the `y` atom, not the list.
+        let mut src = String::new();
+        let mut segments = Vec::new();
+        render(ts("(Add x y)"), &mut src, &mut segments).unwrap();
+        assert_eq!(src, "(Add x y)");
+
+        let y = src.find('y').unwrap();
+        let span = map_offset(&segments, y, y + 1).expect("offset should map to a token");
+        // `src` equals the input here, so the byte offset is the token's column.
+        assert_eq!(span.start().column, y);
+    }
 }
