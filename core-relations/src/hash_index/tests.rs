@@ -1,4 +1,9 @@
-use crate::{numeric_id::NumericId, offsets::Offsets};
+use std::collections::BTreeMap;
+
+use egglog_concurrency::ThreadPool;
+use rand::{Rng, SeedableRng, rngs::StdRng};
+
+use crate::{common::Value, numeric_id::NumericId, offsets::Offsets};
 
 use crate::{
     TupleIndex,
@@ -7,7 +12,7 @@ use crate::{
     table_spec::{ColumnId, WrappedTable},
 };
 
-use super::Index;
+use super::{Index, IndexBase};
 
 #[test]
 fn basic_updates() {
@@ -130,4 +135,105 @@ fn multi_column_column_index_rebuild_orders_each_value_by_row() {
             }
         });
     assert_eq!(row_ids, expected);
+}
+
+/// Brute-force oracle: for the covered `cols`, map each value to the list of row ids (in scan,
+/// i.e. ascending-RowId, order) that contain it in some covered column. A value appearing in
+/// several of a row's columns contributes that row once.
+fn oracle(rows: &[Vec<Value>], cols: &[usize]) -> BTreeMap<u32, Vec<usize>> {
+    let mut map: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (row_id, row) in rows.iter().enumerate() {
+        let mut seen_in_row = Vec::new();
+        for &c in cols {
+            let val = row[c].rep();
+            if !seen_in_row.contains(&val) {
+                seen_in_row.push(val);
+                map.entry(val).or_default().push(row_id);
+            }
+        }
+    }
+    map
+}
+
+/// Collect a built [`ColumnIndex`] into `value -> row ids` for comparison against [`oracle`].
+fn collect(index: &ColumnIndex) -> BTreeMap<u32, Vec<usize>> {
+    let mut got: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    index.for_each(|val, subset| {
+        let mut ids = Vec::new();
+        subset.offsets(|row_id| ids.push(row_id.index()));
+        got.insert(val.rep(), ids);
+    });
+    got
+}
+
+fn assert_matches_oracle(index: &ColumnIndex, expected: &BTreeMap<u32, Vec<usize>>, ctx: &str) {
+    let got = collect(index);
+    for (val, ids) in &got {
+        // Each value's row ids must be strictly ascending: sorted (the ordering this PR fixes)
+        // and de-duplicated (a value repeated across a row's columns maps the row in once).
+        assert!(
+            ids.windows(2).all(|w| w[0] < w[1]),
+            "{ctx}: row ids for value {val} not strictly ascending: {ids:?}",
+        );
+    }
+    assert_eq!(&got, expected, "{ctx}");
+}
+
+/// Randomized oracle test: build a table whose value columns draw from a small pool (so values
+/// repeat across many rows), then check the sort-based rebuild, the parallel rebuild, and the
+/// per-row `build_for_subset` path all produce each value's rows in sorted, de-duplicated order.
+#[test]
+fn column_index_rebuild_matches_oracle() {
+    // Column 0 is a unique key; columns `1..n_cols` are the covered value columns.
+    for seed in 0..4u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        for &n_rows in &[1usize, 10, 63, 64, 200, 512, 1000] {
+            let distinct = ((n_rows / 4).max(1)) as u32;
+            for &n_val_cols in &[1usize, 2, 3, 4] {
+                let n_cols = n_val_cols + 1;
+                let rows: Vec<Vec<Value>> = (0..n_rows)
+                    .map(|i| {
+                        let mut row = Vec::with_capacity(n_cols);
+                        row.push(v(i));
+                        for _ in 1..n_cols {
+                            row.push(v(rng.random_range(0..distinct) as usize));
+                        }
+                        row
+                    })
+                    .collect();
+                let table = WrappedTable::new(fill_table(rows.clone(), 1, None, |old, new| {
+                    assert_eq!(old, new, "unique keys, so no conflicts");
+                    None
+                }));
+                let cols: Vec<ColumnId> = (1..n_cols).map(ColumnId::from_usize).collect();
+                let covered: Vec<usize> = (1..n_cols).collect();
+                let expected = oracle(&rows, &covered);
+                let ctx = format!("seed={seed} n_rows={n_rows} n_val_cols={n_val_cols}");
+
+                let mut serial = ColumnIndex::new();
+                serial.rebuild_full(&cols, table.as_ref(), table.all().as_ref());
+                assert_matches_oracle(&serial, &expected, &format!("{ctx} rebuild_full"));
+
+                // Install a multi-thread pool so `ColumnIndex` shards across several shards and
+                // the merge actually forks; correctness must not depend on the shard count.
+                let parallel = ThreadPool::new(4).install(|| {
+                    let mut ci = ColumnIndex::new();
+                    ci.merge_parallel(&cols, table.as_ref(), table.all().as_ref());
+                    ci
+                });
+                assert_matches_oracle(&parallel, &expected, &format!("{ctx} merge_parallel"));
+
+                if n_val_cols == 1 {
+                    // Single-column public entry point; picks between the bulk sort and the
+                    // per-row scan by subset size, so this also exercises the small-input path.
+                    let built = ColumnIndex::build_for_subset(
+                        table.as_ref(),
+                        table.all().as_ref(),
+                        cols[0],
+                    );
+                    assert_matches_oracle(&built, &expected, &format!("{ctx} build_for_subset"));
+                }
+            }
+        }
+    }
 }

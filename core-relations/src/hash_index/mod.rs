@@ -31,6 +31,9 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+#[doc(hidden)]
+pub mod bench_support;
+
 #[derive(Clone)]
 pub(crate) struct TableEntry<T> {
     hash: u64,
@@ -80,6 +83,19 @@ impl<TI: IndexBase> Index<TI> {
         } else {
             table.updates_since(self.updated_to.minor)
         };
+        // Three ways to fold `subset` into the index; all produce the same result (each value's
+        // rows sorted ascending and de-duplicated) but trade fixed overhead against throughput:
+        //
+        // * `merge_parallel` shards the rows across worker threads. It handles both full and
+        //   incremental refreshes (it appends to whatever is already indexed), but the thread
+        //   coordination only pays off once `subset` clears the size cutoff.
+        // * `rebuild_full` is the serial bulk path for a full rebuild: it sorts all (value, row)
+        //   pairs and sizes each key's subset in a single allocation, avoiding the repeated
+        //   regrowth of the row-at-a-time path. It assumes an empty index, so it is only valid
+        //   right after the major-version `clear()` above.
+        // * `refresh_serial` scans in batches and inserts one row at a time into the existing
+        //   index. Lowest fixed cost, and the only path suited to merging a small incremental
+        //   delta into the index's prior contents.
         if parallelize_index_construction(subset.size()) {
             self.table.merge_parallel(&self.key, table, subset.as_ref());
         } else if is_full {
@@ -231,9 +247,13 @@ impl IndexBase for ColumnIndex {
         shard.table.get(key).map(|x| x.as_ref(&shard.subsets))
     }
     fn add_row(&mut self, vals: &[Value], row: RowId) {
-        // SAFETY: everything in `table` comes from `subsets`.
-        for key in vals {
+        for (i, key) in vals.iter().enumerate() {
+            // A value repeated across this row's covered columns maps the row in only once.
+            if vals[..i].contains(key) {
+                continue;
+            }
             let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
+            // SAFETY: everything in `table` comes from `subsets`.
             unsafe {
                 shard
                     .table
@@ -276,7 +296,12 @@ impl IndexBase for ColumnIndex {
             let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
             split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(1));
             for (row_id, keys) in buf.iter() {
-                for key in keys {
+                for (i, key) in keys.iter().enumerate() {
+                    // Match `add_row`: a value repeated across this row's covered columns is
+                    // recorded once, so a value's subset never holds a duplicate row id.
+                    if keys[..i].contains(key) {
+                        continue;
+                    }
                     shard_data
                         .get_shard_mut(*key, &mut split)
                         .add_row(row_id, &[*key]);
