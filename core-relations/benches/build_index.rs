@@ -34,14 +34,15 @@ fn sort_single_custom<const N: usize>(bench: Bencher) {
         .bench_values(|p| sort_merge_custom(p, &bounds));
 }
 
-/// Single column, standard `sort_unstable` + `dedup`.
+/// Single column, standard `sort_unstable`. No dedup: with one pair per row every `RowId` is
+/// distinct, so no `(Value, RowId)` pair repeats -- matching what the custom path does here.
 #[divan::bench(consts = [4096, 65_536, 1 << 20])]
 fn sort_single_std<const N: usize>(bench: Bencher) {
     let (pairs, _bounds) = gen_blocks(N, 1, distinct_for(N), 1);
     bench
         .with_inputs(|| pairs.clone())
         .input_counter(|p| ItemsCount::new(p.len()))
-        .bench_values(sort_merge_std);
+        .bench_values(|p| sort_merge_std(p, false));
 }
 
 /// Four columns: per-block radix sort followed by the tournament merge with dedup.
@@ -54,14 +55,15 @@ fn merge_multi_custom<const N: usize>(bench: Bencher) {
         .bench_values(|p| sort_merge_custom(p, &bounds));
 }
 
-/// Four columns, standard `sort_unstable` + `dedup` over the whole concatenation.
+/// Four columns, standard `sort_unstable` + `dedup` over the whole concatenation (a value can
+/// repeat across a row's columns, so duplicate pairs are possible and must be dropped).
 #[divan::bench(consts = [4096, 65_536, 1 << 20])]
 fn merge_multi_std<const N: usize>(bench: Bencher) {
     let (pairs, _bounds) = gen_blocks(N, 4, distinct_for(N), 1);
     bench
         .with_inputs(|| pairs.clone())
         .input_counter(|p| ItemsCount::new(p.len()))
-        .bench_values(sort_merge_std);
+        .bench_values(|p| sort_merge_std(p, true));
 }
 
 // -- End-to-end index construction: serial vs. parallel -----------------------------------------

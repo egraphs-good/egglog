@@ -59,10 +59,18 @@ pub fn sort_merge_custom(mut pairs: Vec<(Value, RowId)>, bounds: &[usize]) -> Ve
 }
 
 /// The standard-library analogue of [`sort_merge_custom`]: sort the whole concatenation by
-/// `(Value, RowId)` and drop duplicates.
-pub fn sort_merge_std(mut pairs: Vec<(Value, RowId)>) -> Vec<(Value, RowId)> {
+/// `(Value, RowId)`, then drop duplicates iff `dedup` is set.
+///
+/// Pass `dedup = false` for a single column and `true` for several, mirroring what
+/// `sort_merge_custom` does: a single block has one pair per row, so every `RowId` is distinct
+/// and no `(Value, RowId)` pair can repeat -- deduping there is a wasted pass that would unfairly
+/// handicap this side of the comparison. Only multiple columns can put the same value (hence the
+/// same pair) on one row.
+pub fn sort_merge_std(mut pairs: Vec<(Value, RowId)>, dedup: bool) -> Vec<(Value, RowId)> {
     pairs.sort_unstable();
-    pairs.dedup();
+    if dedup {
+        pairs.dedup();
+    }
     pairs
 }
 
