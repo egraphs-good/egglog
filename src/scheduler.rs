@@ -224,85 +224,94 @@ impl EGraph {
         }
         let mut schedulers = std::mem::take(&mut self.schedulers);
 
-        // Step 1: build all the query/action rules and worklist if have not already
-        let record = &mut schedulers[scheduler_id];
-        for (id, rule) in rules.iter() {
-            if !record.rule_info.contains_key(id) {
-                let info = SchedulerRuleInfo::new(self, rule, id)?;
-                record.rule_info.insert((*id).to_owned(), info);
-            }
-        }
-
-        // Step 2: run all the queries for one iteration
-        let query_rules = rules
-            .iter()
-            .filter_map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-
-                if rule_info.should_seek {
-                    Some(rule_info.query_rule)
-                } else {
-                    None
+        // `rulesets` and `schedulers` are now taken out of `self`. The body below
+        // has several fallible steps (rule compilation, `run_rules`), so run it in
+        // a closure and restore both fields afterward no matter how it exits.
+        // Otherwise an early error would leave the EGraph with empty rulesets and
+        // schedulers.
+        let result = (|| -> Result<RunReport, Error> {
+            // Step 1: build all the query/action rules and worklist if have not already
+            let record = &mut schedulers[scheduler_id];
+            for (id, rule) in rules.iter() {
+                if !record.rule_info.contains_key(id) {
+                    let info = SchedulerRuleInfo::new(self, rule, id)?;
+                    record.rule_info.insert((*id).to_owned(), info);
                 }
-            })
-            .collect::<Vec<_>>();
-
-        let query_iter_report = self
-            .backend
-            .run_rules(&query_rules)
-            .map_err(|e| Error::BackendError(e.to_string()))?;
-
-        // Step 3: let the scheduler decide which matches need to be kept
-        self.backend.with_execution_state(|state| {
-            for (rule_id, _rule) in rules.iter() {
-                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
-
-                let matches: Vec<Value> =
-                    std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                rule_info.should_seek =
-                    record
-                        .scheduler
-                        .filter_matches(rule_id, ruleset, &mut matches);
-                let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
             }
-        });
-        self.backend.flush_updates();
 
-        // Step 4: run the action rules
-        let action_rules = rules
-            .iter()
-            .map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-                rule_info.action_rule
-            })
-            .collect::<Vec<_>>();
-        let action_iter_report = self
-            .backend
-            .run_rules(&action_rules)
-            .map_err(|e| Error::BackendError(e.to_string()))?;
+            // Step 2: run all the queries for one iteration
+            let query_rules = rules
+                .iter()
+                .filter_map(|(rule_id, _rule)| {
+                    let rule_info = record.rule_info.get(rule_id).unwrap();
 
-        // Step 5: combine the reports
-        let mut query_report = RunReport::singleton(ruleset, query_iter_report);
-        let mut action_report = RunReport::singleton(ruleset, action_iter_report);
+                    if rule_info.should_seek {
+                        Some(rule_info.query_rule)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        // query matches don't count
-        query_report.updated = false;
-        query_report.num_matches_per_rule.clear();
-        // Scheduler state should not count as database progress. Instead it
-        // determines whether a no-op iteration can be treated as fully stopped.
-        action_report.can_stop = !action_report.updated && {
-            let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
-            record.scheduler.can_stop(&rule_ids, ruleset)
-        };
+            let query_iter_report = self
+                .backend
+                .run_rules(&query_rules)
+                .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        query_report.union(action_report);
+            // Step 3: let the scheduler decide which matches need to be kept
+            self.backend.with_execution_state(|state| {
+                for (rule_id, _rule) in rules.iter() {
+                    let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+
+                    let matches: Vec<Value> =
+                        std::mem::take(rule_info.matches.lock().unwrap().as_mut());
+                    let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+                    rule_info.should_seek =
+                        record
+                            .scheduler
+                            .filter_matches(rule_id, ruleset, &mut matches);
+                    let table_action = TableAction::new(&self.backend, rule_info.decided);
+                    *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
+                }
+            });
+            self.backend.flush_updates();
+
+            // Step 4: run the action rules
+            let action_rules = rules
+                .iter()
+                .map(|(rule_id, _rule)| {
+                    let rule_info = record.rule_info.get(rule_id).unwrap();
+                    rule_info.action_rule
+                })
+                .collect::<Vec<_>>();
+            let action_iter_report = self
+                .backend
+                .run_rules(&action_rules)
+                .map_err(|e| Error::BackendError(e.to_string()))?;
+
+            // Step 5: combine the reports
+            let mut query_report = RunReport::singleton(ruleset, query_iter_report);
+            let mut action_report = RunReport::singleton(ruleset, action_iter_report);
+
+            // query matches don't count
+            query_report.updated = false;
+            query_report.num_matches_per_rule.clear();
+            // Scheduler state should not count as database progress. Instead it
+            // determines whether a no-op iteration can be treated as fully stopped.
+            action_report.can_stop = !action_report.updated && {
+                let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+                record.scheduler.can_stop(&rule_ids, ruleset)
+            };
+
+            query_report.union(action_report);
+
+            Ok(query_report)
+        })();
 
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
-        Ok(query_report)
+        result
     }
 }
 

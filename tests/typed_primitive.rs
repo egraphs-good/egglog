@@ -15,11 +15,24 @@
 use egglog::add_primitive;
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
+use egglog::scheduler::{Matches, Scheduler};
 use egglog::sort::{I64Sort, S, StringSort};
 use egglog::{
     EGraph, FullPrim, FullState, Primitive, PurePrim, PureState, RawValues, Read, ReadPrim,
     ReadState, Value, WritePrim, WriteState, prelude::*,
 };
+
+/// A scheduler that fires every match. Used by the scheduled-compilation
+/// regression test; the rule there fails to compile before any match is
+/// produced, so `filter_matches` is never actually reached.
+#[derive(Clone)]
+struct ChooseAllScheduler;
+impl Scheduler for ChooseAllScheduler {
+    fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+        matches.choose_all();
+        false
+    }
+}
 
 // --- shared test fixtures ---
 
@@ -489,15 +502,115 @@ fn merge_primitives_use_write_context() {
 /// Direct primitive resolution requires exactly one matching registration for
 /// `(name, signature, context)`. Two independently registered pure primitives
 /// both carry valid runtime ids for every context, so a same-signature direct
-/// call is ambiguous instead of silently picking one registration.
+/// call is ambiguous. Resolution now reports a graceful `TypeError` instead of
+/// panicking.
 #[test]
-#[should_panic(expected = "Ambiguous primitive resolution")]
-fn two_same_signature_registrations_panic_on_use() {
+fn two_same_signature_registrations_error_on_use() {
     let mut egraph = EGraph::default();
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
 
-    let _ = egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))");
+    let err = egraph
+        .parse_and_run_program(None, "(check (= (dup-add 1 2) 3))")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Ambiguous primitive resolution"),
+        "expected ambiguous primitive resolution error, got: {err}"
+    );
+}
+
+/// A duplicate same-signature primitive used on a rule's left-hand side (query)
+/// is ambiguous in the query (`Pure`) context and reports a graceful error.
+#[test]
+fn duplicate_primitive_in_rule_query_errors() {
+    let mut egraph = EGraph::default();
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+
+    let err = egraph
+        .parse_and_run_program(
+            None,
+            "(relation R (i64))\n\
+             (rule ((R x) (= y (dup-add x x))) ((R y)))",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Ambiguous primitive resolution"),
+        "expected ambiguous primitive resolution error, got: {err}"
+    );
+}
+
+/// A duplicate same-signature primitive used on a rule's right-hand side
+/// (action) is ambiguous in the action (`Write`) context and reports a graceful
+/// error.
+#[test]
+fn duplicate_primitive_in_rule_action_errors() {
+    let mut egraph = EGraph::default();
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+
+    let err = egraph
+        .parse_and_run_program(
+            None,
+            "(relation R (i64))\n\
+             (function out (i64) i64 :no-merge)\n\
+             (rule ((R x)) ((set (out x) (dup-add x x))))",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Ambiguous primitive resolution"),
+        "expected ambiguous primitive resolution error, got: {err}"
+    );
+}
+
+/// Scheduled rules are re-lowered lazily inside `step_rules_with_scheduler`, so
+/// an ambiguity introduced after the rule is defined (here by a second
+/// registration of `dup-echo`) only surfaces during scheduled compilation. That
+/// compilation happens after the scheduler has taken `rulesets`/`schedulers` out
+/// of the EGraph, so this also guards that those fields are restored on error:
+/// a second step must reproduce the same graceful error rather than fail with a
+/// spurious "no such ruleset".
+#[test]
+fn duplicate_primitive_in_scheduled_rule_errors_and_restores() {
+    let mut egraph = EGraph::default();
+    // One registration: the rule below lowers cleanly when it is defined.
+    egraph.add_pure_primitive(PureEcho("dup-echo"), None);
+    egraph
+        .parse_and_run_program(
+            None,
+            "(sort Fn (UnstableFn (i64) i64))\n\
+             (ruleset test)\n\
+             (relation R (i64))\n\
+             (relation S (i64))\n\
+             (rule ((R x)) ((let f (unstable-fn \"dup-echo\")) (S (unstable-app f x))) \
+                   :ruleset test :name \"uses-dup\")\n\
+             (R 0)",
+        )
+        .unwrap();
+
+    // A second registration makes `dup-echo` ambiguous.
+    egraph.add_pure_primitive(PureEcho("dup-echo"), None);
+    let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+
+    let err = egraph
+        .step_rules_with_scheduler(scheduler_id, "test")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Ambiguous primitive resolution"),
+        "expected ambiguous primitive resolution error, got: {err}"
+    );
+
+    // If `rulesets`/`schedulers` were not restored, this would fail with a
+    // "no such ruleset" error instead of reproducing the ambiguity.
+    let err_again = egraph
+        .step_rules_with_scheduler(scheduler_id, "test")
+        .unwrap_err();
+    assert!(
+        err_again
+            .to_string()
+            .contains("Ambiguous primitive resolution"),
+        "expected the EGraph to be restored and reproduce the error, got: {err_again}"
+    );
 }
 
 /// Registering a primitive whose argument type has no corresponding sort must
@@ -635,4 +748,31 @@ fn unstable_app_dispatch_matrix() {
             }
         }
     }
+}
+
+#[test]
+fn probe_variants_temp() {
+    // write prim on rule LHS (Pure ctx)
+    let mut e = EGraph::default();
+    e.add_write_primitive(WriteEcho("w-echo"), None);
+    let r = e.parse_and_run_program(
+        None,
+        "(function g (i64) i64 :no-merge)\n(rule ((= x (w-echo 1))) ((set (g 0) x)))",
+    );
+    println!("WRITE-ON-LHS: {:?}", r.err());
+
+    // read prim on rule LHS (Pure ctx)
+    let mut e2 = EGraph::default();
+    e2.add_read_primitive(ReadLookup { name: "lookup-f", table_name: "f" }, None);
+    let r2 = e2.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n(rule ((= x (lookup-f 1))) ((set (f 0) x)))",
+    );
+    println!("READ-ON-LHS: {:?}", r2.err());
+
+    // full prim in check (Read ctx)
+    let mut e3 = EGraph::default();
+    e3.add_full_primitive(FullEcho("f-echo"), None);
+    let r3 = e3.parse_and_run_program(None, "(check (= (f-echo 1) 1))");
+    println!("FULL-IN-CHECK: {:?}", r3.err());
 }
