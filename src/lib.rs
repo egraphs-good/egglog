@@ -767,7 +767,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 if p.name() == "unstable-fn" {
-                    let Some(GenericExpr::Lit(_, Literal::String(name))) = args.first() else {
+                    let Some(GenericExpr::Lit(span, Literal::String(name))) = args.first() else {
                         return Err(Error::BackendError(
                             "expected string literal after `unstable-fn`".into(),
                         ));
@@ -783,6 +783,9 @@ impl EGraph {
                             .read()
                             .unwrap()
                             .default_panic_id(),
+                        // Merge expressions evaluate in the `Write` context.
+                        crate::Context::Write,
+                        span,
                     )?;
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
@@ -1417,6 +1420,9 @@ impl EGraph {
                         name,
                         prim,
                         panic_id,
+                        // Top-level action evaluation runs in the `Full` context.
+                        crate::Context::Full,
+                        target_span,
                     )?;
                     let fn_value = self.backend.base_values().get(resolved_function);
                     let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
@@ -2459,6 +2465,7 @@ pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, Raw
 /// `unstable-app` will call later. For primitive targets, this bakes one
 /// dispatch id per runtime context so application can choose the entrypoint
 /// matching the primitive body's current call-site context.
+#[allow(clippy::too_many_arguments)]
 fn resolve_function_container_target_with_context(
     backend: &egglog_bridge::EGraph,
     functions: &IndexMap<String, Function>,
@@ -2466,6 +2473,8 @@ fn resolve_function_container_target_with_context(
     name: &str,
     primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
+    ctx: crate::Context,
+    span: &Span,
 ) -> Result<ResolvedFunction, Error> {
     let Some(target_function) = type_info
         .get_sorts::<FunctionSort>()
@@ -2552,31 +2561,29 @@ fn resolve_function_container_target_with_context(
             }
         });
         if let Some(runtime_ctx) = ambiguous_ctx {
-            return Err(Error::BackendError(format!(
-                "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-            )));
+            return Err(TypeError::AmbiguousPrimitive {
+                name: name.to_owned(),
+                ctx: runtime_ctx,
+                span: span.clone(),
+            }
+            .into());
         }
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
-            let (output_sort, input_sorts) = signature
-                .split_last()
-                .expect("primitive signature should include an output sort");
-            let input_names = input_sorts
-                .iter()
-                .map(|sort| sort.name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(Error::BackendError(format!(
-                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
-                 context ids: {context_ids:?}",
-                input_names,
-                output_sort.name(),
-            )));
+            return Err(TypeError::UnresolvedPrimitive {
+                name: name.to_owned(),
+                ctx,
+                span: span.clone(),
+            }
+            .into());
         }
         ResolvedFunctionId::Primitive { context_ids }
     } else {
-        return Err(Error::BackendError(format!(
-            "`unstable-fn` references unknown function or primitive {name:?}"
-        )));
+        return Err(TypeError::UnresolvedPrimitive {
+            name: name.to_owned(),
+            ctx,
+            span: span.clone(),
+        }
+        .into());
     };
 
     Ok(ResolvedFunction {
@@ -2675,7 +2682,8 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
-            let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
+            let core::ResolvedAtomTerm::Literal(ref span, Literal::String(ref name)) = args[0]
+            else {
                 return Err(Error::BackendError(
                     "expected a string literal as the first argument to `unstable-fn`".to_string(),
                 ));
@@ -2696,6 +2704,8 @@ impl<'a> BackendRule<'a> {
                 name,
                 prim,
                 panic_id,
+                ctx,
+                span,
             )?;
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved);
