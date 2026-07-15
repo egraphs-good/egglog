@@ -227,6 +227,14 @@ pub fn egglog_header(input: TokenStream) -> TokenStream {
         "`{name}!` is an egglog schema handle — use `egglog_static!({name}; <program>)` \
          to check a program against it"
     );
+    // Alongside the checking macro, emit `<name>_schema()` returning the schema's
+    // own commands, so the schema can be *run* into an e-graph from a single
+    // source of truth (the header) rather than being restated.
+    let schema_fn = Ident::new(&format!("{name}_schema"), name.span());
+    let schema_doc = format!(
+        "The declarations of the `{name}` egglog schema, as commands to run into \
+         an e-graph. Pair with `egglog_static!({name}; …)`-checked fragments."
+    );
     quote! {
         #[doc = #doc]
         #[macro_export]
@@ -240,6 +248,19 @@ pub fn egglog_header(input: TokenStream) -> TokenStream {
             ($($__other:tt)*) => {
                 ::core::compile_error!(#direct_use)
             };
+        }
+
+        #[doc = #schema_doc]
+        #[allow(dead_code)]
+        pub fn #schema_fn()
+        -> ::core::result::Result<::std::vec::Vec<::egglog::ast::Command>, ::egglog::Error> {
+            let mut __parser = ::egglog::ast::Parser::default();
+            ::egglog::ast::Parser::get_program_from_string(
+                &mut __parser,
+                ::core::option::Option::None,
+                #src,
+            )
+            .map_err(::egglog::Error::from)
         }
     }
     .into()
