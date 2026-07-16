@@ -423,7 +423,10 @@ fn radix_passes_for(max: u32) -> u32 {
 /// sort is stable and `data` arrives in RowId-ascending order, the result is ordered by
 /// (Value, RowId). The multi-column rebuild path sorts each column's block this way before
 /// merging, so no explicit RowId sort is ever needed.
-fn radix_sort_slice_by_value(data: &mut [(Value, RowId)], scratch: &mut [(Value, RowId)]) {
+pub(crate) fn radix_sort_slice_by_value(
+    data: &mut [(Value, RowId)],
+    scratch: &mut [(Value, RowId)],
+) {
     let n = data.len();
     if n < 64 {
         data.sort_unstable();
@@ -598,37 +601,6 @@ impl ColumnIndex {
             };
             shard.table.insert(key, buffered);
         }
-    }
-
-    /// Pre-reserve capacity in each shard's HashMap for `n` rows total.
-    /// Eliminates hashbrown rehashing during add_row for the small-subset path.
-    pub(crate) fn reserve_for_n_rows(&mut self, n: usize) {
-        let n_shards = self.shards.len();
-        let per_shard = n / n_shards + 2;
-        for (_, shard) in self.shards.iter_mut() {
-            shard.table.reserve(per_shard);
-        }
-    }
-
-    /// Build a single-column index for `subset` of `table`. Picks between a
-    /// sort-based bulk path and a per-row scan based on subset size: large
-    /// subsets amortize the sort overhead, small ones avoid the buffer copy.
-    pub(crate) fn build_for_subset(
-        table: WrappedTableRef,
-        subset: SubsetRef,
-        col: ColumnId,
-    ) -> ColumnIndex {
-        const SORT_BULK_THRESHOLD: usize = 512;
-        let mut res = ColumnIndex::new();
-        if subset.size() >= SORT_BULK_THRESHOLD {
-            res.rebuild_full(&[col], table, subset);
-        } else {
-            res.reserve_for_n_rows(subset.size());
-            table.for_each_col(subset, col, &mut |row_id, val| {
-                res.add_row(&[val], row_id);
-            });
-        }
-        res
     }
 }
 
