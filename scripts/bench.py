@@ -25,7 +25,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent
 BENCH_DIR = REPO_ROOT / "benchmarks"
-TEST_DIR = REPO_ROOT / "tests-bench"
+TEST_DIR = REPO_ROOT / "tests"
 EGGLOG = REPO_ROOT / "target" / "release" / "egglog"
 
 BENCHMARKS = [
@@ -35,8 +35,8 @@ BENCHMARKS = [
     "python_array_optimize.egg",
     "cykjson.egg",
     "eggcc-extraction.egg",
-    "gemma.egg",
-    "gemma4_moe.egg",
+    # "gemma.egg",
+    # "gemma4_moe.egg",
     "llama.egg",
     "paged_llama.egg",
     "qwen.egg",
