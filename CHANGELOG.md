@@ -8,6 +8,7 @@
 - Replace the global Rayon thread pool with an `egglog-concurrency` scoped `ThreadPool`; configure parallelism per `EGraph` via `with_num_threads` / `set_num_threads`.
 - Report full source file paths in egglog span and error messages.
 - Fix seminaive matching after nested containers rebuild in place by propagating dirty container ids through parent containers.
+- Fix multi-column secondary index rebuilds so each value's rows come back sorted by row id, and make all rebuild paths (serial, parallel, and bulk) record a row once even when its value repeats across covered columns (#914).
 - Render nullary AST calls without a trailing space, e.g. (foo) instead of (foo ).
 - Add a BigRat to-i64 primitive for integral rationals.
 - Add f64 exp, log, and sqrt primitives.
