@@ -35,6 +35,13 @@ BENCHMARKS = [
     "python_array_optimize.egg",
     "cykjson.egg",
     "eggcc-extraction.egg",
+    # "gemma.egg",
+    # "gemma4_moe.egg",
+    "llama.egg",
+    "paged_llama.egg",
+    "qwen.egg",
+    "qwen3_moe.egg",
+    "whisper.egg",
 ]
 
 HYPERFINE_RUNS = 15

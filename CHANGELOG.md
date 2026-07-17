@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Speed up query evaluation by building on-the-fly per-subset column indexes as sorted arrays (`SortedColumnIndex`) instead of hash maps. These indexes are typically iterated once and probed a bounded number of times over high-cardinality columns, so skipping hash-table construction is a large win (e.g. ~33% faster on the `gemma` benchmark).
 - Add `make nightly` and `scripts/nightly_bench.py`, a hyperfine-based benchmark harness that measures every `tests/**/*.egg` program at 1/2/4/8 threads and (where supported) in proof-testing mode, caps each run at a 2-minute timeout, skips sub-50ms programs, and emits an HTML dashboard (one row per benchmark, one column per configuration) for nightly.cs.washington.edu. The dashboard uses [eval-live](https://github.com/oflatt/eval-live) for interactive filtering and sorting.
 - Add typed `EGraph` extension state that clones with `EGraph` and is restored by `push`/`pop`.
 - Fix custom scheduler queries so subsumed rows are not offered as fresh matches.

@@ -292,8 +292,23 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
     let mut push_trial = |run: Run| trials.push(run.into_trial());
 
     for entry in glob::glob(glob).unwrap() {
+        let path = entry.unwrap().clone();
+
+        // Files under tests/header/ are shared fragments pulled in via
+        // `(include ...)`, not standalone test programs.
+        if path.parent().is_some_and(|p| p.ends_with("header")) {
+            continue;
+        }
+
+        // Test bypass: files too slow/large to run as part of the normal test
+        // suite. They remain available as benchmarks (see scripts/bench.py).
+        let test_bypass_file_list = ["gemma.egg", "gemma4_moe.egg"];
+        if test_bypass_file_list.iter().any(|f| path.ends_with(f)) {
+            continue;
+        }
+
         let run = Run {
-            path: entry.unwrap().clone(),
+            path,
             desugar: false,
             term_encoding: false,
             proofs: false,
@@ -310,6 +325,14 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
+            // Luminal transformer benchmarks: too large/slow to run in proof modes.
+            "gemma.egg",
+            "gemma4_moe.egg",
+            "llama.egg",
+            "paged_llama.egg",
+            "qwen.egg",
+            "qwen3_moe.egg",
+            "whisper.egg",
         ];
         let supports_proofs = file_supports_proofs(&run.path)
             && !proof_unsupported_file_list
@@ -371,6 +394,10 @@ fn generate_proof_support_snapshot_test() -> Trial {
 
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
+            // Skip shared header fragments (see generate_tests).
+            if path.parent().is_some_and(|p| p.ends_with("header")) {
+                continue;
+            }
             if !file_supports_proofs(&path) && !path.parent().unwrap().ends_with("fail-typecheck") {
                 // Use just the filename for cross-platform consistency
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();

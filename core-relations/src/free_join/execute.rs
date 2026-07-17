@@ -29,7 +29,7 @@ use crate::{
         frame_update::{FrameUpdates, UpdateInstr},
         get_index_from_tableinfo,
     },
-    hash_index::{ColumnIndex, IndexBase, TupleIndex},
+    hash_index::{IndexBase, TupleIndex},
     offsets::{Offsets, RowId, SortedOffsetSlice, SortedOffsetVector, Subset},
     parallel_heuristics::{action_batch_size, free_join_fork_depth, parallelize_db_level_op},
     pool::Pooled,
@@ -153,6 +153,95 @@ impl SparseColumnIndex {
     }
 }
 
+/// Return a `SubsetRef` for `ids[range]`, which must be nonempty and sorted
+/// ascending. A contiguous run is returned as `Dense` to avoid a pool
+/// allocation when the subset is later materialized.
+///
+/// # Safety
+/// `ids[range]` must be sorted in non-decreasing order.
+#[inline]
+unsafe fn dense_or_sparse_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
+    let slice = &ids[range];
+    let first = slice[0];
+    let last = slice[slice.len() - 1];
+    if last.index() - first.index() == slice.len() - 1 {
+        SubsetRef::Dense(OffsetRange::new(first, last.inc()))
+    } else {
+        // SAFETY: caller guarantees `slice` is sorted.
+        SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(slice) })
+    }
+}
+
+/// A heap-allocated, sort-based single-column index for on-the-fly (per-subset)
+/// indexing during joins.
+///
+/// Unlike a hash-based column index, the (value -> rows) groups live in sorted
+/// arrays: `for_each` walks them directly and `get_subset` binary-searches the
+/// keys. Building it therefore skips hash-table construction, which is wasteful
+/// for the high-cardinality columns joined on in an e-graph, where each value
+/// typically maps to only one or two rows.
+pub(crate) struct SortedColumnIndex {
+    /// Distinct column values (ascending) paired with the start offset of their
+    /// rows in `row_ids`. A trailing `(_, row_ids.len())` sentinel delimits the
+    /// final group.
+    keys: Vec<(Value, u32)>,
+    /// Row ids grouped by key; each group is ascending.
+    row_ids: Vec<RowId>,
+}
+
+impl SortedColumnIndex {
+    fn build_for_subset(table: WrappedTableRef, subset: SubsetRef, col: ColumnId) -> Self {
+        let n = subset.size();
+        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
+        // Rows arrive in RowId-ascending order, so a value-stable sort leaves
+        // each value's rows ascending.
+        table.for_each_col(subset, col, &mut |row_id, val| pairs.push((val, row_id)));
+        let mut scratch = vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
+        crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut scratch);
+        drop(scratch);
+
+        let mut keys: Vec<(Value, u32)> = Vec::new();
+        let mut row_ids: Vec<RowId> = Vec::with_capacity(pairs.len());
+        for (val, row) in pairs {
+            if keys.last().map(|&(v, _)| v) != Some(val) {
+                keys.push((val, row_ids.len() as u32));
+            }
+            row_ids.push(row);
+        }
+        keys.push((Value::new_const(0), row_ids.len() as u32));
+        SortedColumnIndex { keys, row_ids }
+    }
+
+    fn get_subset(&self, key: Value) -> Option<SubsetRef<'_>> {
+        // The trailing sentinel is never a real match: it is stored as value 0
+        // but the search space excludes it via the `len - 1` bound below.
+        let n = self.len();
+        let i = self.keys[..n]
+            .binary_search_by_key(&key, |&(v, _)| v)
+            .ok()?;
+        let lo = self.keys[i].1 as usize;
+        let hi = self.keys[i + 1].1 as usize;
+        // SAFETY: rows within a single key's range are ascending (see `build_for_subset`).
+        Some(unsafe { dense_or_sparse_ref(&self.row_ids, lo..hi) })
+    }
+
+    fn for_each(&self, mut f: impl FnMut(Value, SubsetRef)) {
+        let n = self.len();
+        for i in 0..n {
+            let (val, lo) = self.keys[i];
+            let hi = self.keys[i + 1].1 as usize;
+            // SAFETY: see `get_subset`.
+            let subset = unsafe { dense_or_sparse_ref(&self.row_ids, lo as usize..hi) };
+            f(val, subset);
+        }
+    }
+
+    fn len(&self) -> usize {
+        // The last entry is the sentinel offset, not a key.
+        self.keys.len().saturating_sub(1)
+    }
+}
+
 enum DynamicIndex {
     Cached {
         /// When Some(range), intersect each subset from the index with this dense range.
@@ -167,7 +256,7 @@ enum DynamicIndex {
         table: HashColumnIndex,
     },
     Dynamic(TupleIndex),
-    DynamicColumn(Arc<ColumnIndex>),
+    DynamicColumn(Arc<SortedColumnIndex>),
     SparseColumn(SparseColumnIndex),
 }
 
@@ -274,7 +363,7 @@ impl Prober {
             }
             DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(PotentiallyStale::not_stale),
             DynamicIndex::DynamicColumn(tab) => {
-                tab.get_subset(&key[0]).map(PotentiallyStale::not_stale)
+                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
             }
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
@@ -326,7 +415,7 @@ impl Prober {
                 tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
             }
             DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
-                f(&[*k], PotentiallyStale::not_stale(v));
+                f(&[k], PotentiallyStale::not_stale(v));
             }),
             DynamicIndex::SparseColumn(tab) => {
                 tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
@@ -661,7 +750,7 @@ struct JoinState<'a> {
 }
 
 /// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
-type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
+type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<SortedColumnIndex>>>;
 // Each TrieNode is probed with exactly one column in practice, so we store a single
 // (ColumnId, map) pair instead of a per-column IdVec of Mutexes. Boxed to keep
 // TrieNode size small for the many short-lived TrieNodes that never need caching.
@@ -705,7 +794,7 @@ impl TrieNode {
     fn size(&self) -> usize {
         self.subset.size()
     }
-    fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<ColumnIndex> {
+    fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<SortedColumnIndex> {
         self.cached_subsets.get_or_init(|| {
             // Pre-size the vector so we do not need to borrow it mutably to initialize the index.
             let mut vec: Pooled<ColumnIndexes> = with_pool_set(|ps| ps.get());
@@ -713,8 +802,11 @@ impl TrieNode {
             vec
         })[col]
             .get_or_init(|| {
-                let col_index = info.table.group_by_col(self.subset.as_ref(), col);
-                Arc::new(col_index)
+                Arc::new(SortedColumnIndex::build_for_subset(
+                    info.table.as_ref(),
+                    self.subset.as_ref(),
+                    col,
+                ))
             })
             .clone()
     }

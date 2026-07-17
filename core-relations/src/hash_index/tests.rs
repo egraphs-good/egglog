@@ -222,17 +222,6 @@ fn column_index_rebuild_matches_oracle() {
                     ci
                 });
                 assert_matches_oracle(&parallel, &expected, &format!("{ctx} merge_parallel"));
-
-                if n_val_cols == 1 {
-                    // Single-column public entry point; picks between the bulk sort and the
-                    // per-row scan by subset size, so this also exercises the small-input path.
-                    let built = ColumnIndex::build_for_subset(
-                        table.as_ref(),
-                        table.all().as_ref(),
-                        cols[0],
-                    );
-                    assert_matches_oracle(&built, &expected, &format!("{ctx} build_for_subset"));
-                }
             }
         }
     }
