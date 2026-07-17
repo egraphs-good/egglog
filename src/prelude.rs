@@ -7,11 +7,11 @@
 //! # Writing egglog inline
 //!
 //! The quasiquote macros let you write egglog directly in Rust rather than as
-//! a string — with parse and type errors reported at the call site, and Rust
-//! values spliced in. [`egglog!`] takes a whole program; [`expr!`], [`query!`],
-//! [`command!`], [`rule!`], and [`action!`] each take a single form. `?x`,
-//! `:field`, `...`, and any sorts or macros you've registered all work exactly
-//! as they do in egglog text.
+//! a string, with Rust values spliced in; a parse error points back at your
+//! Rust source rather than into a string literal. [`egglog!`] takes a whole
+//! program; [`expr!`], [`query!`], [`command!`], [`rule!`], and [`action!`] each
+//! take a single form. `?x`, `:field`, `...`, and any sorts or macros you've
+//! registered all work exactly as they do in egglog text.
 //!
 //! Each parsing macro has three forms — parse it, or, against an e-graph,
 //! `resolve_*!` it (typecheck, no run) or `run_*!` it (run):
@@ -47,6 +47,12 @@
 //! assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
 //! # Ok::<(), egglog::Error>(())
 //! ```
+//!
+//! These macros build and check egglog at run time, against a live e-graph. For
+//! a program fully known at compile time, the `egglog-checked` crate validates
+//! it while your crate builds (a type error becomes a build error): its
+//! `egglog_checked!` / `run_egglog_checked!` return a checked `Vec<Command>` or
+//! a populated e-graph, and `egglog_header!` declares a reusable schema.
 //!
 //! For a whole program kept in a file or a large string, use
 //! [`crate::EGraph::parse_and_run_program`]. The rest of this module is Rust
