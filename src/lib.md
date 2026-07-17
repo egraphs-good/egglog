@@ -46,7 +46,9 @@ The quasiquote macros let you write egglog right in your Rust source:
 [`egglog!`] for a whole program, [`expr!`] / [`query!`] / [`command!`] /
 [`rule!`] / [`action!`] for a single form. Splice Rust values in with `#`, and
 reach for the `resolve_*!` / `run_*!` variants to typecheck or execute against
-an e-graph.
+an e-graph. For a program fully known at compile time and checked while your
+crate builds, reach for the `egglog-checked` crate instead (`egglog_checked!` /
+`run_egglog_checked!` / `egglog_header!`).
 
 ```
 use egglog::prelude::*;
@@ -65,12 +67,3 @@ assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
 See [`prelude`] for the full guide — every macro, the parse / `resolve_*` /
 `run_*` variants, and the splice forms — alongside the rest of the Rust API
 (custom rules, primitives, and sorts).
-
-These quasiquotes build and check egglog at *run time*, against a live
-`EGraph`. For a program that is fully known at *compile time*, the separate
-`egglog-checked` crate validates it while your crate builds — a parse or type
-error becomes a build error at the macro call. It offers `egglog_checked!`
-(returns the checked `Vec<Command>`), `run_egglog_checked!` (returns a populated
-`EGraph`), and `egglog_header!` (a reusable schema that fragments in other
-crates can be checked against). It has no `#` splices, since the program cannot
-depend on runtime values.
