@@ -1,6 +1,6 @@
 use egglog::EGraph;
 use egglog::ast::Command;
-use egglog_static::{egglog_header, egglog_static, run_egglog_static};
+use egglog_checked::{egglog_checked, egglog_header, run_egglog_checked};
 
 // Two independent, self-contained schemas, as if declared in (and exported
 // from) separate crates. Each is typechecked at its own `egglog_header!` site.
@@ -13,7 +13,7 @@ egglog_header!(seen_schema
 
 #[test]
 fn single_header_checks_a_fragment() {
-    let fragment: Vec<Command> = egglog_static!(math_schema;
+    let fragment: Vec<Command> = egglog_checked!(math_schema;
         (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
     )
     .unwrap();
@@ -28,7 +28,7 @@ fn single_header_checks_a_fragment() {
 fn composed_headers_pool_their_declarations() {
     // The fragment uses `Add`/`Num` (from `math_schema`) *and* `seen` (from
     // `seen_schema`) — it only typechecks with both schemas in scope.
-    let fragment: Vec<Command> = egglog_static!(math_schema, seen_schema;
+    let fragment: Vec<Command> = egglog_checked!(math_schema, seen_schema;
         (rule ((= e (Add (Num a) (Num b)))) ((seen a)))
     )
     .unwrap();
@@ -47,7 +47,7 @@ fn composed_headers_pool_their_declarations() {
 fn hands_back_checked_commands_to_run_elsewhere() {
     // Checked at compile time, handed back as unresolved commands, then run
     // into a separately-built e-graph (they re-typecheck against it).
-    let program: Vec<Command> = egglog_static!(
+    let program: Vec<Command> = egglog_checked!(
         (datatype Math (Num i64) (Add Math Math))
         (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
         (let start (Add (Num 1) (Num 2)))
@@ -64,7 +64,7 @@ fn hands_back_checked_commands_to_run_elsewhere() {
 fn builds_and_runs_a_checked_program() {
     // Compile-time-checked; at run time this builds a fresh e-graph, runs the
     // fold rule once, and the embedded `(check …)` confirms `start` folded.
-    let egraph: EGraph = run_egglog_static!(
+    let egraph: EGraph = run_egglog_checked!(
         (datatype Math (Num i64) (Add Math Math))
         (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
         (let start (Add (Num 1) (Num 2)))
@@ -79,7 +79,7 @@ fn builds_and_runs_a_checked_program() {
 fn hyphenated_and_keyword_atoms_survive() {
     // `:no-merge`, `my-ruleset`, and negative literals must round-trip through
     // the token renderer as single egglog atoms.
-    let egraph: EGraph = run_egglog_static!(
+    let egraph: EGraph = run_egglog_checked!(
         (function f (i64) i64 :no-merge)
         (ruleset my-ruleset)
         (set (f 0) -1)

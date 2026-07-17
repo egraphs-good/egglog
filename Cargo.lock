@@ -537,6 +537,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "egglog-checked"
+version = "2.0.0"
+dependencies = [
+ "egglog",
+ "egglog-ast",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "egglog-concurrency"
 version = "2.0.0"
 dependencies = [
@@ -604,16 +614,6 @@ dependencies = [
  "serde",
  "serde_json",
  "web-time",
-]
-
-[[package]]
-name = "egglog-static"
-version = "2.0.0"
-dependencies = [
- "egglog",
- "egglog-ast",
- "proc-macro2",
- "quote",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ members = [
   "union-find",
   "src/sort/add_primitive",
   "quote-macro",
-  "static-macro",
+  "checked-macro",
   "wasm-example"
 ]
 

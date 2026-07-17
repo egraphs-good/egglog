@@ -1,6 +1,6 @@
 //! Turning Rust proc-macro tokens into egglog atoms.
 //!
-//! Shared by the quasiquote proc-macro crates (`egglog-quote`, `egglog-static`)
+//! Shared by the quasiquote proc-macro crates (`egglog-quote`, `egglog-checked`)
 //! so they reconstruct egglog atoms from Rust tokens identically. Gated behind
 //! the `tokens` feature so egglog-ast's normal build doesn't pull `proc-macro2`.
 

@@ -20,5 +20,5 @@ proc-macro2 = { workspace = true, optional = true, features = ["span-locations"]
 [features]
 default = []
 # Helpers for turning Rust proc-macro tokens into egglog atoms. Enabled by the
-# `egglog-quote` and `egglog-static` proc-macro crates.
+# `egglog-quote` and `egglog-checked` proc-macro crates.
 tokens = ["dep:proc-macro2"]

@@ -1,5 +1,5 @@
 [package]
-name = "egglog-static"
+name = "egglog-checked"
 version = { workspace = true }
 edition = { workspace = true }
 description = { workspace = true }
@@ -17,7 +17,7 @@ quote = { workspace = true }
 # Shared token → egglog-atom rendering (also used by `egglog-quote`), so both
 # crates reconstruct atoms identically.
 egglog-ast = { workspace = true, features = ["tokens"] }
-# Depends on egglog so `egglog_static!` / `run_egglog_static!` can run egglog's
+# Depends on egglog so `egglog_checked!` / `run_egglog_checked!` can run egglog's
 # parser and typechecker at macro-expansion time (compile-time validation).
 # No cycle: egglog does NOT depend on this crate — it is a leaf that downstream
 # crates opt into.
