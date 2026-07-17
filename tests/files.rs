@@ -294,6 +294,12 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
     for entry in glob::glob(glob).unwrap() {
         let path = entry.unwrap().clone();
 
+        // Files under tests/header/ are shared fragments pulled in via
+        // `(include ...)`, not standalone test programs.
+        if path.parent().is_some_and(|p| p.ends_with("header")) {
+            continue;
+        }
+
         // Test bypass: files too slow/large to run as part of the normal test
         // suite. They remain available as benchmarks (see scripts/bench.py).
         let test_bypass_file_list = ["gemma.egg", "gemma4_moe.egg"];
@@ -388,6 +394,10 @@ fn generate_proof_support_snapshot_test() -> Trial {
 
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
+            // Skip shared header fragments (see generate_tests).
+            if path.parent().is_some_and(|p| p.ends_with("header")) {
+                continue;
+            }
             if !file_supports_proofs(&path) && !path.parent().unwrap().ends_with("fail-typecheck") {
                 // Use just the filename for cross-platform consistency
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();
