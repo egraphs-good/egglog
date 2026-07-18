@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     common::{HashMap, IndexMap},
+    free_join::index_stats::{BuildStats, IndexKind},
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
@@ -47,12 +48,22 @@ use super::{
 
 const SMALL_RESIDUAL: usize = 8;
 
+/// Probers expecting at most this many probes answer each probe by scanning
+/// the subset instead of building a single-column index (see
+/// [`DynamicIndex::ScanColumn`]). A single scan is one pass with no
+/// allocation, while a build is a collection pass plus a (cheap, for small
+/// subsets) sort — so scanning only wins for probers probed exactly once.
+/// Benchmarks confirm higher limits regress: most scan-eligible probers
+/// receive one probe, and at two or more the build already pays off.
+const SCAN_PROBE_LIMIT: usize = 1;
+
 struct SparseColumnIndex {
     n_keys: usize,
     n_subsets: usize,
     keys: [Value; SMALL_RESIDUAL],
     offsets: [usize; SMALL_RESIDUAL],
     subset_ids: [RowId; SMALL_RESIDUAL],
+    stats: BuildStats,
 }
 
 /// Return a SubsetRef for the given range of rows in a SparseColumnIndex.
@@ -121,6 +132,7 @@ impl SparseColumnIndex {
             keys,
             offsets,
             subset_ids,
+            stats: BuildStats::new(IndexKind::SparseColumn, n_subsets),
         }
     }
 
@@ -187,6 +199,7 @@ pub(crate) struct SortedColumnIndex {
     keys: Vec<(Value, u32)>,
     /// Row ids grouped by key; each group is ascending.
     row_ids: Vec<RowId>,
+    stats: BuildStats,
 }
 
 impl SortedColumnIndex {
@@ -209,7 +222,11 @@ impl SortedColumnIndex {
             row_ids.push(row);
         }
         keys.push((Value::new_const(0), row_ids.len() as u32));
-        SortedColumnIndex { keys, row_ids }
+        SortedColumnIndex {
+            keys,
+            row_ids,
+            stats: BuildStats::new(IndexKind::SortedColumn, n),
+        }
     }
 
     fn get_subset(&self, key: Value) -> Option<SubsetRef<'_>> {
@@ -242,7 +259,7 @@ impl SortedColumnIndex {
     }
 }
 
-enum DynamicIndex {
+enum DynamicIndex<'a> {
     Cached {
         /// When Some(range), intersect each subset from the index with this dense range.
         /// The range is the Dense outer subset known at Prober construction time.
@@ -255,9 +272,21 @@ enum DynamicIndex {
         intersect_outer: Option<OffsetRange>,
         table: HashColumnIndex,
     },
-    Dynamic(TupleIndex),
+    Dynamic {
+        table: TupleIndex,
+        stats: BuildStats,
+    },
     DynamicColumn(Arc<SortedColumnIndex>),
     SparseColumn(SparseColumnIndex),
+    /// No index at all: each probe answers by scanning the trie node's subset
+    /// for rows matching the probed value. Chosen by [`JoinState::get_index`]
+    /// when the caller's `probe_hint` shows the prober will be probed at most
+    /// [`SCAN_PROBE_LIMIT`] times, which makes an index build unprofitable.
+    ScanColumn {
+        info: &'a TableInfo,
+        col: ColumnId,
+        stats: BuildStats,
+    },
 }
 
 /// This struct is used to mark subsets that can contain non-stale entries.
@@ -298,6 +327,42 @@ impl PotentiallyStale<SubsetRef<'_>> {
     }
 }
 
+/// The result of a point probe on a [`Prober`]: either a view into an index's
+/// group of rows, or a subset the prober had to materialize (e.g. by scanning).
+enum ProbedSubset<'a> {
+    Borrowed(SubsetRef<'a>),
+    Owned(Subset),
+}
+
+impl ProbedSubset<'_> {
+    fn size(&self) -> usize {
+        match self {
+            ProbedSubset::Borrowed(s) => s.size(),
+            ProbedSubset::Owned(s) => s.size(),
+        }
+    }
+
+    fn into_owned(self, pool: &Pool<SortedOffsetVector>) -> Subset {
+        match self {
+            ProbedSubset::Borrowed(s) => s.to_owned(pool),
+            ProbedSubset::Owned(s) => s,
+        }
+    }
+}
+
+impl PotentiallyStale<ProbedSubset<'_>> {
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn into_owned(self, pool: &Pool<SortedOffsetVector>) -> PotentiallyStale<Subset> {
+        PotentiallyStale {
+            inner: self.inner.into_owned(pool),
+            can_be_stale: self.can_be_stale,
+        }
+    }
+}
+
 /// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
 /// borrowed `SubsetRef`, or `None` if the intersection is empty.
 ///
@@ -328,13 +393,13 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
     }
 }
 
-struct Prober {
+struct Prober<'a> {
     node: Arc<TrieNode>,
-    ix: DynamicIndex,
+    ix: DynamicIndex<'a>,
 }
 
-impl Prober {
-    fn get_subset<'a>(&'a self, key: &'a [Value]) -> Option<PotentiallyStale<SubsetRef<'a>>> {
+impl Prober<'_> {
+    fn get_subset<'s>(&'s self, key: &'s [Value]) -> Option<PotentiallyStale<ProbedSubset<'s>>> {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer,
@@ -346,7 +411,9 @@ impl Prober {
                 } else {
                     subset_ref
                 };
-                Some(PotentiallyStale::maybe_stale(subset))
+                Some(PotentiallyStale::maybe_stale(ProbedSubset::Borrowed(
+                    subset,
+                )))
             }
             DynamicIndex::CachedColumn {
                 intersect_outer,
@@ -359,15 +426,44 @@ impl Prober {
                 } else {
                     subset_ref
                 };
-                Some(PotentiallyStale::maybe_stale(subset))
+                Some(PotentiallyStale::maybe_stale(ProbedSubset::Borrowed(
+                    subset,
+                )))
             }
-            DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(PotentiallyStale::not_stale),
+            DynamicIndex::Dynamic { table, stats } => {
+                stats.record_probe();
+                let subset = table.get_subset(key)?;
+                Some(PotentiallyStale::not_stale(ProbedSubset::Borrowed(subset)))
+            }
             DynamicIndex::DynamicColumn(tab) => {
-                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
+                tab.stats.record_probe();
+                let subset = tab.get_subset(key[0])?;
+                Some(PotentiallyStale::not_stale(ProbedSubset::Borrowed(subset)))
             }
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
-                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
+                tab.stats.record_probe();
+                let subset = tab.get_subset(key[0])?;
+                Some(PotentiallyStale::not_stale(ProbedSubset::Borrowed(subset)))
+            }
+            DynamicIndex::ScanColumn { info, col, stats } => {
+                debug_assert_eq!(key.len(), 1);
+                stats.record_probe();
+                let mut result = Subset::empty();
+                info.table.as_ref().for_each_col(
+                    self.node.subset.as_ref(),
+                    *col,
+                    &mut |row, val| {
+                        if val == key[0] {
+                            result.add_row_sorted(row);
+                        }
+                    },
+                );
+                if result.size() == 0 {
+                    return None;
+                }
+                // Scans (like on-the-fly index builds) never see stale rows.
+                Some(PotentiallyStale::not_stale(ProbedSubset::Owned(result)))
             }
         }
     }
@@ -411,14 +507,25 @@ impl Prober {
                     .unwrap()
                     .for_each(|k, v| f(&[*k], PotentiallyStale::maybe_stale(v)));
             }
-            DynamicIndex::Dynamic(tab) => {
+            DynamicIndex::Dynamic { table, stats } => {
+                stats.record_iter();
+                table.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
+            }
+            DynamicIndex::DynamicColumn(tab) => {
+                tab.stats.record_iter();
+                tab.for_each(|k, v| {
+                    f(&[k], PotentiallyStale::not_stale(v));
+                })
+            }
+            DynamicIndex::SparseColumn(tab) => {
+                tab.stats.record_iter();
                 tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
             }
-            DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
-                f(&[k], PotentiallyStale::not_stale(v));
-            }),
-            DynamicIndex::SparseColumn(tab) => {
-                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
+            DynamicIndex::ScanColumn { .. } => {
+                unreachable!(
+                    "Iterating requires grouping rows by value, i.e. an actual index.
+                    Callers that request a scan-based prober are not expected to iterate it"
+                )
             }
         }
     }
@@ -427,9 +534,13 @@ impl Prober {
         match &self.ix {
             DynamicIndex::Cached { table, .. } => table.get().unwrap().len(),
             DynamicIndex::CachedColumn { table, .. } => table.get().unwrap().len(),
-            DynamicIndex::Dynamic(tab) => tab.len(),
+            DynamicIndex::Dynamic { table, .. } => table.len(),
             DynamicIndex::DynamicColumn(tab) => tab.len(),
             DynamicIndex::SparseColumn(tab) => tab.len(),
+            // See `for_each`: not expected for scan-based probers.
+            DynamicIndex::ScanColumn { .. } => {
+                unreachable!("Unexpected iteration of a scan-based prober")
+            }
         }
     }
 }
@@ -772,6 +883,12 @@ pub(crate) struct TrieNode {
     /// only ever probed with a single column, so we store one (col, map) pair
     /// instead of an IdVec across all columns.
     cached_children: OnceLock<Pooled<ChildrenMaps>>,
+    /// How many more index-free scan probes ([`DynamicIndex::ScanColumn`])
+    /// this node's subset may serve. Starts at [`SCAN_PROBE_LIMIT`]; when a
+    /// reservation no longer fits, `get_index` builds a real index instead.
+    /// This bounds the total scan work per node even when the node is probed
+    /// again across many join frames.
+    scan_budget: AtomicUsize,
 }
 
 impl std::fmt::Debug for TrieNode {
@@ -788,11 +905,23 @@ impl TrieNode {
             subset,
             cached_subsets: Default::default(),
             cached_children: Default::default(),
+            scan_budget: AtomicUsize::new(SCAN_PROBE_LIMIT),
         }
     }
 
     fn size(&self) -> usize {
         self.subset.size()
+    }
+
+    /// Try to reserve `probes` scan probes from this node's budget, returning
+    /// whether the reservation fits. See [`TrieNode::scan_budget`].
+    fn try_reserve_scans(&self, probes: usize) -> bool {
+        use std::sync::atomic::Ordering;
+        self.scan_budget
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |budget| {
+                budget.checked_sub(probes)
+            })
+            .is_ok()
     }
     fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<SortedColumnIndex> {
         self.cached_subsets.get_or_init(|| {
@@ -809,6 +938,11 @@ impl TrieNode {
                 ))
             })
             .clone()
+    }
+
+    /// The cached index for `col`, if one has already been built.
+    fn peek_cached_index(&self, col: ColumnId) -> Option<Arc<SortedColumnIndex>> {
+        self.cached_subsets.get()?[col].get().cloned()
     }
 
     fn get_cached_trie_node(
@@ -872,6 +1006,7 @@ impl BindingInfo {
             node.cached_subsets.take();
             node.cached_children.take();
             node.subset = subset;
+            *node.scan_budget.get_mut() = SCAN_PROBE_LIMIT;
             return;
         }
         self.subsets.insert(atom, Arc::new(TrieNode::new(subset)));
@@ -909,19 +1044,26 @@ impl<'a> JoinState<'a> {
         }
     }
 
+    /// Build a [`Prober`] for the given atom's current subset over `cols`.
+    ///
+    /// `probe_hint`, when known by the caller, is an upper bound on the number
+    /// of point probes ([`Prober::get_subset`] calls) this prober will
+    /// receive. A small bound lets us skip building an index entirely and
+    /// answer each probe with a scan.
     fn get_index(
         &self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         atom: AtomId,
         binding_info: &mut BindingInfo,
         cols: impl Iterator<Item = ColumnId>,
-    ) -> Prober {
+        probe_hint: Option<usize>,
+    ) -> Prober<'a> {
         let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
 
         let table_id = atoms[atom].table;
-        let info = &self.db.tables[table_id];
+        let info: &'a TableInfo = &self.db.tables[table_id];
         let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
             DynamicIndex::SparseColumn(SparseColumnIndex::new(
                 info.table.as_ref(),
@@ -965,7 +1107,23 @@ impl<'a> JoinState<'a> {
                 }
             } else if cols.len() != 1 {
                 // NB: we should have a caching strategy for non-column indexes.
-                DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
+                DynamicIndex::Dynamic {
+                    stats: BuildStats::new(IndexKind::Tuple, subset.size()),
+                    table: info.table.group_by_key(subset.as_ref(), &cols),
+                }
+            } else if let Some(index) = trie_node.peek_cached_index(cols[0]) {
+                // An index for this column already exists; probing it is free.
+                DynamicIndex::DynamicColumn(index)
+            } else if probe_hint.is_some_and(|probes| trie_node.try_reserve_scans(probes)) {
+                // Few enough probes are coming that scanning per probe beats
+                // building an index. (Reservations larger than the node's
+                // starting budget never succeed, so this also enforces
+                // `probes <= SCAN_PROBE_LIMIT`.)
+                DynamicIndex::ScanColumn {
+                    info,
+                    col: cols[0],
+                    stats: BuildStats::new(IndexKind::Scan, subset.size()),
+                }
             } else {
                 DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
             }
@@ -981,8 +1139,9 @@ impl<'a> JoinState<'a> {
         binding_info: &mut BindingInfo,
         atom: AtomId,
         col: ColumnId,
-    ) -> Prober {
-        self.get_index(atoms, atom, binding_info, iter::once(col))
+        probe_hint: Option<usize>,
+    ) -> Prober<'a> {
+        self.get_index(atoms, atom, binding_info, iter::once(col), probe_hint)
     }
 
     /// Runs the free join plan, starting with the header.
@@ -1207,7 +1366,7 @@ impl<'a> JoinState<'a> {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
-                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column, None);
                     let info = &self.db.tables[atoms[a.atom].table];
                     let table = info.table.as_ref();
                     let has_stale = table.has_stale_rows();
@@ -1243,14 +1402,43 @@ impl<'a> JoinState<'a> {
                     binding_info.move_back(a.atom, prober);
                 }
                 [a, b] => {
-                    let a_prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
-                    let b_prober = self.get_column_index(atoms, binding_info, b.atom, b.column);
-
-                    let ((smaller, smaller_scan), (larger, larger_scan)) =
-                        if a_prober.len() < b_prober.len() {
-                            ((&a_prober, a), (&b_prober, b))
+                    // Index the side with the smaller subset first: its key
+                    // count is an exact bound on how many times the other
+                    // side would be probed. When that bound is small,
+                    // `get_index` skips building the other side's index and
+                    // iterating the first side is trivially the right order;
+                    // otherwise both sides have indexes and the iteration
+                    // side is picked by exact key count, which minimizes
+                    // probe misses.
+                    let (first_scan, second_scan) = if binding_info.subsets[a.atom].size()
+                        <= binding_info.subsets[b.atom].size()
+                    {
+                        (a, b)
+                    } else {
+                        (b, a)
+                    };
+                    let first = self.get_column_index(
+                        atoms,
+                        binding_info,
+                        first_scan.atom,
+                        first_scan.column,
+                        None,
+                    );
+                    let first_len = first.len();
+                    let second = self.get_column_index(
+                        atoms,
+                        binding_info,
+                        second_scan.atom,
+                        second_scan.column,
+                        Some(first_len),
+                    );
+                    let (smaller, larger, smaller_scan, larger_scan) =
+                        // We only consider swapping when `second` is not a ScanColumn,
+                        // which is meant to be scanned.
+                        if first_len > SCAN_PROBE_LIMIT && second.len() < first_len {
+                            (second, first, second_scan, first_scan)
                         } else {
-                            ((&b_prober, b), (&a_prober, a))
+                            (first, second, first_scan, second_scan)
                         };
 
                     let smaller_atom = smaller_scan.atom;
@@ -1299,7 +1487,7 @@ impl<'a> JoinState<'a> {
                             }
                             if large_sub.size() <= 16 {
                                 let large_sub = refine_subset(
-                                    large_sub.to_owned(pool),
+                                    large_sub.into_owned(pool),
                                     &larger_scan.cs,
                                     &large_table,
                                     large_has_stale,
@@ -1316,7 +1504,7 @@ impl<'a> JoinState<'a> {
                                     large_info,
                                     || {
                                         refine_subset(
-                                            large_sub.to_owned(pool),
+                                            large_sub.into_owned(pool),
                                             &larger_scan.cs,
                                             &large_table,
                                             large_has_stale,
@@ -1337,23 +1525,60 @@ impl<'a> JoinState<'a> {
                     });
                     drain_updates!(updates);
 
-                    binding_info.move_back(a.atom, a_prober);
-                    binding_info.move_back(b.atom, b_prober);
+                    binding_info.move_back(smaller_atom, smaller);
+                    binding_info.move_back(larger_atom, larger);
                 }
                 rest => {
-                    let mut smallest = 0;
-                    let mut smallest_size = usize::MAX;
-                    let mut probers = Vec::with_capacity(rest.len());
+                    // As in the two-scan case: index the atom with the
+                    // smallest subset first. When its key count is small it
+                    // leads the scan and bounds the number of probes every
+                    // other atom receives; otherwise all atoms get indexes
+                    // and the lead is picked by exact key count.
+                    let mut min_subset_idx = 0;
+                    let mut min_subset_size = usize::MAX;
                     for (i, scan) in rest.iter().enumerate() {
-                        let prober =
-                            self.get_column_index(atoms, binding_info, scan.atom, scan.column);
-                        let size = prober.len();
-                        if size < smallest_size {
-                            smallest = i;
-                            smallest_size = size;
+                        let size = binding_info.subsets[scan.atom].size();
+                        if size < min_subset_size {
+                            min_subset_idx = i;
+                            min_subset_size = size;
+                        }
+                    }
+                    let lead_prober = self.get_column_index(
+                        atoms,
+                        binding_info,
+                        rest[min_subset_idx].atom,
+                        rest[min_subset_idx].column,
+                        None,
+                    );
+                    let lead_len = lead_prober.len();
+                    let probe_hint = (lead_len <= SCAN_PROBE_LIMIT).then_some(lead_len);
+                    let mut probers = Vec::with_capacity(rest.len());
+                    let mut smallest = min_subset_idx;
+                    let mut smallest_size = lead_len;
+                    for (i, scan) in rest.iter().enumerate() {
+                        if i == min_subset_idx {
+                            continue;
+                        }
+                        let prober = self.get_column_index(
+                            atoms,
+                            binding_info,
+                            scan.atom,
+                            scan.column,
+                            probe_hint,
+                        );
+                        // Probers built without a hint have an index; re-pick
+                        // the lead by exact key count among them.
+                        // Only do this when hint is some to avoid calling `len()` on ScanColumn probers.
+                        if probe_hint.is_none() {
+                            let size = prober.len();
+                            if size < smallest_size {
+                                smallest = i;
+                                smallest_size = size;
+                            }
                         }
                         probers.push(prober);
                     }
+                    probers.insert(min_subset_idx, lead_prober);
 
                     let main_spec = &rest[smallest];
                     let main_spec_info = &self.db.tables[atoms[main_spec.atom].table];
@@ -1385,7 +1610,7 @@ impl<'a> JoinState<'a> {
                                         self.db.tables[atoms[rest[i].atom].table].table.as_ref();
                                     if sub.size() <= 16 {
                                         let sub = refine_subset(
-                                            sub.to_owned(pool),
+                                            sub.into_owned(pool),
                                             &rest[i].cs,
                                             &table,
                                             rest_has_stale[i],
@@ -1402,7 +1627,7 @@ impl<'a> JoinState<'a> {
                                             &self.db.tables[atoms[scan.atom].table],
                                             || {
                                                 refine_subset(
-                                                    sub.to_owned(pool),
+                                                    sub.into_owned(pool),
                                                     &rest[i].cs,
                                                     &table,
                                                     rest_has_stale[i],
@@ -1555,6 +1780,9 @@ impl<'a> JoinState<'a> {
                 if binding_info.has_empty_subset(cover_atom) {
                     return;
                 }
+                // Each index is probed once per cover row surviving the
+                // constraints, so the cover's subset size bounds the probes.
+                let cover_size = binding_info.subsets[cover_atom].size();
                 let index_probers = to_intersect
                     .iter()
                     .enumerate()
@@ -1567,6 +1795,7 @@ impl<'a> JoinState<'a> {
                                 spec.to_index.atom,
                                 binding_info,
                                 spec.to_index.vars.iter().copied(),
+                                Some(cover_size),
                             ),
                         )
                     })
@@ -1626,7 +1855,7 @@ impl<'a> JoinState<'a> {
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset.into_owned(pool),
                                 cs,
                                 &table_info.table.as_ref(),
                                 index_has_stale[prober_idx],
@@ -1743,6 +1972,23 @@ impl<'a> JoinState<'a> {
             } => {
                 let cover_mat = binding_info.materializations[*cover].clone();
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                // Each index is probed once per enumerated frame of the
+                // materialization: one per group in `KeyOnly` mode, one per
+                // row in `Full` mode, and one per row of the group selected
+                // by the current bindings in `Value` mode.
+                let probe_hint = match mode {
+                    MatScanMode::KeyOnly => Some(cover_mat.len()),
+                    MatScanMode::Full => Some(cover_mat.values().map(RowBuffer::len).sum()),
+                    MatScanMode::Value(index_vars) => {
+                        let keys: Vec<Value> = index_vars
+                            .iter()
+                            .map(|var| binding_info.bindings[*var])
+                            .collect();
+                        Some(cover_mat.get(&keys).map_or(0, RowBuffer::len))
+                    }
+                    // `Lookup` requires `to_intersect` to be empty: no probers.
+                    MatScanMode::Lookup(_) => None,
+                };
                 let probers = to_intersect
                     .iter()
                     .map(|(spec, _)| {
@@ -1751,6 +1997,7 @@ impl<'a> JoinState<'a> {
                             spec.to_index.atom,
                             binding_info,
                             spec.to_index.vars.iter().copied(),
+                            probe_hint,
                         )
                     })
                     .collect::<SmallVec<[Prober; 4]>>();
@@ -1789,7 +2036,7 @@ impl<'a> JoinState<'a> {
                         }
                         if let Some(subset) = prober.get_subset(&key) {
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset.into_owned(pool),
                                 &spec.constraints,
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table

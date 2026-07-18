@@ -130,6 +130,8 @@ bin = [
 ]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
+# Report join index build/usage statistics at CLI exit.
+index-stats = ["egglog-core-relations/index-stats"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"], optional = true }

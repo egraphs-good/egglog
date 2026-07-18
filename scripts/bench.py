@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 bench.py — egglog benchmark harness
@@ -8,17 +7,28 @@ Commands:
   run --compare-unstaged    — benchmark HEAD vs current working-tree changes
   diff                      — print the most recently saved diff report
 
+Each state is built in its own temporary git worktree (the unstaged state
+builds in the main checkout), so the checkout you are working in is never
+touched. The two binaries' runs are interleaved per benchmark — alternating
+back-to-back, swapping which binary goes first every round — so slow drift in
+machine state (thermals, cache pressure) hits both states equally instead of
+biasing whichever was measured last.
+
+Temporary worktrees are removed on exit, including on SIGINT/SIGTERM; ones
+orphaned by a hard kill (SIGKILL) are swept up by the next invocation.
+
 Improvement policy:
   IMPROVEMENT iff at least one benchmark improved >=3% AND net average change is negative.
 """
 
-import json
-import os
-import shlex
+import atexit
 import shutil
+import signal
+import statistics
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -26,7 +36,6 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent
 BENCH_DIR = REPO_ROOT / "benchmarks"
 TEST_DIR = REPO_ROOT / "tests"
-EGGLOG = REPO_ROOT / "target" / "release" / "egglog"
 
 BENCHMARKS = [
     "hardboiled_conv1d_32.egg",
@@ -44,7 +53,7 @@ BENCHMARKS = [
     "whisper.egg",
 ]
 
-HYPERFINE_RUNS = 15
+TIMED_RUNS = 15
 WARMUP_RUNS = 3
 IMPROVE_THRESHOLD = 3.0
 UNCHANGED_BAND = 0.5
@@ -65,32 +74,109 @@ def _resolve(ref: str) -> tuple[str, str, str]:
     return full, short, subject
 
 
-def _current_ref() -> str:
-    """Branch name if on a branch, else full hash (detached HEAD)."""
-    try:
-        return _git("symbolic-ref", "--short", "HEAD")
-    except subprocess.CalledProcessError:
-        return _git("rev-parse", "HEAD")
+# ── temporary worktrees ──────────────────────────────────────────────────────
+
+_WORKTREE_PREFIX = "egglog-bench-"
+_temp_worktrees: list[Path] = []
+
+
+def _remove_worktree(path: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "worktree", "remove", "--force", str(path)],
+        capture_output=True,
+    )
+    # `git worktree remove` refuses in some states (e.g. a build was killed
+    # mid-write); make sure the directory is gone either way, then drop any
+    # dangling registration.
+    shutil.rmtree(path, ignore_errors=True)
+    subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "worktree", "prune"],
+        capture_output=True,
+    )
+
+
+def _cleanup_worktrees() -> None:
+    while _temp_worktrees:
+        _remove_worktree(_temp_worktrees.pop())
+
+
+def _sweep_stale_worktrees() -> None:
+    """Remove bench worktrees left behind by a previous killed run."""
+    out = _git("worktree", "list", "--porcelain")
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line[len("worktree ") :])
+            if path.name.startswith(_WORKTREE_PREFIX):
+                print(f"  Removing stale bench worktree {path}")
+                _remove_worktree(path)
+
+
+def _add_worktree(commit: str, label: str) -> Path:
+    """Check `commit` out into a fresh temporary worktree and return its path."""
+    path = Path(tempfile.mkdtemp(prefix=f"{_WORKTREE_PREFIX}{label}-"))
+    path.rmdir()  # `git worktree add` wants to create the directory itself.
+    _temp_worktrees.append(path)
+    _git("worktree", "add", "--detach", str(path), commit)
+    return path
+
+
+def _exit_on_signal(signum: int, _frame) -> None:
+    # Turn the signal into a normal exit so `finally` blocks and the atexit
+    # worktree cleanup run.
+    sys.exit(128 + signum)
+
+
+atexit.register(_cleanup_worktrees)
+for _sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+    if _sig is not None:
+        signal.signal(_sig, _exit_on_signal)
 
 
 # ── benchmarking ─────────────────────────────────────────────────────────────
 
 
-def benchmark_state(label: str) -> dict[str, tuple[float, float]]:
-    """Build the current working tree and hyperfine all benchmarks.
-
-    Returns {bench_name: (mean_s, stddev_s)}.
-    """
+def _build(manifest_dir: Path, label: str) -> Path:
+    """Build egglog (release) in `manifest_dir` and return the binary path."""
     print(f"\n  [{label}] Building egglog (release)...")
     subprocess.run(
-        ["cargo", "build", "--release", "--manifest-path", str(REPO_ROOT / "Cargo.toml")],
+        ["cargo", "build", "--release", "--manifest-path", str(manifest_dir / "Cargo.toml")],
         check=True,
     )
+    return manifest_dir / "target" / "release" / "egglog"
 
-    results: dict[str, tuple[float, float]] = {}
-    print(f"\n  [{label}] Benchmarking ({HYPERFINE_RUNS} runs each)\n")
-    print(f"    {'Benchmark':<42} {'Mean (s)':>9}  {'± Stddev':>9}")
-    print("    " + "─" * 62)
+
+def _time_run(binary: Path, src: Path) -> float | None:
+    """One timed run; returns wall-clock seconds, or None if the run failed."""
+    start = time.perf_counter()
+    proc = subprocess.run(
+        [str(binary), str(src)],
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    elapsed = time.perf_counter() - start
+    return elapsed if proc.returncode == 0 else None
+
+
+def benchmark_interleaved(
+    label1: str,
+    bin1: Path,
+    label2: str,
+    bin2: Path,
+) -> tuple[dict[str, tuple[float, float]], dict[str, tuple[float, float]]]:
+    """Time all benchmarks, interleaving runs of the two binaries.
+
+    Both binaries run against the main checkout's `tests/` directory (same
+    inputs for both states) with the repo root as working directory.
+
+    Returns ({bench: (mean_s, stddev_s)}, {bench: (mean_s, stddev_s)}).
+    """
+    results1: dict[str, tuple[float, float]] = {}
+    results2: dict[str, tuple[float, float]] = {}
+
+    print(f"\n  Benchmarking ({TIMED_RUNS} interleaved runs each, {WARMUP_RUNS} warmup)\n")
+    print(f"    {'Benchmark':<42} {label1:>15}  {label2:>15}")
+    print("    " + "─" * 76)
 
     for bench in BENCHMARKS:
         src = TEST_DIR / bench
@@ -98,43 +184,40 @@ def benchmark_state(label: str) -> dict[str, tuple[float, float]]:
             print(f"    SKIP  {bench}")
             continue
 
-        shell_cmd = shlex.join([str(EGGLOG), str(src)]) + " >/dev/null 2>&1"
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
-            tmp_json = tf.name
+        times1: list[float] = []
+        times2: list[float] = []
+        failed = False
 
-        try:
-            proc = subprocess.run(
-                [
-                    "hyperfine",
-                    "--warmup",
-                    str(WARMUP_RUNS),
-                    "--runs",
-                    str(HYPERFINE_RUNS),
-                    "--export-json",
-                    tmp_json,
-                    shell_cmd,
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if proc.returncode != 0:
-                print(f"    FAIL  {bench}")
-                if proc.stderr:
-                    print("          " + proc.stderr.splitlines()[0])
-                continue
+        for _ in range(WARMUP_RUNS):
+            if _time_run(bin1, src) is None or _time_run(bin2, src) is None:
+                failed = True
+                break
 
-            with open(tmp_json) as f:
-                hf = json.load(f)
+        for i in range(TIMED_RUNS):
+            if failed:
+                break
+            # Swap the order every round so neither binary always runs first.
+            pair = [(bin1, times1), (bin2, times2)]
+            if i % 2:
+                pair.reverse()
+            for binary, acc in pair:
+                t = _time_run(binary, src)
+                if t is None:
+                    failed = True
+                    break
+                acc.append(t)
 
-            r = hf["results"][0]
-            mean = r["mean"]
-            stddev = r.get("stddev", 0.0)
-            results[bench] = (mean, stddev)
-            print(f"    {bench:<42} {mean:>9.3f}  ±{stddev:>8.3f}")
-        finally:
-            os.unlink(tmp_json)
+        if failed:
+            print(f"    FAIL  {bench}")
+            continue
 
-    return results
+        mean1, stddev1 = statistics.mean(times1), statistics.stdev(times1)
+        mean2, stddev2 = statistics.mean(times2), statistics.stdev(times2)
+        results1[bench] = (mean1, stddev1)
+        results2[bench] = (mean2, stddev2)
+        print(f"    {bench:<42} {mean1:>7.3f} ±{stddev1:>6.3f}  {mean2:>7.3f} ±{stddev2:>6.3f}")
+
+    return results1, results2
 
 
 # ── diff formatting ───────────────────────────────────────────────────────────
@@ -244,37 +327,27 @@ def _save_diff(report: str, slug: str, timestamp: str) -> Path:
 
 
 def cmd_run(argv: list[str]) -> None:
-    if not shutil.which("hyperfine"):
-        sys.exit("hyperfine not found — install with: cargo install hyperfine")
-
-    if argv == ["--compare-unstaged"]:
-        _run_compare_unstaged()
-    elif len(argv) == 2:
-        _run_compare_commits(argv[0], argv[1])
-    else:
-        sys.exit("Usage:\n" "  bench.py run <commit1> <commit2>\n" "  bench.py run --compare-unstaged")
+    _sweep_stale_worktrees()
+    try:
+        if argv == ["--compare-unstaged"]:
+            _run_compare_unstaged()
+        elif len(argv) == 2:
+            _run_compare_commits(argv[0], argv[1])
+        else:
+            sys.exit("Usage:\n" "  bench.py run <commit1> <commit2>\n" "  bench.py run --compare-unstaged")
+    finally:
+        _cleanup_worktrees()
 
 
 def _run_compare_commits(ref1: str, ref2: str) -> None:
-    dirty = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--untracked-files=no"],
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if dirty:
-        sys.exit("Working tree is dirty. Stash or commit your changes first.")
-
     full1, short1, subject1 = _resolve(ref1)
     full2, short2, subject2 = _resolve(ref2)
-    orig = _current_ref()
 
-    try:
-        _git("checkout", full1)
-        times1 = benchmark_state(short1)
-        _git("checkout", full2)
-        times2 = benchmark_state(short2)
-    finally:
-        _git("checkout", orig)
+    wt1 = _add_worktree(full1, short1)
+    wt2 = _add_worktree(full2, short2)
+    bin1 = _build(wt1, short1)
+    bin2 = _build(wt2, short2)
+    times1, times2 = benchmark_interleaved(short1, bin1, short2, bin2)
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     report = format_diff(
@@ -302,14 +375,10 @@ def _run_compare_unstaged() -> None:
 
     full_head, short_head, subject_head = _resolve("HEAD")
 
-    # Benchmark working-tree state (with changes) first, then HEAD as baseline.
-    times_wt = benchmark_state("working-tree")
-
-    _git("stash", "push", "--include-untracked", "-m", "bench.py temp stash")
-    try:
-        times_head = benchmark_state(short_head)
-    finally:
-        _git("stash", "pop")
+    wt_head = _add_worktree(full_head, short_head)
+    bin_head = _build(wt_head, short_head)
+    bin_wt = _build(REPO_ROOT, "working-tree")
+    times_head, times_wt = benchmark_interleaved(short_head, bin_head, "working-tree", bin_wt)
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     report = format_diff(
@@ -354,4 +423,3 @@ if __name__ == "__main__":
     else:
         print(__doc__)
         sys.exit(1)
-
