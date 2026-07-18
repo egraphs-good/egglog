@@ -1213,12 +1213,12 @@ impl<'a> JoinState<'a> {
                             }
                             updates.refine_atom_subset(a.atom, sub);
                         } else {
-                            let node = prober.node.get_cached_trie_node(
-                                a.column,
-                                val[0],
-                                info,
-                                || refine_subset(x, &a.cs, &table, has_stale, pool),
-                            );
+                            let node =
+                                prober
+                                    .node
+                                    .get_cached_trie_node(a.column, val[0], info, || {
+                                        refine_subset(x, &a.cs, &table, has_stale, pool)
+                                    });
                             if node.subset.is_empty() {
                                 updates.rollback();
                                 return;
