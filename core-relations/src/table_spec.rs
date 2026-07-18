@@ -484,6 +484,21 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         });
     }
 
+    fn collect_col_pairs(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        out: &mut Vec<(Value, RowId)>,
+    ) {
+        let table = table.as_any().downcast_ref::<T>().unwrap();
+        let col_idx = col.index();
+        out.reserve(subset.size());
+        table.scan_generic(subset, |row_id, row| {
+            out.push((row[col_idx], row_id));
+        });
+    }
+
     fn scan_project(
         &self,
         table: &dyn Table,
@@ -721,6 +736,18 @@ pub(crate) trait TableWrapper: Send + Sync {
         f: &mut dyn FnMut(RowId, Value),
     );
 
+    /// Append `(col_value, row_id)` for each row in `subset` to `out`.
+    ///
+    /// Equivalent to [`TableWrapper::for_each_col`] pushing into `out`, but the
+    /// scan loop is monomorphized, avoiding a virtual callback per row.
+    fn collect_col_pairs(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        out: &mut Vec<(Value, RowId)>,
+    );
+
     #[allow(clippy::too_many_arguments)]
     fn scan_project(
         &self,
@@ -816,6 +843,17 @@ impl WrappedTableRef<'_> {
         f: &mut dyn FnMut(RowId, Value),
     ) {
         self.wrapper.for_each_col(self.inner, subset, col, f);
+    }
+
+    /// Append `(col_value, row_id)` for each row in `subset` to `out`, using a
+    /// monomorphized scan loop (no per-row virtual call).
+    pub(crate) fn collect_col_pairs(
+        &self,
+        subset: SubsetRef,
+        col: ColumnId,
+        out: &mut Vec<(Value, RowId)>,
+    ) {
+        self.wrapper.collect_col_pairs(self.inner, subset, col, out);
     }
 
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of

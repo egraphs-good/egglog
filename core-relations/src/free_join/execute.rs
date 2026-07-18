@@ -191,11 +191,10 @@ pub(crate) struct SortedColumnIndex {
 
 impl SortedColumnIndex {
     fn build_for_subset(table: WrappedTableRef, subset: SubsetRef, col: ColumnId) -> Self {
-        let n = subset.size();
-        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
+        let mut pairs: Vec<(Value, RowId)> = Vec::new();
         // Rows arrive in RowId-ascending order, so a value-stable sort leaves
         // each value's rows ascending.
-        table.for_each_col(subset, col, &mut |row_id, val| pairs.push((val, row_id)));
+        table.collect_col_pairs(subset, col, &mut pairs);
         let mut scratch = vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
         crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut scratch);
         drop(scratch);

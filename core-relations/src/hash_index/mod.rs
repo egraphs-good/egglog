@@ -372,9 +372,7 @@ impl IndexBase for ColumnIndex {
         let mut bounds: SmallVec<[usize; 8]> = SmallVec::new();
         bounds.push(0);
         for &col in cols {
-            table.for_each_col(subset, col, &mut |row_id, val| {
-                pairs.push((val, row_id));
-            });
+            table.collect_col_pairs(subset, col, &mut pairs);
             bounds.push(pairs.len());
         }
 
