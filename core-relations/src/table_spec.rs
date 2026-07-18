@@ -319,6 +319,23 @@ pub trait Table: Any + Send + Sync {
             .fold(subset, |subset, c| self.refine_one(subset, c))
     }
 
+    /// Filter a borrowed `subset` to the rows matching `cs` — and, when
+    /// `check_live` is set, to live rows — returning an owned subset.
+    ///
+    /// Equivalent to `to_owned` + [`Table::refine_live`] + [`Table::refine`];
+    /// implementors may fuse the copy and filter into a single pass.
+    fn refine_ref(&self, subset: SubsetRef, cs: &[Constraint], check_live: bool) -> Subset {
+        let mut owned = subset.to_owned(&with_pool_set(|ps| ps.get_pool()));
+        if check_live {
+            owned = self.refine_live(owned);
+        }
+        if cs.is_empty() {
+            owned
+        } else {
+            self.refine(owned, cs)
+        }
+    }
+
     /// An optional method for quickly generating a subset from a constraint.
     /// The standard use-case here is to apply constraints based on a column
     /// that is known to be sorted.

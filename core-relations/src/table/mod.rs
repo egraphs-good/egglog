@@ -26,7 +26,7 @@ use crate::{
     action::ExecutionState,
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
     hash_index::{ColumnIndex, Index},
-    offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
+    offsets::{OffsetRange, Offsets, RowId, SortedOffsetVector, Subset, SubsetRef},
     parallel,
     parallel_heuristics::parallelize_table_op,
     pool::with_pool_set,
@@ -513,6 +513,26 @@ impl Table for SortedWritesTable {
         // to if the higher-level implementations end up using it directly.
         subset.retain(|row| self.eval(std::slice::from_ref(c), row));
         subset
+    }
+
+    fn refine_ref(&self, subset: SubsetRef, cs: &[Constraint], _check_live: bool) -> Subset {
+        // Single fused pass: `eval` reads each row once, checking liveness
+        // (`get_row` skips stale rows) and all constraints together. A dense
+        // input whose rows all survive stays dense.
+        let n = subset.size();
+        let mut vec: Pooled<SortedOffsetVector> = with_pool_set(|ps| ps.get());
+        subset.offsets(|row| {
+            if self.eval(cs, row) {
+                // SAFETY: `offsets` visits rows in ascending order.
+                unsafe { vec.push_unchecked(row) }
+            }
+        });
+        if let SubsetRef::Dense(range) = subset
+            && vec.slice().inner().len() == n
+        {
+            return Subset::Dense(range);
+        }
+        Subset::Sparse(vec)
     }
 
     fn new_buffer(&self) -> Box<dyn MutationBuffer> {
