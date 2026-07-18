@@ -27,6 +27,8 @@ pub use action::{ExecutionState, MergeVal, QueryEntry, WriteVal};
 pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed};
 pub use common::Value;
 pub use containers::{ContainerRebuildSummary, ContainerValue, ContainerValueId, ContainerValues};
+#[cfg(feature = "index-stats")]
+pub use free_join::index_stats::report as index_stats_report;
 pub use free_join::{
     AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, TableId, Variable,
     make_external_func, plan::PlanStrategy,

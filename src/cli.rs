@@ -198,6 +198,9 @@ pub fn cli(mut egraph: EGraph) {
         log::info!("Saved report to {report_path:?}");
     }
 
+    #[cfg(feature = "index-stats")]
+    eprintln!("{}", egglog_core_relations::index_stats_report());
+
     // no need to drop the egraph if we are going to exit
     std::mem::forget(egraph)
 }

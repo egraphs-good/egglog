@@ -49,3 +49,5 @@ harness = false
 [features]
 default = []
 debug-val-trace = []
+# Collect and report statistics on join index builds and their usage.
+index-stats = []

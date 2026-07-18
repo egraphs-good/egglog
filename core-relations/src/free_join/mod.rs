@@ -38,6 +38,7 @@ use crate::action::ExecutionState;
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
+pub(crate) mod index_stats;
 pub(crate) mod plan;
 
 define_id!(
