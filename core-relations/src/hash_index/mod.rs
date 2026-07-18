@@ -206,6 +206,8 @@ pub(crate) trait IndexBase {
 }
 
 struct ColumnIndexShard {
+    /// It's important that table is implemented using IndexMap instead of the more efficient
+    /// HashMap because we want stable enumeration order.
     table: Pooled<IndexMap<Value, BufferedSubset>>,
     subsets: SubsetBuffer,
 }
