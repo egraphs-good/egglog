@@ -1,4 +1,6 @@
 //! Hash-based secondary indexes.
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     cmp,
     hash::{Hash, Hasher},
@@ -132,6 +134,25 @@ impl<TI: IndexBase> Index<TI> {
         self.table.for_each(f);
     }
 
+    /// Call `f` over the elements stored in one physical index shard.
+    ///
+    /// The shards form a disjoint partition of the index keys.  Exposing that
+    /// partition lets query execution create a small number of coarse tasks
+    /// without first copying keys into a separate work list.
+    pub(crate) fn for_each_shard(&self, shard: usize, f: impl FnMut(&TI::Key, SubsetRef)) {
+        self.table.for_each_shard(shard, f);
+    }
+
+    /// Return the number of physical shards in this index.
+    pub(crate) fn shard_count(&self) -> usize {
+        self.table.shard_count()
+    }
+
+    /// Return the number of distinct keys stored in one physical shard.
+    pub(crate) fn shard_len(&self, shard: usize) -> usize {
+        self.table.shard_len(shard)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.table.len()
     }
@@ -181,6 +202,12 @@ pub(crate) trait IndexBase {
     fn merge_rows(&mut self, buf: &TaggedRowBuffer);
     /// Call `f` over the elements of the index.
     fn for_each(&self, f: impl FnMut(&Self::Key, SubsetRef));
+    /// Call `f` over the elements of one physical index shard.
+    fn for_each_shard(&self, shard: usize, f: impl FnMut(&Self::Key, SubsetRef));
+    /// The number of physical shards in the index.
+    fn shard_count(&self) -> usize;
+    /// The number of distinct keys in one physical shard.
+    fn shard_len(&self, shard: usize) -> usize;
     /// The number of keys in the index.
     fn len(&self) -> usize;
 
@@ -279,6 +306,21 @@ impl IndexBase for ColumnIndex {
         {
             f(k, v.as_ref(subsets));
         }
+    }
+
+    fn for_each_shard(&self, shard: usize, mut f: impl FnMut(&Self::Key, SubsetRef)) {
+        let shard = &self.shards[ShardId::from_usize(shard)];
+        for (key, subset) in shard.table.iter() {
+            f(key, subset.as_ref(&shard.subsets));
+        }
+    }
+
+    fn shard_count(&self) -> usize {
+        self.shards.len()
+    }
+
+    fn shard_len(&self, shard: usize) -> usize {
+        self.shards[ShardId::from_usize(shard)].table.len()
     }
 
     fn len(&self) -> usize {
@@ -720,6 +762,23 @@ impl IndexBase for TupleIndex {
         }
     }
 
+    fn for_each_shard(&self, shard: usize, mut f: impl FnMut(&Self::Key, SubsetRef)) {
+        let shard = &self.shards[ShardId::from_usize(shard)];
+        for entry in shard.table.hash.iter() {
+            // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
+            let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
+            f(key, entry.vals.as_ref(&shard.subsets));
+        }
+    }
+
+    fn shard_count(&self) -> usize {
+        self.shards.len()
+    }
+
+    fn shard_len(&self, shard: usize) -> usize {
+        self.shards[ShardId::from_usize(shard)].table.hash.len()
+    }
+
     fn len(&self) -> usize {
         self.shards
             .iter()
@@ -830,6 +889,8 @@ fn hash_key(key: &[Value]) -> u64 {
 #[derive(Default)]
 pub struct IndexCatalog<K: Clone + std::hash::Hash + Eq, I: Clone> {
     data: ReadOptimizedLock<Vec<(K, I)>>,
+    #[cfg(test)]
+    get_or_insert_calls: AtomicUsize,
 }
 
 impl<K, I: Clone> IndexCatalog<K, I>
@@ -839,6 +900,8 @@ where
     pub fn new() -> Self {
         IndexCatalog {
             data: ReadOptimizedLock::new(Vec::new()),
+            #[cfg(test)]
+            get_or_insert_calls: AtomicUsize::new(0),
         }
     }
 
@@ -846,6 +909,8 @@ where
         let vec = self.data.read().iter().map(f).collect();
         IndexCatalog {
             data: ReadOptimizedLock::new(vec),
+            #[cfg(test)]
+            get_or_insert_calls: AtomicUsize::new(0),
         }
     }
 
@@ -856,6 +921,8 @@ where
     }
 
     pub fn get_or_insert(&self, k: K, init: impl FnOnce() -> I) -> I {
+        #[cfg(test)]
+        self.get_or_insert_calls.fetch_add(1, Ordering::Relaxed);
         let data = self.data.read();
         let entry = data.iter().find(|(k1, _)| k1 == &k);
         if let Some(entry) = entry {
@@ -871,6 +938,11 @@ where
                 index
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_or_insert_calls(&self) -> usize {
+        self.get_or_insert_calls.load(Ordering::Relaxed)
     }
 }
 

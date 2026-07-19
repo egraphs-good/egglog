@@ -226,3 +226,63 @@ fn column_index_rebuild_matches_oracle() {
         }
     }
 }
+
+#[test]
+fn physical_shards_partition_index_iteration() {
+    ThreadPool::new(4).install(|| {
+        let rows = (0..257)
+            .map(|i| vec![v(i), v(i % 37), v(10_000 + i)])
+            .collect::<Vec<_>>();
+        let table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+            assert_eq!(old, new, "unique keys, so no conflicts");
+            None
+        }));
+
+        let mut column = Index::new(vec![ColumnId::new(1)], ColumnIndex::new());
+        column.refresh(table.as_ref());
+        assert_eq!(column.shard_count(), 8);
+        let mut whole_column = BTreeMap::new();
+        column.for_each(|key, subset| {
+            whole_column.insert(key.rep(), subset.size());
+        });
+        let mut by_column_shard = BTreeMap::new();
+        for shard in 0..column.shard_count() {
+            let mut shard_keys = 0;
+            column.for_each_shard(shard, |key, subset| {
+                shard_keys += 1;
+                assert!(
+                    by_column_shard.insert(key.rep(), subset.size()).is_none(),
+                    "a column-index key appeared in more than one shard"
+                );
+            });
+            assert_eq!(column.shard_len(shard), shard_keys);
+        }
+        assert_eq!(by_column_shard, whole_column);
+
+        let mut tuple = Index::new(
+            vec![ColumnId::new(1), ColumnId::new(2)],
+            crate::TupleIndex::new(2),
+        );
+        tuple.refresh(table.as_ref());
+        assert_eq!(tuple.shard_count(), 8);
+        let mut whole_tuple = BTreeMap::new();
+        tuple.for_each(|key, subset| {
+            whole_tuple.insert((key[0].rep(), key[1].rep()), subset.size());
+        });
+        let mut by_tuple_shard = BTreeMap::new();
+        for shard in 0..tuple.shard_count() {
+            let mut shard_keys = 0;
+            tuple.for_each_shard(shard, |key, subset| {
+                shard_keys += 1;
+                assert!(
+                    by_tuple_shard
+                        .insert((key[0].rep(), key[1].rep()), subset.size())
+                        .is_none(),
+                    "a tuple-index key appeared in more than one shard"
+                );
+            });
+            assert_eq!(tuple.shard_len(shard), shard_keys);
+        }
+        assert_eq!(by_tuple_shard, whole_tuple);
+    });
+}
