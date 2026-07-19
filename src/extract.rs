@@ -541,6 +541,29 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         )
     }
 
+    /// Report every (sort id, value) pair a container value's cost depends on:
+    /// the eq values stored anywhere inside it, found by recursing through
+    /// nested container values.
+    fn register_container_deps(
+        &self,
+        egraph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+        register: &mut impl FnMut(usize, Value),
+    ) {
+        if sort.is_container_sort() {
+            for (inner_sort, inner_value) in
+                sort.inner_values(egraph.backend.container_values(), value)
+            {
+                self.register_container_deps(egraph, &inner_sort, inner_value, register);
+            }
+        } else if sort.is_eq_sort()
+            && let Some(id) = self.sort_ids.get(sort.name())
+        {
+            register(*id, value);
+        }
+    }
+
     /// We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
     /// [Bellman-Ford](https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm) is a shortest path algorithm.
     /// The version implemented here computes the shortest path from any node in a set of sources to all the reachable nodes.
@@ -591,17 +614,76 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             })
             .collect();
 
-        let mut ch_costs: Vec<C> = Vec::new();
-        let mut ensure_fixpoint = false;
-        while !ensure_fixpoint {
-            ensure_fixpoint = true;
+        // Reverse dependency index: (sort id, value) -> rows reading that value
+        // as an eq child, directly or inside a container child.
+        let mut child_index: HashMap<(usize, Value), Vec<(u32, u32)>> = Default::default();
+        for (fi, f) in func_data.iter().enumerate() {
+            if f.rows.is_empty() {
+                continue;
+            }
+            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
+                for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
+                    let mut register = |sid: usize, v: Value| {
+                        child_index
+                            .entry((sid, v))
+                            .or_default()
+                            .push((fi as u32, ri as u32));
+                    };
+                    match kind {
+                        ChildKind::EqSort(Some(id)) => register(*id, *value),
+                        ChildKind::EqSort(None) | ChildKind::Base(_) => {}
+                        ChildKind::Container(sort) => {
+                            self.register_container_deps(egraph, sort, *value, &mut register)
+                        }
+                    }
+                }
+            }
+        }
 
-            for f in &func_data {
-                if f.rows.is_empty() {
+        // Semi-naive relaxation: a row recomputes exactly the same cost against a
+        // never-increasing target unless one of its child (sort, value) costs
+        // changed since the row was last evaluated, so only such "dirty" rows are
+        // (re)visited. Rows are swept in the same (function, row) order as the
+        // naive pass loop, so the update trace — and hence topo ranks and
+        // extracted terms — is unchanged.
+        let mut dirty: Vec<Vec<bool>> = func_data
+            .iter()
+            .map(|f| {
+                vec![
+                    true;
+                    if f.arity == 0 {
+                        0
+                    } else {
+                        f.rows.len() / f.arity
+                    }
+                ]
+            })
+            .collect();
+        let mut dirty_count: Vec<usize> = dirty.iter().map(|d| d.len()).collect();
+
+        let mut ch_costs: Vec<C> = Vec::new();
+        loop {
+            let mut any = false;
+            for (fi, f) in func_data.iter().enumerate() {
+                if dirty_count[fi] == 0 {
                     continue;
                 }
+                any = true;
                 let func = egraph.functions.get(&f.name).unwrap();
-                for row in f.rows.chunks_exact(f.arity) {
+                // Marks set at or behind the sweep cursor (including a row
+                // re-marking itself) stay for the next sweep; marks ahead of it
+                // are picked up in this one, matching the naive pass exactly.
+                let n_rows = dirty[fi].len();
+                let mut ri = 0;
+                while ri < n_rows {
+                    if !dirty[fi][ri] {
+                        ri += 1;
+                        continue;
+                    }
+                    dirty[fi][ri] = false;
+                    dirty_count[fi] -= 1;
+                    let row = &f.rows[ri * f.arity..(ri + 1) * f.arity];
+                    ri += 1;
                     let Some(new_cost) = self.row_cost(egraph, func, f, row, &mut ch_costs) else {
                         continue;
                     };
@@ -624,11 +706,22 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     // which serves as a topological order that avoids cycles
                     // even when a term has a cost equal to its subterms
                     if updated {
-                        ensure_fixpoint = false;
                         self.topo_rnk_cnt += 1;
                         self.topo_rnk[f.output_sort_id].insert(target, self.topo_rnk_cnt);
+                        if let Some(readers) = child_index.get(&(f.output_sort_id, target)) {
+                            for &(dfi, dri) in readers {
+                                let (dfi, dri) = (dfi as usize, dri as usize);
+                                if !dirty[dfi][dri] {
+                                    dirty[dfi][dri] = true;
+                                    dirty_count[dfi] += 1;
+                                }
+                            }
+                        }
                     }
                 }
+            }
+            if !any {
+                break;
             }
         }
 
