@@ -137,6 +137,85 @@ pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     parent_edge: Vec<HashMap<Value, (String, Vec<Value>)>>,
 }
 
+/// The reusable state of a default-cost-model [`Extractor`], detached from its
+/// (unsendable) boxed cost model so it can be stored on the [`EGraph`]. See
+/// [`ExtractorCache`].
+pub(crate) struct ExtractorData {
+    rootsorts: Vec<ArcSort>,
+    funcs: Vec<String>,
+    sort_ids: HashMap<String, usize>,
+    costs: Vec<HashMap<Value, DefaultCost>>,
+    topo_rnk_cnt: usize,
+    topo_rnk: Vec<HashMap<Value, usize>>,
+    parent_edge: Vec<HashMap<Value, (String, Vec<Value>)>>,
+}
+
+impl Extractor<DefaultCost> {
+    pub(crate) fn from_data(data: ExtractorData) -> Self {
+        Extractor {
+            rootsorts: data.rootsorts,
+            funcs: data.funcs,
+            cost_model: Box::new(TreeAdditiveCostModel::default()),
+            sort_ids: data.sort_ids,
+            costs: data.costs,
+            topo_rnk_cnt: data.topo_rnk_cnt,
+            topo_rnk: data.topo_rnk,
+            parent_edge: data.parent_edge,
+        }
+    }
+
+    pub(crate) fn into_data(self) -> ExtractorData {
+        ExtractorData {
+            rootsorts: self.rootsorts,
+            funcs: self.funcs,
+            sort_ids: self.sort_ids,
+            costs: self.costs,
+            topo_rnk_cnt: self.topo_rnk_cnt,
+            topo_rnk: self.topo_rnk,
+            parent_edge: self.parent_edge,
+        }
+    }
+}
+
+/// Cache of the extractor built by the most recent `extract` command, keyed by
+/// its root sort and the backend's table-version fingerprint, so runs of
+/// consecutive extracts against an unchanged e-graph build the extractor once.
+///
+/// Deliberately clones empty: a pushed e-graph rebuilds its extractor on first
+/// use rather than carrying a copy of the cost tables through push/pop.
+#[derive(Default)]
+pub(crate) struct ExtractorCache(Option<(String, Vec<(u64, u64)>, ExtractorData)>);
+
+impl Clone for ExtractorCache {
+    fn clone(&self) -> Self {
+        ExtractorCache(None)
+    }
+}
+
+impl ExtractorCache {
+    /// Take the cached data if it was built for `rootsort` against a database
+    /// whose table versions still equal `versions`.
+    pub(crate) fn take_if_valid(
+        &mut self,
+        rootsort: &str,
+        versions: &[(u64, u64)],
+    ) -> Option<ExtractorData> {
+        match self.0.take() {
+            Some((s, v, data)) if s == rootsort && v == versions => Some(data),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn store(
+        &mut self,
+        rootsort: String,
+        versions: Vec<(u64, u64)>,
+        data: ExtractorData,
+    ) {
+        self.0 = Some((rootsort, versions, data));
+    }
+}
+
 /// How extraction treats one child column of a function, resolved once so the
 /// per-row cost loops avoid repeated sort dispatch and name-keyed lookups.
 enum ChildKind {

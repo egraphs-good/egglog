@@ -476,6 +476,20 @@ impl EGraph {
         self.db.get_table(self.funcs[table].table).len()
     }
 
+    /// The version of every table in the database, in table-id order.
+    ///
+    /// Any merged mutation that reaches a table (inserts, rebuilds, union-find
+    /// changes, clears, or newly declared tables) changes the result, so equal
+    /// vectors mean the readable state of the database is unchanged.
+    pub fn table_versions(&self) -> Vec<(u64, u64)> {
+        (0..self.db.next_table_id().index())
+            .map(|i| {
+                let v = self.db.get_table(TableId::from_usize(i)).version();
+                (v.major.index() as u64, v.minor.index() as u64)
+            })
+            .collect()
+    }
+
     /// Remove every row from the given function's backing table.
     ///
     /// This is the bulk counterpart to staging a `remove` for every key in the
