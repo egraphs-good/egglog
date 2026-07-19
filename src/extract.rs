@@ -388,27 +388,26 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         ))
     }
 
-    /// Collect the ids of every eq sort reachable inside a container sort,
-    /// i.e. the sorts a container child's cost can depend on. `visited` guards
-    /// against container sorts that reach themselves (e.g. an `UnstableFn`
-    /// closing over values of its own sort).
-    fn collect_container_dep_sorts(
+    /// Report every (sort id, value) pair a container value's cost depends on:
+    /// the eq values stored anywhere inside it, found by recursing through
+    /// nested container values.
+    fn register_container_deps(
         &self,
+        egraph: &EGraph,
         sort: &ArcSort,
-        visited: &mut HashSet<String>,
-        out: &mut Vec<usize>,
+        value: Value,
+        register: &mut impl FnMut(usize, Value),
     ) {
-        if !visited.insert(sort.name().to_owned()) {
-            return;
-        }
         if sort.is_container_sort() {
-            for inner in sort.inner_sorts() {
-                self.collect_container_dep_sorts(&inner, visited, out);
+            for (inner_sort, inner_value) in
+                sort.inner_values(egraph.backend.container_values(), value)
+            {
+                self.register_container_deps(egraph, &inner_sort, inner_value, register);
             }
         } else if sort.is_eq_sort()
             && let Some(id) = self.sort_ids.get(sort.name())
         {
-            out.push(*id);
+            register(*id, value);
         }
     }
 
@@ -452,62 +451,76 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             })
             .collect();
 
-        // The eq sorts each function's row costs depend on: eq children directly,
-        // plus every eq sort reachable inside a container child.
-        let func_deps: Vec<Vec<usize>> = func_data
-            .iter()
-            .map(|f| {
-                let mut deps: Vec<usize> = Vec::new();
-                let mut visited: HashSet<String> = Default::default();
-                for kind in &f.child_kinds {
+        // Reverse dependency index: (sort id, value) -> rows reading that value
+        // as an eq child, directly or inside a container child.
+        let mut child_index: HashMap<(usize, Value), Vec<(u32, u32)>> = Default::default();
+        for (fi, f) in func_data.iter().enumerate() {
+            if f.rows.is_empty() {
+                continue;
+            }
+            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
+                for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
+                    let mut register = |sid: usize, v: Value| {
+                        child_index
+                            .entry((sid, v))
+                            .or_default()
+                            .push((fi as u32, ri as u32));
+                    };
                     match kind {
-                        ChildKind::EqSort(Some(id)) => deps.push(*id),
+                        ChildKind::EqSort(Some(id)) => register(*id, *value),
                         ChildKind::EqSort(None) | ChildKind::Base(_) => {}
                         ChildKind::Container(sort) => {
-                            self.collect_container_dep_sorts(sort, &mut visited, &mut deps)
+                            self.register_container_deps(egraph, sort, *value, &mut register)
                         }
                     }
                 }
-                deps.sort_unstable();
-                deps.dedup();
-                deps
+            }
+        }
+
+        // Semi-naive relaxation: a row recomputes exactly the same cost against a
+        // never-increasing target unless one of its child (sort, value) costs
+        // changed since the row was last evaluated, so only such "dirty" rows are
+        // (re)visited. Rows are swept in the same (function, row) order as the
+        // naive pass loop, so the update trace — and hence topo ranks and
+        // extracted terms — is unchanged.
+        let mut dirty: Vec<Vec<bool>> = func_data
+            .iter()
+            .map(|f| {
+                vec![
+                    true;
+                    if f.arity == 0 {
+                        0
+                    } else {
+                        f.rows.len() / f.arity
+                    }
+                ]
             })
             .collect();
-
-        // A function's pass recomputes exactly the same cost for every row unless
-        // one of its dependency sorts gained a cost update since the snapshot
-        // taken right before the function was last processed. Skipping it in that
-        // case drops no updates, so the relaxation trace (and hence topo ranks
-        // and extracted terms) is unchanged.
-        let mut sort_versions: Vec<u64> = vec![0; self.costs.len()];
-        let mut last_seen: Vec<Option<Vec<u64>>> = vec![None; func_data.len()];
+        let mut dirty_count: Vec<usize> = dirty.iter().map(|d| d.len()).collect();
 
         let mut ch_costs: Vec<C> = Vec::new();
-        let mut ensure_fixpoint = false;
-        while !ensure_fixpoint {
-            ensure_fixpoint = true;
-
+        loop {
+            let mut any = false;
             for (fi, f) in func_data.iter().enumerate() {
-                if f.rows.is_empty() {
+                if dirty_count[fi] == 0 {
                     continue;
                 }
-                match &mut last_seen[fi] {
-                    Some(seen)
-                        if func_deps[fi]
-                            .iter()
-                            .zip(seen.iter())
-                            .all(|(d, s)| sort_versions[*d] == *s) =>
-                    {
+                any = true;
+                let func = egraph.functions.get(&f.name).unwrap();
+                // Marks set at or behind the sweep cursor (including a row
+                // re-marking itself) stay for the next sweep; marks ahead of it
+                // are picked up in this one, matching the naive pass exactly.
+                let n_rows = dirty[fi].len();
+                let mut ri = 0;
+                while ri < n_rows {
+                    if !dirty[fi][ri] {
+                        ri += 1;
                         continue;
                     }
-                    Some(seen) => {
-                        seen.clear();
-                        seen.extend(func_deps[fi].iter().map(|d| sort_versions[*d]));
-                    }
-                    slot => *slot = Some(func_deps[fi].iter().map(|d| sort_versions[*d]).collect()),
-                }
-                let func = egraph.functions.get(&f.name).unwrap();
-                for row in f.rows.chunks_exact(f.arity) {
+                    dirty[fi][ri] = false;
+                    dirty_count[fi] -= 1;
+                    let row = &f.rows[ri * f.arity..(ri + 1) * f.arity];
+                    ri += 1;
                     let Some(new_cost) = self.row_cost(egraph, func, f, row, &mut ch_costs) else {
                         continue;
                     };
@@ -530,12 +543,22 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     // which serves as a topological order that avoids cycles
                     // even when a term has a cost equal to its subterms
                     if updated {
-                        ensure_fixpoint = false;
-                        sort_versions[f.output_sort_id] += 1;
                         self.topo_rnk_cnt += 1;
                         self.topo_rnk[f.output_sort_id].insert(target, self.topo_rnk_cnt);
+                        if let Some(readers) = child_index.get(&(f.output_sort_id, target)) {
+                            for &(dfi, dri) in readers {
+                                let (dfi, dri) = (dfi as usize, dri as usize);
+                                if !dirty[dfi][dri] {
+                                    dirty[dfi][dri] = true;
+                                    dirty_count[dfi] += 1;
+                                }
+                            }
+                        }
                     }
                 }
+            }
+            if !any {
+                break;
             }
         }
 
