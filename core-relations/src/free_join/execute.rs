@@ -27,7 +27,7 @@ use web_time::Instant;
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
     action::{Bindings, ExecutionState},
-    common::{DashMap, ShardData, ShardId, Value},
+    common::{DashMap, Value},
     free_join::{
         frame_update::{FrameUpdates, UpdateInstr},
         get_index_from_tableinfo,
@@ -35,9 +35,8 @@ use crate::{
     hash_index::{ColumnIndex, Index, IndexBase, TupleIndex},
     offsets::{Offsets, RowId, SortedOffsetSlice, SortedOffsetVector, Subset},
     parallel_heuristics::{
-        GjChildCache, GjTopPromotion, action_batch_size, free_join_fork_depth, gj_child_cache,
-        gj_local_depth, gj_local_morsel, gj_local_queue_limit, gj_min_keys_per_worker,
-        gj_top_index_sharding, gj_top_promotion, parallelize_db_level_op,
+        MIN_TOP_INDEX_KEYS_PER_WORKER, action_batch_size, free_join_fork_depth,
+        parallelize_db_level_op,
     },
     pool::Pooled,
     query::RuleSet,
@@ -63,41 +62,6 @@ fn top_index_shape_is_eligible(
     workers > 1
         && leader_keys >= min_keys_per_worker.saturating_mul(workers)
         && nonempty_shards >= workers
-}
-
-/// Select one already-evaluated eligible candidate. The iterator remains lazy,
-/// so `Current` evaluates only position zero and `Eligible` stops at its first
-/// usable fallback; only `Largest` evaluates the full
-/// leading prefix.
-fn select_top_candidate<T>(
-    policy: GjTopPromotion,
-    current_estimate: usize,
-    min_threshold: usize,
-    mut candidates: impl Iterator<Item = Option<T>>,
-    leader_keys: impl Fn(&T) -> usize,
-) -> Option<T> {
-    let current = candidates.next().flatten();
-    match policy {
-        GjTopPromotion::Current => current,
-        GjTopPromotion::Eligible => {
-            if current.is_some() {
-                return current;
-            }
-            let promotion_limit = current_estimate.saturating_mul(4).max(min_threshold);
-            candidates
-                .flatten()
-                .find(|candidate| leader_keys(candidate) <= promotion_limit)
-        }
-        GjTopPromotion::Largest => {
-            current
-                .into_iter()
-                .chain(candidates.flatten())
-                .fold(None, |best, candidate| match best {
-                    Some(best) if leader_keys(&best) >= leader_keys(&candidate) => Some(best),
-                    _ => Some(candidate),
-                })
-        }
-    }
 }
 
 struct SparseColumnIndex {
@@ -1034,88 +998,35 @@ type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<SortedColumnIndex>>>;
 // (node, col, value) with different slow constraints; they are almost always
 // empty, in which case the guard is a cheap length check.
 type ChildEntry = (Arc<TrieNode>, Box<[Constraint]>);
-type ChildLock = RwLock<HashMap<Value, ChildEntry>>;
-type ChildrenMaps = IdVec<ColumnId, OnceLock<ChildMap>>;
+pub(crate) type ChildLock = RwLock<HashMap<Value, ChildEntry>>;
+type ChildrenMaps = IdVec<ColumnId, OnceLock<ChildLock>>;
 
-/// Cache of child trie nodes for one `(TrieNode, ColumnId)` pair.
-///
-/// Descendant nodes lazily initialize [`ChildMap::Single`]. An eligible coarse
-/// top-index partition may initialize a root column as [`ChildMap::Sharded`]
-/// before its jobs start, using the same [`ShardData`] layout as the leader's
-/// column index. There is deliberately no promotion from `Single` to `Sharded`:
-/// an already-used cache remains valid and simply falls back to the old layout.
-pub(crate) enum ChildMap {
-    Single(ChildLock),
-    Sharded {
-        shard_data: ShardData,
-        shards: IdVec<ShardId, CachePadded<ChildLock>>,
-    },
-}
-
-impl ChildMap {
-    fn single() -> Self {
-        Self::Single(RwLock::new(HashMap::default()))
-    }
-
-    fn sharded(shard_count: usize) -> Self {
-        let shard_data = ShardData::new(shard_count);
-        debug_assert_eq!(shard_data.n_shards(), shard_count);
-        let mut shards = IdVec::with_capacity(shard_data.n_shards());
-        shards.resize_with(shard_data.n_shards(), || {
-            CachePadded::new(RwLock::new(HashMap::default()))
-        });
-        Self::Sharded { shard_data, shards }
-    }
-
-    fn is_aligned_to(&self, shard_count: usize) -> bool {
-        matches!(
-            self,
-            Self::Sharded { shard_data, .. } if shard_data.n_shards() == shard_count
-        )
-    }
-
-    /// Select the lock with the same `Value` hashing and high-bit shard mapping
-    /// used by [`crate::hash_index::ColumnIndex`].
-    fn lock_for(&self, value: Value) -> &ChildLock {
-        match self {
-            Self::Single(lock) => lock,
-            Self::Sharded { shard_data, shards } => {
-                shard_data.get_shard(&value, shards) as &ChildLock
-            }
-        }
-    }
-
-    fn get_or_insert(
-        &self,
-        value: Value,
-        edge_cs: &[Constraint],
-        sub: impl FnOnce() -> Subset,
-    ) -> Arc<TrieNode> {
-        let map = self.lock_for(value);
-        // Optimistic read path: most calls are cache hits, so try a shared lock
-        // first. A hit is only valid when the edge constraints match.
-        {
-            let guard = map.read().unwrap();
-            if let Some((node, stored_cs)) = guard.get(&value)
-                && &**stored_cs == edge_cs
-            {
-                return node.clone();
-            }
-        }
-        // Cache miss (or constraint mismatch): acquire the write lock and insert.
-        let mut guard = map.write().unwrap();
+fn get_or_insert_child(
+    map: &ChildLock,
+    value: Value,
+    edge_cs: &[Constraint],
+    sub: impl FnOnce() -> Subset,
+) -> Arc<TrieNode> {
+    // Optimistic read path: most calls are cache hits, so try a shared lock
+    // first. A hit is only valid when the edge constraints match.
+    {
+        let guard = map.read().unwrap();
         if let Some((node, stored_cs)) = guard.get(&value)
             && &**stored_cs == edge_cs
         {
             return node.clone();
         }
-        // Child nodes intentionally start with no cache layout. If they are
-        // probed later, they lazily choose `Single` and never inherit root
-        // sharding from this map.
-        let new_node = Arc::new(TrieNode::new(sub()));
-        guard.insert(value, (new_node.clone(), Box::from(edge_cs)));
-        new_node
     }
+    // Cache miss (or constraint mismatch): acquire the write lock and insert.
+    let mut guard = map.write().unwrap();
+    if let Some((node, stored_cs)) = guard.get(&value)
+        && &**stored_cs == edge_cs
+    {
+        return node.clone();
+    }
+    let new_node = Arc::new(TrieNode::new(sub()));
+    guard.insert(value, (new_node.clone(), Box::from(edge_cs)));
+    new_node
 }
 
 /// Canonical signature of a trie root: the table plus its sorted header (fast)
@@ -1237,11 +1148,9 @@ pub(crate) struct TrieNode {
     /// Any cached indexes on this subset.
     cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
     /// Cached child trie nodes, keyed first by column and then by value. Each
-    /// column lazily chooses a single lock, except an eligible top-level root
-    /// may preinitialize a physically aligned sharded map before partition jobs
-    /// start. When this node is a shared root (or reachable from one), this
-    /// cache is shared across plans too, so children are shared without any
-    /// global lookup.
+    /// column's lock is allocated lazily. When this node is a shared root (or
+    /// reachable from one), this cache is shared across plans too, so children
+    /// are shared without any global lookup.
     cached_children: OnceLock<Pooled<ChildrenMaps>>,
 }
 
@@ -1282,33 +1191,13 @@ impl TrieNode {
             .clone()
     }
 
-    fn child_map_slot(&self, col: ColumnId, arity: usize) -> &OnceLock<ChildMap> {
-        &self.cached_children.get_or_init(|| {
+    fn child_map(&self, col: ColumnId, arity: usize) -> &ChildLock {
+        self.cached_children.get_or_init(|| {
             let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
             vec.resize_with(arity, OnceLock::new);
             vec
         })[col]
-    }
-
-    fn child_map(&self, col: ColumnId, arity: usize) -> &ChildMap {
-        self.child_map_slot(col, arity)
-            .get_or_init(ChildMap::single)
-    }
-
-    /// Initialize this node's child cache for `col` with the physical partition
-    /// used by the top index. If the column was already initialized, keep that
-    /// representation: in particular, do not promote an existing `Single` map.
-    /// The return value says whether the installed map has the requested
-    /// alignment.
-    fn initialize_aligned_child_map(
-        &self,
-        col: ColumnId,
-        arity: usize,
-        shard_count: usize,
-    ) -> bool {
-        self.child_map_slot(col, arity)
-            .get_or_init(|| ChildMap::sharded(shard_count))
-            .is_aligned_to(shard_count)
+            .get_or_init(|| RwLock::new(HashMap::default()))
     }
 
     /// Return the child node reached by additionally constraining `col = value`
@@ -1329,8 +1218,7 @@ impl TrieNode {
         info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
-        self.child_map(col, info.spec.arity())
-            .get_or_insert(value, edge_cs, sub)
+        get_or_insert_child(self.child_map(col, info.spec.arity()), value, edge_cs, sub)
     }
 }
 
@@ -1389,44 +1277,6 @@ impl BindingInfo {
 
     fn unwrap_val(&mut self, atom: AtomId) -> Arc<TrieNode> {
         self.subsets.unwrap_val(atom)
-    }
-}
-
-struct TopChildCacheTarget {
-    node: Arc<TrieNode>,
-    column: ColumnId,
-    arity: usize,
-}
-
-struct TopIndexCandidate {
-    order_position: usize,
-    leader_keys: usize,
-    shard_count: usize,
-    shards: Vec<usize>,
-    child_cache_targets: Vec<TopChildCacheTarget>,
-}
-
-#[derive(Clone, Copy)]
-struct TopIndexEligibility {
-    workers: usize,
-    min_keys_per_worker: usize,
-}
-
-impl TopIndexCandidate {
-    /// Install an aligned cache layout only after this candidate has won top
-    /// variable selection. Candidate discovery may initialize column indexes,
-    /// but must not commit cache layouts for rejected stages.
-    fn configure_child_cache(&self) {
-        if gj_child_cache() != GjChildCache::Aligned {
-            return;
-        }
-        for target in &self.child_cache_targets {
-            let _ = target.node.initialize_aligned_child_map(
-                target.column,
-                target.arity,
-                self.shard_count,
-            );
-        }
     }
 }
 
@@ -1608,19 +1458,18 @@ impl<'a> JoinState<'a> {
     /// building a dynamic nonleader index during discovery and then rebuilding
     /// it in every shard job. Tiny or badly skewed leaders stay on the existing
     /// path as well.
-    fn top_index_candidate(
+    fn top_index_shards(
         &self,
-        order_position: usize,
         stage: &JoinStage,
         prepared: &[PreparedIndexSlot],
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         binding_info: &mut BindingInfo,
-        eligibility: TopIndexEligibility,
-    ) -> Option<TopIndexCandidate> {
+        workers: usize,
+    ) -> Option<Vec<usize>> {
         let JoinStage::Intersect { scans, .. } = stage else {
             return None;
         };
-        if scans.is_empty() || eligibility.workers <= 1 {
+        if scans.is_empty() || workers <= 1 {
             return None;
         }
         debug_assert_eq!(scans.len(), prepared.len());
@@ -1661,87 +1510,46 @@ impl<'a> JoinState<'a> {
             }
             probers.push(prober);
         }
-        let candidate = probers[leader].shard_count().and_then(|shard_count| {
+        let shards = probers[leader].shard_count().and_then(|shard_count| {
             let shards = (0..shard_count)
                 .filter(|shard| probers[leader].shard_len(*shard).unwrap_or(0) != 0)
                 .collect::<Vec<_>>();
             top_index_shape_is_eligible(
-                eligibility.workers,
+                workers,
                 leader_size,
                 shards.len(),
-                eligibility.min_keys_per_worker,
+                MIN_TOP_INDEX_KEYS_PER_WORKER,
             )
-            .then(|| TopIndexCandidate {
-                order_position,
-                leader_keys: leader_size,
-                shard_count,
-                shards,
-                child_cache_targets: scans
-                    .iter()
-                    .zip(&probers)
-                    .map(|(scan, prober)| TopChildCacheTarget {
-                        node: prober.node.clone(),
-                        column: scan.column,
-                        arity: self.db.tables[atoms[scan.atom].table].spec.arity(),
-                    })
-                    .collect(),
-            })
+            .then_some(shards)
         });
         for (scan, prober) in scans.iter().zip(probers) {
             binding_info.move_back(scan.atom, prober);
         }
-        candidate
+        shards
     }
 
-    /// Choose a top-index driver from the maximal leading run of plain
-    /// `Intersect` stages. Restricting promotion to that run is deliberately
-    /// conservative: every candidate is known to commute, so rotating one to
-    /// the front cannot cross a fused or materialization dependency.
-    fn select_top_index_candidate(
+    /// Return a coarse partition for the variable already sorted to the top of
+    /// the join. Later variables are deliberately not promoted: benchmarking
+    /// found that probing and reordering them was not broadly beneficial.
+    fn select_top_index_shards(
         &self,
         stages: &JoinStages,
         prepared: &PreparedJoinIndexes,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         order: &InstrOrder,
         binding_info: &mut BindingInfo,
-    ) -> Option<TopIndexCandidate> {
-        let prefix_len = (0..order.len())
-            .take_while(|position| {
-                matches!(
-                    &stages.instrs[order.get(*position)],
-                    JoinStage::Intersect { .. }
-                )
-            })
-            .count();
-        if prefix_len == 0 {
+    ) -> Option<Vec<usize>> {
+        if order.len() == 0 {
             return None;
         }
 
-        let eligibility = TopIndexEligibility {
-            workers: crate::parallel::current_num_threads(),
-            min_keys_per_worker: gj_min_keys_per_worker(),
-        };
-        let current_estimate = estimate_size(&stages.instrs[order.get(0)], binding_info);
-        let min_threshold = eligibility
-            .min_keys_per_worker
-            .saturating_mul(eligibility.workers);
-        let candidates = (0..prefix_len).map(|order_position| {
-            let stage_index = order.get(order_position);
-            self.top_index_candidate(
-                order_position,
-                &stages.instrs[stage_index],
-                prepared.stage(stage_index),
-                atoms,
-                binding_info,
-                eligibility,
-            )
-        });
-        select_top_candidate(
-            gj_top_promotion(),
-            current_estimate,
-            min_threshold,
-            candidates,
-            |candidate| candidate.leader_keys,
+        let stage_index = order.get(0);
+        self.top_index_shards(
+            &stages.instrs[stage_index],
+            prepared.stage(stage_index),
+            atoms,
+            binding_info,
+            crate::parallel::current_num_threads(),
         )
     }
 
@@ -1777,30 +1585,18 @@ impl<'a> JoinState<'a> {
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
         sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
 
-        // A cached top index is already partitioned by hash.  Schedule one
-        // coarse global job per nonempty shard. The shard may schedule one
-        // bounded level of coalesced local packets, but every packet's subtree
-        // remains serial. Besides avoiding an intermediate key copy, this keeps
-        // related nested probes on one worker by default. Buffers that cannot
-        // construct an independent partition (the in-place executors) decline
-        // this path.
-        if gj_top_index_sharding()
-            && !stages.instrs.is_empty()
+        // A cached top index is already partitioned by hash. Schedule one
+        // coarse global job per nonempty shard and run each shard's subtree
+        // serially. Besides avoiding an intermediate key copy, this keeps
+        // related nested probes on one worker. Buffers that cannot construct an
+        // independent partition (the in-place executors) decline this path.
+        if !stages.instrs.is_empty()
             && action_buf.supports_global_partition()
-            && let Some(candidate) =
-                self.select_top_index_candidate(stages, prepared, atoms, &order, binding_info)
+            && let Some(shards) =
+                self.select_top_index_shards(stages, prepared, atoms, &order, binding_info)
         {
-            if candidate.order_position != 0 {
-                order.promote_to_front(candidate.order_position);
-                recompute_leaf_scans(&order, &mut leaf_scans, &stages.instrs, 0);
-            }
-            // If configured, install the same value-hash partition in the
-            // root child cache as the selected leader before any shard job can
-            // touch these nodes. Rejected candidates never commit a cache
-            // layout.
-            candidate.configure_child_cache();
             let mut updates = FrameUpdates::with_capacity(0);
-            for shard in candidate.shards {
+            for shard in shards {
                 let db = self.db;
                 let exec_state_for_factory = self.exec_state.clone();
                 let exec_state_for_work = self.exec_state.clone();
@@ -1859,12 +1655,10 @@ impl<'a> JoinState<'a> {
 
     /// The core method for executing a free join plan.
     ///
-    /// This method takes the plan, mutable data-structures for variable binding and staging
-    /// actions, and two indexes: `cur` which is the current stage of the plan to run, and `level`
-    /// which is the current "fan-out" node we are in. The latter parameter is an experimental
-    /// index used to detect if we are at the "top" of a plan rather than the "bottom", and is
-    /// currently used as a heuristic to determine if we should increase parallelism more than the
-    /// default.
+    /// This method takes the plan, mutable data structures for variable binding
+    /// and staging actions, and `cur`, the current stage of the plan. A top-level
+    /// coarse partition also passes `index_shard`; recursive calls clear it so
+    /// only the first intersection is restricted to that physical shard.
     #[allow(clippy::too_many_arguments)]
     fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
@@ -1911,12 +1705,9 @@ impl<'a> JoinState<'a> {
                 }
                 // TODO: `supports_parallel_drain`` is a hack because currently
                 // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
-                if (index_shard.is_some()
-                    && cur == 0
-                    && action_buf.supports_local_partition_drain())
-                    || (index_shard.is_none()
-                        && cur < free_join_fork_depth()
-                        && action_buf.supports_parallel_drain())
+                if index_shard.is_none()
+                    && cur < free_join_fork_depth()
+                    && action_buf.supports_parallel_drain()
                 {
                     drain_updates_parallel!($updates)
                 } else {
@@ -2892,16 +2683,6 @@ trait ActionBuffer<'state, A: NumericId>: Send {
         true
     }
 
-    /// Whether a coarse top-index partition may schedule its `cur = 0`
-    /// `FrameUpdates` packets on the current worker's local queue.
-    ///
-    /// This is separate from [`Self::supports_parallel_drain`] so a partition
-    /// can explicitly permit one local level while its packet buffer remains
-    /// fully serial.
-    fn supports_local_partition_drain(&self) -> bool {
-        false
-    }
-
     /// Whether this buffer can enqueue independent top-level partitions.
     fn supports_global_partition(&self) -> bool {
         false
@@ -2984,50 +2765,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
     }
 }
 
-#[derive(Clone)]
-struct LocalPacketLimiter {
-    outstanding: Arc<AtomicUsize>,
-    limit: usize,
-}
-
-impl LocalPacketLimiter {
-    fn new() -> Self {
-        Self::with_limit(gj_local_queue_limit())
-    }
-
-    fn with_limit(limit: usize) -> Self {
-        Self {
-            outstanding: Arc::new(AtomicUsize::new(0)),
-            limit,
-        }
-    }
-
-    fn try_acquire(&self) -> Option<LocalPacketPermit> {
-        self.outstanding
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |outstanding| {
-                (outstanding < self.limit).then_some(outstanding + 1)
-            })
-            .ok()
-            .map(|_| LocalPacketPermit {
-                outstanding: self.outstanding.clone(),
-            })
-    }
-}
-
-struct LocalPacketPermit {
-    outstanding: Arc<AtomicUsize>,
-}
-
-impl Drop for LocalPacketPermit {
-    fn drop(&mut self) {
-        let previous = self.outstanding.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(previous > 0);
-    }
-}
-
-/// Strictly serial action buffer used inside one locally scheduled packet.
-/// It shares the rule-set match counter with sibling packets, but executes all
-/// recursive join and action work inline and cannot schedule grandchildren.
+/// Strictly serial action buffer used inside one globally scheduled top-index
+/// shard. It shares the rule-set match counter with sibling shards, but executes
+/// all recursive join and action work inline.
 struct SerialScopedActionBuffer<'scope> {
     rule_set: &'scope RuleSet,
     match_counter: Arc<MatchCounter>,
@@ -3113,104 +2853,6 @@ impl<'scope> ActionBuffer<'scope, ActionId> for SerialScopedActionBuffer<'scope>
     }
 }
 
-/// Buffer owned by one globally scheduled top-index shard. It may fork
-/// coalesced `cur = 0` packets onto that worker's local deque, but every packet
-/// receives a [`SerialScopedActionBuffer`] and therefore runs the entire
-/// `cur = 1` subtree and its actions serially.
-struct TopPartitionActionBuffer<'inner, 'scope> {
-    scope: &'inner Scope<'scope>,
-    serial: SerialScopedActionBuffer<'scope>,
-    limiter: LocalPacketLimiter,
-}
-
-impl<'inner, 'scope> TopPartitionActionBuffer<'inner, 'scope> {
-    fn new(
-        scope: &'inner Scope<'scope>,
-        rule_set: &'scope RuleSet,
-        match_counter: Arc<MatchCounter>,
-    ) -> Self {
-        Self {
-            scope,
-            serial: SerialScopedActionBuffer::new(rule_set, match_counter),
-            limiter: LocalPacketLimiter::new(),
-        }
-    }
-}
-
-impl<'scope> ActionBuffer<'scope, ActionId> for TopPartitionActionBuffer<'_, 'scope> {
-    type AsLocal<'a>
-        = SerialScopedActionBuffer<'scope>
-    where
-        'scope: 'a;
-    type AsGlobalSerial<'a>
-        = Self
-    where
-        'scope: 'a;
-
-    fn push_bindings(
-        &mut self,
-        action: ActionId,
-        bindings: &DenseIdMap<Variable, Value>,
-        to_exec_state: impl FnMut() -> ExecutionState<'scope>,
-    ) {
-        self.serial.push_bindings(action, bindings, to_exec_state);
-    }
-
-    fn flush(&mut self, exec_state: &mut ExecutionState) {
-        self.serial.flush(exec_state);
-    }
-
-    fn recur<'local>(
-        &mut self,
-        mut local: BorrowedLocalState<'local>,
-        mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut SerialScopedActionBuffer<'scope>)
-        + Send
-        + 'scope,
-    ) {
-        let rule_set = self.serial.rule_set;
-        let match_counter = self.serial.match_counter.clone();
-        if let Some(permit) = self.limiter.try_acquire() {
-            let mut inner = local.clone_state();
-            self.scope.spawn_local(move |_| {
-                let _permit = permit;
-                let mut buf = SerialScopedActionBuffer::new(rule_set, match_counter);
-                work(inner.borrow_mut(), &mut buf);
-                buf.flush(&mut to_exec_state());
-            });
-        } else {
-            let mut buf = SerialScopedActionBuffer::new(rule_set, match_counter);
-            work(local, &mut buf);
-            buf.flush(&mut to_exec_state());
-        }
-    }
-
-    fn recur_global_serial<'local>(
-        &mut self,
-        local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self) + Send + 'scope,
-    ) {
-        work(local, self);
-    }
-
-    fn morsel_size(&mut self, level: usize, _total: usize) -> usize {
-        if level == 0 && gj_local_depth() == 1 {
-            gj_local_morsel()
-        } else {
-            256
-        }
-    }
-
-    fn supports_parallel_drain(&self) -> bool {
-        false
-    }
-
-    fn supports_local_partition_drain(&self) -> bool {
-        gj_local_depth() == 1
-    }
-}
-
 /// An action buffer that hands off batches of actions to scoped worker tasks.
 struct ScopedActionBuffer<'inner, 'scope> {
     scope: &'inner Scope<'scope>,
@@ -3242,7 +2884,7 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
     where
         'scope: 'a;
     type AsGlobalSerial<'a>
-        = TopPartitionActionBuffer<'a, 'scope>
+        = SerialScopedActionBuffer<'scope>
     where
         'scope: 'a;
     fn push_bindings(
@@ -3323,15 +2965,15 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         &mut self,
         mut local: BorrowedLocalState<'local>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut TopPartitionActionBuffer<'a, 'scope>)
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut SerialScopedActionBuffer<'scope>)
         + Send
         + 'scope,
     ) {
         let rule_set = self.rule_set;
         let match_counter = self.match_counter.clone();
         let mut inner = local.clone_state();
-        self.scope.spawn_global(move |scope| {
-            let mut buf = TopPartitionActionBuffer::new(scope, rule_set, match_counter);
+        self.scope.spawn_global(move |_| {
+            let mut buf = SerialScopedActionBuffer::new(rule_set, match_counter);
             work(inner.borrow_mut(), &mut buf);
             buf.flush(&mut to_exec_state());
         });
@@ -3573,99 +3215,6 @@ impl<'scope> ActionBuffer<'scope, MatId> for SerialScopedMaterializer {
     }
 }
 
-/// Materialization counterpart to [`TopPartitionActionBuffer`]. Only the
-/// `cur = 0` packet boundary may use the worker-local queue; every packet gets
-/// a serial materializer and cannot spawn deeper work.
-struct TopPartitionMaterializer<'inner, 'scope> {
-    scope: &'inner Scope<'scope>,
-    serial: SerialScopedMaterializer,
-    limiter: LocalPacketLimiter,
-}
-
-impl<'inner, 'scope> TopPartitionMaterializer<'inner, 'scope> {
-    fn new(
-        scope: &'inner Scope<'scope>,
-        specs: Arc<DenseIdMap<MatId, MatSpec>>,
-        materializations: Arc<DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>>,
-    ) -> Self {
-        Self {
-            scope,
-            serial: SerialScopedMaterializer::new(specs, materializations),
-            limiter: LocalPacketLimiter::new(),
-        }
-    }
-}
-
-impl<'scope> ActionBuffer<'scope, MatId> for TopPartitionMaterializer<'_, 'scope> {
-    type AsLocal<'a>
-        = SerialScopedMaterializer
-    where
-        'scope: 'a;
-    type AsGlobalSerial<'a>
-        = Self
-    where
-        'scope: 'a;
-
-    fn push_bindings(
-        &mut self,
-        mat_id: MatId,
-        bindings: &DenseIdMap<Variable, Value>,
-        to_exec_state: impl FnMut() -> ExecutionState<'scope>,
-    ) {
-        self.serial.push_bindings(mat_id, bindings, to_exec_state);
-    }
-
-    fn flush(&mut self, exec_state: &mut ExecutionState) {
-        self.serial.flush(exec_state);
-    }
-
-    fn recur<'local>(
-        &mut self,
-        mut local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut SerialScopedMaterializer) + Send + 'scope,
-    ) {
-        let specs = self.serial.specs.clone();
-        let materializations = self.serial.materializations.clone();
-        if let Some(permit) = self.limiter.try_acquire() {
-            let mut inner = local.clone_state();
-            self.scope.spawn_local(move |_| {
-                let _permit = permit;
-                let mut buf = SerialScopedMaterializer::new(specs, materializations);
-                work(inner.borrow_mut(), &mut buf);
-            });
-        } else {
-            let mut buf = SerialScopedMaterializer::new(specs, materializations);
-            work(local, &mut buf);
-        }
-    }
-
-    fn recur_global_serial<'local>(
-        &mut self,
-        local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self) + Send + 'scope,
-    ) {
-        work(local, self);
-    }
-
-    fn morsel_size(&mut self, level: usize, _total: usize) -> usize {
-        if level == 0 && gj_local_depth() == 1 {
-            gj_local_morsel()
-        } else {
-            256
-        }
-    }
-
-    fn supports_parallel_drain(&self) -> bool {
-        false
-    }
-
-    fn supports_local_partition_drain(&self) -> bool {
-        gj_local_depth() == 1
-    }
-}
-
 struct ScopedMaterializer<'inner, 'scope> {
     scope: &'inner Scope<'scope>,
     specs: Arc<DenseIdMap<MatId, MatSpec>>,
@@ -3679,7 +3228,7 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
     where
         'scope: 'a;
     type AsGlobalSerial<'a>
-        = TopPartitionMaterializer<'a, 'scope>
+        = SerialScopedMaterializer
     where
         'scope: 'a;
 
@@ -3749,15 +3298,13 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
         &mut self,
         mut local: BorrowedLocalState<'local>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut TopPartitionMaterializer<'a, 'scope>)
-        + Send
-        + 'scope,
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut SerialScopedMaterializer) + Send + 'scope,
     ) {
         let specs = self.specs.clone();
         let materializations = self.materializations.clone();
         let mut inner = local.clone_state();
-        self.scope.spawn_global(move |scope| {
-            let mut buf = TopPartitionMaterializer::new(scope, specs, materializations);
+        self.scope.spawn_global(move |_| {
+            let mut buf = SerialScopedMaterializer::new(specs, materializations);
             work(inner.borrow_mut(), &mut buf);
         });
     }
@@ -4052,12 +3599,6 @@ impl InstrOrder {
     fn len(&self) -> usize {
         self.data.len()
     }
-
-    /// Move the stage at `position` to the front while preserving the relative
-    /// order of every stage it passes.
-    fn promote_to_front(&mut self, position: usize) {
-        self.data[..=position].rotate_right(1);
-    }
 }
 
 /// Per-position leaf-scan flags. `leaf_scans[i] == true` means the stage currently scheduled at
@@ -4102,10 +3643,8 @@ impl LocalState {
 }
 
 #[cfg(test)]
-mod local_packet_tests {
+mod top_index_tests {
     use std::{
-        cell::Cell,
-        ptr,
         sync::{
             Arc, Barrier,
             atomic::{AtomicUsize, Ordering},
@@ -4113,15 +3652,9 @@ mod local_packet_tests {
         thread,
     };
 
-    use crate::{
-        common::Value, numeric_id::NumericId, offsets::Subset, parallel_heuristics::GjTopPromotion,
-        table_spec::ColumnId,
-    };
+    use crate::{common::Value, numeric_id::NumericId, offsets::Subset};
 
-    use super::{
-        ChildMap, InstrOrder, LocalPacketLimiter, TrieNode, select_top_candidate,
-        top_index_shape_is_eligible,
-    };
+    use super::{ChildLock, get_or_insert_child, top_index_shape_is_eligible};
 
     #[test]
     fn top_index_partitioning_rejects_serial_tiny_and_skewed_shapes() {
@@ -4133,102 +3666,9 @@ mod local_packet_tests {
     }
 
     #[test]
-    fn current_top_policy_probes_only_sorted_position_zero() {
-        let probes = Cell::new(0);
-        let candidates = [None, Some((1, 512))].into_iter().inspect(|_| {
-            probes.set(probes.get() + 1);
-        });
-        let selected =
-            select_top_candidate(GjTopPromotion::Current, 100, 256, candidates, |candidate| {
-                candidate.1
-            });
-        assert_eq!(selected, None);
-        assert_eq!(probes.get(), 1);
-    }
-
-    #[test]
-    fn eligible_top_policy_keeps_current_or_uses_first_guarded_fallback() {
-        let probes = Cell::new(0);
-        let candidates = [Some((0, 256)), Some((1, 512))].into_iter().inspect(|_| {
-            probes.set(probes.get() + 1);
-        });
-        assert_eq!(
-            select_top_candidate(
-                GjTopPromotion::Eligible,
-                100,
-                256,
-                candidates,
-                |candidate| candidate.1,
-            ),
-            Some((0, 256))
-        );
-        assert_eq!(probes.get(), 1);
-
-        // max(4 * 100, 256) = 400: skip the first eligible-but-too-large
-        // fallback and preserve the first later candidate within the guard.
-        assert_eq!(
-            select_top_candidate(
-                GjTopPromotion::Eligible,
-                100,
-                256,
-                [None, Some((1, 401)), Some((2, 300))].into_iter(),
-                |candidate| candidate.1,
-            ),
-            Some((2, 300))
-        );
-    }
-
-    #[test]
-    fn largest_top_policy_uses_actual_keys_and_keeps_earliest_tie() {
-        assert_eq!(
-            select_top_candidate(
-                GjTopPromotion::Largest,
-                1,
-                256,
-                [Some((0, 256)), None, Some((2, 1024)), Some((3, 1024))].into_iter(),
-                |candidate| candidate.1,
-            ),
-            Some((2, 1024))
-        );
-    }
-
-    #[test]
-    fn top_promotion_preserves_passed_stage_order() {
-        let mut order = InstrOrder::from_iter([3, 1, 4, 2].into_iter());
-        order.promote_to_front(2);
-        assert_eq!(
-            (0..order.len()).map(|i| order.get(i)).collect::<Vec<_>>(),
-            vec![4, 3, 1, 2]
-        );
-    }
-
-    #[test]
-    fn local_packet_limiter_bounds_outstanding_work_and_reuses_slots() {
-        let limiter = LocalPacketLimiter::with_limit(2);
-        let first = limiter.try_acquire().expect("first packet should fit");
-        let second = limiter.try_acquire().expect("second packet should fit");
-        assert!(limiter.try_acquire().is_none());
-
-        drop(first);
-        let replacement = limiter
-            .try_acquire()
-            .expect("completed packet should release its slot");
-        assert!(limiter.try_acquire().is_none());
-
-        drop((second, replacement));
-        assert!(limiter.try_acquire().is_some());
-    }
-
-    #[test]
-    fn zero_local_packet_limit_always_executes_inline() {
-        let limiter = LocalPacketLimiter::with_limit(0);
-        assert!(limiter.try_acquire().is_none());
-    }
-
-    #[test]
-    fn sharded_child_cache_returns_one_arc_for_racing_same_key() {
+    fn child_cache_returns_one_arc_for_racing_same_key() {
         const THREADS: usize = 16;
-        let map = Arc::new(ChildMap::sharded(8));
+        let map = Arc::new(ChildLock::default());
         let barrier = Arc::new(Barrier::new(THREADS));
         let constructed = Arc::new(AtomicUsize::new(0));
         let value = Value::from_usize(17);
@@ -4240,7 +3680,7 @@ mod local_packet_tests {
                 let constructed = constructed.clone();
                 thread::spawn(move || {
                     barrier.wait();
-                    map.get_or_insert(value, &[], || {
+                    get_or_insert_child(&map, value, &[], || {
                         constructed.fetch_add(1, Ordering::Relaxed);
                         Subset::empty()
                     })
@@ -4254,65 +3694,5 @@ mod local_packet_tests {
 
         assert_eq!(constructed.load(Ordering::Relaxed), 1);
         assert!(nodes[1..].iter().all(|node| Arc::ptr_eq(&nodes[0], node)));
-    }
-
-    #[test]
-    fn sharded_child_cache_maps_distinct_values_to_every_aligned_lock() {
-        let map = Arc::new(ChildMap::sharded(8));
-        let ChildMap::Sharded { shard_data, shards } = map.as_ref() else {
-            unreachable!()
-        };
-        let mut values = vec![None; shard_data.n_shards()];
-        for raw in 0..100_000 {
-            let value = Value::from_usize(raw);
-            let selected = shard_data.get_shard(&value, shards);
-            let shard = shards
-                .iter()
-                .find_map(|(shard, lock)| ptr::eq(lock, selected).then_some(shard.index()))
-                .unwrap();
-            values[shard].get_or_insert(value);
-            if values.iter().all(Option::is_some) {
-                break;
-            }
-        }
-        assert!(values.iter().all(Option::is_some));
-
-        let handles = values
-            .into_iter()
-            .map(|value| {
-                let map = map.clone();
-                thread::spawn(move || {
-                    map.get_or_insert(value.unwrap(), &[], Subset::empty);
-                })
-            })
-            .collect::<Vec<_>>();
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        let ChildMap::Sharded { shards, .. } = map.as_ref() else {
-            unreachable!()
-        };
-        for (_, shard) in shards.iter() {
-            assert_eq!(shard.read().unwrap().len(), 1);
-        }
-    }
-
-    #[test]
-    fn aligned_root_children_default_to_single_and_single_is_not_promoted() {
-        let col = ColumnId::new(0);
-        let root = TrieNode::new(Subset::empty());
-        assert!(root.initialize_aligned_child_map(col, 1, 8));
-        assert!(matches!(root.child_map(col, 1), ChildMap::Sharded { .. }));
-        assert!(!root.initialize_aligned_child_map(col, 1, 16));
-
-        let child = root
-            .child_map(col, 1)
-            .get_or_insert(Value::from_usize(3), &[], Subset::empty);
-        assert!(child.cached_children.get().is_none());
-        assert!(matches!(child.child_map(col, 1), ChildMap::Single(_)));
-
-        assert!(!child.initialize_aligned_child_map(col, 1, 8));
-        assert!(matches!(child.child_map(col, 1), ChildMap::Single(_)));
     }
 }
