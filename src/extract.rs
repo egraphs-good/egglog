@@ -388,6 +388,30 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         ))
     }
 
+    /// Collect the ids of every eq sort reachable inside a container sort,
+    /// i.e. the sorts a container child's cost can depend on. `visited` guards
+    /// against container sorts that reach themselves (e.g. an `UnstableFn`
+    /// closing over values of its own sort).
+    fn collect_container_dep_sorts(
+        &self,
+        sort: &ArcSort,
+        visited: &mut HashSet<String>,
+        out: &mut Vec<usize>,
+    ) {
+        if !visited.insert(sort.name().to_owned()) {
+            return;
+        }
+        if sort.is_container_sort() {
+            for inner in sort.inner_sorts() {
+                self.collect_container_dep_sorts(&inner, visited, out);
+            }
+        } else if sort.is_eq_sort()
+            && let Some(id) = self.sort_ids.get(sort.name())
+        {
+            out.push(*id);
+        }
+    }
+
     fn bellman_ford(&mut self, egraph: &EGraph) {
         // Materialize each function's non-subsumed rows once, so the relaxation
         // passes below iterate plain memory instead of re-scanning every table.
@@ -428,14 +452,59 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             })
             .collect();
 
+        // The eq sorts each function's row costs depend on: eq children directly,
+        // plus every eq sort reachable inside a container child.
+        let func_deps: Vec<Vec<usize>> = func_data
+            .iter()
+            .map(|f| {
+                let mut deps: Vec<usize> = Vec::new();
+                let mut visited: HashSet<String> = Default::default();
+                for kind in &f.child_kinds {
+                    match kind {
+                        ChildKind::EqSort(Some(id)) => deps.push(*id),
+                        ChildKind::EqSort(None) | ChildKind::Base(_) => {}
+                        ChildKind::Container(sort) => {
+                            self.collect_container_dep_sorts(sort, &mut visited, &mut deps)
+                        }
+                    }
+                }
+                deps.sort_unstable();
+                deps.dedup();
+                deps
+            })
+            .collect();
+
+        // A function's pass recomputes exactly the same cost for every row unless
+        // one of its dependency sorts gained a cost update since the snapshot
+        // taken right before the function was last processed. Skipping it in that
+        // case drops no updates, so the relaxation trace (and hence topo ranks
+        // and extracted terms) is unchanged.
+        let mut sort_versions: Vec<u64> = vec![0; self.costs.len()];
+        let mut last_seen: Vec<Option<Vec<u64>>> = vec![None; func_data.len()];
+
         let mut ch_costs: Vec<C> = Vec::new();
         let mut ensure_fixpoint = false;
         while !ensure_fixpoint {
             ensure_fixpoint = true;
 
-            for f in &func_data {
+            for (fi, f) in func_data.iter().enumerate() {
                 if f.rows.is_empty() {
                     continue;
+                }
+                match &mut last_seen[fi] {
+                    Some(seen)
+                        if func_deps[fi]
+                            .iter()
+                            .zip(seen.iter())
+                            .all(|(d, s)| sort_versions[*d] == *s) =>
+                    {
+                        continue;
+                    }
+                    Some(seen) => {
+                        seen.clear();
+                        seen.extend(func_deps[fi].iter().map(|d| sort_versions[*d]));
+                    }
+                    slot => *slot = Some(func_deps[fi].iter().map(|d| sort_versions[*d]).collect()),
                 }
                 let func = egraph.functions.get(&f.name).unwrap();
                 for row in f.rows.chunks_exact(f.arity) {
@@ -462,6 +531,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     // even when a term has a cost equal to its subterms
                     if updated {
                         ensure_fixpoint = false;
+                        sort_versions[f.output_sort_id] += 1;
                         self.topo_rnk_cnt += 1;
                         self.topo_rnk[f.output_sort_id].insert(target, self.topo_rnk_cnt);
                     }
