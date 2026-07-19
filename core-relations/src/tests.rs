@@ -475,17 +475,6 @@ fn prepared_plan_indexes_preserve_uncacheable_columns() {
 
 #[test]
 fn gj_top_index_shards_preserve_count_and_materialization() {
-    assert!(crate::parallel_heuristics::gj_top_index_sharding());
-    assert_eq!(crate::parallel_heuristics::gj_local_depth(), 0);
-    assert_eq!(
-        crate::parallel_heuristics::gj_child_cache(),
-        crate::parallel_heuristics::GjChildCache::Single
-    );
-    assert_eq!(
-        crate::parallel_heuristics::gj_top_promotion(),
-        crate::parallel_heuristics::GjTopPromotion::Current
-    );
-    assert_eq!(crate::parallel_heuristics::gj_min_keys_per_worker(), 16);
     gj_top_index_shards_preserve_count_and_materialization_inner();
 }
 

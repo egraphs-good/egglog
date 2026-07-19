@@ -14,44 +14,9 @@ const DEFAULT_TABLE_OP_CUTOFF: usize = 400_000;
 const DEFAULT_FREE_JOIN_FORK_DEPTH: usize = 2;
 const DEFAULT_ACTION_BATCH_SIZE: usize = 8 * 1024;
 
-// Fixed generic-join scheduling choices selected by cross-workload
-// benchmarking. Coarse index partitioning is enabled. Recursive fallback work
-// uses worker-local queues, but already-sharded partitions do not create an
-// additional packet level. Aligned child caches and top-variable promotion
-// remain disabled.
-const GJ_TOP_INDEX_SHARDING: bool = true;
-const GJ_LOCAL_DEPTH: usize = 0;
-const GJ_LOCAL_MORSEL: usize = 64;
-const GJ_LOCAL_QUEUE_LIMIT: usize = 2;
-const GJ_CHILD_CACHE: GjChildCache = GjChildCache::Single;
-const GJ_TOP_PROMOTION: GjTopPromotion = GjTopPromotion::Current;
-const GJ_MIN_KEYS_PER_WORKER: usize = 16;
-
-/// Layout for root trie-node child caches during coarse generic-join
-/// partitioning.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GjChildCache {
-    /// One lock per cached column.
-    Single,
-    /// One lock per top-index shard, using the same value hash partition.
-    Aligned,
-}
-
-/// Policy for replacing the initially sorted top generic-join variable with a
-/// coarse-partitionable later variable.
-// The non-selected policies remain available to the executor's deterministic
-// policy tests even though production uses the fixed `Current` policy.
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GjTopPromotion {
-    /// Consider only the variable already sorted into position zero.
-    Current,
-    /// Keep an eligible current variable, otherwise choose the first guarded
-    /// eligible variable in the leading Intersect prefix.
-    Eligible,
-    /// Choose the eligible variable with the largest actual leader cardinality.
-    Largest,
-}
+/// Minimum number of top-index leader keys required per worker before coarse
+/// generic-join partitioning is worthwhile.
+pub(crate) const MIN_TOP_INDEX_KEYS_PER_WORKER: usize = 16;
 
 static CUTOFFS: OnceLock<Cutoffs> = OnceLock::new();
 
@@ -107,44 +72,6 @@ pub(crate) fn free_join_fork_depth() -> usize {
 /// Number of action bindings to batch before dispatching a scoped worker task.
 pub(crate) fn action_batch_size() -> usize {
     cutoffs().action_batch_size
-}
-
-/// Whether a parallel generic join may schedule one coarse global job per
-/// physical shard of its top cached index.
-pub(crate) fn gj_top_index_sharding() -> bool {
-    GJ_TOP_INDEX_SHARDING
-}
-
-/// Number of recursive levels below a coarse top-index shard that may enqueue
-/// worker-local packets. The implementation currently accepts only zero or one.
-pub(crate) fn gj_local_depth() -> usize {
-    GJ_LOCAL_DEPTH
-}
-
-/// Number of top-level generic-join frames coalesced into one local packet.
-pub(crate) fn gj_local_morsel() -> usize {
-    GJ_LOCAL_MORSEL
-}
-
-/// Maximum number of outstanding local packets per coarse index shard.
-pub(crate) fn gj_local_queue_limit() -> usize {
-    GJ_LOCAL_QUEUE_LIMIT
-}
-
-/// Child-cache layout used by eligible coarse top-index partitions.
-pub(crate) fn gj_child_cache() -> GjChildCache {
-    GJ_CHILD_CACHE
-}
-
-/// Policy for promoting an eligible top generic-join variable.
-pub(crate) fn gj_top_promotion() -> GjTopPromotion {
-    GJ_TOP_PROMOTION
-}
-
-/// Minimum number of leader keys required per worker for coarse top-index
-/// partitioning.
-pub(crate) fn gj_min_keys_per_worker() -> usize {
-    GJ_MIN_KEYS_PER_WORKER
 }
 
 fn should_parallelize(len: usize, cutoff: usize) -> bool {
