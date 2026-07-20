@@ -32,6 +32,8 @@ pub use free_join::{
     make_external_func, plan::PlanStrategy,
 };
 pub use hash_index::TupleIndex;
+#[doc(hidden)]
+pub use hash_index::bench_support;
 pub use offsets::{OffsetRange, RowId, Subset, SubsetRef};
 pub use pool::{Pool, PoolSet, Pooled};
 pub use query::{

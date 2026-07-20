@@ -20,7 +20,7 @@ use crate::{
         mask::{Mask, MaskIter, ValueSource},
     },
     common::Value,
-    hash_index::{ColumnIndex, IndexBase, TupleIndex},
+    hash_index::{IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
     pool::{PoolSet, Pooled, with_pool_set},
     row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
@@ -90,7 +90,7 @@ pub struct TableChange {
 }
 
 /// A constraint on the values within a row.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Constraint {
     Eq { l_col: ColumnId, r_col: ColumnId },
     EqConst { col: ColumnId, val: Value },
@@ -426,13 +426,6 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
             out.add_row(row_id, row);
         })
     }
-    fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        let wrapped = WrappedTableRef {
-            inner: table,
-            wrapper: self,
-        };
-        ColumnIndex::build_for_subset(wrapped, subset, col)
-    }
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         let table = table.as_any().downcast_ref::<T>().unwrap();
         let mut res = TupleIndex::new(cols.len());
@@ -613,12 +606,7 @@ impl WrappedTable {
         self.as_ref().scan_bounded(subset, start, n, out)
     }
 
-    /// Group the contents of the given subset by the given column.
-    pub(crate) fn group_by_col(&self, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        self.as_ref().group_by_col(subset, col)
-    }
-
-    /// A multi-column vairant of [`WrappedTable::group_by_col`].
+    /// Group the contents of the given subset by the given columns.
     pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         self.as_ref().group_by_key(subset, cols)
     }
@@ -703,7 +691,6 @@ pub(crate) trait TableWrapper: Send + Sync {
         n: usize,
         out: &mut TaggedRowBuffer,
     ) -> Option<Offset>;
-    fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex;
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex;
 
     /// Scan each row in `subset`, calling `f(row_id, col_value)` for each.
@@ -797,12 +784,7 @@ impl WrappedTableRef<'_> {
         self.wrapper.scan_bounded(self.inner, subset, start, n, out)
     }
 
-    /// Group the contents of the given subset by the given column.
-    pub(crate) fn group_by_col(&self, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        self.wrapper.group_by_col(self.inner, subset, col)
-    }
-
-    /// A multi-column vairant of [`WrappedTable::group_by_col`].
+    /// Group the contents of the given subset by the given columns.
     pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         self.wrapper.group_by_key(self.inner, subset, cols)
     }

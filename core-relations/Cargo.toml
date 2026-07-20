@@ -42,6 +42,10 @@ rayon = { workspace = true }
 name = "writes"
 harness = false
 
+[[bench]]
+name = "build_index"
+harness = false
+
 [features]
 default = []
 debug-val-trace = []
