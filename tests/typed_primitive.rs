@@ -15,11 +15,38 @@
 use egglog::add_primitive;
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
+use egglog::scheduler::{Matches, Scheduler};
 use egglog::sort::{I64Sort, S, StringSort};
 use egglog::{
-    EGraph, FullPrim, FullState, Primitive, PurePrim, PureState, RawValues, Read, ReadPrim,
-    ReadState, Value, WritePrim, WriteState, prelude::*,
+    EGraph, Error, FullPrim, FullState, Primitive, PurePrim, PureState, RawValues, Read, ReadPrim,
+    ReadState, TypeError, Value, WritePrim, WriteState, prelude::*,
 };
+
+/// Assert that `result` failed with `TypeError::AmbiguousPrimitive`. Both direct
+/// primitive calls and `unstable-fn` targets report duplicate registrations
+/// through this one variant.
+#[track_caller]
+fn assert_ambiguous_primitive<T: std::fmt::Debug>(result: Result<T, Error>) {
+    assert!(
+        matches!(
+            result,
+            Err(Error::TypeError(TypeError::AmbiguousPrimitive { .. }))
+        ),
+        "expected TypeError::AmbiguousPrimitive, got: {result:?}"
+    );
+}
+
+/// A scheduler that fires every match. Used by the scheduled-compilation
+/// regression test; the rule there fails to compile before any match is
+/// produced, so `filter_matches` is never actually reached.
+#[derive(Clone)]
+struct ChooseAllScheduler;
+impl Scheduler for ChooseAllScheduler {
+    fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+        matches.choose_all();
+        false
+    }
+}
 
 // --- shared test fixtures ---
 
@@ -489,15 +516,83 @@ fn merge_primitives_use_write_context() {
 /// Direct primitive resolution requires exactly one matching registration for
 /// `(name, signature, context)`. Two independently registered pure primitives
 /// both carry valid runtime ids for every context, so a same-signature direct
-/// call is ambiguous instead of silently picking one registration.
+/// call is ambiguous. Resolution now reports a graceful `TypeError` instead of
+/// panicking.
 #[test]
-#[should_panic(expected = "Ambiguous primitive resolution")]
-fn two_same_signature_registrations_panic_on_use() {
+fn two_same_signature_registrations_error_on_use() {
     let mut egraph = EGraph::default();
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
 
-    let _ = egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))");
+    assert_ambiguous_primitive(egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))"));
+}
+
+/// A duplicate same-signature primitive used on a rule's left-hand side (query)
+/// is ambiguous in the query (`Pure`) context and reports a graceful error.
+#[test]
+fn duplicate_primitive_in_rule_query_errors() {
+    let mut egraph = EGraph::default();
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+
+    assert_ambiguous_primitive(egraph.parse_and_run_program(
+        None,
+        "(relation R (i64))\n\
+         (rule ((R x) (= y (dup-add x x))) ((R y)))",
+    ));
+}
+
+/// A duplicate same-signature primitive used on a rule's right-hand side
+/// (action) is ambiguous in the action (`Write`) context and reports a graceful
+/// error.
+#[test]
+fn duplicate_primitive_in_rule_action_errors() {
+    let mut egraph = EGraph::default();
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+
+    assert_ambiguous_primitive(egraph.parse_and_run_program(
+        None,
+        "(relation R (i64))\n\
+         (function out (i64) i64 :no-merge)\n\
+         (rule ((R x)) ((set (out x) (dup-add x x))))",
+    ));
+}
+
+/// Scheduled rules are re-lowered lazily inside `step_rules_with_scheduler`, so
+/// an ambiguity introduced after the rule is defined (here by a second
+/// registration of `dup-echo`) only surfaces during scheduled compilation. That
+/// compilation happens after the scheduler has taken `rulesets`/`schedulers` out
+/// of the EGraph, so this also guards that those fields are restored on error:
+/// a second step must reproduce the same graceful error rather than fail with a
+/// spurious "no such ruleset".
+#[test]
+fn duplicate_primitive_in_scheduled_rule_errors_and_restores() {
+    let mut egraph = EGraph::default();
+    // One registration: the rule below lowers cleanly when it is defined.
+    egraph.add_pure_primitive(PureEcho("dup-echo"), None);
+    egraph
+        .parse_and_run_program(
+            None,
+            "(sort Fn (UnstableFn (i64) i64))\n\
+             (ruleset test)\n\
+             (relation R (i64))\n\
+             (relation S (i64))\n\
+             (rule ((R x)) ((let f (unstable-fn \"dup-echo\")) (S (unstable-app f x))) \
+                   :ruleset test :name \"uses-dup\")\n\
+             (R 0)",
+        )
+        .unwrap();
+
+    // A second registration makes `dup-echo` ambiguous.
+    egraph.add_pure_primitive(PureEcho("dup-echo"), None);
+    let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+
+    assert_ambiguous_primitive(egraph.step_rules_with_scheduler(scheduler_id, "test"));
+
+    // If `rulesets`/`schedulers` were not restored, this would fail with a
+    // "no such ruleset" error instead of reproducing the ambiguity.
+    assert_ambiguous_primitive(egraph.step_rules_with_scheduler(scheduler_id, "test"));
 }
 
 /// Registering a primitive whose argument type has no corresponding sort must
@@ -514,18 +609,20 @@ fn missing_sort_panics_with_type_name() {
 /// per application context, and duplicate same-signature registrations are
 /// ambiguous for every context where more than one runtime id matches.
 #[test]
-#[should_panic(expected = "Ambiguous primitive resolution")]
-fn unstable_fn_duplicate_primitive_registration_panics_on_build() {
+fn unstable_fn_duplicate_primitive_registration_errors_on_build() {
     let mut egraph = EGraph::default();
     egraph.add_pure_primitive(PureEcho("dup-echo"), None);
     egraph.add_pure_primitive(PureEcho("dup-echo"), None);
 
-    let _ = egraph.parse_and_run_program(
+    // Duplicate same-signature registrations are ambiguous; building the
+    // `unstable-fn` reference now surfaces the same `TypeError::AmbiguousPrimitive`
+    // as a direct call instead of panicking.
+    assert_ambiguous_primitive(egraph.parse_and_run_program(
         None,
         "(sort Fn (UnstableFn (i64) i64))\n\
          (let $f (unstable-fn \"dup-echo\"))\n\
          (check (= (unstable-app $f 7) 7))",
-    );
+    ));
 }
 
 // --- 4x4 unstable-app dispatch matrix ---

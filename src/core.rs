@@ -169,12 +169,13 @@ impl ResolvedCall {
         types: &[ArcSort],
         typeinfo: &TypeInfo,
         ctx: crate::Context,
-    ) -> ResolvedCall {
+        span: &Span,
+    ) -> Result<ResolvedCall, TypeError> {
         if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return ResolvedCall::Func(ty.clone());
+                return Ok(ResolvedCall::Func(ty.clone()));
             }
         }
 
@@ -184,20 +185,30 @@ impl ResolvedCall {
             .flatten()
             .filter(|p| p.context_ids[ctx].is_some() && p.accept(types, typeinfo));
         if let Some(picked) = primitives.next() {
+            // Type inference has already assigned concrete types, so a valid
+            // overload (`+`, `map-empty`, container primitives) leaves exactly
+            // one matching registration. A second match means two registrations
+            // are indistinguishable for this signature and context.
             if primitives.next().is_some() {
-                panic!(
-                    "Ambiguous primitive resolution for {head:?} in direct call context {ctx:?}"
-                );
+                return Err(TypeError::AmbiguousPrimitive {
+                    name: head.to_owned(),
+                    ctx,
+                    span: span.clone(),
+                });
             }
             let (out, inp) = types.split_last().unwrap();
-            return ResolvedCall::Primitive(SpecializedPrimitive {
+            return Ok(ResolvedCall::Primitive(SpecializedPrimitive {
                 prim_with_id: picked.clone(),
                 input: inp.to_vec(),
                 output: out.clone(),
-            });
+            }));
         }
 
-        panic!("No resolution for {head:?} in context {ctx:?}");
+        Err(TypeError::UnresolvedPrimitive {
+            name: head.to_owned(),
+            ctx,
+            span: span.clone(),
+        })
     }
 }
 
