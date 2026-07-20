@@ -36,8 +36,6 @@ use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_add_primitive::add_primitive_with_validator;
-// Token-tree quasiquotes that route through the parser (`?x`/`:field`/`...` and
-// all parser macros work). Defined in the `egglog-quote` proc-macro crate.
 use egglog_ast::generic_ast::{Change, GenericExpr, GenericFact, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
@@ -2944,10 +2942,8 @@ pub enum Error {
 
 impl Error {
     /// The primary source span this error is anchored to, if one is available.
-    ///
-    /// Handy for mapping an error back to its location in the source — e.g.
-    /// pointing a compile-time diagnostic at the offending token. Errors with
-    /// no natural location (backend, extraction, I/O-format) return `None`.
+    /// Errors with no natural location (backend, extraction, I/O-format)
+    /// return `None`.
     pub fn span(&self) -> Option<Span> {
         match self {
             Error::ParseError(e) => Some(e.0.clone()),

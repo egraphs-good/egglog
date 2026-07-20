@@ -103,13 +103,10 @@ impl Sexp {
 impl std::fmt::Display for Sexp {
     /// Render an `Sexp` back to egglog source text (the inverse of parsing an
     /// atom/list; literals use [`Literal`]'s own `Display`, so it round-trips).
-    ///
-    /// Deliberately **iterative** with an explicit work stack rather than
-    /// recursive: a built term can be a very deep left-nested chain (e.g.
-    /// `(ICons a (ICons b (ICons c …)))` for a long list), and per-level
-    /// recursion would risk a stack overflow. The work stack lives on the heap
-    /// and grows with the term's size instead.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Iterative with an explicit work stack, not recursive: a built term
+        // can be a very deep nested chain (e.g. a long `(ICons a (ICons b …))`
+        // list), and per-level recursion would risk a stack overflow.
         enum Work<'a> {
             Node(&'a Sexp),
             Text(&'static str),
@@ -153,9 +150,7 @@ fn map_fallible<T>(
 
 /// Classify an atom's text into a [`Sexp`], matching the lexer used by
 /// [`Parser`]: `true`/`false` → bool, integer → int, `NaN`/`inf`/`-inf` and
-/// finite floats → float, everything else → an atom. Exposed so token-based
-/// builders (the `expr!`/`query!` quasiquotes) classify atoms identically to
-/// parsing the same text.
+/// finite floats → float, everything else → an atom.
 pub fn atom_to_sexp(s: &str, span: Span) -> Sexp {
     if s == "true" {
         Sexp::Literal(Literal::Bool(true), span)
@@ -181,10 +176,8 @@ pub fn atom_to_sexp(s: &str, span: Span) -> Sexp {
 }
 
 /// Splice a runtime keyword atom: `keyword_to_sexp("dtype", span)` yields the
-/// atom `:dtype`. Backs the `:#field` quasiquote form, where the keyword name is
-/// a runtime value (e.g. a constructor's field name) rather than literal text.
-/// Kept distinct from [`atom_to_sexp`] because a keyword is always an atom — it
-/// must never be reclassified as an int/float/bool literal.
+/// atom `:dtype`. Backs the `:#field` quasiquote form. Unlike [`atom_to_sexp`],
+/// the result is always an atom, never an int/float/bool literal.
 pub fn keyword_to_sexp(name: impl std::fmt::Display, span: Span) -> Sexp {
     Sexp::Atom(format!(":{name}"), span)
 }
@@ -224,8 +217,7 @@ impl ToSexp for Expr {
     }
 }
 
-/// Convert an already-built [`Expr`] into a [`Sexp`] structurally, so it can be
-/// spliced into a quasiquote directly rather than printed to text and reparsed.
+/// Convert an already-built [`Expr`] into a [`Sexp`] structurally.
 fn expr_to_sexp(e: &Expr, span: Span) -> Sexp {
     match e {
         Expr::Lit(_, lit) => Sexp::Literal(lit.clone(), span),

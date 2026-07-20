@@ -39,6 +39,11 @@
 //! Checking does not run rules, so a nonterminating `(run …)` costs nothing at
 //! build time. The commands handed back are unresolved and re-typecheck against
 //! whatever e-graph you run them in.
+//!
+//! The expansions reference `::egglog::…` (and `::egglog_checked::…`) paths, so
+//! the calling crate must depend on both under their default names (a renamed
+//! `package = "egglog"` dependency won't resolve) — the same contract as
+//! egglog's other proc macros.
 
 use egglog_ast::tokens::atom_run;
 use proc_macro::TokenStream;
@@ -169,7 +174,7 @@ pub fn run_egglog_checked(input: TokenStream) -> TokenStream {
 ///
 /// The handle is `#[macro_export]`ed, so a schema can be declared in one crate
 /// and used from others (`use my_schema_crate::math;`). Crates that use it need
-/// `egglog-checked` and `egglog` as dependencies.
+/// `egglog-checked` and `egglog` as dependencies, under those default names.
 ///
 /// ```
 /// use egglog::ast::Command;

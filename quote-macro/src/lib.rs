@@ -5,6 +5,10 @@
 //! These are re-exported from the `egglog` crate; the user-facing guide — what
 //! each macro produces, the `#` / `#..` / `:#` splice forms, and examples —
 //! lives in `egglog::prelude`. The doc on each macro below notes its signature.
+//!
+//! The expansions reference `::egglog::…` paths, so the calling crate must
+//! depend on `egglog` under its default name (a renamed `package = "egglog"`
+//! dependency won't resolve) — the same contract as egglog's other proc macros.
 
 use egglog_ast::tokens::atom_run;
 use proc_macro::TokenStream;

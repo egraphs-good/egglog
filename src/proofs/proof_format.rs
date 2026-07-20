@@ -154,7 +154,7 @@ pub struct Proof {
 pub enum Justification {
     /// Equalities added at the top level are justified by fiat.
     /// Primitive reflexive equalities like 2 = 2 are also justified by Fiat.
-    /// Reflexivity of equality is not assumed: a proof of `t = t`` must correspond to some `t` added at the top level.
+    /// Reflexivity of equality is not assumed: a proof of `t = t` must correspond to some `t` added at the top level.
     Fiat,
     /// Proves a grounded equality `t1 = t2` which appears
     /// in the body of a rule given a substitution given proofs

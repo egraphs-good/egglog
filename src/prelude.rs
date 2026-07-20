@@ -373,14 +373,6 @@ macro_rules! vars {
     };
 }
 
-// `expr!`/`query!`/`action!`/`actions!`, `command!`/`egglog!`/`rule!`, and
-// `sexp!`/`sexps!` are token-tree quasiquotes that route through the parser, so
-// `?x`, `:field`, `...`, `#`-splices, and every registered parser macro work.
-// Each parsing macro also has `resolve_*!` / `run_*!` e-graph variants — e.g.
-// add a rule with `run_rule!(egraph, (<facts>) (<actions>))` or
-// `run_egglog!(egraph, (rule … :ruleset r))`. They live in the `egglog-quote`
-// crate and are re-exported from the crate root.
-
 #[derive(Clone)]
 struct RustRuleRhs<F>
 where
@@ -666,11 +658,6 @@ pub fn rust_rule_full(
 
     egraph.run_program(vec![Command::Rule { rule }])
 }
-
-// (The old `datatype!` macro was removed — it's subsumed by
-// `run_egglog!(egraph, (datatype ...))`, which parses, typechecks, and
-// registers the datatype the same way. Use `egglog!((datatype ...))` for the
-// un-run commands.)
 
 /// A "default" implementation of [`Sort`] for simple types
 /// which just want to put some data in the e-graph. If you
@@ -1018,8 +1005,7 @@ mod tests {
         let parsed = egglog!((datatype Math (Num i64) (Add Math Math)))?;
         assert_eq!(parsed.len(), 1);
 
-        // run: register the datatype + a constant-fold rule (subsumes the old
-        // `datatype!` macro).
+        // run: register the datatype + a constant-fold rule.
         run_egglog!(
             &mut egraph,
             (datatype Math (Num i64) (Add Math Math))
@@ -1084,9 +1070,9 @@ mod tests {
         Ok(())
     }
 
-    // The `query!` triple (renamed from `facts!`): parse to `Facts`, resolve to
-    // `ResolvedFact`s, and run — `run_query!` returns matches, deriving the
-    // query variables (and sorts) from the facts.
+    // The `query!` triple: parse to `Facts`, resolve to `ResolvedFact`s, and
+    // run — `run_query!` returns matches, deriving the query variables (and
+    // sorts) from the facts.
     #[test]
     fn rust_api_query_variants() -> Result<(), Error> {
         let mut egraph = EGraph::default();
