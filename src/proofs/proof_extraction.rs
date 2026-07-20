@@ -1,8 +1,8 @@
 use crate::ast::FunctionSubtype;
-use crate::extract::{Extractor, TreeAdditiveCostModel};
 use crate::proofs::proof_encoding::ProofInstrumentor;
+use crate::proofs::proof_extractor::extract_root;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
-use crate::{ResolvedCall, TermDag};
+use crate::{RawValues, Read, ResolvedCall, TermDag};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -41,14 +41,6 @@ impl ProofInstrumentor<'_> {
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
 
-        // Use the version that ignores unextractable flag since proof extraction
-        // needs to extract proofs from all terms including those marked unextractable
-        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
-            None,
-            self.egraph,
-            TreeAdditiveCostModel::default(),
-        );
-
         let mut termdag = TermDag::default();
         let mut witness_value = None;
 
@@ -78,11 +70,6 @@ impl ProofInstrumentor<'_> {
                 )
             })
             .clone();
-        let proof_value = self
-            .egraph
-            .lookup_function(&proof_function_name, &[witness_value])
-            .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
-
         let proof_sort = self
             .egraph
             .functions
@@ -96,18 +83,30 @@ impl ProofInstrumentor<'_> {
             .schema
             .output
             .clone();
+        let proof_value = self
+            .egraph
+            .update_unchecked(|fs| fs.lookup(&proof_function_name, RawValues(vec![witness_value])))
+            .unwrap()
+            .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 
-        let (_, proof_term_id) = extractor
-            .extract_best_with_sort(self.egraph, &mut termdag, proof_value, proof_sort)
+        let proof_term_id = extract_root(self.egraph, &mut termdag, proof_value, proof_sort)
             .unwrap_or_else(|| {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
 
+        let container_normalizers = self
+            .egraph
+            .type_info
+            .sorts
+            .values()
+            .filter_map(|sort| sort.rebuild_container_normalizer())
+            .collect();
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
             termdag,
             proof_term_id,
             &self.egraph.proof_check_program,
+            container_normalizers,
         );
 
         // Remove globals from the proof

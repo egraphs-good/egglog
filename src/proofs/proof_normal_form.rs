@@ -3,15 +3,20 @@ use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::GenericExpr;
 
-/// Transforms queries so that they are in "proof normal form" by lifting subexpressions out, making them top level. In proof normal form:
-/// 1. Function calls like (lower-bound a b) are always top level and look like this:
-///    (= (lower-bound a b) c)
-/// 2. Primitives can't have constructors or function calls as arguments.
-///    For example, (!= a (Const 0)) becomes:
-///    (= (Const 0) v), (!= a v)
+/// Transforms queries into "proof normal form" by lifting subexpressions to the
+/// top level, so that every primitive is applied only to variables, literals, or
+/// other primitives. This is what lets the proof checker re-evaluate a primitive
+/// directly (see `check_side_condition`) instead of needing a proof for each of a
+/// primitive's arguments — the arguments are already bound elsewhere.
 ///
-/// Nested function calls like this are flattened:
-/// (Add c (lower-bound a b))
+/// 1. A custom function call becomes its own top-level fact:
+///    `(= (lower-bound a b) c)`.
+/// 2. A constructor or function argument of a primitive is lifted to a fresh
+///    variable: `(!= a (Const 0))` becomes `(= (Const 0) v)`, `(!= a v)`.
+/// 3. A container-producing primitive is lifted out of any constructor into its
+///    own side condition: `(WrapVec (vec-of e))` becomes `(= (vec-of e) v)`,
+///    `(WrapVec v)`. Its proof is a contentless marker, which can't ride a
+///    congruence step under the constructor.
 pub(crate) fn proof_form(
     prog: Vec<ResolvedNCommand>,
     fresh: &mut SymbolGen,
@@ -170,10 +175,40 @@ fn proof_form_expr(
             ResolvedExpr::Call(span, head, new_args)
         }
         ResolvedExpr::Call(span, head, args) => {
-            let new_args = args
-                .into_iter()
-                .map(|expr| proof_form_expr(expr, res, fresh))
-                .collect();
+            // `head` is a constructor here (custom functions and primitives are
+            // matched above). A container-producing primitive can't sit under a
+            // constructor in proof normal form — it has no anchored proof and
+            // can't ride a congruence step — so lift such an argument into its
+            // own side-condition binding `(= (prim ...) v)` and pass `v`.
+            let mut new_args = vec![];
+            for arg in args {
+                let normalized = proof_form_expr(arg, res, fresh);
+                let lift = matches!(
+                    &normalized,
+                    ResolvedExpr::Call(_, ResolvedCall::Primitive(p), _)
+                        if p.output().is_eq_container_sort()
+                );
+                if lift {
+                    let (arg_span, sort) = match &normalized {
+                        ResolvedExpr::Call(s, ResolvedCall::Primitive(p), _) => {
+                            (s.clone(), p.output().clone())
+                        }
+                        _ => unreachable!(),
+                    };
+                    let fresh_var = GenericExpr::Var(
+                        arg_span.clone(),
+                        ResolvedVar {
+                            name: fresh.fresh("v"),
+                            sort,
+                            is_global_ref: false,
+                        },
+                    );
+                    res.push(ResolvedFact::Eq(arg_span, normalized, fresh_var.clone()));
+                    new_args.push(fresh_var);
+                } else {
+                    new_args.push(normalized);
+                }
+            }
             ResolvedExpr::Call(span, head, new_args)
         }
         ResolvedExpr::Lit(..) | ResolvedExpr::Var(..) => fact,

@@ -10,6 +10,7 @@ readme = { workspace = true }
 
 [dependencies]
 egglog-core-relations = { workspace = true }
+egglog-concurrency = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-union-find = { workspace = true }
 egglog-reports = { workspace = true }
@@ -21,7 +22,6 @@ num-rational = { workspace = true }
 log = { workspace = true }
 indexmap = { workspace = true }
 web-time = { workspace = true }
-rayon = { workspace = true }
 dyn-clone = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }

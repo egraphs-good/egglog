@@ -1,0 +1,4 @@
+; `:naive` and `:unsafe-seminaive` select different evaluation modes,
+; so they are mutually exclusive and may not both be set on one rule.
+(relation trigger (i64))
+(rule ((trigger ?x)) ((trigger ?x)) :naive :unsafe-seminaive)

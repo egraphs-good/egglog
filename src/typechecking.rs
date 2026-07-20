@@ -1,11 +1,15 @@
 use std::hash::Hasher;
 
 use crate::Context;
+use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
-use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
+use ast::{
+    MappedExprExt, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule,
+    RuleEvalMode,
+};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use egglog_bridge::ActionRegistry;
@@ -185,6 +189,11 @@ impl PrimitiveWithId {
             range: HashSet::default(),
         };
         problem.solve(|sort| sort.name()).is_ok()
+    }
+
+    /// Returns whether this primitive has a runtime entrypoint for `context`.
+    pub fn is_valid_in_context(&self, context: Context) -> bool {
+        self.context_ids[context].is_some()
     }
 }
 
@@ -407,6 +416,8 @@ impl EGraph {
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => {
                 // Note this is bad since typechecking should be pure and idempotent
@@ -416,12 +427,51 @@ impl EGraph {
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
                 }
+                // Record this sort's UF / proof tables in proof_state (as
+                // run_command also does) so the container rebuild registration
+                // below can recover them — including this container's own proof
+                // table, which has not run yet.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state
+                        .uf_parent
+                        .insert(name.clone(), uf_ctor.clone());
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state
+                            .uf_function
+                            .insert(name.clone(), uf_index.clone());
+                    }
+                }
+                if let Some(pf) = proof_func {
+                    self.proof_state
+                        .proof_func_parent
+                        .insert(name.clone(), pf.clone());
+                }
+                // The Proof sort records the global proof constructors; restore
+                // them into proof_state so container rebuild can recover them
+                // (the `Proof` datatype name is this sort's own name).
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr.clone();
+                    names.eq_trans_constructor = pc.trans.clone();
+                    names.eq_sym_constructor = pc.sym.clone();
+                    names.container_normalize_constructor = pc.normalize.clone();
+                }
+                // A container sort under the term/proof encoding carries a spec
+                // for its rebuild primitives; register them here so they are
+                // available both during encoding and when the desugared program
+                // is re-parsed.
+                if let Some(spec) = container_rebuild {
+                    register_container_rebuild_from_spec(self, name, spec);
+                }
                 ResolvedNCommand::Sort {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
                     proof_func: proof_func.clone(),
+                    container_rebuild: container_rebuild.clone(),
+                    proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,
                 }
             }
@@ -829,22 +879,24 @@ impl TypeInfo {
             body,
             name,
             ruleset,
-            naive,
+            eval_mode,
             no_decomp,
+            include_subsumed,
         } = rule;
         let mut constraints = vec![];
 
-        // This rule runs without seminaive if either the rule-local
-        // `:naive` option or the global `EGraph::seminaive == false`
-        // applies. Both must widen primitive-context selection to
-        // Read/Full so primitives that read or write the database can
-        // run; mirrors the backend's `self.seminaive && !rule.naive`
-        // check at rule-build time.
-        let seminaive = global_seminaive && !*naive;
-        let (query_ctx, action_ctx) = if seminaive {
-            (Context::Pure, Context::Write)
-        } else {
+        // Compile with the permissive Read/Full primitive contexts (so the RHS
+        // can read the database) when the whole EGraph is non-seminaive, or the
+        // rule's own mode requires it (`:naive` / `:unsafe-seminaive`).
+        let read_contexts = !global_seminaive
+            || matches!(
+                eval_mode,
+                RuleEvalMode::Naive | RuleEvalMode::UnsafeSeminaive
+            );
+        let (query_ctx, action_ctx) = if read_contexts {
             (Context::Read, Context::Full)
+        } else {
+            (Context::Pure, Context::Write)
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -877,7 +929,11 @@ impl TypeInfo {
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
-        self.check_lookup_actions(&actions)?;
+        // Function lookups in actions need the `Full` action context; the
+        // `Write` context (`!read_contexts`) can't express them.
+        if !read_contexts {
+            self.check_no_function_lookups_in_actions(&actions)?;
+        }
 
         Ok(ResolvedRule {
             span: span.clone(),
@@ -885,8 +941,9 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
-            naive: *naive,
+            eval_mode: *eval_mode,
             no_decomp: *no_decomp,
+            include_subsumed: *include_subsumed,
         })
     }
 
@@ -900,7 +957,10 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn check_lookup_actions(&self, actions: &ResolvedActions) -> Result<(), TypeError> {
+    fn check_no_function_lookups_in_actions(
+        &self,
+        actions: &ResolvedActions,
+    ) -> Result<(), TypeError> {
         for action in actions.iter() {
             match action {
                 GenericAction::Let(_, _, rhs) => self.check_lookup_expr(rhs)?,
@@ -988,6 +1048,54 @@ impl TypeInfo {
             self.typecheck_standalone_action(symbol_gen, &action, binding, context)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn typecheck_expr_with_output(
+        &self,
+        symbol_gen: &mut SymbolGen,
+        expr: &Expr,
+        binding: &IndexMap<&str, (Span, ArcSort)>,
+        output_sort: ArcSort,
+        context: Context,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let action = Action::Expr(expr.span(), expr.clone());
+        let mut binding_set: IndexSet<String> =
+            binding.keys().copied().map(str::to_string).collect();
+        let mut ctx = CoreActionContext::new(self, &mut binding_set, symbol_gen, false);
+        let (actions, mapped_action) = Actions::singleton(action).to_core_actions(&mut ctx)?;
+        let mut problem = Problem::default();
+
+        problem.add_actions(&actions, self, symbol_gen, context)?;
+
+        for (var, (span, sort)) in binding {
+            problem.assign_local_var_type(var, span.clone(), sort.clone())?;
+        }
+
+        let [GenericAction::Expr(_, mapped_expr)] = mapped_action.0.as_slice() else {
+            unreachable!("typechecking an expression should produce one expression action")
+        };
+        let output_atom = mapped_expr.get_corresponding_var_or_lit(self);
+        problem.add_binding(output_atom, output_sort.clone());
+
+        let assignment = problem
+            .solve(|sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self, context)?;
+        match annotated_actions.0.into_iter().next().unwrap() {
+            ResolvedAction::Expr(_, resolved_expr) => {
+                let actual = resolved_expr.output_type();
+                if actual.name() != output_sort.name() {
+                    return Err(TypeError::Mismatch {
+                        expr: expr.clone(),
+                        expected: output_sort,
+                        actual,
+                    });
+                }
+                Ok(resolved_expr)
+            }
             _ => unreachable!(),
         }
     }

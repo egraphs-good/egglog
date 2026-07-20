@@ -11,7 +11,7 @@ use std::{
 
 use crate::core_relations;
 use crate::core_relations::{
-    ContainerValue, ExternalFunctionId, Rebuilder, Value, make_external_func,
+    ContainerValue, ExternalFunctionId, Value, ValueRebuilder, make_external_func,
 };
 use crate::numeric_id::NumericId;
 use log::debug;
@@ -449,7 +449,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct VecContainer(Vec<Value>);
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         rebuilder.rebuild_slice(&mut self.0)
     }
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {

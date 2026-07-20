@@ -7,8 +7,9 @@ use crate::{
     EGraph, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
-        ResolvedExprExt, Schedule,
+        ResolvedExprExt, ResolvedFact, Schedule,
     },
+    core::ResolvedCall,
     proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, SymbolGen},
 };
@@ -27,6 +28,8 @@ pub(crate) struct EncodingNames {
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
+    pub(crate) container_normalize_constructor: String,
+    pub(crate) eval_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
@@ -68,6 +71,8 @@ impl EncodingNames {
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
+            container_normalize_constructor: symbol_gen.fresh("ContainerNormalize"),
+            eval_constructor: symbol_gen.fresh("Eval"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
             single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
@@ -363,6 +368,8 @@ impl ProofInstrumentor<'_> {
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
+            ref container_normalize_constructor,
+            ref eval_constructor,
             ref pcons,
             ref pnil,
             ..
@@ -372,7 +379,9 @@ impl ProofInstrumentor<'_> {
             "
 (sort {proof_list_sort})
 (sort {ast_sort}) ;; wrap sorts in this for proofs
-(sort {proof_datatype})
+;; The proof datatype records the global proof constructor names so container
+;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor})
 
 (constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort} :internal-hidden)
 (constructor {pnil} () {proof_list_sort} :internal-hidden)
@@ -398,6 +407,15 @@ impl ProofInstrumentor<'_> {
 ;; and a proof that ci = c2,
 ;; produces a justification that t1 = f(..., c2, ...)
 (constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype} :internal-hidden)
+
+;; given a proof that t1 = c, where c is a container term, produces a proof that
+;; t1 = normalize(c) (the container's canonicalization: sort/dedup for sets,
+;; last-write-wins for maps, sort for multisets)
+(constructor  {container_normalize_constructor} ({proof_datatype}) {proof_datatype} :internal-hidden)
+
+;; marks the proof of a container side condition. Carries nothing: the side
+;; condition is re-evaluated against the rule body when checked.
+(constructor  {eval_constructor} () {proof_datatype} :internal-hidden)
                 "
         )
     }
@@ -435,6 +453,10 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     FunctionLookupInAction,
     #[error(
+        "a container constructed in the query (a container-producing primitive result) is used in the actions. A query-built container is a side condition with no carryable proof, so it cannot be carried into an action."
+    )]
+    ContainerCreatedInQueryUsedInAction,
+    #[error(
         "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
     )]
     SortWithPresort,
@@ -456,6 +478,14 @@ pub enum ProofEncodingUnsupportedReason {
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
     LetBindingWithNonEqSort,
+    #[error(
+        "rule uses `:unsafe-seminaive`. Arbitrary RHS database reads are not representable by the term/proof encoding."
+    )]
+    UnsafeSeminaive,
+    #[error(
+        "rule uses `:naive` with an eq-sort primitive in the body. Proof encoding can only look up proofs for primitive eq-sort fact results under seminaive-safe query evaluation."
+    )]
+    NaiveEqSortPrimitiveFact,
 }
 
 /// Checks whether a desugared program supports proof encoding.
@@ -499,12 +529,39 @@ fn action_has_function_lookup(action: &ResolvedAction, type_info: &TypeInfo) -> 
     has_lookup
 }
 
+/// Check if a fact contains a primitive expression whose result needs a stored term proof.
+fn fact_has_eq_sort_primitive_result(fact: &ResolvedFact) -> bool {
+    let mut has_eq_sort_primitive = false;
+    fact.clone().visit_exprs(&mut |expr| {
+        if let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = &expr
+            && (prim.output().is_eq_sort() || prim.output().is_eq_container_sort())
+        {
+            has_eq_sort_primitive = true;
+        }
+        expr
+    });
+    has_eq_sort_primitive
+}
+
 /// Checks whether a resolved command supports proof encoding.
 /// Returns Ok(()) if supported, or Err with the reason if not.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
+    // `:unsafe-seminaive` rules perform arbitrary reads against the live
+    // database; the term/proof encoding can't represent that.
+    if let crate::ast::GenericCommand::Rule { rule } = command
+        && rule.eval_mode == crate::ast::RuleEvalMode::UnsafeSeminaive
+    {
+        return Err(ProofEncodingUnsupportedReason::UnsafeSeminaive);
+    }
+    if let crate::ast::GenericCommand::Rule { rule } = command
+        && rule.eval_mode == crate::ast::RuleEvalMode::Naive
+        && rule.body.iter().any(fact_has_eq_sort_primitive_result)
+    {
+        return Err(ProofEncodingUnsupportedReason::NaiveEqSortPrimitiveFact);
+    }
     // Check all expressions for primitives without validators
     let mut all_primitives_have_validators = true;
     command.clone().visit_exprs(&mut |expr| {
@@ -531,12 +588,57 @@ pub(crate) fn command_supports_proof_encoding(
         return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
     }
 
+    // A container built by a primitive in the query is a side condition with no
+    // carryable proof, so it can't be used in an action. Reject a rule that binds
+    // such a container to a variable used in its actions.
+    if let GenericCommand::Rule { rule } = command {
+        let mut constructed: Vec<String> = Vec::new();
+        for fact in &rule.body {
+            if let ResolvedFact::Eq(_, lhs, rhs) = fact {
+                for (var_side, call_side) in [(lhs, rhs), (rhs, lhs)] {
+                    if let ResolvedExpr::Var(_, v) = var_side
+                        && let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = call_side
+                        && prim.output().is_eq_container_sort()
+                    {
+                        constructed.push(v.name.clone());
+                    }
+                }
+            }
+        }
+        if !constructed.is_empty() {
+            let mut used_in_action = false;
+            for action in &rule.head.0 {
+                action.clone().visit_exprs(&mut |expr| {
+                    expr.walk(
+                        &mut |e| {
+                            if let ResolvedExpr::Var(_, v) = e
+                                && constructed.contains(&v.name)
+                            {
+                                used_in_action = true;
+                            }
+                        },
+                        &mut |_| {},
+                    );
+                    expr
+                });
+            }
+            if used_in_action {
+                return Err(ProofEncodingUnsupportedReason::ContainerCreatedInQueryUsedInAction);
+            }
+        }
+    }
+
     // Now check command-specific constraints
     match command {
         GenericCommand::Sort {
+            name,
             presort_and_args: Some(_),
             ..
-        } => Err(ProofEncodingUnsupportedReason::SortWithPresort),
+        } => type_info
+            .get_sort_by_name(name)
+            .filter(|sort| sort.is_container_sort())
+            .map(|_| ())
+            .ok_or(ProofEncodingUnsupportedReason::SortWithPresort),
         GenericCommand::Sort { uf: Some(_), .. } => {
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }

@@ -1,0 +1,24 @@
+; `:naive` widens a rule's contexts to Read/Full and skips the "no function
+; lookups in actions" check, so the RHS may read the database — including
+; function-table lookups. Unlike `:unsafe-seminaive` it re-matches the whole
+; database every iteration, so the read is safe. Function lookups in actions
+; aren't representable in the term/proof encoding, so this only runs on the
+; default backend.
+
+(function f (i64) i64 :merge (max old new))
+(set (f 1) 100)
+(set (f 2) 200)
+
+(function result (i64) i64 :merge (max old new))
+(relation trigger (i64))
+
+(rule ((trigger ?x))
+      ((set (result ?x) (f ?x)))
+      :naive)
+
+(trigger 1)
+(trigger 2)
+(run 1)
+
+(check (= (result 1) 100))
+(check (= (result 2) 200))
