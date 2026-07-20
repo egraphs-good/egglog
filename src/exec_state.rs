@@ -395,6 +395,34 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(())
     }
 
+    /// Call `f` on each [`Enode`] of a constructor / relation table whose
+    /// output eclass is `eclass`.
+    ///
+    /// This uses the backend's indexed output-column lookup instead of scanning
+    /// the whole constructor table. Errors with `WrongSubtype` if `name` is a
+    /// function.
+    fn enodes_for_eclass(
+        &self,
+        name: &str,
+        eclass: Value,
+        mut f: impl FnMut(Enode<'_>),
+    ) -> Result<(), Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        action.for_each_output_value(self.es(), eclass, |row| {
+            let (eclass, children) = row
+                .vals
+                .split_last()
+                .expect("constructor row has at least an eclass column");
+            f(Enode {
+                children,
+                eclass: *eclass,
+                subsumed: row.subsumed,
+            });
+        });
+        Ok(())
+    }
+
     /// Call `f` on each [`FunctionEntry`] of a function table. Errors
     /// with `WrongSubtype` if `name` is a constructor. To stop early,
     /// use [`Read::function_entries_while`].

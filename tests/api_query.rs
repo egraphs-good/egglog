@@ -137,6 +137,62 @@ fn constructor_enodes_basic() -> Result<(), Error> {
     Ok(())
 }
 
+/// `enodes_for_eclass` uses the output eclass index and
+/// visits only matching constructor rows.
+#[test]
+fn enodes_for_eclass_basic() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(
+        None,
+        "
+(sort Math)
+(constructor Add (i64 i64) Math)
+(let $a (Add 1 2))
+(let $b (Add 3 4))
+(union $a $b)
+(subsume (Add 1 2))
+",
+    )?;
+
+    let a_expr = egraph.parser.get_expr_from_string(None, "$a").unwrap();
+    let (_, a_eclass) = egraph.eval_expr(&a_expr)?;
+    let b_expr = egraph.parser.get_expr_from_string(None, "$b").unwrap();
+    let (_, b_eclass) = egraph.eval_expr(&b_expr)?;
+    assert_eq!(a_eclass, b_eclass);
+
+    let mut rows: Vec<(Vec<Value>, Value, bool)> = Vec::new();
+    egraph.read(|rs| {
+        rs.enodes_for_eclass("Add", a_eclass, |enode| {
+            rows.push((enode.children.to_vec(), enode.eclass, enode.subsumed));
+        })
+    })?;
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|(_, eclass, _)| *eclass == a_eclass));
+    assert!(rows.iter().any(|(_, _, subsumed)| *subsumed));
+    let mut children = rows
+        .into_iter()
+        .map(|(children, _, subsumed)| {
+            let children = children
+                .into_iter()
+                .map(|value| egraph.value_to_base::<i64>(value))
+                .collect::<Vec<_>>();
+            (children, subsumed)
+        })
+        .collect::<Vec<_>>();
+    children.sort();
+    assert_eq!(children, vec![(vec![1, 2], true), (vec![3, 4], false)]);
+
+    let mut count = 0;
+    egraph.read(|rs| {
+        rs.enodes_for_eclass("Add", b_eclass, |_| {
+            count += 1;
+        })
+    })?;
+    assert_eq!(count, 2);
+    Ok(())
+}
+
 /// A relation desugars to a constructor with a synthetic non-unionable
 /// eq-sort output. `constructor_enodes` returns those rows the same
 /// way as any other constructor.
