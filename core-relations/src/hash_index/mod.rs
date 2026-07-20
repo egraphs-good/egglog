@@ -435,7 +435,21 @@ pub(crate) fn radix_sort_slice_by_value(
         return;
     }
 
-    let max_val = data.iter().map(|&(v, _)| v.rep()).max().unwrap_or(0);
+    // One scan computes the pass count and detects already-sorted input (common
+    // when a column correlates with row order); a sorted block needs no work,
+    // since stability makes the result identical.
+    let mut max_val = 0u32;
+    let mut sorted = true;
+    let mut prev = 0u32;
+    for &(v, _) in data.iter() {
+        let rep = v.rep();
+        max_val = max_val.max(rep);
+        sorted &= prev <= rep;
+        prev = rep;
+    }
+    if sorted {
+        return;
+    }
     let n_passes = radix_passes_for(max_val);
 
     let mut src: &mut [(Value, RowId)] = data;
