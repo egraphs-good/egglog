@@ -11,10 +11,17 @@
 //! [`SharedArena`] is dropped. Since the arena itself is `Send`, values must be
 //! `Send` when they are allocated: the arena may be dropped on a different
 //! thread from the one that performed the allocation.
+//!
+//! [`Handle::alloc_layout`] is the narrow escape hatch for packed allocations.
+//! It returns an uninitialized, non-`Send` [`RawAllocation`]. The caller writes
+//! a no-drop header and any trailing data, then explicitly publishes the
+//! header as a [`SharedRef`]. Raw allocations never register destructors; this
+//! makes abandoning a partially initialized allocation during unwinding safe,
+//! provided every initialized tail value may also be safely forgotten.
 
 use std::{
-    cell::RefCell, marker::PhantomData, mem, ops::Deref, pin::Pin, ptr::NonNull, rc::Rc,
-    sync::Mutex,
+    alloc::Layout, cell::RefCell, marker::PhantomData, mem, ops::Deref, pin::Pin, ptr::NonNull,
+    rc::Rc, sync::Mutex,
 };
 
 use bumpalo::Bump;
@@ -188,6 +195,136 @@ impl<'arena> Handle<'arena> {
             _lifetime: PhantomData,
         }
     }
+
+    /// Allocate uninitialized storage with exactly `layout` in the parent
+    /// [`SharedArena`].
+    ///
+    /// The returned [`RawAllocation`] is an initialization token. It exposes a
+    /// raw pointer for constructing a packed allocation, but no reference to
+    /// the storage exists until
+    /// [`RawAllocation::assume_init_no_drop`] publishes a header at the start
+    /// of the allocation. Dropping the token simply abandons the storage until
+    /// the arena itself is reclaimed.
+    ///
+    /// Raw allocations do not register destructors. This is useful for packed
+    /// data whose header and trailing values are safe to forget, but it is not
+    /// a replacement for [`Handle::alloc`] when values own resources.
+    ///
+    /// The token intentionally does not implement `Send` or `Sync`:
+    ///
+    /// ```compile_fail
+    /// use std::alloc::Layout;
+    /// use egglog_concurrency::SharedArena;
+    ///
+    /// let arena = SharedArena::new();
+    /// let handle = arena.new_handle();
+    /// let raw = handle.alloc_layout(Layout::new::<usize>());
+    /// std::thread::scope(|scope| {
+    ///     scope.spawn(move || drop(raw));
+    /// });
+    /// ```
+    pub fn alloc_layout(&self, layout: Layout) -> RawAllocation<'arena> {
+        // SAFETY: `self.local` points to a boxed `LocalArena` stored in the
+        // parent `SharedArena`. Boxes are never removed from that vector before
+        // the `SharedArena` is dropped, and the raw allocation's lifetime keeps
+        // that arena borrowed until the initialization token is consumed or
+        // dropped.
+        let local = unsafe { self.local.as_ref() };
+        RawAllocation {
+            ptr: local.alloc_layout(layout),
+            layout,
+            _arena: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+/// Uninitialized storage owned by a [`SharedArena`].
+///
+/// A raw allocation is an opaque, single-use publication token returned by
+/// [`Handle::alloc_layout`]. It is deliberately not `Send` or `Sync`: initialize
+/// it on the same thread that owns the allocating [`Handle`]. Its storage stays
+/// allocated until the parent arena is dropped, even if the token is abandoned
+/// because initialization panics.
+///
+/// No destructor is registered for any part of this allocation. The caller of
+/// [`RawAllocation::assume_init_no_drop`] is responsible for ensuring that the
+/// header and all initialized trailing values can safely be forgotten.
+pub struct RawAllocation<'arena> {
+    ptr: NonNull<u8>,
+    layout: Layout,
+    _arena: PhantomData<&'arena SharedArena>,
+    _not_send_sync: PhantomData<Rc<()>>,
+}
+
+impl<'arena> RawAllocation<'arena> {
+    /// Return the allocation's exact requested layout.
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Return a pointer to the start of the uninitialized allocation.
+    ///
+    /// Dereferencing this pointer is unsafe. Although this method requires a
+    /// mutable borrow of the initialization token, raw pointers copied from it
+    /// are not tracked by Rust's borrow checker.
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+
+    /// Publish an initialized, no-drop `T` header at the start of this
+    /// allocation.
+    ///
+    /// The allocation may be larger than `T`; this is the intended way to
+    /// publish a sized header followed by packed trailing arrays. This method
+    /// checks, before treating the storage as `T`, that the original layout is
+    /// large enough and sufficiently aligned for `T`, and that
+    /// `mem::needs_drop::<T>()` is false. A failed check panics without
+    /// publishing a reference.
+    ///
+    /// # Safety
+    ///
+    /// If the checked layout requirements hold, the caller must ensure that:
+    ///
+    /// - a valid `T` has been completely initialized at [`Self::as_mut_ptr`];
+    /// - every byte that `T`'s safe interface can read, including trailing
+    ///   storage reached through offsets or pointers in `T`, is initialized;
+    /// - omitting destructors for every initialized trailing value is sound,
+    ///   both after publication and if initialization unwinds partway through;
+    /// - the `Send` and `Sync` behavior of `T` accurately accounts for any
+    ///   trailing values its interface can access; and
+    /// - no pointer retained from [`Self::as_mut_ptr`] is used to mutate the
+    ///   allocation after publication, except through valid interior
+    ///   mutability.
+    ///
+    /// Raw trailing storage is not described by Rust's type system, so these
+    /// invariants cannot be checked by this API.
+    pub unsafe fn assume_init_no_drop<T>(self) -> SharedRef<'arena, T>
+    where
+        T: Send + 'arena,
+    {
+        assert!(
+            self.layout.size() >= mem::size_of::<T>(),
+            "raw arena allocation of {} bytes is too small for a {}-byte header",
+            self.layout.size(),
+            mem::size_of::<T>()
+        );
+        assert!(
+            self.layout.align() >= mem::align_of::<T>(),
+            "raw arena allocation alignment {} is insufficient for header alignment {}",
+            self.layout.align(),
+            mem::align_of::<T>()
+        );
+        assert!(
+            !mem::needs_drop::<T>(),
+            "raw arena allocation headers must not require drop"
+        );
+
+        SharedRef {
+            ptr: self.ptr.cast(),
+            _lifetime: PhantomData,
+        }
+    }
 }
 
 /// An immutable reference to a value allocated in a [`SharedArena`].
@@ -217,6 +354,18 @@ impl<T> Copy for SharedRef<'_, T> {}
 impl<T> Clone for SharedRef<'_, T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<'arena, T> SharedRef<'arena, T> {
+    /// Convert this copyable handle into a reference valid for the lifetime of
+    /// its parent [`SharedArena`].
+    pub fn into_ref(self) -> &'arena T {
+        // SAFETY: `ptr` denotes a fully initialized value in a bump allocation
+        // owned by the parent arena. The lifetime marker prevents that arena
+        // from being dropped for `'arena`, and publication never exposes a
+        // mutable reference to this value.
+        unsafe { self.ptr.as_ref() }
     }
 }
 
@@ -269,6 +418,10 @@ impl LocalArena {
         }
 
         ptr
+    }
+
+    fn alloc_layout(&self, layout: Layout) -> NonNull<u8> {
+        self.bump.alloc_layout(layout)
     }
 }
 
