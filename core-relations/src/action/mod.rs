@@ -21,7 +21,9 @@ use rustc_hash::FxHasher;
 use crate::{
     BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
     common::Value,
-    free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
+    free_join::{
+        CounterId, CounterReservation, Counters, ExternalFunctions, TableId, TableInfo, Variable,
+    },
     pool::{Clear, Pooled, with_pool_set},
     table_spec::{ColumnId, MutationBuffer},
 };
@@ -413,12 +415,26 @@ pub(crate) struct DbView<'a> {
 pub struct ExecutionState<'a> {
     pub(crate) predicted: PredictedVals,
     pub(crate) db: DbView<'a>,
+    counter_reservations: CounterReservations,
     buffers: MutationBuffers<'a>,
     /// Whether any mutations have been staged via this ExecutionState.
     pub(crate) changed: bool,
     /// Atomic flag for early stopping of rule execution.
     /// This flag is shared across all handles (clones) of this ExecutionState.
     stop_match: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct CounterReservations {
+    ranges: DenseIdMap<CounterId, CounterReservation>,
+}
+
+impl CounterReservations {
+    fn next(&mut self, counters: &Counters, ctr: CounterId) -> usize {
+        self.ranges
+            .get_or_insert(ctr, || counters.take_reservation(ctr))
+            .next()
+    }
 }
 
 /// Copyable query-side view of an [`ExecutionState`]. Join tasks only need
@@ -435,6 +451,7 @@ impl<'db> ExecutionStateSeed<'db, '_> {
         ExecutionState {
             predicted: Default::default(),
             db: self.db,
+            counter_reservations: Default::default(),
             buffers: MutationBuffers::new(self.db.notification_list, Default::default()),
             changed: false,
             stop_match: Arc::clone(self.stop_match),
@@ -492,6 +509,7 @@ impl Clone for ExecutionState<'_> {
         ExecutionState {
             predicted: Default::default(),
             db: self.db,
+            counter_reservations: Default::default(),
             buffers: self.buffers.clone(),
             changed: false,
             stop_match: Arc::clone(&self.stop_match),
@@ -507,6 +525,7 @@ impl<'a> ExecutionState<'a> {
         ExecutionState {
             predicted: Default::default(),
             db,
+            counter_reservations: Default::default(),
             buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
             stop_match: Arc::new(AtomicBool::new(false)),
@@ -553,8 +572,8 @@ impl<'a> ExecutionState<'a> {
         self.db.external_funcs[func].invoke(self, args)
     }
 
-    pub fn inc_counter(&self, ctr: CounterId) -> usize {
-        self.db.counters.inc(ctr)
+    pub fn inc_counter(&mut self, ctr: CounterId) -> usize {
+        self.counter_reservations.next(self.db.counters, ctr)
     }
 
     pub fn read_counter(&self, ctr: CounterId) -> usize {
@@ -605,12 +624,15 @@ impl<'a> ExecutionState<'a> {
         }
         let row_arity = key.len() + vals.len();
         let counters = self.db.counters;
+        let counter_reservations = &mut self.counter_reservations;
         let (row, inserted) =
             self.predicted
                 .get_or_insert_with(table, key, row_arity, |values, _| {
                     for val in vals {
                         values.push(match val {
-                            MergeVal::Counter(ctr) => Value::from_usize(counters.inc(ctr)),
+                            MergeVal::Counter(ctr) => {
+                                Value::from_usize(counter_reservations.next(counters, ctr))
+                            }
                             MergeVal::Constant(c) => c,
                         });
                     }
@@ -642,12 +664,15 @@ impl<'a> ExecutionState<'a> {
         }
         let row_arity = key.len() + vals.len();
         let counters = self.db.counters;
+        let counter_reservations = &mut self.counter_reservations;
         let (row, inserted) =
             self.predicted
                 .get_or_insert_with(table, key, row_arity, |values, _| {
                     for val in vals {
                         values.push(match val {
-                            MergeVal::Counter(ctr) => Value::from_usize(counters.inc(ctr)),
+                            MergeVal::Counter(ctr) => {
+                                Value::from_usize(counter_reservations.next(counters, ctr))
+                            }
                             MergeVal::Constant(c) => c,
                         });
                     }
@@ -755,7 +780,8 @@ impl ExecutionState<'_> {
                         let buffers = &mut self.buffers;
                         // Bind some mutable references because the closure passed
                         // to or_insert_with is `move`.
-                        let ctrs = &self.db.counters;
+                        let ctrs = self.db.counters;
+                        let counter_reservations = &mut self.counter_reservations;
                         let bindings = &bindings;
                         let row_arity = key.as_slice().len() + default.len();
                         let (row, inserted) = self.predicted.get_or_insert_with(
@@ -771,7 +797,7 @@ impl ExecutionState<'_> {
                                             bindings[*v][offset]
                                         }
                                         WriteVal::IncCounter(ctr) => {
-                                            Value::from_usize(ctrs.inc(*ctr))
+                                            Value::from_usize(counter_reservations.next(ctrs, *ctr))
                                         }
                                         WriteVal::CurrentVal(ix) => values[row_start + *ix],
                                     };
