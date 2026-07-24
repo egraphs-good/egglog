@@ -70,6 +70,95 @@ fn table_rows(db: &Database, table: TableId) -> Vec<Vec<Value>> {
 }
 
 #[test]
+fn reservable_counter_recycles_execution_state_tails() {
+    let mut db = Database::new();
+    let counter = db.add_reservable_counter(4);
+
+    let first =
+        db.with_execution_state(|state| [state.inc_counter(counter), state.inc_counter(counter)]);
+    assert_eq!(first, [0, 1]);
+    assert_eq!(db.read_counter(counter), 4);
+
+    let second = db.with_execution_state(|state| {
+        [
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+        ]
+    });
+    assert_eq!(second, [2, 3, 4]);
+    assert_eq!(db.read_counter(counter), 8);
+
+    let third = db.with_execution_state(|state| {
+        [
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+        ]
+    });
+    assert_eq!(third, [5, 6, 7]);
+    assert_eq!(db.read_counter(counter), 8);
+}
+
+#[test]
+fn ordinary_counter_remains_exact_in_execution_state() {
+    let mut db = Database::new();
+    let counter = db.add_counter();
+
+    db.with_execution_state(|state| {
+        assert_eq!(state.inc_counter(counter), 0);
+        assert_eq!(state.read_counter(counter), 1);
+        assert_eq!(state.inc_counter(counter), 1);
+        assert_eq!(state.read_counter(counter), 2);
+    });
+    assert_eq!(db.read_counter(counter), 2);
+}
+
+#[test]
+fn reservable_counter_is_unique_across_execution_states() {
+    const THREADS: usize = 8;
+    const IDS_PER_THREAD: usize = 1_000;
+
+    let mut db = Database::new();
+    let counter = db.add_reservable_counter(64);
+    let mut ids = std::thread::scope(|scope| {
+        let handles = (0..THREADS)
+            .map(|_| {
+                let db = &db;
+                scope.spawn(move || {
+                    db.with_execution_state(|state| {
+                        (0..IDS_PER_THREAD)
+                            .map(|_| state.inc_counter(counter))
+                            .collect::<Vec<_>>()
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+
+    assert_eq!(ids.len(), THREADS * IDS_PER_THREAD);
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), THREADS * IDS_PER_THREAD);
+    let high_water = db.read_counter(counter);
+    assert!(high_water >= ids.len());
+
+    let recycled = db.with_execution_state(|state| {
+        (ids.len()..high_water)
+            .map(|_| state.inc_counter(counter))
+            .collect::<Vec<_>>()
+    });
+    ids.extend(recycled);
+    ids.sort_unstable();
+    assert_eq!(ids, (0..high_water).collect::<Vec<_>>());
+    assert_eq!(db.read_counter(counter), high_water);
+}
+
+#[test]
 fn basic_query() {
     run_serial_and_parallel(basic_query_inner);
 }
