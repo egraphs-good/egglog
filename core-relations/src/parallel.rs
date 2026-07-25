@@ -110,6 +110,39 @@ where
     collect_result_slots(results)
 }
 
+pub(crate) fn map_chunks_mut<T, R, F>(items: &mut [T], f: F) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+    F: Fn(usize, &mut [T]) -> R + Sync,
+{
+    if items.is_empty() {
+        return Vec::new();
+    }
+    if !enabled_for_len(items.len()) {
+        return vec![f(0, items)];
+    }
+
+    let chunk_len = chunk_len(items.len());
+    let chunks = items.len().div_ceil(chunk_len);
+    let mut results = empty_result_slots(chunks);
+    egglog_concurrency::scope(|scope| {
+        let f = &f;
+        for (chunk_index, (chunk, out)) in items
+            .chunks_mut(chunk_len)
+            .zip(results.iter_mut())
+            .enumerate()
+        {
+            let base = chunk_index * chunk_len;
+            scope.spawn(move |_| {
+                *out = Some(f(base, chunk));
+            });
+        }
+    });
+
+    collect_result_slots(results)
+}
+
 pub(crate) fn map_dense_id_map_mut<K, V, R, F>(map: &mut DenseIdMap<K, V>, f: F) -> Vec<R>
 where
     K: NumericId,
@@ -169,4 +202,25 @@ where
     });
 
     collect_result_slots(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_chunks_mut;
+
+    #[test]
+    fn chunk_map_reports_bases_and_covers_each_item_once() {
+        let pool = egglog_concurrency::ThreadPool::new(4);
+        let mut values = vec![0usize; 10];
+        let chunks = pool.install(|| {
+            map_chunks_mut(&mut values, |base, chunk| {
+                for (offset, value) in chunk.iter_mut().enumerate() {
+                    *value = base + offset + 1;
+                }
+                (base, chunk.len())
+            })
+        });
+        assert_eq!(chunks, vec![(0, 3), (3, 3), (6, 3), (9, 1)]);
+        assert_eq!(values, (1..=10).collect::<Vec<_>>());
+    }
 }
