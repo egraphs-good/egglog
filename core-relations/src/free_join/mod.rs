@@ -262,6 +262,12 @@ dyn_clone::clone_trait_object!(ExternalFunction);
 pub(crate) type ExternalFunctions =
     DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunction>>;
 
+// Reservable counters give each execution state a disjoint range of values.
+// Values are then handed out by advancing the state's local `range`, avoiding
+// a shared atomic operation per value. Dropping the reservation returns its
+// unused suffix to `recycled`, and future states reuse those suffixes before
+// advancing the atomic high-water mark. A reservation size of one retains the
+// exact increment/read behavior needed by observable counters.
 struct Counter {
     next: AtomicUsize,
     reservation_size: usize,
