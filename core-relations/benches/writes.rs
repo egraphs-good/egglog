@@ -103,8 +103,19 @@ fn parallel_delete_only<const N: usize>(bench: Bencher) {
     // Stay over the production parallel cutoff (400K) but under the 50%
     // compaction threshold, so this benchmark isolates do_delete.
     const REMOVALS: usize = 7 << 16;
+    bench_delete_only::<N>(bench, TABLE_SIZE, REMOVALS);
+}
+
+#[divan::bench(consts = [1, 2, 4, 8, 12, 16], sample_count = 5)]
+fn parallel_delete_only_large<const N: usize>(bench: Bencher) {
+    const TABLE_SIZE: usize = 4 << 20;
+    const REMOVALS: usize = 7 << 18;
+    bench_delete_only::<N>(bench, TABLE_SIZE, REMOVALS);
+}
+
+fn bench_delete_only<const N: usize>(bench: Bencher, table_size: usize, removals: usize) {
     let rows = Arc::new(
-        (0..TABLE_SIZE)
+        (0..table_size)
             .map(|i| {
                 [
                     Value::new(i as u32),
@@ -127,12 +138,12 @@ fn parallel_delete_only<const N: usize>(bench: Bencher) {
                     let mut table = new_table::<3, 5>();
                     stage_inserts(&table, &rows);
                     db.with_execution_state(|es| table.merge(es));
-                    stage_removals(&table, &rows[..REMOVALS]);
+                    stage_removals(&table, &rows[..removals]);
                     (db, table)
                 })
             }
         })
-        .input_counter(|_| ItemsCount::new(REMOVALS))
+        .input_counter(move |_| ItemsCount::new(removals))
         .bench_refs(move |input| {
             let (db, table) = input;
             pool.install(|| db.with_execution_state(|es| table.merge(es)));
