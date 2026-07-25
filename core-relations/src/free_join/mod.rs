@@ -520,12 +520,8 @@ impl Database {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         let mut to_merge = IndexSet::default();
-        // Tables modified during this call (accumulated from the notification list
-        // here and inside `merge_simple`). Only these need their cached indexes
-        // reset at the end: an unmodified table's index is still valid — its
-        // version is unchanged, so `Index::refresh` would be a no-op. Resetting
-        // *every* table instead is O(all tables) per call, which is quadratic when
-        // many small tables each trigger a merge.
+        // Tables modified during this `merge_all` call. Only these need their cached indexes reset
+        // at the end so future reads refresh them.
         let mut touched: IndexSet<TableId> = IndexSet::default();
         loop {
             to_merge.clear();
