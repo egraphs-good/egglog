@@ -767,7 +767,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 if p.name() == "unstable-fn" {
-                    let Some(GenericExpr::Lit(_, Literal::String(name))) = args.first() else {
+                    let Some(GenericExpr::Lit(span, Literal::String(name))) = args.first() else {
                         return Err(Error::BackendError(
                             "expected string literal after `unstable-fn`".into(),
                         ));
@@ -783,6 +783,9 @@ impl EGraph {
                             .read()
                             .unwrap()
                             .default_panic_id(),
+                        // Merge expressions evaluate in the `Write` context.
+                        crate::Context::Write,
+                        span,
                     )?;
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
@@ -867,7 +870,8 @@ impl EGraph {
         &mut self,
         sym: &str,
         n: Option<usize>,
-        file: Option<File>,
+        file: Option<(File, PathBuf)>,
+        span: Span,
         mode: PrintFunctionMode,
     ) -> Result<Option<CommandOutput>, Error> {
         let n = match n {
@@ -890,10 +894,10 @@ impl EGraph {
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
         let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
         match file {
-            Some(mut file) => {
+            Some((mut file, path)) => {
                 log::info!("Writing output to file");
                 file.write_all(output.to_string().as_bytes())
-                    .expect("Error writing to file");
+                    .map_err(|e| Error::IoError(path, e, span.clone()))?;
                 Ok(None)
             }
             None => Ok(Some(output)),
@@ -1159,7 +1163,7 @@ impl EGraph {
             rb.set_no_decomp(no_decomp);
             let mut translator =
                 BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
-            translator.query(query, rule.include_subsumed);
+            translator.query(query, rule.include_subsumed)?;
             translator.actions(actions)?;
             translator.build()
         };
@@ -1169,8 +1173,7 @@ impl EGraph {
                 Ruleset::Rules(rules) => {
                     match rules.entry(rule.name.clone()) {
                         indexmap::map::Entry::Occupied(_) => {
-                            let name = rule.name;
-                            panic!("Rule '{name}' was already present")
+                            return Err(Error::RuleAlreadyExists(rule.name, rule.span));
                         }
                         indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
@@ -1304,11 +1307,23 @@ impl EGraph {
         }
         let resolved_commands = resolved.desugared;
 
-        assert_eq!(resolved_commands.len(), 1);
-        let resolved_command = resolved_commands.into_iter().next().unwrap();
+        if resolved_commands.len() != 1 {
+            return Err(Error::BackendError(
+                "eval_expr expects a single resolved command".to_string(),
+            ));
+        }
+        let Some(resolved_command) = resolved_commands.into_iter().next() else {
+            return Err(Error::BackendError(
+                "eval_expr expects a single resolved command".to_string(),
+            ));
+        };
         let resolved_expr = match resolved_command {
             ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
-            _ => unreachable!(),
+            cmd => {
+                return Err(Error::BackendError(format!(
+                    "eval_expr: unexpected resolved command: {cmd:?}"
+                )));
+            }
         };
         let sort = resolved_expr.output_type();
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
@@ -1405,6 +1420,9 @@ impl EGraph {
                         name,
                         prim,
                         panic_id,
+                        // Top-level action evaluation runs in the `Full` context.
+                        crate::Context::Full,
+                        target_span,
                     )?;
                     let fn_value = self.backend.base_values().get(resolved_function);
                     let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
@@ -1553,7 +1571,7 @@ impl EGraph {
             &self.type_info,
             true, // global query: Read context (may read the DB)
         );
-        translator.query(&query, true);
+        translator.query(&query, true)?;
         translator
             .rb
             .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
@@ -1652,8 +1670,9 @@ impl EGraph {
                         .map_err(|e| Error::IoError(path.clone().into(), e, span.clone()))?;
                     log::info!("Printed overall statistics to json file {path}");
 
-                    serde_json::to_writer(&mut file, &self.overall_run_report)
-                        .expect("error serializing to json");
+                    serde_json::to_writer(&mut file, &self.overall_run_report).map_err(|e| {
+                        Error::BackendError(format!("failed writing statistics: {e}"))
+                    })?;
                 }
             },
             ResolvedNCommand::Check(span, facts) => {
@@ -1697,7 +1716,9 @@ impl EGraph {
                     }
                 } else {
                     if n < 0 {
-                        panic!("Cannot extract negative number of variants");
+                        return Err(Error::ExtractError(
+                            "cannot extract a negative number of variants".to_string(),
+                        ));
                     }
                     let terms: Vec<TermId> = extractor
                         .extract_variants(self, &mut termdag, x, n as usize)
@@ -1730,12 +1751,15 @@ impl EGraph {
             ResolvedNCommand::PrintFunction(span, f, n, file, mode) => {
                 let file = file
                     .map(|file| {
-                        std::fs::File::create(&file)
-                            .map_err(|e| Error::IoError(file.into(), e, span.clone()))
+                        let path: PathBuf = file.into();
+                        match std::fs::File::create(&path) {
+                            Ok(f) => Ok((f, path)),
+                            Err(e) => Err(Error::IoError(path, e, span.clone())),
+                        }
                     })
                     .transpose()?;
                 return self
-                    .print_function(&f, n, file, mode)
+                    .print_function(&f, n, file, span.clone(), mode)
                     .map_err(|e| match e {
                         Error::TypeError(TypeError::UnboundFunction(f, _)) => {
                             Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
@@ -1763,12 +1787,8 @@ impl EGraph {
                     return Err(Error::ExpectFail(span));
                 }
             }
-            ResolvedNCommand::Input {
-                span: _,
-                name,
-                file,
-            } => {
-                self.input_file(&name, file)?;
+            ResolvedNCommand::Input { span, name, file } => {
+                self.input_file(&name, file, span)?;
             }
             ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1792,10 +1812,18 @@ impl EGraph {
                     let value = self.eval_resolved_expr(span.clone(), &expr)?;
                     let expr_type = expr.output_type();
 
-                    let term = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
-                        .unwrap()
-                        .1;
+                    let term = match extractor.extract_best_with_sort(
+                        self,
+                        &mut termdag,
+                        value,
+                        expr_type,
+                    ) {
+                        Some((_, term)) => term,
+                        None => return Err(Error::ExtractError(
+                            "Unable to find any valid extraction (likely due to subsume or delete)"
+                                .to_string(),
+                        )),
+                    };
                     writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
@@ -1832,11 +1860,13 @@ impl EGraph {
         Ok(vec![])
     }
 
-    fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
-        let function_type = self
-            .type_info
-            .get_func_type(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
+    fn input_file(&mut self, func_name: &str, file: String, span: Span) -> Result<(), Error> {
+        let function_type = self.type_info.get_func_type(func_name).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(
+                func_name.to_string(),
+                span.clone(),
+            ))
+        })?;
         let func = self.functions.get_mut(func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1847,21 +1877,23 @@ impl EGraph {
         for t in &func.schema.input {
             match t.name() {
                 "i64" | "f64" | "String" => {}
-                s => panic!("Unsupported type {s} for input"),
+                s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
             }
         }
 
         if function_type.subtype != FunctionSubtype::Constructor {
             match func.schema.output.name() {
                 "i64" | "String" | "Unit" => {}
-                s => panic!("Unsupported type {s} for input"),
+                s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
             }
         }
 
         log::info!("Opening file '{filename:?}'...");
-        let mut f = File::open(filename).unwrap();
+        let mut f =
+            File::open(&filename).map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
         let mut contents = String::new();
-        f.read_to_string(&mut contents).unwrap();
+        f.read_to_string(&mut contents)
+            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
         // Can also do a row-major Vec<Value>
         let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
@@ -2433,6 +2465,7 @@ pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, Raw
 /// `unstable-app` will call later. For primitive targets, this bakes one
 /// dispatch id per runtime context so application can choose the entrypoint
 /// matching the primitive body's current call-site context.
+#[allow(clippy::too_many_arguments)]
 fn resolve_function_container_target_with_context(
     backend: &egglog_bridge::EGraph,
     functions: &IndexMap<String, Function>,
@@ -2440,26 +2473,30 @@ fn resolve_function_container_target_with_context(
     name: &str,
     primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
+    ctx: crate::Context,
+    span: &Span,
 ) -> Result<ResolvedFunction, Error> {
-    let target_function = type_info
+    let Some(target_function) = type_info
         .get_sorts::<FunctionSort>()
         .into_iter()
         .find(|function| function.name() == primitive.output().name())
-        .ok_or_else(|| {
-            Error::BackendError(format!(
-                "`unstable-fn` output sort `{}` is not a function sort",
-                primitive.output().name()
-            ))
-        })?;
+    else {
+        return Err(Error::BackendError(format!(
+            "`unstable-fn` output sort `{}` is not a function sort",
+            primitive.output().name()
+        )));
+    };
 
     let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
     let remaining_inputs = target_function.inputs();
     let output = target_function.output();
 
     let id = if let Some(func) = functions.get(name) {
-        let func_type = type_info
-            .get_func_type(name)
-            .ok_or_else(|| Error::BackendError(format!("No resolution for {name:?}")))?;
+        let func_type = type_info.get_func_type(name).ok_or_else(|| {
+            Error::BackendError(format!(
+                "`unstable-fn` references `{name}`, which has no resolved type"
+            ))
+        })?;
         let expected_inputs = partial_arcsorts
             .iter()
             .chain(remaining_inputs)
@@ -2483,7 +2520,7 @@ fn resolve_function_container_target_with_context(
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(Error::BackendError(format!(
-                "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
+                "`unstable-fn` reference `{name}` expected ({}) -> {}, found ({}) -> {}",
                 expected_input_names,
                 output.name(),
                 actual_input_names,
@@ -2507,42 +2544,46 @@ fn resolve_function_container_target_with_context(
             .iter()
             .filter(|primitive| primitive.accept(&signature, type_info))
             .collect();
-        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
-        for runtime_ctx in Context::ALL {
+        let mut ambiguous_ctx = None;
+        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
             let mut ids = candidates
                 .iter()
                 .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
             // The first `next` finds the candidate for this runtime context;
             // the second detects whether there is more than one such candidate.
             match (ids.next(), ids.next()) {
-                (None, _) => {}
-                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
+                (None, _) => None,
+                (Some(id), None) => Some(id),
                 (Some(_), Some(_)) => {
-                    return Err(Error::BackendError(format!(
-                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                    )));
+                    ambiguous_ctx = Some(runtime_ctx);
+                    None
                 }
             }
+        });
+        if let Some(runtime_ctx) = ambiguous_ctx {
+            return Err(TypeError::AmbiguousPrimitive {
+                name: name.to_owned(),
+                ctx: runtime_ctx,
+                span: span.clone(),
+            }
+            .into());
         }
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
-            let (output_sort, input_sorts) = signature
-                .split_last()
-                .expect("primitive signature should include an output sort");
-            let input_names = input_sorts
-                .iter()
-                .map(|sort| sort.name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(Error::BackendError(format!(
-                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
-                 context ids: {context_ids:?}",
-                input_names,
-                output_sort.name(),
-            )));
+            return Err(TypeError::UnresolvedPrimitive {
+                name: name.to_owned(),
+                ctx,
+                span: span.clone(),
+            }
+            .into());
         }
         ResolvedFunctionId::Primitive { context_ids }
     } else {
-        return Err(Error::BackendError(format!("No resolution for {name:?}")));
+        return Err(TypeError::UnresolvedPrimitive {
+            name: name.to_owned(),
+            ctx,
+            span: span.clone(),
+        }
+        .into());
     };
 
     Ok(ResolvedFunction {
@@ -2632,7 +2673,7 @@ impl<'a> BackendRule<'a> {
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
         ctx: crate::Context,
-    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+    ) -> Result<(ExternalFunctionId, Vec<QueryEntry>, ColumnTy), Error> {
         // The typechecker has already checked that this primitive is
         // valid in `ctx`; pick the runtime id that stamps the same ctx
         // onto the state wrapper when invoked.
@@ -2641,8 +2682,11 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
-            let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
-                panic!("expected string literal after `unstable-fn`")
+            let core::ResolvedAtomTerm::Literal(ref span, Literal::String(ref name)) = args[0]
+            else {
+                return Err(Error::BackendError(
+                    "expected a string literal as the first argument to `unstable-fn`".to_string(),
+                ));
             };
             // Pre-register a panic id used by `FunctionContainer::apply`
             // when the wrapped function is applied in a context that
@@ -2660,17 +2704,18 @@ impl<'a> BackendRule<'a> {
                 name,
                 prim,
                 panic_id,
-            )
-            .unwrap_or_else(|err| panic!("{err}"));
+                ctx,
+                span,
+            )?;
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
 
-        (
+        Ok((
             resolved_id,
             qe_args,
             prim.output().column_ty(self.rb.egraph()),
-        )
+        ))
     }
 
     fn args<'b>(
@@ -2680,7 +2725,11 @@ impl<'a> BackendRule<'a> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
-    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+    fn query(
+        &mut self,
+        query: &core::Query<ResolvedCall, ResolvedVar>,
+        include_subsumed: bool,
+    ) -> Result<(), Error> {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
@@ -2694,11 +2743,12 @@ impl<'a> BackendRule<'a> {
                 }
                 ResolvedCall::Primitive(p) => {
                     let ctx = self.query_context();
-                    let (p, args, ty) = self.prim(p, &atom.args, ctx);
+                    let (p, args, ty) = self.prim(p, &atom.args, ctx)?;
                     self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
         }
+        Ok(())
     }
 
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
@@ -2719,7 +2769,7 @@ impl<'a> BackendRule<'a> {
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
                             let ctx = self.action_context();
-                            let (p, args, ty) = self.prim(p, args, ctx);
+                            let (p, args, ty) = self.prim(p, args, ctx)?;
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -2835,6 +2885,12 @@ pub enum Error {
     Shadowing(String, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]
     CommandAlreadyExists(String, Span),
+    #[error("{1}\nRule already exists: {0}")]
+    RuleAlreadyExists(String, Span),
+    #[error("{1}\nUnsupported type {0} for input")]
+    UnsupportedInputType(String, Span),
+    #[error("{0}\n{1}")]
+    DesugarError(Span, String),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
     #[error(
@@ -3336,5 +3392,40 @@ mod tests {
             .parse_and_run_program(None, "(ruleset test)\n(run test2 1)")
             .unwrap_err();
         assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "test2"));
+    }
+
+    #[test]
+    fn test_duplicate_rule_name_errors() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "(relation foo (i64))
+                 (rule ((foo x)) ((foo (+ x 1))) :name \"r\")
+                 (rule ((foo x)) ((foo (+ x 2))) :name \"r\")",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::RuleAlreadyExists(..)));
+    }
+
+    #[test]
+    fn test_extract_negative_variants_errors() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "(sort Math)(constructor Num (i64) Math)(let x (Num 5))(extract x -1)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::ExtractError(..)));
+    }
+
+    #[test]
+    fn test_input_missing_file_errors() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "(function edge (i64) i64 :merge old)(input edge \"/no/such/file_xyz\")",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::IoError(..)));
     }
 }

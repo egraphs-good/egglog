@@ -95,11 +95,12 @@ impl Presort for MultiSetSort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
+        if let [Expr::Var(arg_span, e)] = args {
             let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), arg_span.clone()))?;
 
             let out = Self {
                 name,
@@ -107,7 +108,10 @@ impl Presort for MultiSetSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!()
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().to_owned(),
+                span,
+            ))
         }
     }
 }
@@ -183,7 +187,7 @@ impl ContainerSort for MultiSetSort {
                 data: std::iter::repeat_n(x, i).collect()
             })
         });
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
+        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -?> # (self.element()) { xs.data.pick().copied() });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
         add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
         add_primitive!(eg, "multiset-remove-swapped" = |x: # (self.element()), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs }) });
@@ -510,9 +514,9 @@ impl FullPrim for FillIndex {
             .clone();
         let action = match fc.0 {
             ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
-            ResolvedFunctionId::Primitive { .. } => panic!(
-                "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
-            ),
+            // Primitive functions cannot be used with
+            // unstable-multiset-fill-index, since they cannot be set.
+            ResolvedFunctionId::Primitive { .. } => return None,
         };
         let unit_val = state.base_values().get::<()>(());
         let es = state.raw_exec_state();
@@ -524,7 +528,7 @@ impl FullPrim for FillIndex {
             if action.lookup(es, &row).is_some() {
                 break;
             }
-            row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
+            row.push(es.base_values().get::<i64>(c.try_into().ok()?));
             action.insert(es, row.into_iter());
         }
         Some(unit_val)
@@ -575,9 +579,9 @@ impl WritePrim for ClearIndex {
             .clone();
         let action = match fc.0 {
             ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
-            ResolvedFunctionId::Primitive { .. } => panic!(
-                "Primitive functions cannot be used with unstable-multiset-clear-index, since they cannot be deleted"
-            ),
+            // Primitive functions cannot be used with
+            // unstable-multiset-clear-index, since they cannot be deleted.
+            ResolvedFunctionId::Primitive { .. } => return None,
         };
         let unit_val = state.base_values().get::<()>(());
         let es = state.raw_exec_state();
@@ -641,7 +645,7 @@ impl PurePrim for FlatMap {
                     .get_val::<MultiSetContainer>(mapped_ms)
                     .unwrap();
                 for (mv, mc) in mapped_ms.data.iter_counts() {
-                    new_data.insert_multiple_mut(mv, c * mc);
+                    new_data.insert_multiple_mut(mv, c.checked_mul(mc)?);
                 }
             } else {
                 new_data.insert_multiple_mut(v, c);
@@ -760,7 +764,7 @@ impl PurePrim for SumMultisets {
                 .get_val::<MultiSetContainer>(ms_value)
                 .unwrap();
             for (v, c) in ms.data.iter_counts() {
-                data.insert_multiple_mut(v, c * counts);
+                data.insert_multiple_mut(v, c.checked_mul(counts)?);
             }
         }
         let multiset = MultiSetContainer {

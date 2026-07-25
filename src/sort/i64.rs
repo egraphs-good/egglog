@@ -39,7 +39,7 @@ impl BaseSort for I64Sort {
         add_literal_prim!(eg, ">>" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
         add_literal_prim!(eg, "not-i64" = |a: i64| -> i64 { !a });
 
-        add_literal_prim!(eg, "log2" = |a: i64| -> i64 { a.ilog2() as i64 });
+        add_literal_prim!(eg, "log2" = |a: i64| -?> i64 { a.checked_ilog2().map(|x| x as i64) });
 
         add_literal_prim!(eg, "abs" = |a: i64| -?> i64 { a.checked_abs() });
 

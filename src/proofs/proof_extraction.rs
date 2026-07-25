@@ -13,6 +13,8 @@ pub enum ProveExistsError {
     PrimitivesUnsupported,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
     QueryDidNotMatch { constructor: String },
+    #[error("prove/prove-exists requires proofs to be enabled (run with --proofs).")]
+    ProofsNotEnabled,
 }
 
 impl ProofInstrumentor<'_> {
@@ -62,13 +64,10 @@ impl ProofInstrumentor<'_> {
             .proof_state
             .proof_func_parent
             .get(output_sort.name())
-            .unwrap_or_else(|| {
-                panic!(
-                    "no :internal-proof-func annotation recorded for sort {} (constructor {})",
-                    output_sort.name(),
-                    func.name
-                )
-            })
+            // A missing proof-function annotation means the proof infrastructure
+            // was never set up for this sort, i.e. proofs are not enabled. This is
+            // the genuine user-facing precondition for prove/prove-exists.
+            .ok_or(ProveExistsError::ProofsNotEnabled)?
             .clone();
         let proof_sort = self
             .egraph

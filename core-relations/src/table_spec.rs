@@ -90,7 +90,7 @@ pub struct TableChange {
 }
 
 /// A constraint on the values within a row.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Constraint {
     Eq { l_col: ColumnId, r_col: ColumnId },
     EqConst { col: ColumnId, val: Value },

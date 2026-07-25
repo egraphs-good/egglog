@@ -550,10 +550,10 @@ fn generate_literal_validator(
                 let #x = if let Term::Lit(lit) = termdag.get(args[#i]) {
                     match <#ty as egglog::prelude::LiteralConvertible>::from_literal(&lit) {
                         Some(val) => val,
-                        None => panic!("Failed to extract literal for argument {}", #i),
+                        None => return None,
                     }
                 } else {
-                    panic!("Argument {} is not a literal", #i);
+                    return None;
                 };
             }
         } else {
@@ -577,7 +577,7 @@ fn generate_literal_validator(
                     let result_lit = #ret_conv(result);
                     termdag.lit(result_lit)
                 }
-                None => panic!("Primitive operation failed"),
+                None => return None,
             }
         }
     } else {

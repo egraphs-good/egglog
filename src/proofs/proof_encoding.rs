@@ -1575,7 +1575,11 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedNCommand::Fail(span, cmd) => {
                 self.term_encode_command(cmd, res);
-                let last = res.pop().unwrap();
+                // Every term-encodable inner command pushes at least one command, so
+                // this pop cannot fail; an empty `res` would be an egglog bug.
+                let last = res
+                    .pop()
+                    .expect("(fail ...) inner command produced no instrumented command");
                 res.push(Command::Fail(span.clone(), Box::new(last)));
             }
             ResolvedNCommand::Extract(span, expr, variants) => {

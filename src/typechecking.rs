@@ -245,7 +245,7 @@ impl EGraph {
             None => Arc::new(EqSort { name }),
             Some((presort, args)) => {
                 if let Some(mksort) = self.type_info.mksorts.get(presort) {
-                    mksort(&mut self.type_info, name, args)?
+                    mksort(&mut self.type_info, name, args, span.clone())?
                 } else {
                     return Err(TypeError::PresortNotFound(presort.clone(), span));
                 }
@@ -925,7 +925,7 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self, query_ctx);
+        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self, query_ctx)?;
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
@@ -999,7 +999,7 @@ impl TypeInfo {
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
-        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::Read);
+        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::Read)?;
         Ok(annotated_facts)
     }
 
@@ -1209,6 +1209,8 @@ pub enum TypeError {
     FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("{1}\nPresort {0} not found.")]
     PresortNotFound(String, Span),
+    #[error("{1}\nInvalid arguments to sort constructor `{0}`")]
+    BadPresortArguments(String, Span),
     #[error("{}\nFailed to infer a type for: {}", .0.span(), .0)]
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
@@ -1239,6 +1241,20 @@ pub enum TypeError {
         crate::GLOBAL_NAME_PREFIX
     )]
     GlobalMissingPrefix { name: String, span: Span },
+    #[error(
+        "{span}\nAmbiguous primitive resolution for `{name}` in {ctx:?} context: multiple registered primitives match the same signature."
+    )]
+    AmbiguousPrimitive {
+        name: String,
+        ctx: crate::Context,
+        span: Span,
+    },
+    #[error("{span}\nNo resolution for `{name}` in {ctx:?} context.")]
+    UnresolvedPrimitive {
+        name: String,
+        ctx: crate::Context,
+        span: Span,
+    },
 }
 
 #[cfg(test)]
