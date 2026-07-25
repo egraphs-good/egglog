@@ -5,14 +5,14 @@ use std::{cmp, mem};
 use crate::numeric_id::NumericId;
 
 use crate::{
-    ColumnId, ExecutionState, Offset, OffsetRange, RowId, Subset, SubsetRef, Table, TableId,
+    ColumnId, ExecutionState, Offset, OffsetRange, RowId, Subset, SubsetRef, TableId,
     TaggedRowBuffer, Value, WrappedTable,
     common::HashSet,
     hash_index::{ColumnIndex, Index},
     offsets::Offsets,
     parallel,
     parallel_heuristics::{parallelize_incremental_rebuild, parallelize_rebuild},
-    table_spec::{Rebuilder, WrappedTableRef},
+    table_spec::{MutationBuffer, Rebuilder, WrappedTableRef},
 };
 
 use super::SortedWritesTable;
@@ -97,7 +97,7 @@ impl SortedWritesTable {
         }
 
         let mut changed = false;
-        let mut mutation_buf = self.new_buffer();
+        let mut mutation_buf = self.new_table_buffer();
         let mut refreshed_row = Vec::<Value>::with_capacity(self.n_columns);
         for row_id in candidate_rows {
             let Some(current_row) = self.data.get_row(row_id) else {
@@ -105,7 +105,7 @@ impl SortedWritesTable {
             };
             // Preserve the logical row and only advance its sort/timestamp
             // column, so seminaive treats this as a fresh parent-row delta.
-            mutation_buf.stage_remove(&current_row[0..self.n_keys]);
+            mutation_buf.stage_remove_row(row_id, &current_row[0..self.n_keys]);
             refreshed_row.clear();
             refreshed_row.extend_from_slice(current_row);
             if let Some(sort_by) = self.sort_by {
@@ -148,7 +148,7 @@ impl SortedWritesTable {
                         *start,
                         cmp::min(*start + partition_size, subset.size()),
                     );
-                    let mut mutation_buf = self.new_buffer();
+                    let mut mutation_buf = self.new_table_buffer();
                     let mut exec_state = exec_state.clone();
                     let mut changed = false;
                     let mut scanned = TaggedRowBuffer::new(self.n_columns);
@@ -160,7 +160,7 @@ impl SortedWritesTable {
                         for (row_id, row) in scanned.non_stale_mut() {
                             let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
                             if let Some(key) = to_remove {
-                                mutation_buf.stage_remove(key);
+                                mutation_buf.stage_remove_row(row_id, key);
                             }
                             changed = true;
                             insert_row!(self, mutation_buf, row, next_ts);
@@ -194,10 +194,10 @@ impl SortedWritesTable {
                 changed |= subset.size() > 0;
             }
             if !scratch.is_empty() {
-                let mut write_buf = self.new_buffer();
+                let mut write_buf = self.new_table_buffer();
                 for (row_id, row) in scratch.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
-                        write_buf.stage_remove(to_remove);
+                        write_buf.stage_remove_row(row_id, to_remove);
                     }
                     insert_row!(self, write_buf, row, next_ts);
                 }
@@ -222,7 +222,7 @@ impl SortedWritesTable {
                 // publications, whose merge cost outweighs the saved setup here.
                 let starts = (0..max_row).step_by(STEP_SIZE).collect::<Vec<_>>();
                 return parallel::map(&starts, |_, start| {
-                    let mut mutation_buf = self.new_buffer();
+                    let mut mutation_buf = self.new_table_buffer();
                     let mut buf = TaggedRowBuffer::new(self.n_columns);
                     let mut exec_state = exec_state.clone();
                     let mut changed = false;
@@ -237,7 +237,7 @@ impl SortedWritesTable {
                         let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
                         changed = true;
                         if let Some(key) = to_remove {
-                            mutation_buf.stage_remove(key);
+                            mutation_buf.stage_remove_row(row_id, key);
                         }
                         insert_row!(self, mutation_buf, row, next_ts);
                     }
@@ -252,7 +252,7 @@ impl SortedWritesTable {
             let starts = (0..max_row).step_by(partition_size).collect::<Vec<_>>();
             parallel::map(&starts, |_, start| {
                 let partition_end = cmp::min(*start + partition_size, max_row);
-                let mut mutation_buf = self.new_buffer();
+                let mut mutation_buf = self.new_table_buffer();
                 let mut buf = TaggedRowBuffer::new(self.n_columns);
                 let mut exec_state = exec_state.clone();
                 let mut changed = false;
@@ -268,7 +268,7 @@ impl SortedWritesTable {
                         let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
                         changed = true;
                         if let Some(key) = to_remove {
-                            mutation_buf.stage_remove(key);
+                            mutation_buf.stage_remove_row(row_id, key);
                         }
                         insert_row!(self, mutation_buf, row, next_ts);
                     }
@@ -292,10 +292,10 @@ impl SortedWritesTable {
                 );
             }
             if !buf.is_empty() {
-                let mut write_buf = self.new_buffer();
+                let mut write_buf = self.new_table_buffer();
                 for (row_id, row) in buf.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
-                        write_buf.stage_remove(to_remove);
+                        write_buf.stage_remove_row(row_id, to_remove);
                     }
                     insert_row!(self, write_buf, row, next_ts);
                     changed = true;

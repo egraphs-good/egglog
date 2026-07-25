@@ -151,6 +151,36 @@ fn insert_scan_sorted() {
 }
 
 #[test]
+fn known_row_removals_match_the_staged_row_id() {
+    empty_execution_state!(e);
+    let mut table = fill_table(
+        vec![
+            vec![v(0), v(1), v(2)],
+            vec![v(1), v(2), v(3)],
+            vec![v(2), v(3), v(4)],
+        ],
+        2,
+        None,
+        |_, new| Some(new.to_vec()),
+    );
+    let key = [v(1), v(2)];
+    let row = table.get_row(&key).unwrap().id;
+
+    let mut wrong = table.new_table_buffer();
+    wrong.stage_remove_row(RowId::from_usize(row.index() + 1), &key);
+    drop(wrong);
+    table.merge(&mut e);
+    assert!(table.get_row(&key).is_some());
+
+    let mut exact = table.new_table_buffer();
+    exact.stage_remove_row(row, &key);
+    drop(exact);
+    table.merge(&mut e);
+    assert!(table.get_row(&key).is_none());
+    assert_eq!(table.len(), 2);
+}
+
+#[test]
 fn shard_math() {
     let mut table = ShardedHashTable::<TableEntry>::with_shards(14);
     // Should be rounded up to 16.
