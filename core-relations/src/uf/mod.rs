@@ -8,6 +8,7 @@ use std::{
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
+use smallvec::SmallVec;
 
 use crate::{
     TableChange, TaggedRowBuffer,
@@ -88,7 +89,6 @@ impl Rebuilder for Canonicalizer<'_> {
         }
         assert!(end.index() <= buf.len());
         let mut cur = start;
-        let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
         // SAFETY: `cur` is always in-bounds, guaranteed by the above assertion.
         // Special-case small columns: this gives us a modest speedup on rebuilding-heavy
         // workloads.
@@ -99,10 +99,7 @@ impl Rebuilder for Canonicalizer<'_> {
                     let to_canon = row[c.index()];
                     let canon = self.table.uf.find_naive(to_canon);
                     if canon != to_canon {
-                        scratch.extend_from_slice(row);
-                        scratch[c.index()] = canon;
-                        out.add_row(cur, &scratch);
-                        scratch.clear();
+                        out.add_row_with(cur, row, |dst| dst[c.index()] = canon);
                     }
                     cur = cur.inc();
                 }
@@ -115,11 +112,10 @@ impl Rebuilder for Canonicalizer<'_> {
                     let ca1 = self.table.uf.find_naive(v1);
                     let ca2 = self.table.uf.find_naive(v2);
                     if ca1 != v1 || ca2 != v2 {
-                        scratch.extend_from_slice(row);
-                        scratch[c1.index()] = ca1;
-                        scratch[c2.index()] = ca2;
-                        out.add_row(cur, &scratch);
-                        scratch.clear();
+                        out.add_row_with(cur, row, |dst| {
+                            dst[c1.index()] = ca1;
+                            dst[c2.index()] = ca2;
+                        });
                     }
                     cur = cur.inc();
                 }
@@ -134,30 +130,34 @@ impl Rebuilder for Canonicalizer<'_> {
                     let ca2 = self.table.uf.find_naive(v2);
                     let ca3 = self.table.uf.find_naive(v3);
                     if ca1 != v1 || ca2 != v2 || ca3 != v3 {
-                        scratch.extend_from_slice(row);
-                        scratch[c1.index()] = ca1;
-                        scratch[c2.index()] = ca2;
-                        scratch[c3.index()] = ca3;
-                        out.add_row(cur, &scratch);
-                        scratch.clear();
+                        out.add_row_with(cur, row, |dst| {
+                            dst[c1.index()] = ca1;
+                            dst[c2.index()] = ca2;
+                            dst[c3.index()] = ca3;
+                        });
                     }
                     cur = cur.inc();
                 }
             }
             cs => {
+                let mut canons: SmallVec<[Value; 8]> = SmallVec::with_capacity(cs.len());
                 while cur < end {
-                    scratch.extend_from_slice(unsafe { buf.get_row_unchecked(cur) });
+                    let row = unsafe { buf.get_row_unchecked(cur) };
+                    canons.clear();
                     let mut changed = false;
                     for c in cs {
-                        let to_canon = scratch[c.index()];
+                        let to_canon = row[c.index()];
                         let canon = self.table.uf.find_naive(to_canon);
-                        scratch[c.index()] = canon;
                         changed |= canon != to_canon;
+                        canons.push(canon);
                     }
                     if changed {
-                        out.add_row(cur, &scratch);
+                        out.add_row_with(cur, row, |dst| {
+                            for (c, canon) in cs.iter().zip(canons.iter()) {
+                                dst[c.index()] = *canon;
+                            }
+                        });
                     }
-                    scratch.clear();
                     cur = cur.inc();
                 }
             }

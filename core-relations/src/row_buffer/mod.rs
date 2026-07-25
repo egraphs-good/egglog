@@ -444,6 +444,38 @@ impl<V: ValueVec> TaggedRowBuffer<V> {
         res
     }
 
+    /// Add the given row and RowId to the buffer, then let `patch` edit the
+    /// copied row in place. Equivalent to copying `row` into a scratch
+    /// buffer, editing it, and calling [`TaggedRowBuffer::add_row`], without
+    /// the intermediate copy.
+    #[inline]
+    pub fn add_row_with(
+        &mut self,
+        row_id: RowId,
+        row: &[Value],
+        patch: impl FnOnce(&mut [Value]),
+    ) -> RowId {
+        debug_assert_eq!(
+            row.len(),
+            self.base_arity(),
+            "attempting to add a row with mismatched arity to table"
+        );
+        if self.inner.total_rows == 0 {
+            self.inner.data.refresh();
+        }
+        let res = RowId::from_usize(self.inner.total_rows);
+        self.inner.data.extend_from_values(row);
+        self.inner.data.push(Cell::new(Value::new(row_id.rep())));
+        self.inner.total_rows += 1;
+        let vals = self.inner.data.as_values_mut();
+        let end = vals.len() - 1;
+        let dst = &mut vals[end - row.len()..end];
+        // SAFETY: see the comment in `RowBuffer::non_stale`; this is the same
+        // Cell-to-Value transmute used by `get_row_mut`.
+        patch(unsafe { mem::transmute::<&mut [Cell<Value>], &mut [Value]>(dst) });
+        res
+    }
+
     /// Get the row (and the id it was associated with at insertion time) at the
     /// offset associated with `row`.
     pub fn get_row(&self, row: RowId) -> (RowId, &[Value]) {
