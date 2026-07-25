@@ -6,7 +6,7 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 use crate::{
     common::{HashSet, Value},
     numeric_id::NumericId,
-    offsets::{Offsets, RowId, SubsetRef},
+    offsets::{Offsets, RowId, Subset, SubsetRef},
 };
 
 use crate::{
@@ -16,12 +16,21 @@ use crate::{
     table_spec::{ColumnId, WrappedTable},
 };
 
-use super::{Index, IndexBase, IndexPosition, PositionedIndexBase};
+use super::{
+    Index, IndexBase, IndexPosition, PositionedIndexBase, coarse_index_scan_partition_size,
+};
 
 fn subset_rows(subset: SubsetRef<'_>) -> Vec<usize> {
     let mut rows = Vec::new();
     subset.offsets(|row| rows.push(row.index()));
     rows
+}
+
+#[test]
+fn coarse_index_scan_partitions_are_bounded() {
+    assert_eq!(coarse_index_scan_partition_size(0, 0), 256);
+    assert_eq!(coarse_index_scan_partition_size(1_000, 4), 256);
+    assert_eq!(coarse_index_scan_partition_size(4_096, 3), 1_366);
 }
 
 #[test]
@@ -226,7 +235,7 @@ fn column_index_rebuild_matches_oracle() {
 
                 // Install a multi-thread pool so `ColumnIndex` shards across several shards and
                 // the merge actually forks; correctness must not depend on the shard count.
-                let parallel = ThreadPool::new(4).install(|| {
+                let parallel = ThreadPool::new(8).install(|| {
                     let mut ci = ColumnIndex::new();
                     ci.merge_parallel(&cols, table.as_ref(), table.all().as_ref());
                     ci
@@ -235,6 +244,50 @@ fn column_index_rebuild_matches_oracle() {
             }
         }
     }
+}
+
+#[test]
+fn parallel_column_index_handles_sparse_source_partitions() {
+    let rows = (0..1_000)
+        .map(|i| vec![v(i), v(i % 17), v((i / 3) % 23), v(i % 17)])
+        .collect::<Vec<_>>();
+    let selected = (0..rows.len()).filter(|i| i % 3 == 0).collect::<Vec<_>>();
+    let mut first_subset = Subset::empty();
+    let mut second_subset = Subset::empty();
+    for (i, &row) in selected.iter().enumerate() {
+        let subset = if i < selected.len() / 2 {
+            &mut first_subset
+        } else {
+            &mut second_subset
+        };
+        subset.add_row_sorted(RowId::from_usize(row));
+    }
+
+    let mut expected = BTreeMap::<u32, Vec<usize>>::new();
+    for &row_id in &selected {
+        let row = &rows[row_id];
+        let mut seen = Vec::new();
+        for value in &row[1..] {
+            if seen.contains(value) {
+                continue;
+            }
+            seen.push(*value);
+            expected.entry(value.rep()).or_default().push(row_id);
+        }
+    }
+
+    let table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+        assert_eq!(old, new, "unique keys, so no conflicts");
+        None
+    }));
+    let cols = [ColumnId::new(1), ColumnId::new(2), ColumnId::new(3)];
+    let index = ThreadPool::new(8).install(|| {
+        let mut index = ColumnIndex::new();
+        index.merge_parallel(&cols, table.as_ref(), first_subset.as_ref());
+        index.merge_parallel(&cols, table.as_ref(), second_subset.as_ref());
+        index
+    });
+    assert_matches_oracle(&index, &expected, "sparse source partitions");
 }
 
 #[test]
