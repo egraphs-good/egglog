@@ -9,7 +9,7 @@ use egglog_reports::ReportLevel;
 use crate::numeric_id::NumericId;
 
 use crate::{
-    PlanStrategy,
+    PlanStrategy, Subset,
     action::WriteVal,
     common::Value,
     free_join::{
@@ -1799,6 +1799,286 @@ fn gj_top_index_shards_preserve_count_and_materialization_inner() {
             assert_eq!(y / DEGREE, z / DEGREE);
         }
     });
+}
+
+#[test]
+fn gj_filtered_top_index_ranges_preserve_count_and_materialization() {
+    let serial = gj_filtered_top_index_range_fixture(1);
+    let parallel = gj_filtered_top_index_range_fixture(4);
+    assert_eq!(parallel.0, serial.0, "parallel match count changed");
+    assert_eq!(parallel.1, serial.1, "parallel actions changed");
+    assert!(
+        parallel.2 > 4,
+        "filtered top-index ranges did not enqueue global work"
+    );
+    assert_eq!(
+        parallel.3, 0,
+        "filtered top-index range subtrees must stay serial"
+    );
+}
+
+/// Return `(matches, materialized rows, global pushes, local pushes)`.
+///
+/// The filtered left input is deliberately smaller than half of its table.
+/// It therefore builds the normal execution-scoped packed scalar index rather
+/// than using the persistent whole-table catalog. Coarse search jobs must
+/// borrow disjoint key ranges from that index without rescanning the table.
+fn gj_filtered_top_index_range_fixture(num_threads: usize) -> (usize, Vec<Vec<Value>>, u64, u64) {
+    let pool = egglog_concurrency::ThreadPool::new(num_threads);
+    pool.install(|| {
+        let mut db = Database::default();
+        let left = db.add_table(
+            SortedWritesTable::new(
+                3,
+                3,
+                Some(ColumnId::new(2)),
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "left rows are unique");
+                    false
+                }),
+            ),
+            iter::empty(),
+            iter::empty(),
+        );
+        let right = add_set_table(&mut db, 2);
+        let output = add_set_table(&mut db, 2);
+
+        const ROWS: usize = 12_001;
+        const NEW_START: usize = 9_001;
+        {
+            let mut left_buf = db.new_buffer(left);
+            let mut right_buf = db.new_buffer(right);
+            for key in 0..NEW_START {
+                left_buf.stage_insert(&[v(key), v(100_000 + key), v(0)]);
+                right_buf.stage_insert(&[v(key), v(200_000 + key)]);
+            }
+        }
+        db.merge_all();
+        {
+            let mut left_buf = db.new_buffer(left);
+            let mut right_buf = db.new_buffer(right);
+            for key in NEW_START..ROWS {
+                left_buf.stage_insert(&[v(key), v(100_000 + key), v(1)]);
+                right_buf.stage_insert(&[v(key), v(200_000 + key)]);
+            }
+        }
+        db.merge_all();
+
+        let recent = Constraint::GeConst {
+            col: ColumnId::new(2),
+            val: v(1),
+        };
+        let mut rsb = db.new_rule_set();
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let key = query.new_var_named("key");
+        let left_value = query.new_var_named("left-value");
+        let timestamp = query.new_var_named("timestamp");
+        let right_value = query.new_var_named("right-value");
+        query
+            .add_atom(
+                left,
+                &[key.into(), left_value.into(), timestamp.into()],
+                std::slice::from_ref(&recent),
+            )
+            .unwrap();
+        query
+            .add_atom(right, &[key.into(), right_value.into()], &[])
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[left_value.into(), right_value.into()])
+            .unwrap();
+        rule.build_with_description("filtered-index-range-gj");
+        let rules = rsb.build();
+
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::SinglePlan(plan) = plan else {
+            panic!("set_no_decomp must produce a single plan")
+        };
+        assert!(matches!(
+            &plan.stages.instrs[0],
+            JoinStage::Intersect { scans, .. } if scans.len() == 2
+        ));
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let scheduler = pool.scheduler_metrics();
+        let expected = ROWS - NEW_START;
+        assert_eq!(report.num_matches("filtered-index-range-gj"), expected);
+        let rows = table_rows(&db, output);
+        assert_eq!(rows.len(), expected);
+        (
+            report.num_matches("filtered-index-range-gj"),
+            rows,
+            scheduler.global_pushes,
+            scheduler.local_pushes,
+        )
+    })
+}
+
+#[test]
+fn fused_cover_partitions_preserve_matches_and_actions() {
+    let serial = fused_cover_partition_fixture(1, false);
+    let parallel = fused_cover_partition_fixture(4, false);
+    assert_eq!(parallel.0, serial.0, "parallel match count changed");
+    assert_eq!(parallel.1, serial.1, "parallel actions changed");
+    assert!(
+        parallel.2 > 4,
+        "coarse fused-cover partitioning did not enqueue global work"
+    );
+    assert_eq!(
+        parallel.3, 0,
+        "coarse fused-cover subtrees must stay serial"
+    );
+}
+
+#[test]
+fn fused_cover_partitions_preserve_seminaive_subset() {
+    let serial = fused_cover_partition_fixture(1, true);
+    let parallel = fused_cover_partition_fixture(4, true);
+    assert_eq!(parallel.0, serial.0, "parallel match count changed");
+    assert_eq!(parallel.1, serial.1, "parallel actions changed");
+    assert!(
+        parallel.2 > 4,
+        "filtered fused cover did not enqueue global work"
+    );
+    assert_eq!(
+        parallel.3, 0,
+        "filtered fused-cover subtrees must stay serial"
+    );
+}
+
+/// Return `(matches, materialized rows, global pushes, local pushes)`.
+///
+/// The timestamp-filtered case models a seminaive root: its cover is a dense
+/// suffix with a nonzero origin rather than the table's whole-row subset.
+fn fused_cover_partition_fixture(
+    num_threads: usize,
+    timestamp_filtered: bool,
+) -> (usize, Vec<Vec<Value>>, u64, u64) {
+    let pool = egglog_concurrency::ThreadPool::new(num_threads);
+    pool.install(|| {
+        let mut db = Database::default();
+        let facts = db.add_table(
+            SortedWritesTable::new(
+                3,
+                3,
+                Some(ColumnId::new(2)),
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "facts are unique");
+                    false
+                }),
+            ),
+            iter::empty(),
+            iter::empty(),
+        );
+        let gate = add_set_table(&mut db, 1);
+        let output = add_set_table(&mut db, 3);
+
+        const FACT_ROWS: usize = 12_001;
+        const ZERO_TIMESTAMP_ROWS: usize = 4_001;
+        const GATE_ROWS: usize = 16_001;
+        {
+            let mut facts_buf = db.new_buffer(facts);
+            for i in 0..ZERO_TIMESTAMP_ROWS {
+                facts_buf.stage_insert(&[v(i), v(100_000 + i), v(0)]);
+            }
+        }
+        {
+            let mut gate_buf = db.new_buffer(gate);
+            for i in 0..GATE_ROWS {
+                gate_buf.stage_insert(&[v(i)]);
+            }
+        }
+        db.merge_all();
+        {
+            let mut facts_buf = db.new_buffer(facts);
+            for i in ZERO_TIMESTAMP_ROWS..FACT_ROWS {
+                facts_buf.stage_insert(&[v(i), v(100_000 + i), v(1)]);
+            }
+        }
+        db.merge_all();
+
+        let timestamp = Constraint::GeConst {
+            col: ColumnId::new(2),
+            val: v(1),
+        };
+        let mut rsb = db.new_rule_set();
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::PureSize);
+        query.set_no_decomp(true);
+        let key = query.new_var_named("key");
+        let payload = query.new_var_named("payload");
+        let ts = query.new_var_named("timestamp");
+        let facts_atom = query
+            .add_atom(
+                facts,
+                &[key.into(), payload.into(), ts.into()],
+                timestamp_filtered.then_some(&timestamp),
+            )
+            .unwrap();
+        query.add_atom(gate, &[key.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[key.into(), payload.into(), ts.into()])
+            .unwrap();
+        rule.build_with_description("coarse-fused-cover");
+        let rules = rsb.build();
+
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::SinglePlan(plan) = plan else {
+            panic!("set_no_decomp must produce a single plan")
+        };
+        assert_eq!(plan.stages.instrs.len(), 1);
+        assert!(matches!(
+            &plan.stages.instrs[0],
+            JoinStage::FusedIntersect {
+                cover,
+                to_intersect,
+                ..
+            } if cover.to_index.atom == facts_atom && !to_intersect.is_empty()
+        ));
+        let expected = if timestamp_filtered {
+            FACT_ROWS - ZERO_TIMESTAMP_ROWS
+        } else {
+            FACT_ROWS
+        };
+        if timestamp_filtered {
+            let cover_header = plan
+                .header
+                .iter()
+                .find(|header| header.atom == facts_atom)
+                .unwrap();
+            assert_eq!(cover_header.subset.size(), expected);
+            let Subset::Dense(range) = &cover_header.subset else {
+                panic!("sorted timestamp filter must produce a dense suffix")
+            };
+            assert!(
+                range.start.index() > 0,
+                "the seminaive fixture must exercise a nonzero subset origin"
+            );
+        } else {
+            assert!(
+                plan.header.iter().all(|header| header.atom != facts_atom),
+                "an unconstrained cover should use the whole table"
+            );
+        }
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let scheduler = pool.scheduler_metrics();
+        assert_eq!(report.num_matches("coarse-fused-cover"), expected);
+        let rows = table_rows(&db, output);
+        assert_eq!(rows.len(), expected);
+        (
+            report.num_matches("coarse-fused-cover"),
+            rows,
+            scheduler.global_pushes,
+            scheduler.local_pushes,
+        )
+    })
 }
 
 #[test]

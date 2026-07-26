@@ -11,8 +11,8 @@
 //! closure. There's likely more to do in this area but for now it seems to work
 //! well enough. It doesn't hurt that it's also simpler to implement.
 use egglog_numeric_id as numeric_id;
-use numeric_id::NumericId;
-use std::cmp;
+use numeric_id::{AtomicNumericId, NumericId};
+use std::{cmp, marker::PhantomData, mem, slice};
 
 pub mod concurrent;
 
@@ -23,6 +23,41 @@ mod tests;
 #[derive(Clone)]
 pub struct UnionFind<Value> {
     parents: Vec<Value>,
+}
+
+/// A concurrent, fixed-capacity view borrowed from a serial [`UnionFind`].
+///
+/// Creating this view requires exclusive access to the serial union-find. The
+/// view may be shared with scoped worker threads, and the serial representation
+/// becomes accessible again only after all of those borrows have ended.
+///
+/// Operations on this fixed view use relaxed atomics. Parent entries are the
+/// only shared state: a successful union changes a root from itself to a
+/// strictly smaller ID, and path splitting changes a parent to a strictly
+/// smaller ancestor. Consequently links never increase, cannot exhibit ABA,
+/// and cannot form a cycle. A stale load is still a same-component ancestor,
+/// while every mutation uses compare-exchange to verify the observed link.
+/// The scope join before this view is dropped provides the happens-before edge
+/// needed before ordinary reads resume; parent links do not publish any other
+/// payload.
+pub struct AtomicUnionFindAccess<'a, Value: AtomicNumericId> {
+    parents: &'a [Value::Atomic],
+    marker: PhantomData<Value>,
+}
+
+impl<Value: AtomicNumericId> AtomicUnionFindAccess<'_, Value>
+where
+    Value::Atomic: concurrent::atomic_int::AtomicInt<Underlying = Value::Rep>,
+{
+    /// Merge two equivalence classes.
+    ///
+    /// Panics if either ID exceeds the fixed capacity selected when this view
+    /// was created.
+    #[inline]
+    pub fn union(&self, l: Value, r: Value) -> (Value, Value) {
+        let (parent, child) = concurrent::uf::merge_scoped_impl(self.parents, l.rep(), r.rep());
+        (Value::new(parent), Value::new(child))
+    }
 }
 
 impl<V> Default for UnionFind<V> {
@@ -100,5 +135,62 @@ impl<Value: NumericId> UnionFind<Value> {
             cur = parent;
         }
         cur
+    }
+}
+
+impl<Value: AtomicNumericId> UnionFind<Value>
+where
+    Value::Atomic: concurrent::atomic_int::AtomicInt<Underlying = Value::Rep>,
+{
+    /// Temporarily borrow this union-find as a fixed-capacity atomic view.
+    ///
+    /// The backing vector is grown before the atomic view is created and
+    /// cannot resize while `f` runs. Atomic and ordinary accesses never
+    /// overlap: the mutable receiver excludes ordinary readers until `f` and
+    /// every scoped worker borrowing its view have completed. No allocation,
+    /// resize, or per-operation access guard occurs while the view is active.
+    /// `max_id` is inclusive, and `f` must not request a union containing a
+    /// larger ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ID and its atomic integer do not have identical size and
+    /// alignment on the target platform.
+    pub fn with_atomic_access<R>(
+        &mut self,
+        max_id: Value,
+        f: impl FnOnce(&AtomicUnionFindAccess<'_, Value>) -> R,
+    ) -> R {
+        self.reserve(max_id);
+        assert_eq!(
+            mem::size_of::<Value>(),
+            mem::size_of::<Value::Atomic>(),
+            "numeric id and atomic representation must have equal size"
+        );
+        assert_eq!(
+            mem::align_of::<Value>(),
+            mem::align_of::<Value::Atomic>(),
+            "numeric id and atomic representation must have equal alignment"
+        );
+
+        // SAFETY:
+        // - `AtomicNumericId` guarantees a transparent integer
+        //   representation compatible with the corresponding atomic; the
+        //   assertions above defensively verify its size and alignment.
+        // - Integer bit patterns are valid atomic integer bit patterns.
+        // - `&mut self` excludes every ordinary access to `parents` for the
+        //   lifetime of this slice.
+        // - `f` cannot let the borrowed view escape, so every atomic access
+        //   ends before ordinary access resumes.
+        let parents = unsafe {
+            slice::from_raw_parts(
+                self.parents.as_mut_ptr().cast::<Value::Atomic>(),
+                self.parents.len(),
+            )
+        };
+        f(&AtomicUnionFindAccess {
+            parents,
+            marker: PhantomData,
+        })
     }
 }
