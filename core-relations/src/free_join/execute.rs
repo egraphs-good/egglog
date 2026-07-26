@@ -194,11 +194,10 @@ pub(crate) struct SortedColumnIndex {
 
 impl SortedColumnIndex {
     fn build_for_subset(table: WrappedTableRef, subset: SubsetRef, col: ColumnId) -> Self {
-        let n = subset.size();
-        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
+        let mut pairs: Vec<(Value, RowId)> = Vec::new();
         // Rows arrive in RowId-ascending order, so a value-stable sort leaves
         // each value's rows ascending.
-        table.for_each_col(subset, col, &mut |row_id, val| pairs.push((val, row_id)));
+        table.collect_col_pairs(subset, col, &mut pairs);
         let mut scratch = vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
         crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut scratch);
         drop(scratch);
@@ -291,13 +290,6 @@ impl<T> PotentiallyStale<T> {
 impl PotentiallyStale<SubsetRef<'_>> {
     fn size(&self) -> usize {
         self.inner.size()
-    }
-
-    fn to_owned(&self, pool: &Pool<SortedOffsetVector>) -> PotentiallyStale<Subset> {
-        PotentiallyStale {
-            inner: self.inner.to_owned(pool),
-            can_be_stale: self.can_be_stale,
-        }
     }
 }
 
@@ -1395,20 +1387,19 @@ impl<'a> JoinState<'a> {
         }
 
         fn refine_subset(
-            sub: PotentiallyStale<Subset>,
+            sub: PotentiallyStale<SubsetRef<'_>>,
             constraints: &[Constraint],
             table: &WrappedTableRef,
             has_stale: bool,
+            pool: &Pool<SortedOffsetVector>,
         ) -> Subset {
-            let sub = if sub.can_be_stale && has_stale {
-                table.refine_live(sub.inner)
+            let need_live = sub.can_be_stale && has_stale;
+            if constraints.is_empty() && !need_live {
+                sub.inner.to_owned(pool)
             } else {
-                sub.inner
-            };
-            if constraints.is_empty() {
-                sub
-            } else {
-                table.refine(sub, constraints)
+                // Fused copy + liveness + constraint filter (single pass for
+                // tables that implement `refine_ref` directly).
+                table.refine_ref(sub.inner, constraints, need_live)
             }
         }
 
@@ -1428,7 +1419,7 @@ impl<'a> JoinState<'a> {
                     prober.for_each(|val, x| {
                         updates.push_binding(*var, val[0]);
                         if x.size() <= 16 {
-                            let sub = refine_subset(x.to_owned(pool), &a.cs, &table, has_stale);
+                            let sub = refine_subset(x, &a.cs, &table, has_stale, pool);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
@@ -1440,7 +1431,7 @@ impl<'a> JoinState<'a> {
                                 val[0],
                                 &a.cs,
                                 info,
-                                || refine_subset(x.to_owned(pool), &a.cs, &table, has_stale),
+                                || refine_subset(x, &a.cs, &table, has_stale, pool),
                             );
                             if node.subset.is_empty() {
                                 updates.rollback();
@@ -1481,10 +1472,11 @@ impl<'a> JoinState<'a> {
                             updates.push_binding(*var, val[0]);
                             if small_sub.size() <= 16 {
                                 let small_sub = refine_subset(
-                                    small_sub.to_owned(pool),
+                                    small_sub,
                                     &smaller_scan.cs,
                                     &small_table,
                                     small_has_stale,
+                                    pool,
                                 );
                                 if small_sub.is_empty() {
                                     updates.rollback();
@@ -1499,10 +1491,11 @@ impl<'a> JoinState<'a> {
                                     small_info,
                                     || {
                                         refine_subset(
-                                            small_sub.to_owned(pool),
+                                            small_sub,
                                             &smaller_scan.cs,
                                             &small_table,
                                             small_has_stale,
+                                            pool,
                                         )
                                     },
                                 );
@@ -1514,10 +1507,11 @@ impl<'a> JoinState<'a> {
                             }
                             if large_sub.size() <= 16 {
                                 let large_sub = refine_subset(
-                                    large_sub.to_owned(pool),
+                                    large_sub,
                                     &larger_scan.cs,
                                     &large_table,
                                     large_has_stale,
+                                    pool,
                                 );
                                 if large_sub.is_empty() {
                                     updates.rollback();
@@ -1532,10 +1526,11 @@ impl<'a> JoinState<'a> {
                                     large_info,
                                     || {
                                         refine_subset(
-                                            large_sub.to_owned(pool),
+                                            large_sub,
                                             &larger_scan.cs,
                                             &large_table,
                                             large_has_stale,
+                                            pool,
                                         )
                                     },
                                 );
@@ -1601,10 +1596,11 @@ impl<'a> JoinState<'a> {
                                         self.db.tables[atoms[rest[i].atom].table].table.as_ref();
                                     if sub.size() <= 16 {
                                         let sub = refine_subset(
-                                            sub.to_owned(pool),
+                                            sub,
                                             &rest[i].cs,
                                             &table,
                                             rest_has_stale[i],
+                                            pool,
                                         );
                                         if sub.is_empty() {
                                             updates.rollback();
@@ -1619,10 +1615,11 @@ impl<'a> JoinState<'a> {
                                             &self.db.tables[atoms[scan.atom].table],
                                             || {
                                                 refine_subset(
-                                                    sub.to_owned(pool),
+                                                    sub,
                                                     &rest[i].cs,
                                                     &table,
                                                     rest_has_stale[i],
+                                                    pool,
                                                 )
                                             },
                                         );
@@ -1640,10 +1637,11 @@ impl<'a> JoinState<'a> {
                             }
                             if sub.size() <= 16 {
                                 let main_sub = refine_subset(
-                                    sub.to_owned(pool),
+                                    sub,
                                     &main_spec.cs,
                                     &main_spec_table,
                                     main_spec_has_stale,
+                                    pool,
                                 );
                                 if main_sub.is_empty() {
                                     updates.rollback();
@@ -1657,12 +1655,12 @@ impl<'a> JoinState<'a> {
                                     &main_spec.cs,
                                     main_spec_info,
                                     || {
-                                        let sub = sub.to_owned(pool);
                                         refine_subset(
                                             sub,
                                             &main_spec.cs,
                                             &main_spec_table,
                                             main_spec_has_stale,
+                                            pool,
                                         )
                                     },
                                 );
@@ -1844,10 +1842,11 @@ impl<'a> JoinState<'a> {
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset,
                                 cs,
                                 &table_info.table.as_ref(),
                                 index_has_stale[prober_idx],
+                                pool,
                             );
                             if subset.is_empty() {
                                 updates.rollback();
@@ -2007,12 +2006,13 @@ impl<'a> JoinState<'a> {
                         }
                         if let Some(subset) = prober.get_subset(&key) {
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset,
                                 &spec.constraints,
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table
                                     .as_ref(),
                                 probers_has_stale[j],
+                                pool,
                             );
                             if subset.is_empty() {
                                 return false;
