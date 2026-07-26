@@ -13,8 +13,11 @@ use crate::{
     pool::{Pooled, with_pool_set},
 };
 
+mod partitioned;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use partitioned::{HashPartitioning, PartitionedRowBuffer};
 
 /// A trait for types that can store a vector of `Value`s.
 ///
@@ -589,7 +592,8 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
     /// The caller must ensure that either `row` is within bounds of the buffer at the creation of
     /// this handle, or that the row was successfully written to the buffer before it was called.
     ///
-    /// Furthermore, no calls to `set_stale_shared` may overlap with this call.
+    /// Furthermore, no calls to `set_stale_shared` or `replace_row_shared` may
+    /// overlap with this call.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         // SAFETY: ParallelVecWriter guarantees that data within bounds is not
         // being modified concurrently.
@@ -598,6 +602,31 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
                 self.data.as_ptr().add(row.index() * self.buf.n_columns) as *const Value,
                 self.buf.n_columns,
             )
+        }
+    }
+
+    /// Replace a row in the buffer through shared access.
+    ///
+    /// The row may be beyond the vector's original length if it is covered by
+    /// a completed write to the underlying [`ParallelVecWriter`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `row` is covered by the original vector or
+    /// a completed write and that no other reads or writes overlap this row.
+    pub(crate) unsafe fn replace_row_shared(&self, row: RowId, values: &[Value]) {
+        assert_eq!(
+            values.len(),
+            self.buf.n_columns,
+            "attempting to replace a row with mismatched arity"
+        );
+        let cells: &[Cell<Value>] = &self.data;
+        let cell_ptr = cells.as_ptr();
+        let start = row.index() * self.buf.n_columns;
+        for (offset, value) in values.iter().copied().enumerate() {
+            unsafe {
+                (&*cell_ptr.add(start + offset)).set(value);
+            }
         }
     }
 
