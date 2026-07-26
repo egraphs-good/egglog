@@ -66,7 +66,7 @@ impl<T: AtomicInt> ConcurrentUnionFind<T> {
     pub fn find(&self, elt: T::Underlying) -> T::Underlying {
         self.data.with_access(
             T::as_usize(elt) + 1,
-            |buf| Self::find_impl(buf, elt),
+            |buf| find_impl(buf, elt),
             T::from_usize,
         )
     }
@@ -77,15 +77,15 @@ impl<T: AtomicInt> ConcurrentUnionFind<T> {
         self.data.with_access(
             T::as_usize(max_elt) + 1,
             |buf| {
-                let mut l = Self::find_impl(buf, l);
-                let mut r = Self::find_impl(buf, r);
+                let mut l = find_impl(buf, l);
+                let mut r = find_impl(buf, r);
                 while l != r {
                     let next = buf[T::as_usize(l)].load();
                     if next == l {
                         return false;
                     }
-                    l = Self::find_impl(buf, l);
-                    r = Self::find_impl(buf, r);
+                    l = find_impl(buf, l);
+                    r = find_impl(buf, r);
                 }
                 true
             },
@@ -106,52 +106,121 @@ impl<T: AtomicInt> ConcurrentUnionFind<T> {
     ) {
         self.data.with_access(
             T::as_usize(cmp::max(l, r)) + 1,
-            |buf| {
-                let mut l = l;
-                let mut r = r;
-                loop {
-                    l = Self::find_impl(buf, l);
-                    r = Self::find_impl(buf, r);
-                    if l != r {
-                        // We do "union by min": common in egraphs due to the
-                        // hypothesis that smaller ids will be
-                        // better-represented in the egraph, and hence
-                        // perturbing the maximum id is likely to result in less
-                        // work for rebuilding.
-                        let parent = cmp::min(l, r);
-                        let child = cmp::max(l, r);
-                        match buf[T::as_usize(child)].cas(child, parent) {
-                            Ok(_) => return (parent, child),
-                            Err(_) => continue,
-                        }
-                    } else {
-                        return (l, l);
-                    }
-                }
-            },
+            |buf| merge_impl(buf, l, r),
             T::from_usize,
         )
     }
+}
 
-    fn find_impl(buf: &[T], elt: T::Underlying) -> T::Underlying {
-        macro_rules! load {
-            ($x:expr) => {
-                buf[T::as_usize($x)].load()
-            };
+// The ordinary concurrent union-find uses acquire/release operations because
+// its growable buffer has independent publication requirements. The scoped
+// variants operate on an already initialized, fixed-capacity parent slice and
+// therefore use relaxed operations. Their safety argument is documented on
+// `AtomicUnionFindAccess`: links only move to smaller same-component ancestors,
+// CAS validates every mutation, and the enclosing scope join publishes the
+// completed phase before serial access resumes.
+pub(crate) fn find_impl<T: AtomicInt>(buf: &[T], elt: T::Underlying) -> T::Underlying {
+    find_impl_with_order::<T, false>(buf, elt)
+}
+
+fn find_impl_with_order<T: AtomicInt, const SCOPED_RELAXED: bool>(
+    buf: &[T],
+    elt: T::Underlying,
+) -> T::Underlying {
+    macro_rules! load {
+        ($x:expr) => {
+            load::<T, SCOPED_RELAXED>(&buf[T::as_usize($x)])
+        };
+    }
+    let mut cur = elt;
+    let mut next = load!(cur);
+    let mut grand = load!(next);
+    while next != grand {
+        let _ = cas::<T, SCOPED_RELAXED>(&buf[T::as_usize(cur)], next, grand);
+        // This is what the paper calls "two-try" splitting.
+        // next = load!(cur);
+        // grand = load!(next);
+        // let _ = buf[T::as_usize(cur)].cas(next, grand);
+        cur = next;
+        next = load!(cur);
+        grand = load!(next);
+    }
+    next
+}
+
+pub(crate) fn merge_impl<T: AtomicInt>(
+    buf: &[T],
+    l: T::Underlying,
+    r: T::Underlying,
+) -> (
+    T::Underlying, /* parent */
+    T::Underlying, /* child */
+) {
+    merge_impl_with_order::<T, false>(buf, l, r)
+}
+
+pub(crate) fn merge_scoped_impl<T: AtomicInt>(
+    buf: &[T],
+    l: T::Underlying,
+    r: T::Underlying,
+) -> (
+    T::Underlying, /* parent */
+    T::Underlying, /* child */
+) {
+    merge_impl_with_order::<T, true>(buf, l, r)
+}
+
+fn merge_impl_with_order<T: AtomicInt, const SCOPED_RELAXED: bool>(
+    buf: &[T],
+    mut l: T::Underlying,
+    mut r: T::Underlying,
+) -> (
+    T::Underlying, /* parent */
+    T::Underlying, /* child */
+) {
+    assert!(
+        T::as_usize(cmp::max(l, r)) < buf.len(),
+        "fixed union-find access is too small for the requested union"
+    );
+    loop {
+        l = find_impl_with_order::<T, SCOPED_RELAXED>(buf, l);
+        r = find_impl_with_order::<T, SCOPED_RELAXED>(buf, r);
+        if l != r {
+            // We do "union by min": common in egraphs due to the
+            // hypothesis that smaller ids will be
+            // better-represented in the egraph, and hence
+            // perturbing the maximum id is likely to result in less
+            // work for rebuilding.
+            let parent = cmp::min(l, r);
+            let child = cmp::max(l, r);
+            match cas::<T, SCOPED_RELAXED>(&buf[T::as_usize(child)], child, parent) {
+                Ok(_) => return (parent, child),
+                Err(_) => continue,
+            }
+        } else {
+            return (l, l);
         }
-        let mut cur = elt;
-        let mut next = load!(cur);
-        let mut grand = load!(next);
-        while next != grand {
-            let _ = buf[T::as_usize(cur)].cas(next, grand);
-            // This is what the paper calls "two-try" splitting.
-            // next = load!(cur);
-            // grand = load!(next);
-            // let _ = buf[T::as_usize(cur)].cas(next, grand);
-            cur = next;
-            next = load!(cur);
-            grand = load!(next);
-        }
-        next
+    }
+}
+
+#[inline]
+fn load<T: AtomicInt, const SCOPED_RELAXED: bool>(value: &T) -> T::Underlying {
+    if SCOPED_RELAXED {
+        value.load_relaxed()
+    } else {
+        value.load()
+    }
+}
+
+#[inline]
+fn cas<T: AtomicInt, const SCOPED_RELAXED: bool>(
+    value: &T,
+    current: T::Underlying,
+    new: T::Underlying,
+) -> Result<T::Underlying, T::Underlying> {
+    if SCOPED_RELAXED {
+        value.cas_relaxed(current, new)
+    } else {
+        value.cas(current, new)
     }
 }
