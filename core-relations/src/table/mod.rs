@@ -30,7 +30,7 @@ use crate::{
     parallel,
     parallel_heuristics::parallelize_table_op,
     pool::with_pool_set,
-    row_buffer::{ParallelRowBufWriter, RowBuffer},
+    row_buffer::{HashPartitioning, ParallelRowBufWriter, PartitionedRowBuffer, RowBuffer},
     table_spec::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSpec,
         TableVersion,
@@ -49,6 +49,13 @@ mod tests;
 
 type HashCode = u64;
 
+// The lowest bits select buckets within a cache-sized destination-table
+// window. The next bits group writes to those windows before a shard owner
+// probes its HashTable.
+const MUTATION_CACHE_WINDOW_BITS: u32 = 11;
+const MUTATION_PARTITION_BITS: u32 = 6;
+const PARALLEL_INSERT_BATCH_SIZE: usize = 1 << 12;
+
 /// A pointer to a row in the table.
 #[derive(Clone, Debug)]
 pub(crate) struct TableEntry {
@@ -59,21 +66,6 @@ pub(crate) struct TableEntry {
 impl TableEntry {
     fn hashcode(&self) -> u64 {
         // We keep the cast here to make it easy to switch to HashCode=u32.
-        #[allow(clippy::unnecessary_cast)]
-        {
-            self.hashcode as u64
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct KnownRemoval {
-    hashcode: HashCode,
-    row: RowId,
-}
-
-impl KnownRemoval {
-    fn hashcode(&self) -> u64 {
         #[allow(clippy::unnecessary_cast)]
         {
             self.hashcode as u64
@@ -185,92 +177,46 @@ impl Clone for SortedWritesTable {
     }
 }
 
-/// A variant of [`RowBuffer`] that can handle arity 0.
-///
-/// We use this to handle empty keys, where the deletion API needs to handle "row buffers of empty
-/// rows". The goal here is to keep most of the API RowBuffer-centric and avoid complicating the
-/// code too much: actual code that was optimized to handle arity 0 would look a bit different.
-#[derive(Clone)]
-enum ArbitraryRowBuffer {
-    NonEmpty(RowBuffer),
-    Empty { rows: usize },
-}
-
-impl ArbitraryRowBuffer {
-    fn new(arity: usize) -> ArbitraryRowBuffer {
-        if arity == 0 {
-            ArbitraryRowBuffer::Empty { rows: 0 }
-        } else {
-            ArbitraryRowBuffer::NonEmpty(RowBuffer::new(arity))
-        }
-    }
-
-    fn add_row(&mut self, row: &[Value]) {
-        match self {
-            ArbitraryRowBuffer::NonEmpty(buf) => {
-                buf.add_row(row);
-            }
-            ArbitraryRowBuffer::Empty { rows } => {
-                *rows += 1;
-            }
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            ArbitraryRowBuffer::NonEmpty(buf) => buf.len(),
-            ArbitraryRowBuffer::Empty { rows } => *rows,
-        }
-    }
-
-    fn for_each(&self, mut f: impl FnMut(&[Value])) {
-        match self {
-            ArbitraryRowBuffer::NonEmpty(buf) => {
-                for row in buf.iter() {
-                    f(row);
-                }
-            }
-            ArbitraryRowBuffer::Empty { rows } => {
-                for _ in 0..*rows {
-                    f(&[]);
-                }
-            }
-        }
-    }
-}
-
 struct Buffer {
-    pending_rows: DenseIdMap<ShardId, RowBuffer>,
-    pending_removals: DenseIdMap<ShardId, ArbitraryRowBuffer>,
-    pending_known_removals: DenseIdMap<ShardId, Vec<KnownRemoval>>,
+    pending_rows: Option<PartitionedRowBuffer>,
+    pending_removals: Option<PartitionedRowBuffer>,
+    pending_known_removals: Option<PartitionedRowBuffer>,
     state: Weak<PendingState>,
     n_cols: u32,
     n_keys: u32,
     shard_data: ShardData,
+    insert_partitioning: HashPartitioning,
+    removal_partitioning: HashPartitioning,
 }
 
 impl MutationBuffer for Buffer {
     fn stage_insert(&mut self, row: &[Value]) {
-        let (shard, _) = hash_code(self.shard_data, row, self.n_keys as _);
+        let (shard, hash) = hash_code(self.shard_data, row, self.n_keys as _);
         self.pending_rows
-            .get_or_insert(shard, || RowBuffer::new(self.n_cols as _))
-            .add_row(row);
+            .get_or_insert_with(|| {
+                PartitionedRowBuffer::new(self.n_cols as _, self.insert_partitioning)
+            })
+            .add_row(shard.index(), hash, row);
     }
     fn stage_remove(&mut self, key: &[Value]) {
-        let (shard, _) = hash_code(self.shard_data, key, self.n_keys as _);
+        let (shard, hash) = hash_code(self.shard_data, key, self.n_keys as _);
         self.pending_removals
-            .get_or_insert(shard, || ArbitraryRowBuffer::new(self.n_keys as _))
-            .add_row(key);
+            .get_or_insert_with(|| {
+                PartitionedRowBuffer::new(self.n_keys as _, self.removal_partitioning)
+            })
+            .add_row(shard.index(), hash, key);
     }
     fn fresh_handle(&self) -> Box<dyn MutationBuffer> {
         Box::new(Buffer {
-            pending_rows: Default::default(),
-            pending_removals: Default::default(),
-            pending_known_removals: Default::default(),
+            pending_rows: None,
+            pending_removals: None,
+            pending_known_removals: None,
             state: self.state.clone(),
             n_cols: self.n_cols,
             n_keys: self.n_keys,
             shard_data: self.shard_data,
+            insert_partitioning: self.insert_partitioning,
+            removal_partitioning: self.removal_partitioning,
         })
     }
 }
@@ -279,49 +225,51 @@ impl Buffer {
     fn stage_remove_row(&mut self, row: RowId, key: &[Value]) {
         let (shard, hashcode) = hash_code(self.shard_data, key, self.n_keys as _);
         self.pending_known_removals
-            .get_or_insert(shard, Vec::new)
-            .push(KnownRemoval {
-                hashcode: hashcode as _,
-                row,
-            });
+            .get_or_insert_with(|| PartitionedRowBuffer::new(1, self.removal_partitioning))
+            .add_row(shard.index(), hashcode, &[Value::new(row.rep())]);
     }
 }
 
 impl Drop for Buffer {
     fn drop(&mut self) {
         if let Some(state) = self.state.upgrade() {
-            let mut rows = 0;
-            for shard_id in 0..self.pending_rows.n_ids() {
-                let shard = ShardId::from_usize(shard_id);
-                let Some(buf) = self.pending_rows.take(shard) else {
-                    continue;
-                };
-                rows += buf.len();
-                state.pending_rows[shard].push(buf);
-            }
+            let rows = publish_partitioned(
+                self.pending_rows.take(),
+                &state.pending_rows,
+                self.shard_data,
+            );
             state.total_rows.fetch_add(rows, Ordering::Relaxed);
 
-            let mut removals = 0;
-            for shard_id in 0..self.pending_removals.n_ids() {
-                let shard = ShardId::from_usize(shard_id);
-                let Some(buf) = self.pending_removals.take(shard) else {
-                    continue;
-                };
-                removals += buf.len();
-                state.pending_removals[shard].push(buf);
-            }
-
-            for shard_id in 0..self.pending_known_removals.n_ids() {
-                let shard = ShardId::from_usize(shard_id);
-                let Some(buf) = self.pending_known_removals.take(shard) else {
-                    continue;
-                };
-                removals += buf.len();
-                state.pending_known_removals[shard].push(buf);
-            }
+            let removals = publish_partitioned(
+                self.pending_removals.take(),
+                &state.pending_removals,
+                self.shard_data,
+            ) + publish_partitioned(
+                self.pending_known_removals.take(),
+                &state.pending_known_removals,
+                self.shard_data,
+            );
             state.total_removals.fetch_add(removals, Ordering::Relaxed);
         }
     }
+}
+
+fn publish_partitioned(
+    buffer: Option<PartitionedRowBuffer>,
+    queues: &DenseIdMap<ShardId, SegQueue<Arc<PartitionedRowBuffer>>>,
+    shard_data: ShardData,
+) -> usize {
+    let Some(buffer) = buffer else {
+        return 0;
+    };
+    let len = buffer.len();
+    let buffer = Arc::new(buffer.seal());
+    for shard_index in 0..shard_data.n_shards() {
+        if !buffer.group_is_empty(shard_index) {
+            queues[ShardId::from_usize(shard_index)].push(buffer.clone());
+        }
+    }
+    len
 }
 
 impl Table for SortedWritesTable {
@@ -603,15 +551,16 @@ impl Table for SortedWritesTable {
 
 impl SortedWritesTable {
     fn new_table_buffer(&self) -> Buffer {
-        let n_shards = self.hash.shard_data().n_shards();
         Buffer {
-            pending_rows: DenseIdMap::with_capacity(n_shards),
-            pending_removals: DenseIdMap::with_capacity(n_shards),
-            pending_known_removals: DenseIdMap::with_capacity(n_shards),
+            pending_rows: None,
+            pending_removals: None,
+            pending_known_removals: None,
             state: Arc::downgrade(&self.pending_state),
             n_keys: u32::try_from(self.n_keys).expect("n_keys should fit in u32"),
             n_cols: u32::try_from(self.n_columns).expect("n_columns should fit in u32"),
             shard_data: self.hash.shard_data(),
+            insert_partitioning: self.pending_state.insert_partitioning,
+            removal_partitioning: self.pending_state.removal_partitioning,
         }
     }
 
@@ -644,7 +593,7 @@ impl SortedWritesTable {
             n_columns,
             sort_by,
             offsets: Default::default(),
-            pending_state: Arc::new(PendingState::new(shard_data)),
+            pending_state: Arc::new(PendingState::new(shard_data, sort_by.is_some())),
             merge: merge_fn.into(),
             to_rebuild,
             rebuild_index,
@@ -659,6 +608,8 @@ impl SortedWritesTable {
         let shard_data = self.hash.shard_data();
         let pending_removals = &self.pending_state.pending_removals;
         let pending_known_removals = &self.pending_state.pending_known_removals;
+        let partitioning = self.pending_state.removal_partitioning;
+        let partition_count = partitioning.partitions_per_group();
         let data = &self.data.data;
         let n_keys = self.n_keys;
         let stale_delta: usize =
@@ -666,26 +617,42 @@ impl SortedWritesTable {
                 let mut removed_rows = with_pool_set(|ps| ps.get::<Vec<RowId>>());
                 for (shard_offset, shard) in shards.iter_mut().enumerate() {
                     let shard_id = ShardId::from_usize(base_shard + shard_offset);
-                    while let Some(buf) = pending_removals[shard_id].pop() {
-                        buf.for_each(|to_remove| {
-                            let (actual_shard, hc) = hash_code(shard_data, to_remove, n_keys);
-                            assert_eq!(actual_shard, shard_id);
-                            if let Ok(entry) = shard.find_entry(hc, |entry| {
-                                entry.hashcode == (hc as HashCode)
-                                    && &data.get_row(entry.row)[0..n_keys] == to_remove
-                            }) {
-                                let (ent, _) = entry.remove();
-                                removed_rows.push(ent.row);
+                    let removal_buffers = drain_queue(&pending_removals[shard_id]);
+                    for partition in 0..partition_count {
+                        for buf in &removal_buffers {
+                            for hashed in buf.partition(
+                                partitioning.partition_index(shard_id.index(), partition),
+                            ) {
+                                let to_remove = hashed.row;
+                                let hc = hashed.hash;
+                                debug_assert_eq!(shard_data.shard_id(hc), shard_id);
+                                debug_assert_eq!(buf.arity(), n_keys);
+                                if let Ok(entry) = shard.find_entry(hc, |entry| {
+                                    entry.hashcode == (hc as HashCode)
+                                        && &data.get_row(entry.row)[0..n_keys] == to_remove
+                                }) {
+                                    let (ent, _) = entry.remove();
+                                    removed_rows.push(ent.row);
+                                }
                             }
-                        });
+                        }
                     }
-                    while let Some(buf) = pending_known_removals[shard_id].pop() {
-                        for removal in buf {
-                            if let Ok(entry) = shard.find_entry(removal.hashcode(), |entry| {
-                                entry.hashcode == removal.hashcode && entry.row == removal.row
-                            }) {
-                                let (ent, _) = entry.remove();
-                                removed_rows.push(ent.row);
+                    let known_buffers = drain_queue(&pending_known_removals[shard_id]);
+                    for partition in 0..partition_count {
+                        for buf in &known_buffers {
+                            for hashed in buf.partition(
+                                partitioning.partition_index(shard_id.index(), partition),
+                            ) {
+                                let hc = hashed.hash;
+                                let row = RowId::new(hashed.row[0].rep());
+                                debug_assert_eq!(shard_data.shard_id(hc), shard_id);
+                                debug_assert_eq!(buf.arity(), 1);
+                                if let Ok(entry) = shard.find_entry(hc, |entry| {
+                                    entry.hashcode == hc as HashCode && entry.row == row
+                                }) {
+                                    let (ent, _) = entry.remove();
+                                    removed_rows.push(ent.row);
+                                }
                             }
                         }
                     }
@@ -703,6 +670,8 @@ impl SortedWritesTable {
     }
     fn serial_delete(&mut self) -> bool {
         let shard_data = self.hash.shard_data();
+        let partitioning = self.pending_state.removal_partitioning;
+        let partition_count = partitioning.partitions_per_group();
         let mut changed = false;
         self.hash
             .mut_shards()
@@ -710,29 +679,46 @@ impl SortedWritesTable {
             .enumerate()
             .for_each(|(shard_id, shard)| {
                 let shard_id = ShardId::from_usize(shard_id);
-                while let Some(buf) = self.pending_state.pending_removals[shard_id].pop() {
-                    buf.for_each(|to_remove| {
-                        let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
-                        assert_eq!(actual_shard, shard_id);
-                        if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as HashCode)
-                                && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
-                                    == to_remove
-                        }) {
-                            let (ent, _) = entry.remove();
-                            self.data.set_stale(ent.row);
-                            changed = true;
+                let removal_buffers = drain_queue(&self.pending_state.pending_removals[shard_id]);
+                for partition in 0..partition_count {
+                    for buf in &removal_buffers {
+                        for hashed in
+                            buf.partition(partitioning.partition_index(shard_id.index(), partition))
+                        {
+                            let to_remove = hashed.row;
+                            let hc = hashed.hash;
+                            debug_assert_eq!(shard_data.shard_id(hc), shard_id);
+                            debug_assert_eq!(buf.arity(), self.n_keys);
+                            if let Ok(entry) = shard.find_entry(hc, |entry| {
+                                entry.hashcode == (hc as HashCode)
+                                    && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
+                                        == to_remove
+                            }) {
+                                let (ent, _) = entry.remove();
+                                self.data.set_stale(ent.row);
+                                changed = true;
+                            }
                         }
-                    })
+                    }
                 }
-                while let Some(buf) = self.pending_state.pending_known_removals[shard_id].pop() {
-                    for removal in buf {
-                        if let Ok(entry) = shard.find_entry(removal.hashcode(), |entry| {
-                            entry.hashcode == removal.hashcode && entry.row == removal.row
-                        }) {
-                            let (ent, _) = entry.remove();
-                            self.data.set_stale(ent.row);
-                            changed = true;
+                let known_buffers =
+                    drain_queue(&self.pending_state.pending_known_removals[shard_id]);
+                for partition in 0..partition_count {
+                    for buf in &known_buffers {
+                        for hashed in
+                            buf.partition(partitioning.partition_index(shard_id.index(), partition))
+                        {
+                            let hc = hashed.hash;
+                            let row = RowId::new(hashed.row[0].rep());
+                            debug_assert_eq!(shard_data.shard_id(hc), shard_id);
+                            debug_assert_eq!(buf.arity(), 1);
+                            if let Ok(entry) = shard.find_entry(hc, |entry| {
+                                entry.hashcode == hc as HashCode && entry.row == row
+                            }) {
+                                let (ent, _) = entry.remove();
+                                self.data.set_stale(ent.row);
+                                changed = true;
+                            }
                         }
                     }
                 }
@@ -774,117 +760,73 @@ impl SortedWritesTable {
     fn serial_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let mut changed = false;
         let n_keys = self.n_keys;
+        let partitioning = self.pending_state.insert_partitioning;
+        let partition_count = partitioning.partitions_per_group();
         let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
-        for (_outer_shard, queue) in self.pending_state.pending_rows.iter() {
-            if let Some(sort_by) = self.sort_by {
-                while let Some(buf) = queue.pop() {
-                    for query in buf.non_stale() {
+        for (outer_shard, queue) in self.pending_state.pending_rows.iter() {
+            let buffers = drain_queue(queue);
+            let incoming = buffers
+                .iter()
+                .map(|buffer| buffer.group_len(outer_shard.index()))
+                .sum();
+            self.hash.mut_shards()[outer_shard.index()].reserve(incoming, TableEntry::hashcode);
+            for partition in 0..partition_count {
+                for buf in &buffers {
+                    for hashed in
+                        buf.partition(partitioning.partition_index(outer_shard.index(), partition))
+                    {
+                        let query = hashed.row;
+                        if query.first().is_some_and(Value::is_stale) {
+                            continue;
+                        }
+                        let hc = hashed.hash;
+                        debug_assert_eq!(self.hash.shard_data().shard_id(hc), outer_shard);
                         let key = &query[0..n_keys];
-                        let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
-                            let Some(row) = self.data.get_row(row) else {
-                                return false;
-                            };
-                            &row[0..n_keys] == key
-                        });
-
-                        if let Some(row) = entry {
-                            // First case: overwriting an existing value. Apply merge
-                            // function. Insert new row and update hash table if merge
-                            // changes anything.
-                            let cur = self
-                                .data
-                                .get_row(*row)
-                                .expect("table should not point to stale entry");
-                            if (self.merge)(exec_state, cur, query, &mut scratch) {
-                                let sort_val = query[sort_by.index()];
-                                let new = self.data.add_row(&scratch);
-                                if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
-                                    assert!(
-                                        sort_val >= largest,
-                                        "inserting row that violates sort order ({sort_val:?} vs. {largest:?})"
-                                    );
-                                    if sort_val > largest {
-                                        self.offsets.push((sort_val, new));
+                        use hashbrown::hash_table::Entry;
+                        match self.hash.mut_shards()[outer_shard.index()].entry(
+                            hc,
+                            |entry| {
+                                entry.hashcode == hc as HashCode
+                                    && self
+                                        .data
+                                        .get_row(entry.row)
+                                        .is_some_and(|row| &row[0..n_keys] == key)
+                            },
+                            TableEntry::hashcode,
+                        ) {
+                            Entry::Occupied(mut entry) => {
+                                let old_row = entry.get().row;
+                                let cur = self
+                                    .data
+                                    .get_row(old_row)
+                                    .expect("table should not point to stale entry");
+                                if (self.merge)(exec_state, cur, query, &mut scratch) {
+                                    debug_assert_eq!(&scratch[0..n_keys], key);
+                                    let new = self.data.add_row(&scratch);
+                                    if let Some(sort_by) = self.sort_by {
+                                        update_sort_offsets(sort_by, query, new, &mut self.offsets);
                                     }
-                                } else {
-                                    self.offsets.push((sort_val, new));
+                                    self.data.set_stale(old_row);
+                                    entry.get_mut().row = new;
+                                    changed = true;
                                 }
-                                self.data.set_stale(*row);
-                                *row = new;
-                                changed = true;
+                                scratch.clear();
                             }
-                            scratch.clear();
-                        } else {
-                            let sort_val = query[sort_by.index()];
-                            // New value: update invariants.
-                            let new = self.data.add_row(query);
-                            if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
-                                assert!(
-                                    sort_val >= largest,
-                                    "inserting row that violates sort order {sort_val:?} vs. {largest:?}"
-                                );
-                                if sort_val > largest {
-                                    self.offsets.push((sort_val, new));
+                            Entry::Vacant(entry) => {
+                                let new = self.data.add_row(query);
+                                if let Some(sort_by) = self.sort_by {
+                                    update_sort_offsets(sort_by, query, new, &mut self.offsets);
                                 }
-                            } else {
-                                self.offsets.push((sort_val, new));
-                            }
-                            let (shard, hc) = hash_code(self.hash.shard_data(), query, self.n_keys);
-                            debug_assert_eq!(shard, _outer_shard);
-                            self.hash.mut_shards()[shard.index()].insert_unique(
-                                hc as _,
-                                TableEntry {
+                                entry.insert(TableEntry {
                                     hashcode: hc as _,
                                     row: new,
-                                },
-                                TableEntry::hashcode,
-                            );
-                            changed = true;
+                                });
+                                changed = true;
+                            }
                         }
                     }
                 }
-            } else {
-                // Simplified variant without the sorting constraint.
-                while let Some(buf) = queue.pop() {
-                    for query in buf.non_stale() {
-                        let key = &query[0..n_keys];
-                        let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
-                            let Some(row) = self.data.get_row(row) else {
-                                return false;
-                            };
-                            &row[0..n_keys] == key
-                        });
-
-                        if let Some(row) = entry {
-                            let cur = self
-                                .data
-                                .get_row(*row)
-                                .expect("table should not point to stale entry");
-                            if (self.merge)(exec_state, cur, query, &mut scratch) {
-                                let new = self.data.add_row(&scratch);
-                                self.data.set_stale(*row);
-                                *row = new;
-                                changed = true;
-                            }
-                            scratch.clear();
-                        } else {
-                            // New value: update invariants.
-                            let new = self.data.add_row(query);
-                            let (shard, hc) = hash_code(self.hash.shard_data(), query, self.n_keys);
-                            debug_assert_eq!(shard, _outer_shard);
-                            self.hash.mut_shards()[shard.index()].insert_unique(
-                                hc as _,
-                                TableEntry {
-                                    hashcode: hc as _,
-                                    row: new,
-                                },
-                                TableEntry::hashcode,
-                            );
-                            changed = true;
-                        }
-                    }
-                }
-            };
+            }
         }
         changed
     }
@@ -894,7 +836,6 @@ impl SortedWritesTable {
         exec_state: &ExecutionState,
         checker: C,
     ) -> bool {
-        const BATCH_SIZE: usize = 1 << 18;
         // Parallel insert uses one giant parallel foreach. We have updates
         // pre-sharded, and one logical thread can process updates for each
         // shard independently. Updates happen in three phases, which comments
@@ -905,6 +846,8 @@ impl SortedWritesTable {
         let next_offset = RowId::from_usize(self.data.data.len());
         let row_writer = self.data.data.parallel_writer();
         let pending_rows = &self.pending_state.pending_rows;
+        let partitioning = self.pending_state.insert_partitioning;
+        let partition_count = partitioning.partitions_per_group();
         let merge = self.merge.clone();
         let pending_adds = parallel::map_mut(self.hash.mut_shards(), |shard_id, shard| {
             let shard_id = ShardId::from_usize(shard_id);
@@ -912,13 +855,20 @@ impl SortedWritesTable {
             let mut exec_state = exec_state.clone();
             let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
             let queue = &pending_rows[shard_id];
+            let buffers = drain_queue(queue);
+            let incoming = buffers
+                .iter()
+                .map(|buffer| buffer.group_len(shard_id.index()))
+                .sum();
+            shard.reserve(incoming, TableEntry::hashcode);
             let mut marked_stale = 0usize;
-            let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
+            let mut staged = CoalescedInsertBatch::new(n_keys, n_cols, PARALLEL_INSERT_BATCH_SIZE);
             let mut changed = false;
-            // The core flush loop: We call once `staged` reaches `BATCH_SIZE` or
-            // when we're done.
-            macro_rules! flush_staged_outputs {
+            // Flush after a bounded number of staged physical rows or at a
+            // destination-table partition boundary.
+            macro_rules! flush_insert_batch {
                     () => {{
+                        if !staged.is_empty() {
                         // Phase 2: Write the staged rows to the row writer. This only
                         // works due to the `ParallelRowBufWriter` machinery.
                         let (start_row, stale) = staged.write_output(&row_writer);
@@ -933,16 +883,13 @@ impl SortedWritesTable {
                         // contention.
                         let mut cur_row = start_row;
                         let read_handle = row_writer.read_handle();
-                        for row in staged.rows() {
-                            if row.first().map(Value::is_stale).unwrap_or(false) {
+                        for (hc, row) in staged.rows_hashed() {
+                            if row.first().is_some_and(Value::is_stale) {
                                 cur_row = cur_row.inc();
                                 continue;
                             }
                             use hashbrown::hash_table::Entry;
-                            checker.check_local(row);
-                            changed = true;
                             let key = &row[0..n_keys];
-                            let (_actual_shard, hc) = hash_code(shard_data, row, n_keys);
                             #[cfg(any(debug_assertions, test))]
                             {
                                 unsafe {
@@ -951,7 +898,7 @@ impl SortedWritesTable {
                                     assert_eq!(read_handle.get_row_unchecked(cur_row), row);
                                 }
                             }
-                            debug_assert_eq!(_actual_shard, shard_id);
+                            debug_assert_eq!(shard_data.shard_id(hc), shard_id);
                             match shard.entry(
                                 hc,
                                 // SAFETY: `ent` must point to a valid row
@@ -964,19 +911,37 @@ impl SortedWritesTable {
                                 Entry::Occupied(mut occ) => {
                                     // SAFETY: `occ` must point to a valid row: we only insert valid rows
                                     // into the map.
-                                    let cur = unsafe { read_handle.get_row_unchecked(occ.get().row) };
+                                    let old_row = occ.get().row;
+                                    let merged = {
+                                        let cur =
+                                            unsafe { read_handle.get_row_unchecked(old_row) };
+                                        (merge)(&mut exec_state, cur, row, &mut scratch)
+                                    };
 
                                     // SAFETY: The safety requirements of
-                                    // `set_stale_shared` are that there are no
-                                    // concurrent accesses to `row`. We have
-                                    // exclusive access to any row whose hash matches this
-                                    // shard.
-                                    if (merge)(&mut exec_state, cur, row, &mut scratch) {
+                                    // `replace_row_shared` and `set_stale_shared`
+                                    // are that there are no concurrent accesses
+                                    // to either row. `cur_row` is a completed,
+                                    // uniquely reserved write that has not yet
+                                    // been published, and we have exclusive
+                                    // access to every existing row whose hash
+                                    // maps to this shard.
+                                    if merged {
+                                        debug_assert_eq!(
+                                            &scratch[0..n_keys],
+                                            key,
+                                            "merge functions must preserve table keys"
+                                        );
+                                        checker.check_local(&scratch);
                                         unsafe {
-                                            let _was_stale = read_handle.set_stale_shared(occ.get().row);
-                                            debug_assert!(!_was_stale);
+                                            read_handle.replace_row_shared(cur_row, &scratch);
                                         }
                                         occ.get_mut().row = cur_row;
+                                        unsafe {
+                                            let _was_stale =
+                                                read_handle.set_stale_shared(old_row);
+                                            debug_assert!(!_was_stale);
+                                        }
                                         changed = true;
                                     } else {
                                         // Mark the new row as stale: we didn't end up needing it.
@@ -989,6 +954,7 @@ impl SortedWritesTable {
                                     scratch.clear();
                                 }
                                 Entry::Vacant(v) => {
+                                    checker.check_local(row);
                                     changed = true;
                                     v.insert(TableEntry {
                                         hashcode: hc as HashCode,
@@ -1000,24 +966,31 @@ impl SortedWritesTable {
                             cur_row = cur_row.inc();
                         }
                         staged.clear();
+                        }
                     }};
                 }
             // Phase 1: process all incoming updates:
-            // * Add new values to `staged`
-            // * Removing entries in `shard` and mark them as stale in
-            // `data` if they will be overwritten.
-            while let Some(buf) = queue.pop() {
-                // We create a read_handle once per batch to avoid blocking
-                // too many threads if someone needs to resize the row
-                // writer.
-                for row in buf.non_stale() {
-                    staged.insert(row, |cur, new, out| (merge)(&mut exec_state, cur, new, out));
-                    if staged.len() >= BATCH_SIZE {
-                        flush_staged_outputs!();
+            // * Coalesce rows with the same key in a bounded temporary table.
+            // * Copy the staged rows to the shared row buffer in one
+            //   reservation.
+            // * Apply each live row to the exclusively owned destination
+            //   shard in `flush_insert_batch`.
+            for partition in 0..partition_count {
+                for buf in &buffers {
+                    for hashed in
+                        buf.partition(partitioning.partition_index(shard_id.index(), partition))
+                    {
+                        staged.insert_hashed(hashed.hash, hashed.row, |cur, new, out| {
+                            (merge)(&mut exec_state, cur, new, out)
+                        });
+                        if staged.physical_len() >= PARALLEL_INSERT_BATCH_SIZE {
+                            flush_insert_batch!();
+                        }
                     }
                 }
+                // Do not carry rows into the next destination-table window.
+                flush_insert_batch!();
             }
-            flush_staged_outputs!();
             (checker, marked_stale, changed)
         });
         self.data.data = row_writer.finish();
@@ -1113,17 +1086,11 @@ impl SortedWritesTable {
         // Parallel rehashes go "hash-first" rather than "rows-first".
         //
         // We iterate over each shard and then write out new contents to a fresh row, in parallel.
+        self.generation = self.generation.inc();
         let Some(sort_by) = self.sort_by else {
-            // Just do a serial rehash for now. We currently do not have a use-case for parallel
-            // compaction of unsorted tables.
-            //
-            // Implementing parallel compaction for an unsorted table is much easier: each shard
-            // can write to a contiguous chunk of the `scratch` buffer, with the offsets being
-            // pre-chunked based on the size of each shard.
-            self.rehash();
+            self.parallel_rehash_unsorted();
             return;
         };
-        self.generation = self.generation.inc();
         assert!(!self.offsets.is_empty());
         struct TimestampStats {
             value: Value,
@@ -1255,6 +1222,86 @@ impl SortedWritesTable {
         mem::swap(&mut self.data.data, &mut self.data.scratch);
         self.data.stale_rows = 0;
     }
+
+    /// Compact an unsorted table by walking its live hash entries rather than
+    /// scanning the row store, which may be mostly stale.
+    ///
+    /// Every live row has exactly one entry in exactly one hash shard. Shard
+    /// lengths therefore give both the live-row count and a cheap histogram
+    /// for assigning each worker a disjoint output range.
+    fn parallel_rehash_unsorted(&mut self) {
+        debug_assert!(self.sort_by.is_none());
+        debug_assert!(self.offsets.is_empty());
+
+        let shards = self.hash.mut_shards();
+        let mut shard_offsets = Vec::with_capacity(shards.len() + 1);
+        shard_offsets.push(0usize);
+        for shard in shards.iter() {
+            let next = shard_offsets
+                .last()
+                .copied()
+                .unwrap()
+                .checked_add(shard.len())
+                .expect("live row count should fit in usize");
+            shard_offsets.push(next);
+        }
+        let live_rows = *shard_offsets.last().unwrap();
+        debug_assert_eq!(
+            live_rows,
+            self.data.data.len() - self.data.stale_rows,
+            "each live row should have exactly one hash entry"
+        );
+
+        self.data.scratch.clear();
+        self.data.scratch.reserve(live_rows);
+        let scratch_ptr = self.data.scratch.raw_rows() as usize;
+        let data = &self.data.data;
+        let n_columns = self.n_columns;
+
+        // Workers mutate disjoint hash shards and copy into the corresponding
+        // disjoint half-open ranges in `scratch`. The raw pointer is passed as
+        // an integer because raw pointers are not Sync.
+        parallel::for_each_mut(shards, |shard_index, shard| {
+            let scratch_ptr = scratch_ptr as *mut Value;
+            let mut next = shard_offsets[shard_index];
+            let end = shard_offsets[shard_index + 1];
+            for TableEntry { row: row_id, .. } in shard.iter_mut() {
+                let row = data.get_row(*row_id);
+                debug_assert!(
+                    !row[0].is_stale(),
+                    "a hash entry should never point to a stale row"
+                );
+                let new_row = RowId::from_usize(next);
+
+                // SAFETY:
+                // * `scratch` was reserved once before any worker started and
+                //   is not resized until all workers have joined.
+                // * The prefix offsets give each shard a disjoint destination
+                //   range large enough for all of its entries.
+                // * `data` and `scratch` are distinct row buffers, so source
+                //   and destination cannot overlap.
+                // * No references into the uninitialized part of `scratch`
+                //   are created before `set_len` below.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        row.as_ptr(),
+                        scratch_ptr.add(next * n_columns),
+                        n_columns,
+                    );
+                }
+                *row_id = new_row;
+                next += 1;
+            }
+            debug_assert_eq!(next, end);
+        });
+
+        // SAFETY: every row up to `live_rows` was initialized exactly once by
+        // the shard workers above, and the parallel scope has joined.
+        unsafe { self.data.scratch.set_len(live_rows) };
+        mem::swap(&mut self.data.data, &mut self.data.scratch);
+        self.data.stale_rows = 0;
+    }
+
     fn rehash_impl(
         sort_by: Option<ColumnId>,
         n_keys: usize,
@@ -1338,6 +1385,46 @@ fn hash_code(shard_data: ShardData, row: &[Value], n_keys: usize) -> (ShardId, u
     (shard_data.shard_id(full_code), full_code as HashCode as u64)
 }
 
+fn update_sort_offsets(
+    sort_by: ColumnId,
+    row: &[Value],
+    row_id: RowId,
+    offsets: &mut Vec<(Value, RowId)>,
+) {
+    let sort_val = row[sort_by.index()];
+    if let Some(largest) = offsets.last().map(|(value, _)| *value) {
+        assert!(
+            sort_val >= largest,
+            "inserting row that violates sort order ({sort_val:?} vs. {largest:?})"
+        );
+        if sort_val > largest {
+            offsets.push((sort_val, row_id));
+        }
+    } else {
+        offsets.push((sort_val, row_id));
+    }
+}
+
+fn mutation_partitioning(shard_data: ShardData, ordered: bool) -> HashPartitioning {
+    if ordered || shard_data.n_shards() == 1 {
+        HashPartitioning::grouped(0, 0, shard_data.n_shards())
+    } else {
+        HashPartitioning::grouped(
+            MUTATION_CACHE_WINDOW_BITS,
+            MUTATION_PARTITION_BITS,
+            shard_data.n_shards(),
+        )
+    }
+}
+
+fn drain_queue<T>(queue: &SegQueue<T>) -> Vec<T> {
+    let mut drained = Vec::new();
+    while let Some(item) = queue.pop() {
+        drained.push(item);
+    }
+    drained
+}
+
 /// # Safety
 /// The caller must ensure exclusive access to every row in `rows`.
 unsafe fn mark_rows_stale(data: &RowBuffer, rows: &[RowId]) {
@@ -1349,16 +1436,20 @@ unsafe fn mark_rows_stale(data: &RowBuffer, rows: &[RowId]) {
 
 /// A simple struct for packaging up pending mutations to a `SortedWritesTable`.
 struct PendingState {
-    pending_rows: DenseIdMap<ShardId, SegQueue<RowBuffer>>,
-    pending_removals: DenseIdMap<ShardId, SegQueue<ArbitraryRowBuffer>>,
-    pending_known_removals: DenseIdMap<ShardId, SegQueue<Vec<KnownRemoval>>>,
+    pending_rows: DenseIdMap<ShardId, SegQueue<Arc<PartitionedRowBuffer>>>,
+    pending_removals: DenseIdMap<ShardId, SegQueue<Arc<PartitionedRowBuffer>>>,
+    pending_known_removals: DenseIdMap<ShardId, SegQueue<Arc<PartitionedRowBuffer>>>,
     total_removals: AtomicUsize,
     total_rows: AtomicUsize,
+    insert_partitioning: HashPartitioning,
+    removal_partitioning: HashPartitioning,
 }
 
 impl PendingState {
-    fn new(shard_data: ShardData) -> PendingState {
+    fn new(shard_data: ShardData, ordered: bool) -> PendingState {
         let n_shards = shard_data.n_shards();
+        let insert_partitioning = mutation_partitioning(shard_data, ordered);
+        let removal_partitioning = mutation_partitioning(shard_data, false);
         let mut pending_rows = DenseIdMap::with_capacity(n_shards);
         let mut pending_removals = DenseIdMap::with_capacity(n_shards);
         let mut pending_known_removals = DenseIdMap::with_capacity(n_shards);
@@ -1374,6 +1465,8 @@ impl PendingState {
             pending_known_removals,
             total_removals: AtomicUsize::new(0),
             total_rows: AtomicUsize::new(0),
+            insert_partitioning,
+            removal_partitioning,
         }
     }
     fn clear(&self) {
@@ -1388,6 +1481,8 @@ impl PendingState {
         for (_, queue) in self.pending_known_removals.iter() {
             while queue.pop().is_some() {}
         }
+        self.total_rows.store(0, Ordering::Relaxed);
+        self.total_removals.store(0, Ordering::Relaxed);
     }
 
     /// This is only really used in debugging, but it's annoying enough to write
@@ -1442,6 +1537,8 @@ impl PendingState {
             pending_known_removals,
             total_removals: AtomicUsize::new(self.total_removals.load(Ordering::Acquire)),
             total_rows: AtomicUsize::new(self.total_rows.load(Ordering::Acquire)),
+            insert_partitioning: self.insert_partitioning,
+            removal_partitioning: self.removal_partitioning,
         }
     }
 }
@@ -1541,87 +1638,127 @@ impl OrderingChecker for SortChecker {
     }
 }
 
-/// A type similar to a SortedWritesTable used to buffer outputs. The main thing
-/// that StagedOutputs handles is running the merge function for a table on
-/// multiple updates to the same key that show up in the same round of
-/// insertions.
-struct StagedOutputs {
-    shard_data: ShardData,
+/// A bounded, cached-hash coalescer for pending insertion rows.
+///
+/// Multiple rows with the same key are merged before the surviving value is
+/// combined with the destination table's current value. Physical rows and
+/// their unchanged full hashes stay aligned, including stale intermediate
+/// merge outputs.
+struct CoalescedInsertBatch {
     n_keys: usize,
     hash: Pooled<HashTable<TableEntry>>,
     rows: RowBuffer,
+    hashes: Vec<HashCode>,
     n_stale: usize,
     scratch: Pooled<Vec<Value>>,
 }
 
-impl StagedOutputs {
-    fn rows(&self) -> impl Iterator<Item = &[Value]> {
-        self.rows.iter()
+impl CoalescedInsertBatch {
+    fn rows_hashed(&self) -> impl Iterator<Item = (u64, &[Value])> {
+        debug_assert_eq!(self.hashes.len(), self.rows.len());
+        self.hashes
+            .iter()
+            .copied()
+            .zip(self.rows.iter())
+            .map(|(hash, row)| {
+                // Keep this conversion at the boundary so HashCode can still
+                // be changed independently.
+                #[allow(clippy::unnecessary_cast)]
+                let hash = hash as u64;
+                (hash, row)
+            })
     }
+
     fn new(n_keys: usize, n_cols: usize, capacity: usize) -> Self {
-        let mut res = with_pool_set(|ps| StagedOutputs {
-            shard_data: ShardData::new(1),
+        let mut res = with_pool_set(|ps| CoalescedInsertBatch {
             n_keys,
-            n_stale: 0,
             hash: ps.get(),
             rows: RowBuffer::new(n_cols),
+            hashes: Vec::with_capacity(capacity),
+            n_stale: 0,
             scratch: ps.get(),
         });
-        res.hash.reserve(capacity, TableEntry::hashcode);
+        res.hash
+            .reserve(capacity, |entry| coalesced_hash(entry.hashcode()));
         res.rows.reserve(capacity);
         res
     }
+
     fn clear(&mut self) {
         self.hash.clear();
         self.rows.clear();
+        self.hashes.clear();
         self.n_stale = 0;
     }
-    fn len(&self) -> usize {
-        self.rows.len() - self.n_stale
+
+    fn is_empty(&self) -> bool {
+        self.rows.len() == 0
     }
 
-    fn insert(
+    fn physical_len(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn insert_hashed(
         &mut self,
+        hc: u64,
         row: &[Value],
         mut merge_fn: impl FnMut(&[Value], &[Value], &mut Vec<Value>) -> bool,
     ) {
-        if row[0].is_stale() {
+        if row.first().is_some_and(Value::is_stale) {
             return;
         }
+
+        debug_assert_eq!(self.hashes.len(), self.rows.len());
         use hashbrown::hash_table::Entry;
-        let (_, hc) = hash_code(self.shard_data, row, self.n_keys);
         let entry = self.hash.entry(
-            hc,
-            |te| {
-                te.hashcode() == hc
-                    && self.rows.get_row(te.row)[0..self.n_keys] == row[0..self.n_keys]
+            coalesced_hash(hc),
+            |entry| {
+                entry.hashcode() == hc
+                    && self.rows.get_row(entry.row)[0..self.n_keys] == row[0..self.n_keys]
             },
-            TableEntry::hashcode,
+            |entry| coalesced_hash(entry.hashcode()),
         );
         match entry {
-            Entry::Occupied(mut occupied_entry) => {
-                let cur = self.rows.get_row(occupied_entry.get().row);
+            Entry::Occupied(mut occupied) => {
+                let cur = self.rows.get_row(occupied.get().row);
                 if merge_fn(cur, row, &mut self.scratch) {
+                    debug_assert_eq!(
+                        &self.scratch[0..self.n_keys],
+                        &row[0..self.n_keys],
+                        "merge functions must preserve table keys"
+                    );
                     let new = self.rows.add_row(&self.scratch);
-                    self.rows.set_stale(occupied_entry.get().row);
+                    self.hashes.push(hc as HashCode);
+                    self.rows.set_stale(occupied.get().row);
                     self.n_stale += 1;
-                    occupied_entry.get_mut().row = new;
+                    occupied.get_mut().row = new;
                 }
                 self.scratch.clear();
             }
-            Entry::Vacant(vacant_entry) => {
+            Entry::Vacant(vacant) => {
                 let next = self.rows.add_row(row);
-                vacant_entry.insert(TableEntry {
-                    hashcode: hc as _,
+                self.hashes.push(hc as HashCode);
+                vacant.insert(TableEntry {
+                    hashcode: hc as HashCode,
                     row: next,
                 });
             }
         }
+        debug_assert_eq!(self.hashes.len(), self.rows.len());
     }
 
-    /// Write the contents of the staged outputs to the given writer, returning the initial RowId
-    /// of the new output. Returns the number of stale values in the buffer that was appended.
+    /// Append all physical rows, returning the first RowId and stale count.
     fn write_output(&self, output: &ParallelRowBufWriter) -> (RowId, usize) {
+        debug_assert_eq!(self.hashes.len(), self.rows.len());
         (output.append_contents(&self.rows), self.n_stale)
     }
+}
+
+#[inline]
+fn coalesced_hash(hash: u64) -> u64 {
+    // Cache partitioning fixes a run of middle bits in the full hash. Mix
+    // higher bits down before probing the temporary table so those fixed bits
+    // do not artificially restrict its usable buckets.
+    hash ^ hash.wrapping_shr(17)
 }
