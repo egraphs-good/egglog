@@ -13,11 +13,8 @@ use crate::{
     pool::{Pooled, with_pool_set},
 };
 
-mod partitioned;
 #[cfg(test)]
 mod tests;
-
-pub(crate) use partitioned::{HashPartitioning, PartitionedRowBuffer};
 
 /// A trait for types that can store a vector of `Value`s.
 ///
