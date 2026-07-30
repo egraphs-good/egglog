@@ -672,3 +672,79 @@ fn task_clone_keeps_each_live_materialization_once_in_dynamic_order() {
         MatId::from_usize(1)
     ));
 }
+
+use super::{
+    TOP_INDEX_RANGES_PER_WORKER, TopLevelPartition, cover_scan_bounds, top_cover_partitions,
+    top_index_range_partitions,
+};
+
+#[test]
+fn fused_cover_partitions_are_complete_disjoint_and_coarse() {
+    assert!(top_cover_partitions(10_000, 1, 16).is_none());
+    assert!(top_cover_partitions(63, 4, 16).is_none());
+
+    for (cover_rows, workers) in [(64, 4), (1_003, 4), (585_276, 12)] {
+        let partitions = top_cover_partitions(cover_rows, workers, 16).unwrap();
+        assert!(partitions.len() <= workers * 4);
+
+        let mut expected_start = 0;
+        for partition in &partitions {
+            let TopLevelPartition::CoverRange { start, scan_size } = *partition else {
+                panic!("fused covers must produce ordinal ranges")
+            };
+            assert_eq!(start, expected_start, "ranges must be contiguous");
+            assert!(scan_size > 0);
+            if start + scan_size != cover_rows {
+                assert!(
+                    scan_size >= 16,
+                    "all non-tail partitions must remain coarse"
+                );
+            }
+            expected_start += scan_size;
+        }
+        assert_eq!(expected_start, cover_rows, "ranges must cover every row");
+    }
+}
+
+#[test]
+fn fused_cover_scan_bounds_preserve_nonzero_subset_origins() {
+    let partition = TopLevelPartition::CoverRange {
+        start: 17,
+        scan_size: 23,
+    };
+    let (start, len) = cover_scan_bounds(Some(partition), 100);
+    assert_eq!(start.index(), 17);
+    assert_eq!(len, 23);
+
+    let (start, len) = cover_scan_bounds(None, 100);
+    assert_eq!(start.index(), 0);
+    assert_eq!(len, 100);
+}
+
+#[test]
+fn filtered_index_ranges_are_complete_disjoint_and_coarse() {
+    assert!(top_index_range_partitions(10_000, 1, 16).is_none());
+    assert!(top_index_range_partitions(63, 4, 16).is_none());
+
+    for (leader_keys, workers) in [(64, 4), (1_003, 4), (585_276, 12)] {
+        let partitions = top_index_range_partitions(leader_keys, workers, 16).unwrap();
+        assert!(partitions.len() <= workers * TOP_INDEX_RANGES_PER_WORKER);
+
+        let mut expected_start = 0;
+        for partition in &partitions {
+            let TopLevelPartition::IndexRange { start, scan_size } = *partition else {
+                panic!("an unsharded index must produce key-ordinal ranges")
+            };
+            assert_eq!(start, expected_start, "ranges must be contiguous");
+            assert!(scan_size > 0);
+            if start + scan_size != leader_keys {
+                assert!(
+                    scan_size >= 16,
+                    "all non-tail partitions must remain coarse"
+                );
+            }
+            expected_start += scan_size;
+        }
+        assert_eq!(expected_start, leader_keys, "ranges must cover every key");
+    }
+}

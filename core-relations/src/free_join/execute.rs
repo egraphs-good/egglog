@@ -51,16 +51,114 @@ use super::{
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
-        PreparedIndexRef, PreparedIndexSlot, PreparedJoinIndexes, PreparedPlanIndexes,
-        columns_are_cacheable,
+        PreparedIndexRef, PreparedJoinIndexes, PreparedPlanIndexes, columns_are_cacheable,
     },
     probe::{
         AtomRows, LazyArenaHandle, PackedProbe, ProbeIndex, ProbeRequest, Prober,
-        RootProjectionProbe,
+        RootProjectionProbe, SortedScalarProbe, seek_sorted_key,
     },
     residual_index::{SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
     with_pool_set,
 };
+
+const TOP_COVER_PARTITIONS_PER_WORKER: usize = 4;
+const MIN_TOP_COVER_ROWS_PER_PARTITION: usize = 256;
+const TOP_INDEX_RANGES_PER_WORKER: usize = 32;
+
+/// Split a cover subset into bounded ordinal ranges without materializing its
+/// row IDs. Keeping several ranges per worker gives work stealing room to
+/// absorb join-selectivity skew while the minimum size keeps handoff coarse.
+fn top_cover_partitions(
+    cover_rows: usize,
+    workers: usize,
+    min_rows_per_partition: usize,
+) -> Option<Vec<TopLevelPartition>> {
+    if workers <= 1 || cover_rows < min_rows_per_partition.saturating_mul(workers) {
+        return None;
+    }
+
+    let target_partitions = workers.saturating_mul(TOP_COVER_PARTITIONS_PER_WORKER);
+    let rows_per_partition = cover_rows
+        .div_ceil(target_partitions)
+        .max(min_rows_per_partition);
+    let mut partitions = Vec::with_capacity(cover_rows.div_ceil(rows_per_partition));
+    for start in (0..cover_rows).step_by(rows_per_partition) {
+        partitions.push(TopLevelPartition::CoverRange {
+            start,
+            scan_size: cmp::min(rows_per_partition, cover_rows - start),
+        });
+    }
+    Some(partitions)
+}
+
+/// Split an unsharded scalar index into disjoint key-ordinal ranges.
+///
+/// Unlike scan-and-project partitioning, this borrows the scalar index that
+/// normal join execution has already built for the filtered root. It therefore
+/// adds no row-ID copy or second sort for seminaive and constrained subsets.
+/// The aggressive overpartitioning leaves enough independent work to absorb
+/// skew in the number of join results produced by each leading key.
+fn top_index_range_partitions(
+    leader_keys: usize,
+    workers: usize,
+    min_keys_per_worker: usize,
+) -> Option<Vec<TopLevelPartition>> {
+    if workers <= 1 || leader_keys < min_keys_per_worker.saturating_mul(workers) {
+        return None;
+    }
+
+    let target_partitions = workers.saturating_mul(TOP_INDEX_RANGES_PER_WORKER);
+    let keys_per_partition = leader_keys
+        .div_ceil(target_partitions)
+        .max(min_keys_per_worker);
+    let mut partitions = Vec::with_capacity(leader_keys.div_ceil(keys_per_partition));
+    for start in (0..leader_keys).step_by(keys_per_partition) {
+        partitions.push(TopLevelPartition::IndexRange {
+            start,
+            scan_size: cmp::min(keys_per_partition, leader_keys - start),
+        });
+    }
+    Some(partitions)
+}
+
+/// One coarse, disjoint partition used to drive the top join level.
+///
+/// Cached scalar intersections naturally partition by physical index shard.
+/// Filtered scalar indexes use borrowed key-ordinal ranges, and fused
+/// intersections use ordinal ranges of their cover subset. The range forms
+/// work for dense, sparse, whole-table, and seminaive subsets without copying
+/// row IDs. `scan_size` is the number of leader keys or cover rows in the
+/// partition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TopLevelPartition {
+    IndexShard { shard: usize, scan_size: usize },
+    IndexRange { start: usize, scan_size: usize },
+    CoverRange { start: usize, scan_size: usize },
+}
+
+impl TopLevelPartition {
+    fn scan_size(self) -> usize {
+        match self {
+            Self::IndexShard { scan_size, .. }
+            | Self::IndexRange { scan_size, .. }
+            | Self::CoverRange { scan_size, .. } => scan_size,
+        }
+    }
+}
+
+fn cover_scan_bounds(partition: Option<TopLevelPartition>, cover_rows: usize) -> (Offset, usize) {
+    match partition {
+        Some(TopLevelPartition::CoverRange { start, scan_size }) => {
+            debug_assert!(start <= cover_rows);
+            debug_assert!(scan_size <= cover_rows - start);
+            (Offset::from_usize(start), scan_size)
+        }
+        None => (Offset::new(0), cover_rows),
+        Some(TopLevelPartition::IndexShard { .. } | TopLevelPartition::IndexRange { .. }) => {
+            unreachable!("an index partition can only drive a scalar intersection")
+        }
+    }
+}
 
 impl Database {
     /// Run `rule_set` to completion.
@@ -921,71 +1019,66 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
     }
 
-    /// Describe an eligible cached index that could drive a top-level
+    /// Describe an eligible scalar index that could drive a top-level
     /// generic-join intersection.
     ///
-    /// This mirrors the leader selection in [`Self::run_plan`].  Probers move
-    /// trie nodes out of `binding_info`, so restore every node before returning.
-    /// Every scan must cover its whole table through an unfiltered cached
-    /// hash/column index. Requiring this before constructing any prober avoids
-    /// building a dynamic nonleader index during discovery and then rebuilding
-    /// it in every shard job. Tiny or badly skewed leaders stay on the existing
-    /// path as well.
-    fn top_index_shards<'rows>(
+    /// This mirrors leader selection and child-index shape in
+    /// [`Self::run_plan`]. Probers move trie nodes out of `binding_info`, so
+    /// restore every node before returning. Persistent catalog indexes use
+    /// their physical hash shards, including when a dense timestamp range is
+    /// intersected at probe time. Projected and packed filtered roots use
+    /// disjoint ordinal ranges of the already-built scalar index, avoiding a
+    /// scan-and-project handoff copy. Tiny leaders stay on the existing path.
+    #[allow(clippy::too_many_arguments)]
+    fn top_index_partitions<'rows>(
         &self,
-        stage: &JoinStage,
-        prepared_join: &'rows PreparedJoinIndexes,
-        prepared: &[PreparedIndexSlot],
+        stages: &JoinStages,
+        stage_index: usize,
+        prepared: &'rows PreparedJoinIndexes,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        order: &InstrOrder,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         workers: usize,
-    ) -> Option<Vec<usize>>
+    ) -> Option<Vec<TopLevelPartition>>
     where
         'exec: 'rows,
     {
-        let JoinStage::Intersect { scans, .. } = stage else {
+        let JoinStage::Intersect { scans, .. } = &stages.instrs[stage_index] else {
             return None;
         };
-        if scans.is_empty() || workers <= 1 {
+        if scans.is_empty()
+            || workers <= 1
+            || estimate_size(&stages.instrs[stage_index], binding_info)
+                < MIN_TOP_INDEX_KEYS_PER_WORKER.saturating_mul(workers)
+        {
             return None;
         }
-        debug_assert_eq!(scans.len(), prepared.len());
-
-        // Mirror the cached/unfiltered branch in `get_index` without actually
-        // constructing any dynamic fallback indexes.
-        for scan in scans {
-            let rows = &binding_info.subsets[scan.atom];
-            let info = &self.db.tables[atoms[scan.atom].table];
-            if !rows.is_root()
-                || !scan.cs.is_empty()
-                || info.table.has_stale_rows()
-                || !columns_are_cacheable(info, &[scan.column])
-            {
-                return None;
-            }
-            let SubsetRef::Dense(subset) = rows.subset() else {
-                return None;
-            };
-            let Subset::Dense(whole_table) = info.table.all() else {
-                return None;
-            };
-            if subset != whole_table {
-                return None;
-            }
-        }
+        let stage_prepared = prepared.stage(stage_index);
+        debug_assert_eq!(scans.len(), stage_prepared.len());
+        let remaining_after_current = prepared
+            .all_stage_mask()
+            .map(|remaining| remaining & !(1u64 << stage_index));
 
         let mut leader = 0;
         let mut leader_size = usize::MAX;
         let mut probers = Vec::with_capacity(scans.len());
-        for (i, (scan, prepared)) in scans.iter().zip(prepared).enumerate() {
+        for (i, (scan, prepared_slot)) in scans.iter().zip(stage_prepared).enumerate() {
+            let tail = atom_tail_use(
+                scan.atom,
+                &stages.instrs,
+                prepared,
+                remaining_after_current,
+                order,
+                1,
+            );
             let prober = self.get_index(
                 atoms,
                 binding_info,
                 ProbeRequest::column(
                     scan,
                     false,
-                    ChildShape::Leaf,
-                    prepared_join.resolve(prepared),
+                    tail.child_shape,
+                    prepared.resolve(prepared_slot),
                 ),
             );
             let size = prober.len();
@@ -995,9 +1088,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
             probers.push(prober);
         }
-        let shards = probers[leader].shard_count().and_then(|shard_count| {
+        let partitions = if let Some(shard_count) = probers[leader].shard_count() {
             let shards = (0..shard_count)
-                .filter(|shard| probers[leader].shard_len(*shard).unwrap_or(0) != 0)
+                .filter_map(|shard| {
+                    let scan_size = probers[leader].shard_len(shard).unwrap_or(0);
+                    (scan_size != 0).then_some(TopLevelPartition::IndexShard { shard, scan_size })
+                })
                 .collect::<Vec<_>>();
             top_index_shape_is_eligible(
                 workers,
@@ -1006,24 +1102,27 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 MIN_TOP_INDEX_KEYS_PER_WORKER,
             )
             .then_some(shards)
-        });
+        } else {
+            top_index_range_partitions(leader_size, workers, MIN_TOP_INDEX_KEYS_PER_WORKER)
+        };
         for (scan, prober) in scans.iter().zip(probers) {
             binding_info.move_back(scan.atom, prober);
         }
-        shards
+        partitions
     }
 
-    /// Return a coarse partition for the variable already sorted to the top of
-    /// the join. Later variables are deliberately not promoted: benchmarking
-    /// found that probing and reordering them was not broadly beneficial.
-    fn select_top_index_shards<'rows>(
+    /// Return coarse partitions for the stage already sorted to the top of the
+    /// join. Cached scalar intersections use physical index shards, while
+    /// fused intersections use ordinal ranges of their cover subset. Later
+    /// stages are deliberately not promoted.
+    fn select_top_partitions<'rows>(
         &self,
         stages: &JoinStages,
         prepared: &'rows PreparedJoinIndexes,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         order: &InstrOrder,
         binding_info: &mut BindingInfo<'rows, 'exec>,
-    ) -> Option<Vec<usize>>
+    ) -> Option<Vec<TopLevelPartition>>
     where
         'exec: 'rows,
     {
@@ -1032,14 +1131,25 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
 
         let stage_index = order.get(0);
-        self.top_index_shards(
-            &stages.instrs[stage_index],
-            prepared,
-            prepared.stage(stage_index),
-            atoms,
-            binding_info,
-            crate::parallel::current_num_threads(),
-        )
+        let workers = crate::parallel::current_num_threads();
+        let stage = &stages.instrs[stage_index];
+        match stage {
+            JoinStage::Intersect { .. } => self.top_index_partitions(
+                stages,
+                stage_index,
+                prepared,
+                atoms,
+                order,
+                binding_info,
+                workers,
+            ),
+            JoinStage::FusedIntersect { cover, .. } => top_cover_partitions(
+                binding_info.subsets[cover.to_index.atom].size(),
+                workers,
+                MIN_TOP_COVER_ROWS_PER_PARTITION,
+            ),
+            JoinStage::FusedIntersectMat { .. } => None,
+        }
     }
 
     /// Runs the free join plan, starting with the header.
@@ -1086,21 +1196,19 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
         let all_stages = prepared.all_stage_mask();
 
-        // A cached top index is already partitioned by hash. Schedule one
-        // coarse global job per nonempty shard and run each shard's subtree
-        // serially. Besides avoiding an intermediate key copy, this keeps
-        // related nested probes on one worker. Selecting this path commits the
-        // whole subtree to coarse-only parallelism: `recur_global_serial`
-        // supplies a serial buffer whose recursive work stays inline. Buffers
-        // that cannot construct an independent partition (the in-place
-        // executors) decline this path.
+        // Schedule each coarse top partition as a global job and run its
+        // complete subtree inline: `recur_global_serial` supplies a serial
+        // buffer whose recursive work stays inline. Cached scalar indexes
+        // provide physical hash shards; filtered scalar indexes and fused
+        // covers use borrowed ordinal ranges, avoiding row-ID copies. Buffers
+        // that cannot construct an independent partition decline this path.
         if !stages.instrs.is_empty()
             && action_buf.supports_global_partition()
-            && let Some(shards) =
-                self.select_top_index_shards(stages, prepared, atoms, &order, binding_info)
+            && let Some(partitions) =
+                self.select_top_partitions(stages, prepared, atoms, &order, binding_info)
         {
             let mut updates = FrameUpdates::with_capacity(0);
-            for shard in shards {
+            for partition in partitions {
                 let db = self.db;
                 let exec_state_for_factory = self.exec_state;
                 let exec_state_for_work = self.exec_state;
@@ -1135,7 +1243,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             instr_order,
                             leaf_scans,
                             0,
-                            Some(shard),
+                            Some(partition),
                             all_stages,
                             binding_info,
                             buf,
@@ -1179,11 +1287,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     ///   `instr_order` changes.
     /// - `cur` is the physical position to execute next. Reaching the end sends
     ///   the completed binding to `action_buf`.
-    /// - `index_shard` optionally restricts the first intersection in a
-    ///   top-level coarse partition to one physical index shard. Recursive calls
-    ///   clear it. It is only present with a serial action buffer, which keeps
-    ///   the partition's later work inline rather than introducing nested
-    ///   parallelism.
+    /// - `top_partition` optionally restricts the first intersection or fused
+    ///   cover scan to a disjoint shard or ordinal range. Recursive calls clear
+    ///   it; the action buffer determines whether later work can run in parallel.
     /// - `remaining_stages` is a bit set of logical stages in the unexecuted
     ///   suffix. It enables constant-time child-shape and value-liveness checks;
     ///   plans with more than 64 stages use `None` and scan the suffix instead.
@@ -1201,7 +1307,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         instr_order: &mut InstrOrder,
         leaf_scans: &mut LeafScans,
         cur: usize,
-        index_shard: Option<usize>,
+        top_partition: Option<TopLevelPartition>,
         remaining_stages: Option<u64>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         action_buf: &mut BUF,
@@ -1236,8 +1342,11 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             );
             return;
         }
+        let mut cur_size = top_partition.map_or_else(
+            || estimate_size(&stages.instrs[instr_order.get(cur)], binding_info),
+            TopLevelPartition::scan_size,
+        );
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
-        let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
@@ -1259,62 +1368,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             remaining & !stage_bit
         });
 
-        // Helper macro (not its own method to appease the borrow checker).
-        macro_rules! drain_updates {
-            ($updates:expr) => {
-                if self.exec_state.should_stop() {
-                    return;
-                }
-                // TODO: `supports_parallel_drain`` is a hack because currently
-                // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
-                if index_shard.is_none()
-                    && cur < free_join_fork_depth()
-                    && action_buf.supports_parallel_drain()
-                {
-                    drain_updates_parallel!($updates)
-                } else {
-                    $updates.drain(|update| match update {
-                        UpdateInstr::PushBinding(var, val) => {
-                            binding_info.bindings.insert(var, val);
-                        }
-                        UpdateInstr::RefineAtom(atom, subset) => {
-                            binding_info.insert_node(atom, subset);
-                        }
-                        UpdateInstr::RefineAtomDense(atom, range) => {
-                            binding_info.insert_subset(atom, Subset::Dense(range));
-                        }
-                        UpdateInstr::EndFrame => {
-                            // Inline leaf-level: if cur+1 is the leaf (no more
-                            // join stages), call push_bindings directly without
-                            // a recursive run_plan call, avoiding function call
-                            // overhead + an extra should_stop() check.
-                            if cur + 1 >= instr_order.len() {
-                                action_buf.push_bindings_factorized(
-                                    action,
-                                    &mut binding_info.bindings,
-                                    &binding_info.binding_sets,
-                                    self.exec_state,
-                                );
-                            } else {
-                                self.run_plan(
-                                    stages,
-                                    prepared,
-                                    atoms,
-                                    action,
-                                    instr_order,
-                                    leaf_scans,
-                                    cur + 1,
-                                    None,
-                                    remaining_after_current,
-                                    binding_info,
-                                    action_buf,
-                                );
-                            }
-                        }
-                    })
-                }
-            };
-        }
         macro_rules! drain_updates_parallel {
             ($updates:expr) => {{
                 if self.exec_state.should_stop() {
@@ -1377,16 +1430,85 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 $updates.clear();
             }};
         }
+        // Helper macros (not their own methods to appease the borrow checker).
+        macro_rules! drain_updates_body {
+            ($updates:expr) => {{
+                if self.exec_state.should_stop() {
+                    return;
+                }
+                // TODO: `supports_parallel_drain` is a hack because currently
+                // `drain_updates_parallel!` is a bit slower because of the additional
+                // `ExecutionState` clone.
+                if cur < free_join_fork_depth() && action_buf.supports_parallel_drain() {
+                    drain_updates_parallel!($updates)
+                } else {
+                    $updates.drain(|update| match update {
+                        UpdateInstr::PushBinding(var, val) => {
+                            binding_info.bindings.insert(var, val);
+                        }
+                        UpdateInstr::RefineAtom(atom, subset) => {
+                            binding_info.insert_node(atom, subset);
+                        }
+                        UpdateInstr::RefineAtomDense(atom, range) => {
+                            binding_info.insert_subset(atom, Subset::Dense(range));
+                        }
+                        UpdateInstr::EndFrame => {
+                            // Inline leaf-level: if cur+1 is the leaf (no more
+                            // join stages), call push_bindings directly without
+                            // a recursive run_plan call, avoiding function call
+                            // overhead + an extra should_stop() check.
+                            if cur + 1 >= instr_order.len() {
+                                action_buf.push_bindings_factorized(
+                                    action,
+                                    &mut binding_info.bindings,
+                                    &binding_info.binding_sets,
+                                    self.exec_state,
+                                );
+                            } else {
+                                self.run_plan(
+                                    stages,
+                                    prepared,
+                                    atoms,
+                                    action,
+                                    instr_order,
+                                    leaf_scans,
+                                    cur + 1,
+                                    None,
+                                    remaining_after_current,
+                                    binding_info,
+                                    action_buf,
+                                );
+                            }
+                        }
+                    })
+                }
+            }};
+        }
+        macro_rules! drain_updates {
+            ($updates:expr) => {{
+                drain_updates_body!($updates);
+            }};
+            ($updates:expr, false) => {{
+                drain_updates_body!($updates);
+            }};
+        }
 
         // A sharded top-level job enumerates only its assigned physical index
-        // shard.  Every recursive call clears `index_shard`, so this macro is
+        // shard. Every recursive call clears `top_partition`, so this macro is
         // used only by the leading prober of the initial `Intersect` stage.
         macro_rules! for_each_leader {
             ($prober:expr, $callback:expr) => {
-                if let Some(shard) = index_shard {
-                    $prober.for_each_shard(shard, $callback)
-                } else {
-                    $prober.for_each($callback)
+                match top_partition {
+                    Some(TopLevelPartition::IndexShard { shard, .. }) => {
+                        $prober.for_each_shard(shard, $callback)
+                    }
+                    Some(TopLevelPartition::IndexRange {
+                        start, scan_size, ..
+                    }) => $prober.for_each_range(start, scan_size, $callback),
+                    None => $prober.for_each($callback),
+                    Some(TopLevelPartition::CoverRange { .. }) => {
+                        unreachable!("a cover range can only drive a fused intersection")
+                    }
                 }
             };
         }
@@ -1482,18 +1604,115 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         };
 
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    for_each_leader!(smaller, |val, small_sub| {
-                        if let Some(large_sub) = larger.get_subset(val) {
-                            updates.push_binding(*var, val[0]);
-                            small_sub.refine(smaller_scan.atom, &mut updates);
-                            large_sub.refine(larger_scan.atom, &mut updates);
-                            updates.finish_frame();
-                            if updates.frames() >= chunk_size {
-                                drain_updates!(updates);
+                    if let (Some(smaller_keys), Some(larger_keys)) =
+                        (smaller.sorted_scalar_probe(), larger.sorted_scalar_probe())
+                    {
+                        // Both sides expose sorted scalar arrays. Leapfrog through the larger
+                        // side directly, preserving the selected leader and its top-level ordinal
+                        // partition. Successful ordinals reconstruct the same ProbeMatch as a
+                        // scalar lookup, including row-carrying continuations needed by the tail.
+                        let leader_range = match top_partition {
+                            Some(TopLevelPartition::IndexRange {
+                                start, scan_size, ..
+                            }) => start..start + scan_size,
+                            None => 0..smaller_keys.len(),
+                            Some(TopLevelPartition::IndexShard { .. }) => {
+                                unreachable!("a sorted scalar leader is never hash-sharded")
+                            }
+                            Some(TopLevelPartition::CoverRange { .. }) => {
+                                unreachable!("a cover range cannot drive an intersection")
+                            }
+                        };
+                        debug_assert!(leader_range.end <= smaller_keys.len());
+                        let both_tiny = matches!(smaller_keys, SortedScalarProbe::Small(..))
+                            && matches!(larger_keys, SortedScalarProbe::Small(..));
+                        let comparable_sizes =
+                            larger_keys.len() <= leader_range.len().saturating_mul(4);
+                        if both_tiny || comparable_sizes {
+                            // A plain two-finger merge is cheaper for tiny recursive residuals
+                            // and similarly sized packed arrays, where a linear pass has better
+                            // locality than setting up galloping bounds for every key.
+                            let mut leader_index = leader_range.start;
+                            let mut target_index = 0;
+                            if leader_index != 0 && leader_index < leader_range.end {
+                                let first_key = smaller_keys.value_at(leader_index);
+                                seek_sorted_key(
+                                    first_key,
+                                    larger_keys.len(),
+                                    &mut target_index,
+                                    |key_index| larger_keys.value_at(key_index),
+                                );
+                            }
+                            while leader_index < leader_range.end
+                                && target_index < larger_keys.len()
+                            {
+                                let leader_key = smaller_keys.value_at(leader_index);
+                                let target_key = larger_keys.value_at(target_index);
+                                match leader_key.cmp(&target_key) {
+                                    cmp::Ordering::Less => leader_index += 1,
+                                    cmp::Ordering::Greater => target_index += 1,
+                                    cmp::Ordering::Equal => {
+                                        updates.push_binding(*var, leader_key);
+                                        smaller
+                                            .sorted_match_at(leader_index)
+                                            .refine(smaller_scan.atom, &mut updates);
+                                        larger
+                                            .sorted_match_at(target_index)
+                                            .refine(larger_scan.atom, &mut updates);
+                                        updates.finish_frame();
+                                        if updates.frames() >= chunk_size {
+                                            drain_updates!(updates);
+                                        }
+                                        leader_index += 1;
+                                        target_index += 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Retain one target cursor, but gallop across gaps rather than
+                            // scanning the larger side. This protects highly skewed joins where
+                            // the smaller sorted side has only a few widely spaced keys.
+                            let mut target_cursor = 0;
+                            for leader_index in leader_range {
+                                let key = smaller_keys.value_at(leader_index);
+                                if seek_sorted_key(
+                                    key,
+                                    larger_keys.len(),
+                                    &mut target_cursor,
+                                    |key_index| larger_keys.value_at(key_index),
+                                ) {
+                                    updates.push_binding(*var, key);
+                                    smaller
+                                        .sorted_match_at(leader_index)
+                                        .refine(smaller_scan.atom, &mut updates);
+                                    larger
+                                        .sorted_match_at(target_cursor)
+                                        .refine(larger_scan.atom, &mut updates);
+                                    updates.finish_frame();
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates!(updates);
+                                    }
+                                    target_cursor += 1;
+                                } else if target_cursor == larger_keys.len() {
+                                    break;
+                                }
                             }
                         }
-                    });
-                    drain_updates!(updates);
+                    } else {
+                        // Catalog hash indexes and unsupported shapes retain the scalar path.
+                        for_each_leader!(smaller, |val, small_sub| {
+                            if let Some(large_sub) = larger.get_subset(val) {
+                                updates.push_binding(*var, val[0]);
+                                small_sub.refine(smaller_scan.atom, &mut updates);
+                                large_sub.refine(larger_scan.atom, &mut updates);
+                                updates.finish_frame();
+                                if updates.frames() >= chunk_size {
+                                    drain_updates!(updates);
+                                }
+                            }
+                        });
+                    }
+                    drain_updates!(updates, false);
 
                     binding_info.move_back(a.atom, a_prober);
                     binding_info.move_back(b.atom, b_prober);
@@ -1581,11 +1800,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
                     let vars = bind.iter().map(|(_, var)| *var).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                    let (scan_start, scan_size) =
+                        cover_scan_bounds(top_partition, cover_subset.size());
                     table.scan_project(
                         cover_subset,
                         &proj,
-                        Offset::new(0),
-                        usize::MAX,
+                        scan_start,
+                        scan_size,
                         &cover.constraints,
                         &mut buf,
                     );
@@ -1614,20 +1835,23 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
                     let cover_node = binding_info.unwrap_val(cover_atom);
                     let cover_subset = cover_node.subset();
-                    let mut offset = Offset::new(0);
+                    let (mut offset, mut scan_remaining) =
+                        cover_scan_bounds(top_partition, cover_subset.size());
                     let mut buffer = TaggedRowBuffer::new(bind.len());
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    loop {
+                    while scan_remaining != 0 {
                         buffer.clear();
                         let table = &self.db.tables[atoms[cover_atom].table].table;
+                        let scan_size = cmp::min(chunk_size, scan_remaining);
                         let next = table.scan_project(
                             cover_subset,
                             &proj,
                             offset,
-                            chunk_size,
+                            scan_size,
                             &cover.constraints,
                             &mut buffer,
                         );
+                        scan_remaining -= scan_size;
                         for (row, key) in buffer.iter() {
                             if keep_cover {
                                 updates.refine_atom_dense(
@@ -1644,11 +1868,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 drain_updates!(updates);
                             }
                         }
-                        if let Some(next) = next {
+                        if scan_remaining != 0 {
+                            let Some(next) = next else {
+                                break;
+                            };
                             offset = next;
-                            continue;
                         }
-                        break;
                     }
                     drain_updates!(updates);
                     // Restore the subsets we swapped out.
@@ -1704,20 +1929,23 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset();
-                let mut cur = Offset::new(0);
+                let (mut scan_offset, mut scan_remaining) =
+                    cover_scan_bounds(top_partition, cover_subset.size());
                 let mut buffer = TaggedRowBuffer::new(bind.len());
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                loop {
+                while scan_remaining != 0 {
                     buffer.clear();
                     let table = &self.db.tables[atoms[cover_atom].table].table;
+                    let scan_size = cmp::min(chunk_size, scan_remaining);
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
-                        cur,
-                        chunk_size,
+                        scan_offset,
+                        scan_size,
                         &cover.constraints,
                         &mut buffer,
                     );
+                    scan_remaining -= scan_size;
                     'mid: for (row, key) in buffer.iter() {
                         if keep_cover {
                             updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
@@ -1751,11 +1979,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             drain_updates!(updates);
                         }
                     }
-                    if let Some(next) = next {
-                        cur = next;
-                        continue;
+                    if scan_remaining != 0 {
+                        let Some(next) = next else {
+                            break;
+                        };
+                        scan_offset = next;
                     }
-                    break;
                 }
                 // TODO: special-case the scenario when the cover doesn't need
                 // deduping (and hence we can do a straight scan: e.g. when the
