@@ -1020,7 +1020,7 @@ impl SortedWritesTable {
     }
 
     unsafe fn get_if_unchecked(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
-        let row = unsafe { self.data.data.get_row_unchecked(row) };
+        let row = unsafe { self.data.get_row_unchecked(row) }?;
         if Self::eval_constraints(cs, row) {
             Some(row)
         } else {
