@@ -1530,8 +1530,8 @@ fn get_next_freejoin_stage(
 /// deterministic canonical order used as a stable refinement anchor by
 /// runtime `sort_plan_by_size`. Runtime ordering supplies live residual
 /// estimates and, for all-`Intersect` blocks, physical-prefix feedback without
-/// mutating that cached order. [`fuse_single_scans`] then collapses compatible
-/// same-atom scans.
+/// mutating that cached order.
+/// [`fuse_single_scans`] then collapses compatible same-atom scans.
 fn plan_gj(
     ctx: &PlanningContext,
     state: &mut PlanningState,
