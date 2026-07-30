@@ -56,6 +56,61 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
     }
 }
 
+/// Seek `key` in a sorted scalar index without moving backward.
+///
+/// Exponential search followed by a bounded binary search avoids walking a
+/// large target when the sorted query is sparse.
+pub(super) fn seek_sorted_key(
+    key: Value,
+    target_len: usize,
+    target_cursor: &mut usize,
+    target_at: impl Fn(usize) -> Value,
+) -> bool {
+    if *target_cursor >= target_len {
+        return false;
+    }
+
+    let current = target_at(*target_cursor);
+    match current.cmp(&key) {
+        cmp::Ordering::Equal => true,
+        cmp::Ordering::Greater => false,
+        cmp::Ordering::Less => {
+            let base = *target_cursor;
+            let mut step = 1usize;
+            while let Some(position) = base.checked_add(step).filter(|&pos| pos < target_len) {
+                if target_at(position) >= key {
+                    break;
+                }
+                let Some(next) = step.checked_mul(2) else {
+                    step = target_len;
+                    break;
+                };
+                step = next;
+            }
+
+            let previous = step / 2;
+            let mut lo = base
+                .saturating_add(previous)
+                .saturating_add(1)
+                .min(target_len);
+            let mut hi = base.saturating_add(step).saturating_add(1).min(target_len);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if target_at(mid) < key {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            *target_cursor = lo;
+            if lo >= target_len {
+                return false;
+            }
+            target_at(lo) == key
+        }
+    }
+}
+
 /// A plan-local continuation for rows borrowed from a catalog or root index.
 #[derive(Clone, Copy)]
 pub(super) struct CatalogContinuation<'rows> {
@@ -132,10 +187,6 @@ where
         self.size() == 0
     }
 
-    pub(super) fn is_root(&self) -> bool {
-        matches!(self, Self::Root(_))
-    }
-
     #[cfg(test)]
     pub(super) fn root_arc(&self) -> &Arc<TrieRoot> {
         let Self::Root(root) = self else {
@@ -190,6 +241,32 @@ pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// The general fallback: an arena-allocated packed trie over an arbitrary
     /// source subset, with lower column indexes constructed lazily.
     Packed(PackedProbe<'ctx, 'rows, 'exec>),
+}
+
+/// Borrowed, ordered scalar keys used by merge and galloping intersections.
+#[derive(Clone, Copy)]
+pub(super) enum SortedScalarProbe<'a, 'exec> {
+    Projected(&'a RootProjection),
+    Small(&'a SmallColumnIndex),
+    Packed(&'a TrieNode<'exec>),
+}
+
+impl SortedScalarProbe<'_, '_> {
+    pub(super) fn len(self) -> usize {
+        match self {
+            Self::Projected(index) => index.len(),
+            Self::Small(index) => index.n_keys,
+            Self::Packed(index) => index.values().len(),
+        }
+    }
+
+    pub(super) fn value_at(self, key_index: usize) -> Value {
+        match self {
+            Self::Projected(index) => index.value_at(key_index),
+            Self::Small(index) => index.keys[key_index],
+            Self::Packed(index) => index.values()[key_index],
+        }
+    }
 }
 
 /// A successful probe either carries rows needed by a later stage or only
@@ -657,6 +734,52 @@ where
         }
     }
 
+    /// Borrow the ordered keys when this probe supports scalar intersection.
+    pub(super) fn sorted_scalar_probe(&self) -> Option<SortedScalarProbe<'_, 'exec>> {
+        match &self.ix {
+            ProbeIndex::ProjectedRoot(projected) if projected.columns.len() == 1 => {
+                Some(SortedScalarProbe::Projected(projected.first))
+            }
+            ProbeIndex::SmallColumn(index) => Some(SortedScalarProbe::Small(index)),
+            ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
+                Some(SortedScalarProbe::Packed(packed.first))
+            }
+            ProbeIndex::CachedTuple { .. }
+            | ProbeIndex::CachedColumn { .. }
+            | ProbeIndex::ProjectedRoot(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..) => None,
+        }
+    }
+
+    /// Reconstruct the match at an ordinal returned by a sorted scalar probe.
+    /// Preserves the row-retention policy used by ordinary key lookup.
+    pub(super) fn sorted_match_at(&self, key_index: usize) -> ProbeMatch<'rows, 'exec> {
+        match &self.ix {
+            ProbeIndex::ProjectedRoot(projected) if projected.columns.len() == 1 => {
+                Self::keep_or_discard(projected.scalar_rows(key_index), self.keep_rows)
+            }
+            ProbeIndex::SmallColumn(index) => {
+                if self.keep_rows {
+                    ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                } else {
+                    ProbeMatch::Present
+                }
+            }
+            ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
+                let rows = AtomRows::Packed(PackedCursor::new(packed.first, key_index));
+                Self::keep_or_discard(rows, self.keep_rows)
+            }
+            ProbeIndex::CachedTuple { .. }
+            | ProbeIndex::CachedColumn { .. }
+            | ProbeIndex::ProjectedRoot(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..) => {
+                unreachable!("only a sorted scalar probe has a match ordinal")
+            }
+        }
+    }
+
     pub(super) fn for_each(&self, mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>)) {
         match &self.ix {
             ProbeIndex::CachedTuple {
@@ -808,6 +931,64 @@ where
         }
     }
 
+    /// Visit a disjoint ordinal range of an unsharded scalar index.
+    ///
+    /// `Intersect` stages always probe one column, so partitioning the first
+    /// (and only) key level preserves complete key groups. The backing
+    /// projected/packed index remains borrowed by every coarse task.
+    pub(super) fn for_each_range(
+        &self,
+        start: usize,
+        scan_size: usize,
+        mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>),
+    ) {
+        let end = start
+            .checked_add(scan_size)
+            .expect("top index range overflow");
+        match &self.ix {
+            ProbeIndex::ProjectedRoot(projected) => {
+                debug_assert_eq!(projected.columns.len(), 1);
+                assert!(end <= projected.first.len());
+                for key_index in start..end {
+                    let key = [projected.first.value_at(key_index)];
+                    f(
+                        &key,
+                        Self::keep_or_discard(projected.scalar_rows(key_index), self.keep_rows),
+                    );
+                }
+            }
+            ProbeIndex::SmallColumn(index) => {
+                assert!(end <= index.n_keys);
+                for key_index in start..end {
+                    let rows = if self.keep_rows {
+                        ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                    } else {
+                        ProbeMatch::Present
+                    };
+                    f(&index.keys[key_index..key_index + 1], rows);
+                }
+            }
+            ProbeIndex::Packed(packed) => {
+                debug_assert_eq!(packed.columns.len(), 1);
+                let values = packed.first.values();
+                assert!(end <= values.len());
+                for key_index in start..end {
+                    let rows = AtomRows::Packed(PackedCursor::new(packed.first, key_index));
+                    f(
+                        &values[key_index..key_index + 1],
+                        Self::keep_or_discard(rows, self.keep_rows),
+                    );
+                }
+            }
+            ProbeIndex::CachedTuple { .. } | ProbeIndex::CachedColumn { .. } => {
+                unreachable!("persistent indexes use physical shard partitions")
+            }
+            ProbeIndex::SmallExact(..) => {
+                unreachable!("a scalar intersection cannot use an exact tuple probe")
+            }
+        }
+    }
+
     pub(super) fn shard_count(&self) -> Option<usize> {
         match &self.ix {
             ProbeIndex::CachedTuple { table, .. } => Some(table.shard_count()),
@@ -821,25 +1002,9 @@ where
 
     pub(super) fn shard_len(&self, shard: usize) -> Option<usize> {
         match &self.ix {
-            ProbeIndex::CachedTuple {
-                intersect_outer: None,
-                table,
-                ..
-            } => Some(table.shard_len(shard)),
-            ProbeIndex::CachedColumn {
-                intersect_outer: None,
-                table,
-                ..
-            } => Some(table.shard_len(shard)),
-            ProbeIndex::CachedTuple {
-                intersect_outer: Some(_),
-                ..
-            }
-            | ProbeIndex::CachedColumn {
-                intersect_outer: Some(_),
-                ..
-            }
-            | ProbeIndex::ProjectedRoot(..)
+            ProbeIndex::CachedTuple { table, .. } => Some(table.shard_len(shard)),
+            ProbeIndex::CachedColumn { table, .. } => Some(table.shard_len(shard)),
+            ProbeIndex::ProjectedRoot(..)
             | ProbeIndex::SmallColumn(..)
             | ProbeIndex::SmallExact(..)
             | ProbeIndex::Packed(..) => None,
