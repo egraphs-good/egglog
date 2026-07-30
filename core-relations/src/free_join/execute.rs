@@ -3353,6 +3353,23 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     }
 }
 
+fn is_reorder_barrier(stage: &JoinStage) -> bool {
+    matches!(
+        stage,
+        JoinStage::FusedIntersectMat {
+            mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
+            ..
+        }
+    )
+}
+
+/// Choose the physical execution order for a suffix of an already-planned
+/// stage block.
+///
+/// The cached logical order fixes stage identity and provides a stable
+/// refinement anchor. At execution time, all-`Intersect` blocks additionally
+/// follow the branch-local physical frontier; mixed and fused blocks retain
+/// the stable-prefix bias to avoid producing many divergent probe paths.
 fn sort_plan_by_size(
     order: &mut InstrOrder,
     leaf_scans: &mut LeafScans,
@@ -3362,14 +3379,7 @@ fn sort_plan_by_size(
 ) {
     let mut last_pos = start;
     for i in start..instrs.len() {
-        if matches!(
-            &instrs[order.get(i)],
-            // These nodes don't commute
-            JoinStage::FusedIntersectMat {
-                mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
-                ..
-            }
-        ) {
+        if is_reorder_barrier(&instrs[order.get(i)]) {
             sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
             last_pos = i + 1;
         }
@@ -3478,98 +3488,93 @@ fn sort_plan_by_size_inner(
     }
     // How many times an atom has been intersected/joined
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+    let use_physical_refinements = instrs
+        .iter()
+        .all(|stage| matches!(stage, JoinStage::Intersect { .. }));
+    let mut physical_refinements =
+        use_physical_refinements.then(|| with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>()));
 
-    // Count how many times each atom has been refined so far.
-    for position in 0..range.start {
-        match &instrs[order.get(position)] {
+    let update_refinements =
+        |stage: &JoinStage, refinements: &mut DenseIdMap<AtomId, i64>| match stage {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *times_refined.get_or_default(scan.atom) += 1;
+                *refinements.get_or_default(scan.atom) += 1;
             }),
             JoinStage::FusedIntersect {
                 cover,
                 to_intersect,
                 ..
             } => {
-                *times_refined.get_or_default(cover.to_index.atom) +=
+                *refinements.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
+                    *refinements.get_or_default(spec.to_index.atom) +=
                         spec.to_index.vars.len() as i64;
                 });
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
+                    *refinements.get_or_default(spec.to_index.atom) +=
                         spec.to_index.vars.len() as i64;
                 });
             }
+        };
+
+    // The cached logical prefix remains the stable locality signal.
+    for stage in &instrs[..range.start] {
+        update_refinements(stage, &mut times_refined);
+    }
+    // Pure intersection blocks also track the stages actually selected on this
+    // branch, keeping recursive ordering connected to its physical frontier.
+    if let Some(physical_refinements) = &mut physical_refinements {
+        for position in 0..range.start {
+            update_refinements(&instrs[order.get(position)], physical_refinements);
         }
     }
 
-    // We prioritize variables by
-    //
-    //   (1) how many times an atom with this variable has been refined,
-    //   (2) then by the cardinality of the variable to be enumerated (smaller → earlier)
-    //   (3) then by how many relations join on this variable (more → earlier)
-    //
-    // Estimate size is second so that stages with very small cardinality (e.g. FunDep
-    // consequents with exactly 1 value) are run before multi-relation stages that happen
-    // to have a larger current estimate.
-    let key_fn = |join_stage: &JoinStage,
-                  binding_info: &BindingInfo,
-                  times_refined: &DenseIdMap<AtomId, i64>| {
-        let refine = match join_stage {
+    let refinement_count =
+        |join_stage: &JoinStage, refinements: &DenseIdMap<AtomId, i64>| match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
-                .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
+                .map(|scan| refinements.get(scan.atom).copied().unwrap_or_default())
                 .max()
                 .unwrap(),
-            JoinStage::FusedIntersect { cover, .. } => times_refined
+            JoinStage::FusedIntersect { cover, .. } => refinements
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
-        (
-            -refine,
-            estimate_size(join_stage, binding_info),
-            -num_intersected_rels(join_stage),
-        )
-    };
 
     for i in range.clone() {
-        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
-        for j in (i + 1)..range.end {
-            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
-            if key_j < key_i {
-                order.data.swap(i, j);
-                key_i = key_j;
+        let mut best = None;
+        for j in i..range.end {
+            let stage = &instrs[order.get(j)];
+            let stable_refinement = refinement_count(stage, &times_refined);
+            let size = estimate_size(stage, binding_info);
+            let relations = num_intersected_rels(stage);
+            let key = if let Some(physical_refinements) = &physical_refinements {
+                (
+                    -refinement_count(stage, physical_refinements),
+                    size,
+                    -stable_refinement,
+                    -relations,
+                )
+            } else {
+                (-stable_refinement, size, i64::from(-relations), 0)
+            };
+            match best {
+                Some((_, best_key)) if key >= best_key => {}
+                _ => best = Some((j, key)),
             }
         }
-        // Update the counts after a new instruction is selected.
-        match &instrs[order.get(i)] {
-            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *times_refined.get_or_default(scan.atom) += 1;
-            }),
-            JoinStage::FusedIntersect {
-                cover,
-                to_intersect,
-                ..
-            } => {
-                *times_refined.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
+        let (best_position, _) = best.unwrap();
+        order.data.swap(i, best_position);
 
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-            JoinStage::FusedIntersectMat { to_intersect, .. } => {
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
+        // Update the counts after a new instruction is selected.
+        let selected = &instrs[order.get(i)];
+        update_refinements(selected, &mut times_refined);
+        if let Some(physical_refinements) = &mut physical_refinements {
+            update_refinements(selected, physical_refinements);
         }
     }
 }
@@ -3652,9 +3657,123 @@ mod top_index_tests {
         thread,
     };
 
-    use crate::{common::Value, numeric_id::NumericId, offsets::Subset};
+    use smallvec::{SmallVec, smallvec};
 
-    use super::{ChildLock, get_or_insert_child, top_index_shape_is_eligible};
+    use crate::{
+        common::Value,
+        free_join::{
+            AtomId, Variable,
+            plan::{JoinStage, MatId, MatScanMode, SingleScanSpec},
+        },
+        numeric_id::NumericId,
+        offsets::Subset,
+        table_spec::ColumnId,
+    };
+
+    use super::{
+        BindingInfo, ChildLock, InstrOrder, get_or_insert_child, sort_plan_by_size_inner,
+        top_index_shape_is_eligible,
+    };
+
+    fn intersect_stage(atom: usize, column: usize) -> JoinStage {
+        JoinStage::Intersect {
+            var: Variable::from_usize(column),
+            scans: smallvec![SingleScanSpec {
+                atom: AtomId::from_usize(atom),
+                column: ColumnId::from_usize(column),
+                cs: Vec::new(),
+            }],
+        }
+    }
+
+    fn intersect_stage_atoms(atoms: &[usize], column: usize) -> JoinStage {
+        JoinStage::Intersect {
+            var: Variable::from_usize(column),
+            scans: atoms
+                .iter()
+                .map(|&atom| SingleScanSpec {
+                    atom: AtomId::from_usize(atom),
+                    column: ColumnId::from_usize(column),
+                    cs: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    fn mat_stage(mat_id: usize) -> JoinStage {
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(mat_id),
+            mode: MatScanMode::KeyOnly,
+            bind: SmallVec::new(),
+            to_intersect: Vec::new(),
+        }
+    }
+
+    fn binding_info(sizes: &[(usize, usize)]) -> BindingInfo {
+        let mut binding_info = BindingInfo::default();
+        for &(atom, size) in sizes {
+            binding_info.insert_subset(
+                AtomId::from_usize(atom),
+                Subset::Dense(crate::OffsetRange::new(
+                    crate::RowId::from_usize(0),
+                    crate::RowId::from_usize(size),
+                )),
+            );
+        }
+        binding_info
+    }
+
+    #[test]
+    fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
+        let stages = vec![
+            intersect_stage(0, 0),
+            intersect_stage(1, 0),
+            intersect_stage(1, 1),
+            mat_stage(0),
+        ];
+        let mut binding_info = binding_info(&[(0, 100), (1, 100)]);
+
+        let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
+        sort_plan_by_size_inner(&mut order, 1..3, &stages, &mut binding_info);
+
+        assert_eq!(order.data.as_slice(), &[1, 0, 2, 3]);
+    }
+
+    #[test]
+    fn pure_intersect_dvo_prioritizes_physical_refinement_depth() {
+        let stages = vec![
+            intersect_stage(1, 0),
+            intersect_stage(1, 1),
+            intersect_stage(0, 2),
+            intersect_stage(1, 3),
+            intersect_stage_atoms(&[0, 1], 4),
+            intersect_stage(0, 5),
+        ];
+        let mut binding_info = binding_info(&[(0, 1_000), (1, 1)]);
+
+        let mut order = InstrOrder::from_iter([4, 5, 2, 3, 0, 1].into_iter());
+        sort_plan_by_size_inner(&mut order, 2..4, &stages, &mut binding_info);
+
+        assert_eq!(order.data.as_slice(), &[4, 5, 2, 3, 0, 1]);
+    }
+
+    #[test]
+    fn pure_intersect_dvo_uses_cardinality_at_equal_physical_depth() {
+        let stages = vec![
+            intersect_stage(0, 0),
+            intersect_stage(0, 1),
+            intersect_stage(0, 2),
+            intersect_stage(1, 3),
+            intersect_stage_atoms(&[0, 1], 4),
+            intersect_stage(2, 5),
+        ];
+        let mut binding_info = binding_info(&[(0, 50), (1, 10), (2, 100)]);
+
+        let mut order = InstrOrder::from_iter([4, 5, 2, 3, 0, 1].into_iter());
+        sort_plan_by_size_inner(&mut order, 2..4, &stages, &mut binding_info);
+
+        assert_eq!(order.data.as_slice(), &[4, 5, 3, 2, 0, 1]);
+    }
 
     #[test]
     fn top_index_partitioning_rejects_serial_tiny_and_skewed_shapes() {
