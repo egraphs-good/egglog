@@ -1,0 +1,23 @@
+(sort V)
+(constructor K (i64) V)
+(constructor Add (i64 V V) V :cost 100000)
+(constructor Shl (i64 V V) V :cost 100000)
+(constructor LEA (V V i64 i64) V :cost 1)
+(constructor ADD64 (V V) V :cost 1)
+
+(ruleset algebra)
+(birewrite (Add w (Add w a b) c) (Add w a (Add w b c)) :ruleset algebra)
+(rewrite (Add w a a) (Shl w a (K one))
+    :when ((= one (+ w 1))) :ruleset algebra)
+
+(ruleset x64)
+(birewrite (ADD64 a b) (Add 64 a b) :ruleset x64)
+(rewrite (Add 64 b i) (LEA b i 1 0) :ruleset x64)
+(rewrite (LEA b i 1 d) (Add 64 b (Add 64 i (K dv)))
+    :when ((= dv (+ d 0))) :ruleset x64)
+(rewrite (Add 64 b (Add 64 i (K dv))) (LEA b i 1 d)
+    :when ((= d (+ dv 0))) :ruleset x64)
+
+(let $root (ADD64 (K 21) (K 21)))
+
+(run-schedule (repeat 6 (seq (run x64) (run algebra))))
