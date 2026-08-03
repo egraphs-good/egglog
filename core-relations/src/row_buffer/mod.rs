@@ -307,10 +307,11 @@ impl RowBuffer {
     }
 
     /// Get the row corresponding to the given RowId without bounds checking.
-    /// 
+    ///
     /// # Safety
-    /// The caller must ensure that either `row` is within bounds of the buffer,
-    /// This function should not be used if stale rows are undesired.
+    /// The caller must ensure that `row` is within bounds of the buffer. Note that this method
+    /// does not check whether the row is stale, so it should not be used if stale rows are
+    /// undesired.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         unsafe {
             slice::from_raw_parts(
