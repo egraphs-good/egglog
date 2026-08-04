@@ -359,15 +359,103 @@ fn top_index_shape_is_eligible(
         && nonempty_shards >= workers
 }
 
-/// One physical cached-index shard used to drive the top join level.
+const TOP_COVER_PARTITIONS_PER_WORKER: usize = 4;
+const MIN_TOP_COVER_ROWS_PER_PARTITION: usize = 256;
+const TOP_INDEX_RANGES_PER_WORKER: usize = 32;
+
+/// Split a cover subset into bounded ordinal ranges without materializing its
+/// row IDs. Keeping several ranges per worker gives work stealing room to
+/// absorb join-selectivity skew while the minimum size keeps handoff coarse.
+fn top_cover_partitions(
+    cover_rows: usize,
+    workers: usize,
+    min_rows_per_partition: usize,
+) -> Option<Vec<TopLevelPartition>> {
+    if workers <= 1 || cover_rows < min_rows_per_partition.saturating_mul(workers) {
+        return None;
+    }
+
+    let target_partitions = workers.saturating_mul(TOP_COVER_PARTITIONS_PER_WORKER);
+    let rows_per_partition = cover_rows
+        .div_ceil(target_partitions)
+        .max(min_rows_per_partition);
+    let mut partitions = Vec::with_capacity(cover_rows.div_ceil(rows_per_partition));
+    for start in (0..cover_rows).step_by(rows_per_partition) {
+        partitions.push(TopLevelPartition::CoverRange {
+            start,
+            scan_size: cmp::min(rows_per_partition, cover_rows - start),
+        });
+    }
+    Some(partitions)
+}
+
+/// Split an unsharded scalar index into disjoint key-ordinal ranges.
 ///
-/// `scan_size` is the exact number of leader keys in the shard. Besides
-/// avoiding another lookup during execution, it lets a demand-driven executor
-/// coalesce many top bindings into roughly one recursive job per worker.
+/// Unlike scan-and-project partitioning, this borrows the scalar index that
+/// normal join execution has already built for the filtered root. It therefore
+/// adds no row-ID copy or second sort for seminaive and constrained subsets.
+/// The aggressive overpartitioning leaves enough independent work to absorb
+/// skew in the number of join results produced by each leading key.
+fn top_index_range_partitions(
+    leader_keys: usize,
+    workers: usize,
+    min_keys_per_worker: usize,
+) -> Option<Vec<TopLevelPartition>> {
+    if workers <= 1 || leader_keys < min_keys_per_worker.saturating_mul(workers) {
+        return None;
+    }
+
+    let target_partitions = workers.saturating_mul(TOP_INDEX_RANGES_PER_WORKER);
+    let keys_per_partition = leader_keys
+        .div_ceil(target_partitions)
+        .max(min_keys_per_worker);
+    let mut partitions = Vec::with_capacity(leader_keys.div_ceil(keys_per_partition));
+    for start in (0..leader_keys).step_by(keys_per_partition) {
+        partitions.push(TopLevelPartition::IndexRange {
+            start,
+            scan_size: cmp::min(keys_per_partition, leader_keys - start),
+        });
+    }
+    Some(partitions)
+}
+
+/// One coarse, disjoint partition used to drive the top join level.
+///
+/// Cached scalar intersections naturally partition by physical index shard.
+/// Filtered scalar indexes use borrowed key-ordinal ranges, and fused
+/// intersections use ordinal ranges of their cover subset. The range forms
+/// work for dense, sparse, whole-table, and seminaive subsets without copying
+/// row IDs. `scan_size` is the number of leader keys or cover rows in the
+/// partition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct TopIndexPartition {
-    shard: usize,
-    scan_size: usize,
+enum TopLevelPartition {
+    IndexShard { shard: usize, scan_size: usize },
+    IndexRange { start: usize, scan_size: usize },
+    CoverRange { start: usize, scan_size: usize },
+}
+
+impl TopLevelPartition {
+    fn scan_size(self) -> usize {
+        match self {
+            Self::IndexShard { scan_size, .. }
+            | Self::IndexRange { scan_size, .. }
+            | Self::CoverRange { scan_size, .. } => scan_size,
+        }
+    }
+}
+
+fn cover_scan_bounds(partition: Option<TopLevelPartition>, cover_rows: usize) -> (Offset, usize) {
+    match partition {
+        Some(TopLevelPartition::CoverRange { start, scan_size }) => {
+            debug_assert!(start <= cover_rows);
+            debug_assert!(scan_size <= cover_rows - start);
+            (Offset::from_usize(start), scan_size)
+        }
+        None => (Offset::new(0), cover_rows),
+        Some(TopLevelPartition::IndexShard { .. } | TopLevelPartition::IndexRange { .. }) => {
+            unreachable!("an index partition can only drive a scalar intersection")
+        }
+    }
 }
 
 /// A key ordinal in a root continuation grid.
@@ -894,10 +982,6 @@ where
 
     fn is_empty(&self) -> bool {
         self.size() == 0
-    }
-
-    fn is_root(&self) -> bool {
-        matches!(self, Self::Root(_))
     }
 
     #[cfg(test)]
@@ -1462,6 +1546,64 @@ where
         }
     }
 
+    /// Visit a disjoint ordinal range of an unsharded scalar index.
+    ///
+    /// `Intersect` stages always probe one column, so partitioning the first
+    /// (and only) key level preserves complete key groups. The backing
+    /// projected/packed index remains borrowed by every coarse task.
+    fn for_each_range(
+        &self,
+        start: usize,
+        scan_size: usize,
+        mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>),
+    ) {
+        let end = start
+            .checked_add(scan_size)
+            .expect("top index range overflow");
+        match &self.ix {
+            ProbeIndex::ProjectedRoot(projected) => {
+                debug_assert_eq!(projected.columns.len(), 1);
+                assert!(end <= projected.first.len());
+                for key_index in start..end {
+                    let key = [projected.first.value_at(key_index)];
+                    f(
+                        &key,
+                        Self::keep_or_discard(projected.scalar_rows(key_index), self.keep_rows),
+                    );
+                }
+            }
+            ProbeIndex::SmallColumn(index) => {
+                assert!(end <= index.n_keys);
+                for key_index in start..end {
+                    let rows = if self.keep_rows {
+                        ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                    } else {
+                        ProbeMatch::Present
+                    };
+                    f(&index.keys[key_index..key_index + 1], rows);
+                }
+            }
+            ProbeIndex::Packed(packed) => {
+                debug_assert_eq!(packed.columns.len(), 1);
+                let values = packed.first.values();
+                assert!(end <= values.len());
+                for key_index in start..end {
+                    let rows = AtomRows::Packed(PackedCursor::new(packed.first, key_index));
+                    f(
+                        &values[key_index..key_index + 1],
+                        Self::keep_or_discard(rows, self.keep_rows),
+                    );
+                }
+            }
+            ProbeIndex::CachedTuple { .. } | ProbeIndex::CachedColumn { .. } => {
+                unreachable!("persistent indexes use physical shard partitions")
+            }
+            ProbeIndex::SmallExact(..) => {
+                unreachable!("a scalar intersection cannot use an exact tuple probe")
+            }
+        }
+    }
+
     fn shard_count(&self) -> Option<usize> {
         match &self.ix {
             ProbeIndex::CachedTuple { table, .. } => Some(table.shard_count()),
@@ -1475,25 +1617,9 @@ where
 
     fn shard_len(&self, shard: usize) -> Option<usize> {
         match &self.ix {
-            ProbeIndex::CachedTuple {
-                intersect_outer: None,
-                table,
-                ..
-            } => Some(table.shard_len(shard)),
-            ProbeIndex::CachedColumn {
-                intersect_outer: None,
-                table,
-                ..
-            } => Some(table.shard_len(shard)),
-            ProbeIndex::CachedTuple {
-                intersect_outer: Some(_),
-                ..
-            }
-            | ProbeIndex::CachedColumn {
-                intersect_outer: Some(_),
-                ..
-            }
-            | ProbeIndex::ProjectedRoot(..)
+            ProbeIndex::CachedTuple { table, .. } => Some(table.shard_len(shard)),
+            ProbeIndex::CachedColumn { table, .. } => Some(table.shard_len(shard)),
+            ProbeIndex::ProjectedRoot(..)
             | ProbeIndex::SmallColumn(..)
             | ProbeIndex::SmallExact(..)
             | ProbeIndex::Packed(..) => None,
@@ -2860,66 +2986,62 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
     }
 
-    /// Describe an eligible cached index that could drive a top-level
+    /// Describe an eligible scalar index that could drive a top-level
     /// generic-join intersection.
     ///
-    /// This mirrors the leader selection in [`Self::run_plan`].  Probers move
-    /// trie nodes out of `binding_info`, so restore every node before returning.
-    /// Every scan must cover its whole table through an unfiltered cached
-    /// hash/column index. Requiring this before constructing any prober avoids
-    /// building a dynamic nonleader index during discovery and then rebuilding
-    /// it in every shard job. Tiny or badly skewed leaders stay on the existing
-    /// path as well.
-    fn top_index_shards<'rows>(
+    /// This mirrors leader selection and child-index shape in
+    /// [`Self::run_plan`]. Probers move trie nodes out of `binding_info`, so
+    /// restore every node before returning. Persistent catalog indexes use
+    /// their physical hash shards, including when a dense timestamp range is
+    /// intersected at probe time. Projected and packed filtered roots use
+    /// disjoint ordinal ranges of the already-built scalar index, avoiding a
+    /// scan-and-project handoff copy. Tiny leaders stay on the existing path.
+    #[allow(clippy::too_many_arguments)]
+    fn top_index_partitions<'rows>(
         &self,
-        stage: &JoinStage,
-        prepared: &'rows [PreparedIndexSlot],
+        stages: &JoinStages,
+        stage_index: usize,
+        prepared: &'rows PreparedJoinIndexes,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        order: &InstrOrder,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         workers: usize,
-    ) -> Option<Vec<TopIndexPartition>>
+    ) -> Option<Vec<TopLevelPartition>>
     where
         'exec: 'rows,
     {
-        let JoinStage::Intersect { scans, .. } = stage else {
+        let JoinStage::Intersect { scans, .. } = &stages.instrs[stage_index] else {
             return None;
         };
-        if scans.is_empty() || workers <= 1 {
+        if scans.is_empty()
+            || workers <= 1
+            || estimate_size(&stages.instrs[stage_index], binding_info)
+                < MIN_TOP_INDEX_KEYS_PER_WORKER.saturating_mul(workers)
+        {
             return None;
         }
-        debug_assert_eq!(scans.len(), prepared.len());
-
-        // Mirror the cached/unfiltered branch in `get_index` without actually
-        // constructing any dynamic fallback indexes.
-        for scan in scans {
-            let rows = &binding_info.subsets[scan.atom];
-            let info = &self.db.tables[atoms[scan.atom].table];
-            if !rows.is_root()
-                || !scan.cs.is_empty()
-                || info.table.has_stale_rows()
-                || !columns_are_cacheable(info, &[scan.column])
-            {
-                return None;
-            }
-            let SubsetRef::Dense(subset) = rows.subset() else {
-                return None;
-            };
-            let Subset::Dense(whole_table) = info.table.all() else {
-                return None;
-            };
-            if subset != whole_table {
-                return None;
-            }
-        }
+        let stage_prepared = prepared.stage(stage_index);
+        debug_assert_eq!(scans.len(), stage_prepared.len());
+        let remaining_after_current = prepared
+            .all_stage_mask()
+            .map(|remaining| remaining & !(1u64 << stage_index));
 
         let mut leader = 0;
         let mut leader_size = usize::MAX;
         let mut probers = Vec::with_capacity(scans.len());
-        for (i, (scan, prepared)) in scans.iter().zip(prepared).enumerate() {
+        for (i, (scan, prepared_slot)) in scans.iter().zip(stage_prepared).enumerate() {
+            let tail = atom_tail_use(
+                scan.atom,
+                &stages.instrs,
+                prepared,
+                remaining_after_current,
+                order,
+                1,
+            );
             let prober = self.get_index(
                 atoms,
                 binding_info,
-                ProbeRequest::column(scan, false, ChildShape::Leaf, prepared),
+                ProbeRequest::column(scan, false, tail.child_shape, prepared_slot),
             );
             let size = prober.len();
             // The two-way hot path historically breaks ties in favor of the
@@ -2931,11 +3053,11 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
             probers.push(prober);
         }
-        let shards = probers[leader].shard_count().and_then(|shard_count| {
+        let partitions = if let Some(shard_count) = probers[leader].shard_count() {
             let shards = (0..shard_count)
                 .filter_map(|shard| {
                     let scan_size = probers[leader].shard_len(shard).unwrap_or(0);
-                    (scan_size != 0).then_some(TopIndexPartition { shard, scan_size })
+                    (scan_size != 0).then_some(TopLevelPartition::IndexShard { shard, scan_size })
                 })
                 .collect::<Vec<_>>();
             top_index_shape_is_eligible(
@@ -2945,24 +3067,27 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 MIN_TOP_INDEX_KEYS_PER_WORKER,
             )
             .then_some(shards)
-        });
+        } else {
+            top_index_range_partitions(leader_size, workers, MIN_TOP_INDEX_KEYS_PER_WORKER)
+        };
         for (scan, prober) in scans.iter().zip(probers) {
             binding_info.move_back(scan.atom, prober);
         }
-        shards
+        partitions
     }
 
-    /// Return a coarse partition for the variable already sorted to the top of
-    /// the join. Later variables are deliberately not promoted: benchmarking
-    /// found that probing and reordering them was not broadly beneficial.
-    fn select_top_index_shards<'rows>(
+    /// Return coarse partitions for the stage already sorted to the top of the
+    /// join. Cached scalar intersections use physical index shards, while
+    /// fused intersections use ordinal ranges of their cover subset. Later
+    /// stages are deliberately not promoted.
+    fn select_top_partitions<'rows>(
         &self,
         stages: &JoinStages,
         prepared: &'rows PreparedJoinIndexes,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         order: &InstrOrder,
         binding_info: &mut BindingInfo<'rows, 'exec>,
-    ) -> Option<Vec<TopIndexPartition>>
+    ) -> Option<Vec<TopLevelPartition>>
     where
         'exec: 'rows,
     {
@@ -2971,13 +3096,25 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
 
         let stage_index = order.get(0);
-        self.top_index_shards(
-            &stages.instrs[stage_index],
-            prepared.stage(stage_index),
-            atoms,
-            binding_info,
-            crate::parallel::current_num_threads(),
-        )
+        let workers = crate::parallel::current_num_threads();
+        let stage = &stages.instrs[stage_index];
+        match stage {
+            JoinStage::Intersect { .. } => self.top_index_partitions(
+                stages,
+                stage_index,
+                prepared,
+                atoms,
+                order,
+                binding_info,
+                workers,
+            ),
+            JoinStage::FusedIntersect { cover, .. } => top_cover_partitions(
+                binding_info.subsets[cover.to_index.atom].size(),
+                workers,
+                MIN_TOP_COVER_ROWS_PER_PARTITION,
+            ),
+            JoinStage::FusedIntersectMat { .. } => None,
+        }
     }
 
     /// Runs the free join plan, starting with the header.
@@ -3024,18 +3161,18 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
         let all_stages = prepared.all_stage_mask();
 
-        // A cached top index is already partitioned by hash. Schedule one
-        // coarse global job per nonempty shard and run each shard's subtree
-        // serially. Besides avoiding an intermediate key copy, this keeps
-        // related nested probes on one worker. Buffers that cannot construct an
-        // independent partition (the in-place executors) decline this path.
+        // Schedule each coarse top partition as a global job and run its
+        // complete subtree serially. Cached scalar indexes already provide
+        // physical hash shards; fused covers use borrowed ordinal ranges, so
+        // seminaive and other filtered roots need no row-ID copy. Buffers that
+        // cannot construct an independent partition decline this path.
         if !stages.instrs.is_empty()
             && action_buf.supports_global_partition()
-            && let Some(shards) =
-                self.select_top_index_shards(stages, prepared, atoms, &order, binding_info)
+            && let Some(partitions) =
+                self.select_top_partitions(stages, prepared, atoms, &order, binding_info)
         {
             let mut updates = FrameUpdates::with_capacity(0);
-            for partition in shards {
+            for partition in partitions {
                 let db = self.db;
                 let exec_state_for_factory = self.exec_state;
                 let exec_state_for_work = self.exec_state;
@@ -3099,8 +3236,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     ///
     /// This method takes the plan, mutable data structures for variable binding
     /// and staging actions, and `cur`, the current stage of the plan. A top-level
-    /// coarse partition also passes `index_partition`; recursive calls clear it
-    /// so only the first intersection is restricted to that physical shard.
+    /// coarse partition also passes `top_partition`; recursive calls clear it
+    /// so only the first intersection or fused cover scan is restricted.
     #[allow(clippy::too_many_arguments)]
     fn run_plan<'plan, 'rows, 'scope, A: NumericId + 'scope, BUF: ActionBuffer<'scope, 'exec, A>>(
         &self,
@@ -3111,7 +3248,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         instr_order: &mut InstrOrder,
         leaf_scans: &mut LeafScans,
         cur: usize,
-        index_partition: Option<TopIndexPartition>,
+        top_partition: Option<TopLevelPartition>,
         remaining_stages: Option<u64>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         action_buf: &mut BUF,
@@ -3146,9 +3283,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             );
             return;
         }
-        let mut cur_size = index_partition.map_or_else(
+        let mut cur_size = top_partition.map_or_else(
             || estimate_size(&stages.instrs[instr_order.get(cur)], binding_info),
-            |partition| partition.scan_size,
+            TopLevelPartition::scan_size,
         );
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // Re-evaluate the remaining suffix after observing the residuals
@@ -3250,7 +3387,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 // `drain_updates_parallel!` is a bit slower because of the additional
                 // `ExecutionState` clone.
                 if cur < free_join_fork_depth()
-                    && action_buf.supports_parallel_drain(cur, index_partition.is_some())
+                    && action_buf.supports_parallel_drain(cur, top_partition.is_some())
                 {
                     drain_updates_parallel!($updates)
                 } else {
@@ -3311,14 +3448,21 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
 
         // A sharded top-level job enumerates only its assigned physical index
-        // shard. Every recursive call clears `index_partition`, so this macro is
+        // shard. Every recursive call clears `top_partition`, so this macro is
         // used only by the leading prober of the initial `Intersect` stage.
         macro_rules! for_each_leader {
             ($prober:expr, $callback:expr) => {
-                if let Some(partition) = index_partition {
-                    $prober.for_each_shard(partition.shard, $callback)
-                } else {
-                    $prober.for_each($callback)
+                match top_partition {
+                    Some(TopLevelPartition::IndexShard { shard, .. }) => {
+                        $prober.for_each_shard(shard, $callback)
+                    }
+                    Some(TopLevelPartition::IndexRange {
+                        start, scan_size, ..
+                    }) => $prober.for_each_range(start, scan_size, $callback),
+                    None => $prober.for_each($callback),
+                    Some(TopLevelPartition::CoverRange { .. }) => {
+                        unreachable!("a cover range can only drive a fused intersection")
+                    }
                 }
             };
         }
@@ -3514,11 +3658,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
                     let vars = bind.iter().map(|(_, var)| *var).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                    let (scan_start, scan_size) =
+                        cover_scan_bounds(top_partition, cover_subset.size());
                     table.scan_project(
                         cover_subset,
                         &proj,
-                        Offset::new(0),
-                        usize::MAX,
+                        scan_start,
+                        scan_size,
                         &cover.constraints,
                         &mut buf,
                     );
@@ -3548,20 +3694,23 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
                     let cover_node = binding_info.unwrap_val(cover_atom);
                     let cover_subset = cover_node.subset();
-                    let mut offset = Offset::new(0);
+                    let (mut offset, mut scan_remaining) =
+                        cover_scan_bounds(top_partition, cover_subset.size());
                     let mut buffer = TaggedRowBuffer::new(bind.len());
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    loop {
+                    while scan_remaining != 0 {
                         buffer.clear();
                         let table = &self.db.tables[atoms[cover_atom].table].table;
+                        let scan_size = cmp::min(chunk_size, scan_remaining);
                         let next = table.scan_project(
                             cover_subset,
                             &proj,
                             offset,
-                            chunk_size,
+                            scan_size,
                             &cover.constraints,
                             &mut buffer,
                         );
+                        scan_remaining -= scan_size;
                         for (row, key) in buffer.iter() {
                             if keep_cover {
                                 updates.refine_atom_dense(
@@ -3578,11 +3727,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 drain_updates!(updates);
                             }
                         }
-                        if let Some(next) = next {
+                        if scan_remaining != 0 {
+                            let Some(next) = next else {
+                                break;
+                            };
                             offset = next;
-                            continue;
                         }
-                        break;
                     }
                     drain_updates!(updates, false);
                     // Restore the subsets we swapped out.
@@ -3638,20 +3788,23 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset();
-                let mut cur = Offset::new(0);
+                let (mut scan_offset, mut scan_remaining) =
+                    cover_scan_bounds(top_partition, cover_subset.size());
                 let mut buffer = TaggedRowBuffer::new(bind.len());
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                loop {
+                while scan_remaining != 0 {
                     buffer.clear();
                     let table = &self.db.tables[atoms[cover_atom].table].table;
+                    let scan_size = cmp::min(chunk_size, scan_remaining);
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
-                        cur,
-                        chunk_size,
+                        scan_offset,
+                        scan_size,
                         &cover.constraints,
                         &mut buffer,
                     );
+                    scan_remaining -= scan_size;
                     'mid: for (row, key) in buffer.iter() {
                         if keep_cover {
                             updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
@@ -3685,11 +3838,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             drain_updates!(updates);
                         }
                     }
-                    if let Some(next) = next {
-                        cur = next;
-                        continue;
+                    if scan_remaining != 0 {
+                        let Some(next) = next else {
+                            break;
+                        };
+                        scan_offset = next;
                     }
-                    break;
                 }
                 // TODO: special-case the scenario when the cover doesn't need
                 // deduping (and hence we can do a straight scan: e.g. when the
@@ -5408,10 +5562,11 @@ mod top_index_tests {
         AccessId, BindingInfo, CatalogContinuation, ContinuationPosition,
         ExperimentalTopShardPolicy, InstrOrder, PreparedIndexKind, PreparedIndexSlot,
         PreparedJoinIndexes, PreparedTailMasks, RootContinuationCache, RootProjection,
-        SmallColumnIndex, SmallColumnSink, TrieNode, cached_coarse_scan_morsel_size,
-        coarse_scan_morsel_size, for_each_stage_atom, materialization_is_live_in_tail,
-        packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner,
-        top_index_shape_is_eligible,
+        SmallColumnIndex, SmallColumnSink, TOP_INDEX_RANGES_PER_WORKER, TopLevelPartition,
+        TrieNode, cached_coarse_scan_morsel_size, coarse_scan_morsel_size, cover_scan_bounds,
+        for_each_stage_atom, materialization_is_live_in_tail, packed_child_shape_in_tail,
+        scan_atom_tail_use, sort_plan_by_size_inner, top_cover_partitions,
+        top_index_range_partitions, top_index_shape_is_eligible,
     };
     use crate::free_join::packed_trie::ChildShape;
 
@@ -6050,6 +6205,77 @@ mod top_index_tests {
         assert!(!top_index_shape_is_eligible(4, 10_000, 3, 64));
         assert!(top_index_shape_is_eligible(4, 256, 4, 64));
         assert!(top_index_shape_is_eligible(4, 40, 4, 10));
+    }
+
+    #[test]
+    fn fused_cover_partitions_are_complete_disjoint_and_coarse() {
+        assert!(top_cover_partitions(10_000, 1, 16).is_none());
+        assert!(top_cover_partitions(63, 4, 16).is_none());
+
+        for (cover_rows, workers) in [(64, 4), (1_003, 4), (585_276, 12)] {
+            let partitions = top_cover_partitions(cover_rows, workers, 16).unwrap();
+            assert!(partitions.len() <= workers * 4);
+
+            let mut expected_start = 0;
+            for partition in &partitions {
+                let TopLevelPartition::CoverRange { start, scan_size } = *partition else {
+                    panic!("fused covers must produce ordinal ranges")
+                };
+                assert_eq!(start, expected_start, "ranges must be contiguous");
+                assert!(scan_size > 0);
+                if start + scan_size != cover_rows {
+                    assert!(
+                        scan_size >= 16,
+                        "all non-tail partitions must remain coarse"
+                    );
+                }
+                expected_start += scan_size;
+            }
+            assert_eq!(expected_start, cover_rows, "ranges must cover every row");
+        }
+    }
+
+    #[test]
+    fn fused_cover_scan_bounds_preserve_nonzero_subset_origins() {
+        let partition = TopLevelPartition::CoverRange {
+            start: 17,
+            scan_size: 23,
+        };
+        let (start, len) = cover_scan_bounds(Some(partition), 100);
+        assert_eq!(start.index(), 17);
+        assert_eq!(len, 23);
+
+        let (start, len) = cover_scan_bounds(None, 100);
+        assert_eq!(start.index(), 0);
+        assert_eq!(len, 100);
+    }
+
+    #[test]
+    fn filtered_index_ranges_are_complete_disjoint_and_coarse() {
+        assert!(top_index_range_partitions(10_000, 1, 16).is_none());
+        assert!(top_index_range_partitions(63, 4, 16).is_none());
+
+        for (leader_keys, workers) in [(64, 4), (1_003, 4), (585_276, 12)] {
+            let partitions = top_index_range_partitions(leader_keys, workers, 16).unwrap();
+            assert!(partitions.len() <= workers * TOP_INDEX_RANGES_PER_WORKER);
+
+            let mut expected_start = 0;
+            for partition in &partitions {
+                let TopLevelPartition::IndexRange { start, scan_size } = *partition else {
+                    panic!("an unsharded index must produce key-ordinal ranges")
+                };
+                assert_eq!(start, expected_start, "ranges must be contiguous");
+                assert!(scan_size > 0);
+                if start + scan_size != leader_keys {
+                    assert!(
+                        scan_size >= 16,
+                        "all non-tail partitions must remain coarse"
+                    );
+                }
+                expected_start += scan_size;
+            }
+            assert_eq!(expected_start, leader_keys, "ranges must cover every key");
+        }
     }
 
     #[test]

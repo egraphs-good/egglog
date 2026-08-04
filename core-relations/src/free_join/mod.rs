@@ -12,6 +12,7 @@ use crate::{
     hash_index::IndexCatalog,
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
+use crossbeam_queue::SegQueue;
 use egglog_concurrency::{NotificationList, ResettableOnceLock};
 use smallvec::SmallVec;
 
@@ -261,15 +262,88 @@ dyn_clone::clone_trait_object!(ExternalFunction);
 pub(crate) type ExternalFunctions =
     DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunction>>;
 
+// Reservable counters give each execution state a disjoint range of values.
+// Values are then handed out by advancing the state's local `range`, avoiding
+// a shared atomic operation per value. Dropping the reservation returns its
+// unused suffix to `recycled`, and future states reuse those suffixes before
+// advancing the atomic high-water mark. A reservation size of one retains the
+// exact increment/read behavior needed by observable counters.
+struct Counter {
+    next: AtomicUsize,
+    reservation_size: usize,
+    recycled: SegQueue<std::ops::Range<usize>>,
+}
+
+impl Counter {
+    fn new(reservation_size: usize) -> Self {
+        assert!(reservation_size > 0);
+        Self {
+            next: AtomicUsize::new(0),
+            reservation_size,
+            recycled: SegQueue::new(),
+        }
+    }
+
+    fn take_reservation(&self) -> std::ops::Range<usize> {
+        if self.reservation_size == 1 {
+            let start = self.next.fetch_add(1, Ordering::Release);
+            return start..start + 1;
+        }
+        self.recycled.pop().unwrap_or_else(|| {
+            let start = self
+                .next
+                .fetch_add(self.reservation_size, Ordering::Release);
+            start..start + self.reservation_size
+        })
+    }
+}
+
+pub(crate) struct CounterReservation {
+    counter: Arc<Counter>,
+    range: std::ops::Range<usize>,
+}
+
+impl CounterReservation {
+    fn new(counter: Arc<Counter>) -> Self {
+        let range = counter.take_reservation();
+        Self { counter, range }
+    }
+
+    pub(crate) fn next(&mut self) -> usize {
+        if self.range.start == self.range.end {
+            self.range = self.counter.take_reservation();
+        }
+        let result = self.range.start;
+        self.range.start += 1;
+        result
+    }
+}
+
+impl Drop for CounterReservation {
+    fn drop(&mut self) {
+        if !self.range.is_empty() {
+            self.counter.recycled.push(self.range.clone());
+        }
+    }
+}
+
 #[derive(Default)]
-pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
+pub(crate) struct Counters(DenseIdMap<CounterId, Arc<Counter>>);
 
 impl Clone for Counters {
     fn clone(&self) -> Counters {
         let mut map = DenseIdMap::new();
         for (k, v) in self.0.iter() {
             // NB: we may want to experiment with Ordering::Relaxed here.
-            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)));
+            let cloned = Counter {
+                next: AtomicUsize::new(v.next.load(Ordering::SeqCst)),
+                reservation_size: v.reservation_size,
+                // The high-water mark already includes every recycled range,
+                // so omitting the free list is safe and avoids sharing
+                // reservations between independent database snapshots.
+                recycled: SegQueue::new(),
+            };
+            map.insert(k, Arc::new(cloned));
         }
         Counters(map)
     }
@@ -277,12 +351,15 @@ impl Clone for Counters {
 
 impl Counters {
     pub(crate) fn read(&self, ctr: CounterId) -> usize {
-        self.0[ctr].load(Ordering::Acquire)
+        self.0[ctr].next.load(Ordering::Acquire)
     }
     pub(crate) fn inc(&self, ctr: CounterId) -> usize {
         // We synchronize with `read_counter` but not with other increments.
         // NB: we may want to experiment with Ordering::Relaxed here.
-        self.0[ctr].fetch_add(1, Ordering::Release)
+        self.0[ctr].next.fetch_add(1, Ordering::Release)
+    }
+    pub(crate) fn take_reservation(&self, ctr: CounterId) -> CounterReservation {
+        CounterReservation::new(Arc::clone(&self.0[ctr]))
     }
 }
 
@@ -294,10 +371,8 @@ pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
     pub(crate) tables: DenseIdMap<TableId, TableInfo>,
-    // TODO: having a single AtomicUsize per counter can lead to contention. We
-    // should look into prefetching counters when creating a new ExecutionState
-    // and incrementing locally. Note that the batch size shouldn't be too big
-    // because we keep an array per id in the UF.
+    // Reservable counters amortize shared atomic increments across an
+    // ExecutionState. Exact counters retain one atomic increment per value.
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
@@ -500,7 +575,24 @@ impl Database {
     ///
     /// These counters can be used to generate unique ids as part of an action.
     pub fn add_counter(&mut self) -> CounterId {
-        self.counters.0.push(AtomicUsize::new(0))
+        self.counters.0.push(Arc::new(Counter::new(1)))
+    }
+
+    /// Create a counter whose increments from one [`ExecutionState`] are
+    /// allocated in local reservations.
+    ///
+    /// This is intended for fresh identifiers, where uniqueness matters but a
+    /// concurrent read need not equal the number of identifiers already
+    /// returned. Ordinary counters created by [`Database::add_counter`] retain
+    /// exact increment/read behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `reservation_size` is zero.
+    pub fn add_reservable_counter(&mut self, reservation_size: usize) -> CounterId {
+        self.counters
+            .0
+            .push(Arc::new(Counter::new(reservation_size)))
     }
 
     /// Increment the given counter and return its previous value.

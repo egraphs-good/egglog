@@ -5,7 +5,7 @@ use std::{
     cmp,
     hash::{Hash, Hasher},
     mem,
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
 };
 
 use crate::{
@@ -26,7 +26,7 @@ use crate::{
     parallel,
     parallel_heuristics::parallelize_index_construction,
     pool::{Pooled, with_pool_set},
-    row_buffer::{RowBuffer, TaggedRowBuffer},
+    row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
     table_spec::{ColumnId, Generation, Offset, TableVersion, WrappedTableRef},
 };
 
@@ -302,11 +302,149 @@ struct ColumnIndexShard {
     subsets: SubsetBuffer,
 }
 
+struct ColumnIndexPairSink {
+    pairs: Vec<(Value, RowId)>,
+}
+
+impl ColumnIndexPairSink {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            pairs: Vec::with_capacity(capacity),
+        }
+    }
+}
+
+impl RowSink for ColumnIndexPairSink {
+    fn add_row(&mut self, row_id: RowId, keys: &[Value]) {
+        for (i, key) in keys.iter().enumerate() {
+            // A value repeated across covered columns maps the row only once.
+            if !keys[..i].contains(key) {
+                self.pairs.push((*key, row_id));
+            }
+        }
+    }
+}
+
+struct SortedIndexChunk {
+    /// Ordered by (physical shard, value, row id) and de-duplicated.
+    pairs: Vec<(Value, RowId)>,
+    /// Each physical shard owns one contiguous range in `pairs`.
+    shard_ranges: IdVec<ShardId, std::ops::Range<usize>>,
+}
+
+fn value_shard_id(shard_data: ShardData, value: Value) -> ShardId {
+    let mut hasher = FxHasher::default();
+    value.hash(&mut hasher);
+    shard_data.shard_id(hasher.finish())
+}
+
+fn sort_index_chunk(mut pairs: Vec<(Value, RowId)>, shard_data: ShardData) -> SortedIndexChunk {
+    if pairs.is_empty() {
+        let mut shard_ranges = IdVec::with_capacity(shard_data.n_shards());
+        shard_ranges.resize_with(shard_data.n_shards(), || 0..0);
+        return SortedIndexChunk {
+            pairs,
+            shard_ranges,
+        };
+    }
+
+    // The scan emits rows in RowId order. The stable value radix sort therefore
+    // produces (Value, RowId) order without a RowId pass.
+    let original_len = pairs.len();
+    let mut scratch = vec![(Value::new_const(0), RowId::new_const(0)); original_len];
+    radix_sort_slice_by_value(&mut pairs, &mut scratch);
+    pairs.dedup();
+
+    // A final stable counting pass by physical shard turns each shard's values
+    // into one contiguous run while preserving (Value, RowId) order within it.
+    let mut counts = vec![0usize; shard_data.n_shards()];
+    for &(value, _) in &pairs {
+        counts[value_shard_id(shard_data, value).index()] += 1;
+    }
+    let mut starts = counts;
+    let mut prefix = 0;
+    for count in &mut starts {
+        let size = *count;
+        *count = prefix;
+        prefix += size;
+    }
+    let mut next = starts.clone();
+    for &pair in &pairs {
+        let shard = value_shard_id(shard_data, pair.0).index();
+        scratch[next[shard]] = pair;
+        next[shard] += 1;
+    }
+    scratch.truncate(pairs.len());
+    mem::swap(&mut pairs, &mut scratch);
+
+    let mut shard_ranges = IdVec::with_capacity(shard_data.n_shards());
+    for (start, end) in starts.into_iter().zip(next) {
+        shard_ranges.push(start..end);
+    }
+    SortedIndexChunk {
+        pairs,
+        shard_ranges,
+    }
+}
+
+const MIN_COARSE_INDEX_SCAN_ROWS: usize = 256;
+// Below this worker count, the radix-sort setup costs more than it saves over
+// the existing fine-grained scan-and-split path.
+const MIN_COARSE_INDEX_SCAN_THREADS: usize = 8;
+
+fn coarse_index_scan_partition_size(scan_size: usize, workers: usize) -> usize {
+    scan_size
+        .div_ceil(workers.max(1))
+        .max(MIN_COARSE_INDEX_SCAN_ROWS)
+}
+
+fn subset_partition<'a>(subset: SubsetRef<'a>, start: usize, end: usize) -> SubsetRef<'a> {
+    debug_assert!(start <= end);
+    debug_assert!(end <= subset.size());
+    match subset {
+        SubsetRef::Dense(range) => SubsetRef::Dense(OffsetRange::new(
+            RowId::from_usize(range.start.index() + start),
+            RowId::from_usize(range.start.index() + end),
+        )),
+        SubsetRef::Sparse(rows) => SubsetRef::Sparse(rows.subslice(start, end)),
+    }
+}
+
 impl Clone for ColumnIndexShard {
     fn clone(&self) -> Self {
         ColumnIndexShard {
             table: Pooled::cloned(&self.table),
             subsets: self.subsets.clone(),
+        }
+    }
+}
+
+impl ColumnIndexShard {
+    fn merge_sorted_pairs(&mut self, pairs: &[(Value, RowId)]) {
+        let mut start = 0;
+        while start < pairs.len() {
+            let key = pairs[start].0;
+            let mut end = start + 1;
+            while end < pairs.len() && pairs[end].0 == key {
+                end += 1;
+            }
+            let run = &pairs[start..end];
+            match self.table.entry(key) {
+                Entry::Occupied(mut occupied) => {
+                    // SAFETY: every sparse subset in this table comes from
+                    // `self.subsets`, and source partitions are consumed in
+                    // ascending RowId order.
+                    unsafe {
+                        occupied
+                            .get_mut()
+                            .merge_sorted_pairs(run, &mut self.subsets);
+                    }
+                }
+                Entry::Vacant(vacant) => {
+                    vacant.insert(buffered_subset_from_sorted_pairs(run, &mut self.subsets));
+                }
+            }
+            start = end;
         }
     }
 }
@@ -374,39 +512,87 @@ impl IndexBase for ColumnIndex {
     }
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
-        const BATCH_SIZE: usize = 1024;
         let shard_data = self.shard_data;
-        let mut queues = IdVec::<ShardId, Mutex<Vec<(RowId, TaggedRowBuffer)>>>::with_capacity(
-            shard_data.n_shards(),
-        );
-        queues.resize_with(shard_data.n_shards(), || {
-            Mutex::new(Vec::with_capacity((subset.size() / BATCH_SIZE) + 1))
-        });
-        let split_buf = |buf: TaggedRowBuffer| {
-            let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
-            split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(1));
-            for (row_id, keys) in buf.iter() {
-                for (i, key) in keys.iter().enumerate() {
-                    // Match `add_row`: a value repeated across this row's covered columns is
-                    // recorded once, so a value's subset never holds a duplicate row id.
-                    if keys[..i].contains(key) {
-                        continue;
-                    }
-                    shard_data
-                        .get_shard_mut(*key, &mut split)
-                        .add_row(row_id, &[*key]);
-                }
-            }
-            for (shard_id, buf) in split.drain() {
-                if buf.is_empty() {
-                    continue;
-                }
-                let first = buf.get_row(RowId::new(0)).0;
-                queues[shard_id].lock().unwrap().push((first, buf));
-            }
-        };
+        let workers = parallel::current_num_threads();
+        let use_coarse_scan = workers >= MIN_COARSE_INDEX_SCAN_THREADS;
+        let partition_size = coarse_index_scan_partition_size(subset.size(), workers);
+        let n_partitions = subset.size().div_ceil(partition_size);
 
         run_in_index_thread_pool(|| {
+            if use_coarse_scan {
+                // A fixed slot per logical partition transfers ownership of
+                // each sorted backing vector out of its producer task. After
+                // the scope joins, shard workers can borrow their contiguous
+                // ranges directly without Arc ownership or another copy.
+                let chunks = (0..n_partitions)
+                    .map(|_| OnceLock::new())
+                    .collect::<Vec<OnceLock<SortedIndexChunk>>>();
+                egglog_concurrency::scope(|inner| {
+                    for (partition_id, start) in
+                        (0..subset.size()).step_by(partition_size).enumerate()
+                    {
+                        let end = cmp::min(start + partition_size, subset.size());
+                        let partition = subset_partition(subset, start, end);
+                        let slot = &chunks[partition_id];
+                        inner.spawn(move |_| {
+                            let capacity = partition.size().saturating_mul(cols.len());
+                            let mut sink = ColumnIndexPairSink::with_capacity(capacity);
+                            let next = table.scan_project(
+                                partition,
+                                cols,
+                                Offset::new(0),
+                                usize::MAX,
+                                &[],
+                                &mut sink,
+                            );
+                            debug_assert!(next.is_none());
+                            slot.set(sort_index_chunk(sink.pairs, shard_data))
+                                .unwrap_or_else(|_| unreachable!("partition slot set twice"));
+                        });
+                    }
+                });
+                parallel::for_each_id_vec_mut(&mut self.shards, |shard_id, shard| {
+                    for slot in &chunks {
+                        let chunk = slot
+                            .get()
+                            .expect("all index scan partitions completed before population");
+                        let range = chunk.shard_ranges[shard_id].clone();
+                        shard.merge_sorted_pairs(&chunk.pairs[range]);
+                    }
+                });
+                return;
+            }
+
+            const BATCH_SIZE: usize = 1024;
+            let mut queues = IdVec::<ShardId, Mutex<Vec<(RowId, TaggedRowBuffer)>>>::with_capacity(
+                shard_data.n_shards(),
+            );
+            queues.resize_with(shard_data.n_shards(), || {
+                Mutex::new(Vec::with_capacity((subset.size() / BATCH_SIZE) + 1))
+            });
+            let split_buf = |buf: TaggedRowBuffer| {
+                let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
+                split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(1));
+                for (row_id, keys) in buf.iter() {
+                    for (i, key) in keys.iter().enumerate() {
+                        // Match `add_row`: a value repeated across this row's covered columns is
+                        // recorded once, so a value's subset never holds a duplicate row id.
+                        if keys[..i].contains(key) {
+                            continue;
+                        }
+                        shard_data
+                            .get_shard_mut(*key, &mut split)
+                            .add_row(row_id, &[*key]);
+                    }
+                }
+                for (shard_id, buf) in split.drain() {
+                    if buf.is_empty() {
+                        continue;
+                    }
+                    let first = buf.get_row(RowId::new(0)).0;
+                    queues[shard_id].lock().unwrap().push((first, buf));
+                }
+            };
             egglog_concurrency::scope(|inner| {
                 let mut cur = Offset::new(0);
                 loop {
@@ -422,7 +608,6 @@ impl IndexBase for ColumnIndex {
                     }
                 }
             });
-
             parallel::for_each_id_vec_mut(&mut self.shards, |shard_id, shard| {
                 // Sort the vector by start row id to ensure we populate subsets in sorted order.
                 let mut vec = queues[shard_id].lock().unwrap();
@@ -727,25 +912,11 @@ impl ColumnIndex {
         while i < pairs.len() {
             let key = pairs[i].0;
             let start = i;
-            let mut first = pairs[i].1;
-            let mut last = pairs[i].1;
             while i < pairs.len() && pairs[i].0 == key {
-                last = cmp::max(last, pairs[i].1);
-                first = cmp::min(first, pairs[i].1);
                 i += 1;
             }
             let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
-            let count = i - start;
-            let buffered = if last.rep() - first.rep() == (count - 1) as u32 {
-                // If the row ids are contiguous, we can represent the subset as a dense range
-                // to avoid allocations
-                BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
-            } else {
-                let bv = shard
-                    .subsets
-                    .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
-                BufferedSubset::Sparse(bv)
-            };
+            let buffered = buffered_subset_from_sorted_pairs(&pairs[start..i], &mut shard.subsets);
             shard.table.insert(key, buffered);
         }
     }
@@ -1168,6 +1339,48 @@ impl SubsetBuffer {
         res
     }
 
+    fn extend_vec(
+        &mut self,
+        vec: BufferedVec,
+        rows: impl ExactSizeIterator<Item = RowId>,
+    ) -> BufferedVec {
+        let old_len = vec.len();
+        let added = rows.len();
+        if added == 0 {
+            return vec;
+        }
+        let new_len = old_len + added;
+        let old_capacity = old_len.next_power_of_two();
+        if new_len <= old_capacity {
+            let mut end = vec.1;
+            for row in rows {
+                self.buf[end.index()] = row;
+                end = end.inc();
+            }
+            return BufferedVec(vec.0, end);
+        }
+
+        let start = if let Some(start) = self.free_list.get_size_class(new_len).pop() {
+            start
+        } else {
+            let start = BufferIndex::from_usize(self.buf.len());
+            self.buf.resize(
+                start.index() + new_len.next_power_of_two(),
+                RowId::new(u32::MAX),
+            );
+            start
+        };
+        self.buf
+            .copy_within(vec.0.index()..vec.1.index(), start.index());
+        let mut end = BufferIndex::from_usize(start.index() + old_len);
+        for row in rows {
+            self.buf[end.index()] = row;
+            end = end.inc();
+        }
+        self.return_vec(vec);
+        BufferedVec(start, end)
+    }
+
     fn make_ref<'a>(&'a self, vec: &BufferedVec) -> SubsetRef<'a> {
         // SAFETY: if `vec` is a valid index into self.buf, it will be sorted.
         //
@@ -1240,6 +1453,50 @@ impl BufferedSubset {
         }
     }
 
+    /// Merge one nonempty `(Value, RowId)` run whose rows are strictly sorted
+    /// and newer than every row already in this subset.
+    ///
+    /// *Safety:* callers must ensure that `self` is either dense or comes from
+    /// `buf`, and that the ordering preconditions above hold.
+    unsafe fn merge_sorted_pairs(&mut self, pairs: &[(Value, RowId)], buf: &mut SubsetBuffer) {
+        debug_assert!(!pairs.is_empty());
+        debug_assert!(
+            pairs
+                .windows(2)
+                .all(|pair| { pair[0].0 == pair[1].0 && pair[0].1 < pair[1].1 })
+        );
+        let first = pairs[0].1;
+        let last = pairs[pairs.len() - 1].1;
+        let incoming_is_dense = last.rep() - first.rep() == u32::try_from(pairs.len() - 1).unwrap();
+
+        match self {
+            BufferedSubset::Dense(range) if range.start == range.end => {
+                *self = buffered_subset_from_sorted_pairs(pairs, buf);
+            }
+            BufferedSubset::Dense(range) => {
+                debug_assert!(range.end <= first);
+                if range.end == first && incoming_is_dense {
+                    range.end = last.inc();
+                } else {
+                    let old_start = range.start.rep();
+                    let old_len = range.end.index() - range.start.index();
+                    let rows = (0..old_len + pairs.len()).map(|i| {
+                        if i < old_len {
+                            RowId::new(old_start + u32::try_from(i).unwrap())
+                        } else {
+                            pairs[i - old_len].1
+                        }
+                    });
+                    *self = BufferedSubset::Sparse(buf.new_vec(rows));
+                }
+            }
+            BufferedSubset::Sparse(vec) => {
+                debug_assert!(buf.buf[vec.1.index() - 1] < first);
+                *vec = buf.extend_vec(mem::take(vec), pairs.iter().map(|&(_, row)| row));
+            }
+        }
+    }
+
     fn empty() -> Self {
         BufferedSubset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)))
     }
@@ -1253,6 +1510,25 @@ impl BufferedSubset {
             BufferedSubset::Dense(range) => SubsetRef::Dense(*range),
             BufferedSubset::Sparse(vec) => buf.make_ref(vec),
         }
+    }
+}
+
+fn buffered_subset_from_sorted_pairs(
+    pairs: &[(Value, RowId)],
+    buf: &mut SubsetBuffer,
+) -> BufferedSubset {
+    debug_assert!(!pairs.is_empty());
+    debug_assert!(
+        pairs
+            .windows(2)
+            .all(|pair| { pair[0].0 == pair[1].0 && pair[0].1 < pair[1].1 })
+    );
+    let first = pairs[0].1;
+    let last = pairs[pairs.len() - 1].1;
+    if last.rep() - first.rep() == u32::try_from(pairs.len() - 1).unwrap() {
+        BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
+    } else {
+        BufferedSubset::Sparse(buf.new_vec(pairs.iter().map(|&(_, row)| row)))
     }
 }
 
