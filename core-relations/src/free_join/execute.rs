@@ -912,6 +912,61 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
     }
 }
 
+/// Seek `key` in a sorted scalar index without moving backward.
+///
+/// Exponential search followed by a bounded binary search avoids walking a
+/// large target when the sorted query is sparse.
+fn seek_sorted_key(
+    key: Value,
+    target_len: usize,
+    target_cursor: &mut usize,
+    target_at: impl Fn(usize) -> Value,
+) -> bool {
+    if *target_cursor >= target_len {
+        return false;
+    }
+
+    let current = target_at(*target_cursor);
+    match current.cmp(&key) {
+        cmp::Ordering::Equal => true,
+        cmp::Ordering::Greater => false,
+        cmp::Ordering::Less => {
+            let base = *target_cursor;
+            let mut step = 1usize;
+            while let Some(position) = base.checked_add(step).filter(|&pos| pos < target_len) {
+                if target_at(position) >= key {
+                    break;
+                }
+                let Some(next) = step.checked_mul(2) else {
+                    step = target_len;
+                    break;
+                };
+                step = next;
+            }
+
+            let previous = step / 2;
+            let mut lo = base
+                .saturating_add(previous)
+                .saturating_add(1)
+                .min(target_len);
+            let mut hi = base.saturating_add(step).saturating_add(1).min(target_len);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if target_at(mid) < key {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            *target_cursor = lo;
+            if lo >= target_len {
+                return false;
+            }
+            target_at(lo) == key
+        }
+    }
+}
+
 /// The rows currently associated with an atom during one plan execution.
 /// Roots retain ownership of their header-filtered subset. An indexed cursor
 /// borrows a first-level group from either a prepared persistent index or a
@@ -1016,6 +1071,31 @@ enum ProbeIndex<'ctx, 'rows, 'exec> {
     SmallColumn(SmallColumnIndex),
     SmallExact(SmallExactProbe<'ctx>),
     Packed(PackedProbe<'ctx, 'rows, 'exec>),
+}
+
+#[derive(Clone, Copy)]
+enum SortedScalarProbe<'a, 'exec> {
+    Projected(&'a RootProjection),
+    Small(&'a SmallColumnIndex),
+    Packed(&'a PackedTrieNode<'exec>),
+}
+
+impl SortedScalarProbe<'_, '_> {
+    fn len(self) -> usize {
+        match self {
+            Self::Projected(index) => index.len(),
+            Self::Small(index) => index.n_keys,
+            Self::Packed(index) => index.values().len(),
+        }
+    }
+
+    fn value_at(self, key_index: usize) -> Value {
+        match self {
+            Self::Projected(index) => index.value_at(key_index),
+            Self::Small(index) => index.keys[key_index],
+            Self::Packed(index) => index.values()[key_index],
+        }
+    }
 }
 
 /// A successful probe either carries rows needed by a later stage or only
@@ -1396,6 +1476,49 @@ where
             ProbeIndex::Packed(packed) => packed
                 .get(key)
                 .map(|rows| Self::keep_or_discard(rows, self.keep_rows)),
+        }
+    }
+
+    fn sorted_scalar_probe(&self) -> Option<SortedScalarProbe<'_, 'exec>> {
+        match &self.ix {
+            ProbeIndex::ProjectedRoot(projected) if projected.columns.len() == 1 => {
+                Some(SortedScalarProbe::Projected(projected.first))
+            }
+            ProbeIndex::SmallColumn(index) => Some(SortedScalarProbe::Small(index)),
+            ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
+                Some(SortedScalarProbe::Packed(packed.first))
+            }
+            ProbeIndex::CachedTuple { .. }
+            | ProbeIndex::CachedColumn { .. }
+            | ProbeIndex::ProjectedRoot(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..) => None,
+        }
+    }
+
+    fn sorted_match_at(&self, key_index: usize) -> ProbeMatch<'rows, 'exec> {
+        match &self.ix {
+            ProbeIndex::ProjectedRoot(projected) if projected.columns.len() == 1 => {
+                Self::keep_or_discard(projected.scalar_rows(key_index), self.keep_rows)
+            }
+            ProbeIndex::SmallColumn(index) => {
+                if self.keep_rows {
+                    ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                } else {
+                    ProbeMatch::Present
+                }
+            }
+            ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
+                let rows = AtomRows::Packed(PackedCursor::new(packed.first, key_index));
+                Self::keep_or_discard(rows, self.keep_rows)
+            }
+            ProbeIndex::CachedTuple { .. }
+            | ProbeIndex::CachedColumn { .. }
+            | ProbeIndex::ProjectedRoot(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..) => {
+                unreachable!("only a sorted scalar probe has a match ordinal")
+            }
         }
     }
 
@@ -3558,17 +3681,114 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         };
 
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    for_each_leader!(smaller, |val, small_sub| {
-                        if let Some(large_sub) = larger.get_subset(val) {
-                            updates.push_binding(*var, val[0]);
-                            small_sub.refine(smaller_scan.atom, &mut updates);
-                            large_sub.refine(larger_scan.atom, &mut updates);
-                            updates.finish_frame();
-                            if updates.frames() >= chunk_size {
-                                drain_updates!(updates);
+                    if let (Some(smaller_keys), Some(larger_keys)) =
+                        (smaller.sorted_scalar_probe(), larger.sorted_scalar_probe())
+                    {
+                        // Both sides expose sorted scalar arrays. Leapfrog through the larger
+                        // side directly, preserving the selected leader and its top-level ordinal
+                        // partition. Successful ordinals reconstruct the same ProbeMatch as a
+                        // scalar lookup, including row-carrying continuations needed by the tail.
+                        let leader_range = match top_partition {
+                            Some(TopLevelPartition::IndexRange {
+                                start, scan_size, ..
+                            }) => start..start + scan_size,
+                            None => 0..smaller_keys.len(),
+                            Some(TopLevelPartition::IndexShard { .. }) => {
+                                unreachable!("a sorted scalar leader is never hash-sharded")
+                            }
+                            Some(TopLevelPartition::CoverRange { .. }) => {
+                                unreachable!("a cover range cannot drive an intersection")
+                            }
+                        };
+                        debug_assert!(leader_range.end <= smaller_keys.len());
+                        let both_tiny = matches!(smaller_keys, SortedScalarProbe::Small(..))
+                            && matches!(larger_keys, SortedScalarProbe::Small(..));
+                        let comparable_sizes =
+                            larger_keys.len() <= leader_range.len().saturating_mul(4);
+                        if both_tiny || comparable_sizes {
+                            // A plain two-finger merge is cheaper for tiny recursive residuals
+                            // and similarly sized packed arrays, where a linear pass has better
+                            // locality than setting up galloping bounds for every key.
+                            let mut leader_index = leader_range.start;
+                            let mut target_index = 0;
+                            if leader_index != 0 && leader_index < leader_range.end {
+                                let first_key = smaller_keys.value_at(leader_index);
+                                seek_sorted_key(
+                                    first_key,
+                                    larger_keys.len(),
+                                    &mut target_index,
+                                    |key_index| larger_keys.value_at(key_index),
+                                );
+                            }
+                            while leader_index < leader_range.end
+                                && target_index < larger_keys.len()
+                            {
+                                let leader_key = smaller_keys.value_at(leader_index);
+                                let target_key = larger_keys.value_at(target_index);
+                                match leader_key.cmp(&target_key) {
+                                    cmp::Ordering::Less => leader_index += 1,
+                                    cmp::Ordering::Greater => target_index += 1,
+                                    cmp::Ordering::Equal => {
+                                        updates.push_binding(*var, leader_key);
+                                        smaller
+                                            .sorted_match_at(leader_index)
+                                            .refine(smaller_scan.atom, &mut updates);
+                                        larger
+                                            .sorted_match_at(target_index)
+                                            .refine(larger_scan.atom, &mut updates);
+                                        updates.finish_frame();
+                                        if updates.frames() >= chunk_size {
+                                            drain_updates!(updates);
+                                        }
+                                        leader_index += 1;
+                                        target_index += 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Retain one target cursor, but gallop across gaps rather than
+                            // scanning the larger side. This protects highly skewed joins where
+                            // the smaller sorted side has only a few widely spaced keys.
+                            let mut target_cursor = 0;
+                            for leader_index in leader_range {
+                                let key = smaller_keys.value_at(leader_index);
+                                if seek_sorted_key(
+                                    key,
+                                    larger_keys.len(),
+                                    &mut target_cursor,
+                                    |key_index| larger_keys.value_at(key_index),
+                                ) {
+                                    updates.push_binding(*var, key);
+                                    smaller
+                                        .sorted_match_at(leader_index)
+                                        .refine(smaller_scan.atom, &mut updates);
+                                    larger
+                                        .sorted_match_at(target_cursor)
+                                        .refine(larger_scan.atom, &mut updates);
+                                    updates.finish_frame();
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates!(updates);
+                                    }
+                                    target_cursor += 1;
+                                } else if target_cursor == larger_keys.len() {
+                                    break;
+                                }
                             }
                         }
-                    });
+                    } else {
+                        // Catalog hash indexes and unsupported shapes retain the scalar path.
+                        for_each_leader!(smaller, |val, small_sub| {
+                            if let Some(large_sub) = larger.get_subset(val) {
+                                updates.push_binding(*var, val[0]);
+                                small_sub.refine(smaller_scan.atom, &mut updates);
+                                large_sub.refine(larger_scan.atom, &mut updates);
+                                updates.finish_frame();
+                                if updates.frames() >= chunk_size {
+                                    drain_updates!(updates);
+                                }
+                            }
+                        });
+                    }
                     drain_updates!(updates, false);
 
                     binding_info.move_back(a.atom, a_prober);
@@ -5537,6 +5757,7 @@ impl<'rows, 'exec> LocalState<'rows, 'exec> {
 #[cfg(test)]
 mod top_index_tests {
     use std::{
+        cell::Cell,
         mem,
         sync::{
             Arc, Barrier,
@@ -5559,14 +5780,15 @@ mod top_index_tests {
     };
 
     use super::{
-        AccessId, BindingInfo, CatalogContinuation, ContinuationPosition,
+        AccessId, AtomRows, BindingInfo, CatalogContinuation, ContinuationPosition,
         ExperimentalTopShardPolicy, InstrOrder, PreparedIndexKind, PreparedIndexSlot,
-        PreparedJoinIndexes, PreparedTailMasks, RootContinuationCache, RootProjection,
-        SmallColumnIndex, SmallColumnSink, TOP_INDEX_RANGES_PER_WORKER, TopLevelPartition,
-        TrieNode, cached_coarse_scan_morsel_size, coarse_scan_morsel_size, cover_scan_bounds,
-        for_each_stage_atom, materialization_is_live_in_tail, packed_child_shape_in_tail,
-        scan_atom_tail_use, sort_plan_by_size_inner, top_cover_partitions,
-        top_index_range_partitions, top_index_shape_is_eligible,
+        PreparedJoinIndexes, PreparedTailMasks, ProbeIndex, ProbeMatch, Prober,
+        RootContinuationCache, RootProjection, SmallColumnIndex, SmallColumnSink,
+        TOP_INDEX_RANGES_PER_WORKER, TopLevelPartition, TrieNode, cached_coarse_scan_morsel_size,
+        coarse_scan_morsel_size, cover_scan_bounds, for_each_stage_atom,
+        materialization_is_live_in_tail, packed_child_shape_in_tail, scan_atom_tail_use,
+        seek_sorted_key, sort_plan_by_size_inner, top_cover_partitions, top_index_range_partitions,
+        top_index_shape_is_eligible,
     };
     use crate::free_join::packed_trie::ChildShape;
 
@@ -5699,6 +5921,106 @@ mod top_index_tests {
                 .index(),
             6
         );
+    }
+
+    #[test]
+    fn sorted_multi_probe_keeps_a_monotone_cursor_across_batches() {
+        let target = [1, 2, 4, 8, 9, 20, 21].map(Value::from_usize);
+        let first = [0, 2, 3, 8].map(Value::from_usize);
+        let second = [9, 10, 20, 22].map(Value::from_usize);
+        let mut cursor = 0;
+        let mut matches = Vec::new();
+
+        for (input, key) in first.into_iter().enumerate() {
+            if seek_sorted_key(key, target.len(), &mut cursor, |index| target[index]) {
+                matches.push((input, cursor));
+                cursor += 1;
+            }
+        }
+        assert_eq!(matches, vec![(1, 1), (3, 3)]);
+        assert_eq!(cursor, 4);
+
+        matches.clear();
+        for (input, key) in second.into_iter().enumerate() {
+            if seek_sorted_key(key, target.len(), &mut cursor, |index| target[index]) {
+                matches.push((input, cursor));
+                cursor += 1;
+            }
+        }
+        assert_eq!(matches, vec![(0, 4), (2, 5)]);
+        assert_eq!(cursor, target.len());
+    }
+
+    #[test]
+    fn sorted_multi_probe_gallops_across_skewed_gaps() {
+        let target_len = 100_000;
+        let keys = [2, 199_998].map(Value::from_usize);
+        let calls = Cell::new(0);
+        let mut cursor = 0;
+        let mut matches = Vec::new();
+
+        for (input, key) in keys.into_iter().enumerate() {
+            if seek_sorted_key(key, target_len, &mut cursor, |index| {
+                calls.set(calls.get() + 1);
+                Value::from_usize(index * 2)
+            }) {
+                matches.push((input, cursor));
+                cursor += 1;
+            }
+        }
+
+        assert_eq!(matches, vec![(0, 1), (1, 99_999)]);
+        assert!(
+            calls.get() < 100,
+            "galloping should not linearly scan a large key gap"
+        );
+    }
+
+    #[test]
+    fn sorted_seek_reads_an_immediate_hit_once() {
+        let target = [2, 4, 6].map(Value::from_usize);
+        let calls = Cell::new(0);
+        let mut cursor = 0;
+        assert!(seek_sorted_key(
+            Value::from_usize(2),
+            target.len(),
+            &mut cursor,
+            |index| {
+                calls.set(calls.get() + 1);
+                target[index]
+            }
+        ));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn sorted_match_ordinal_reconstructs_row_carrying_small_probe() {
+        let mut sink = SmallColumnSink::default();
+        for (value, row) in [(1, 4), (2, 9), (2, 7)] {
+            sink.rows[sink.len] = (Value::from_usize(value), crate::RowId::from_usize(row));
+            sink.len += 1;
+        }
+        let index = SmallColumnIndex::from_projected(sink);
+        let source = AtomRows::Inline(index.rows_at(0));
+        let mut prober = Prober {
+            source,
+            ix: ProbeIndex::SmallColumn(index),
+            keep_rows: true,
+        };
+
+        let ProbeMatch::Rows(AtomRows::Inline(rows)) = prober.sorted_match_at(1) else {
+            panic!("a row-carrying small probe must reconstruct inline rows")
+        };
+        assert_eq!(
+            rows.rows()
+                .iter()
+                .map(|row| row.index())
+                .collect::<Vec<_>>(),
+            vec![7, 9]
+        );
+
+        prober.keep_rows = false;
+        assert!(matches!(prober.sorted_match_at(1), ProbeMatch::Present));
     }
 
     #[test]
