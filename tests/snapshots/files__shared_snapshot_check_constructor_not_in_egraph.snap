@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+assertion_line: 94
+expression: snapshot_content_across_treatments
+---
+((Num 1))
