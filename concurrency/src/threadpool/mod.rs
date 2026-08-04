@@ -3,11 +3,12 @@
 //! [`ThreadPool`] owns a fixed set of primary worker threads. Each worker
 //! owns a private deque in addition to receiving boxed `'static` jobs from a
 //! shared channel. Local work is pushed and popped at the back, giving the
-//! owner depth-first execution; when another worker is stalled, half of the
-//! oldest local work is donated from the front to the shared queue. A primary
-//! worker that blocks waiting for nested scoped work helps drain its local
-//! deque first and then the shared queue until that nested scope completes, so
-//! the pool does not lose a worker while work it needs may still be queued.
+//! owner depth-first execution. At a bounded cadence, a worker with stalled
+//! peers packages the oldest half of its private work as one global batch. A
+//! primary worker that blocks waiting for nested scoped work helps drain its
+//! local deque first and then the shared queue until that nested scope
+//! completes, so the pool does not lose a worker while work it needs may still
+//! be queued.
 //! [`Scope`] provides the safe scoped API on top of those `'static` jobs by
 //! erasing task lifetimes when work is queued, then waiting for all work in the
 //! scope before returning to the caller.
@@ -120,6 +121,7 @@ const COMPLETED_MASK: u64 = u32::MAX as u64;
 // Keep inline helping bounded so pathological nested scopes move onto a fresh
 // stack before exhausting the current worker stack.
 const MAX_INLINE_SCOPE_HELP_DEPTH: usize = 64;
+const LOCAL_DONATION_INTERVAL: Duration = Duration::from_millis(10);
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 type ScopedJob<'scope> = Box<dyn FnOnce() + Send + 'scope>;
@@ -150,6 +152,8 @@ pub struct SchedulerMetrics {
     pub local_pops: u64,
     /// Jobs moved from private queues to the global queue.
     pub donated_jobs: u64,
+    /// Global queue batches created from donated private jobs.
+    pub donation_batches: u64,
     /// Aggregate wall-clock time for which primary workers were stalled.
     ///
     /// This includes the elapsed portion of stalls that are still in progress
@@ -179,6 +183,9 @@ impl SchedulerMetrics {
             local_pushes: self.local_pushes.saturating_sub(earlier.local_pushes),
             local_pops: self.local_pops.saturating_sub(earlier.local_pops),
             donated_jobs: self.donated_jobs.saturating_sub(earlier.donated_jobs),
+            donation_batches: self
+                .donation_batches
+                .saturating_sub(earlier.donation_batches),
             stalled_time: self
                 .stalled_time
                 .checked_sub(earlier.stalled_time)
@@ -488,6 +495,7 @@ struct WorkerInstrumentation {
     local_pushes: AtomicU64,
     local_pops: AtomicU64,
     donated_jobs: AtomicU64,
+    donation_batches: AtomicU64,
     max_local_queue_depth: AtomicUsize,
     stall_timer: Mutex<StallTimerState>,
 }
@@ -498,6 +506,7 @@ impl WorkerInstrumentation {
             local_pushes: AtomicU64::new(0),
             local_pops: AtomicU64::new(0),
             donated_jobs: AtomicU64::new(0),
+            donation_batches: AtomicU64::new(0),
             max_local_queue_depth: AtomicUsize::new(0),
             stall_timer: Mutex::new(StallTimerState::default()),
         }
@@ -559,6 +568,11 @@ impl SchedulerInstrumentation {
             .iter()
             .map(|worker| worker.donated_jobs.load(Ordering::Relaxed))
             .sum();
+        let donation_batches = self
+            .workers
+            .iter()
+            .map(|worker| worker.donation_batches.load(Ordering::Relaxed))
+            .sum();
         let max_local_queue_depth = self
             .workers
             .iter()
@@ -572,6 +586,7 @@ impl SchedulerInstrumentation {
             local_pushes,
             local_pops,
             donated_jobs,
+            donation_batches,
             stalled_time,
             stalled_workers: self.stalled_workers.load(Ordering::Acquire),
             max_local_queue_depth,
@@ -595,6 +610,7 @@ impl SchedulerInstrumentation {
             worker.local_pushes.store(0, Ordering::Relaxed);
             worker.local_pops.store(0, Ordering::Relaxed);
             worker.donated_jobs.store(0, Ordering::Relaxed);
+            worker.donation_batches.store(0, Ordering::Relaxed);
             worker.max_local_queue_depth.store(0, Ordering::Relaxed);
         }
 
@@ -637,14 +653,24 @@ impl SchedulerInstrumentation {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_donation(&self, worker_id: usize, jobs: usize) {
-        self.workers[worker_id]
+    fn record_donation(&self, worker_id: usize, jobs: usize, batches: usize) {
+        let worker = &self.workers[worker_id];
+        worker
             .donated_jobs
             .fetch_add(jobs as u64, Ordering::Relaxed);
+        worker
+            .donation_batches
+            .fetch_add(batches as u64, Ordering::Relaxed);
+    }
+
+    fn stalled_workers(&self) -> usize {
+        // This counter is only an advisory scheduling hint. Queue operations
+        // provide the synchronization needed to publish and consume jobs.
+        self.stalled_workers.load(Ordering::Relaxed)
     }
 
     fn has_stalled_workers(&self) -> bool {
-        self.stalled_workers.load(Ordering::Acquire) != 0
+        self.stalled_workers() != 0
     }
 
     fn begin_stall(&self, worker_id: usize) {
@@ -898,6 +924,7 @@ struct WorkerContext {
     pool: ThreadPoolStatePtr,
     worker_id: usize,
     local: UnsafeCell<VecDeque<Job>>,
+    last_donation: Cell<Instant>,
 }
 
 impl WorkerContext {
@@ -906,6 +933,7 @@ impl WorkerContext {
             pool,
             worker_id,
             local: UnsafeCell::new(VecDeque::new()),
+            last_donation: Cell::new(Instant::now()),
         }
     }
 
@@ -913,21 +941,34 @@ impl WorkerContext {
         ptr::eq(self.pool.0, pool)
     }
 
+    fn local_queue_depth(&self) -> usize {
+        // SAFETY: a `WorkerContext` is installed only on its owning worker and
+        // `CURRENT_WORKER` is never made available to another thread.
+        unsafe { (&*self.local.get()).len() }
+    }
+
     fn push_local(&self, pool: &ThreadPoolState, job: Job) {
         // SAFETY: a `WorkerContext` is installed only on its owning worker and
         // `CURRENT_WORKER` is never made available to another thread.
-        let depth = unsafe {
+        let (depth, was_empty) = unsafe {
             let queue = &mut *self.local.get();
+            let was_empty = queue.is_empty();
             queue.push_back(job);
-            queue.len()
+            (queue.len(), was_empty)
         };
+        // A worker that has been idle for longer than the interval should
+        // still get one full collection window. Otherwise its first two local
+        // jobs can be donated immediately using a stale timestamp.
+        if was_empty {
+            self.last_donation.set(Instant::now());
+        }
         pool.instrumentation
             .record_local_push(self.worker_id, depth);
-        self.donate_half_if_stalled(pool);
+        self.donate_half_if_due(pool);
     }
 
     fn pop_local(&self, pool: &ThreadPoolState) -> Option<Job> {
-        self.donate_half_if_stalled(pool);
+        self.donate_half_if_due(pool);
         // The owner takes the newest work, retaining depth-first locality.
         // SAFETY: see `push_local`.
         let job = unsafe { (&mut *self.local.get()).pop_back() };
@@ -937,20 +978,31 @@ impl WorkerContext {
         job
     }
 
-    fn donate_half_if_stalled(&self, pool: &ThreadPoolState) {
+    fn donate_half_if_due(&self, pool: &ThreadPoolState) {
         if !pool.instrumentation.has_stalled_workers() {
             return;
         }
 
-        // Donation takes the opposite end from the owner: the oldest siblings
-        // have the weakest connection to the owner's current depth-first path.
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_donation.get()) < LOCAL_DONATION_INTERVAL {
+            return;
+        }
+
+        // Donation takes the opposite end from the owner. Package the oldest
+        // half as one global job so its recipient can process related siblings
+        // without repeated channel traffic or cache migration.
         // SAFETY: see `push_local`.
         let donated = unsafe {
             let queue = &mut *self.local.get();
             let count = queue.len() / 2;
             queue.drain(..count).collect::<Vec<_>>()
         };
-        self.publish_donation(pool, donated);
+        if donated.is_empty() {
+            return;
+        }
+
+        self.last_donation.set(now);
+        self.publish_donation_batch(pool, donated);
     }
 
     fn donate_all(&self, pool: &ThreadPoolState) {
@@ -958,16 +1010,30 @@ impl WorkerContext {
         // backup consumer. Publish everything so private work remains live.
         // SAFETY: see `push_local`.
         let donated = unsafe { (&mut *self.local.get()).drain(..).collect::<Vec<_>>() };
-        self.publish_donation(pool, donated);
+        self.publish_donation_individually(pool, donated);
     }
 
-    fn publish_donation(&self, pool: &ThreadPoolState, donated: Vec<Job>) {
+    fn publish_donation_batch(&self, pool: &ThreadPoolState, donated: Vec<Job>) {
         if donated.is_empty() {
             return;
         }
 
         pool.instrumentation
-            .record_donation(self.worker_id, donated.len());
+            .record_donation(self.worker_id, donated.len(), 1);
+        pool.enqueue_global(Box::new(move || {
+            for job in donated {
+                job();
+            }
+        }));
+    }
+
+    fn publish_donation_individually(&self, pool: &ThreadPoolState, donated: Vec<Job>) {
+        if donated.is_empty() {
+            return;
+        }
+
+        pool.instrumentation
+            .record_donation(self.worker_id, donated.len(), donated.len());
         for job in donated {
             pool.enqueue_global(job);
         }
@@ -1033,6 +1099,14 @@ fn pop_current_worker_local(pool: &ThreadPoolState) -> Option<Job> {
         worker
             .filter(|worker| worker.belongs_to(pool))
             .and_then(|worker| worker.pop_local(pool))
+    })
+}
+
+fn current_worker_local_queue_depth(pool: &ThreadPoolState) -> usize {
+    with_current_worker(|worker| {
+        worker
+            .filter(|worker| worker.belongs_to(pool))
+            .map_or(0, WorkerContext::local_queue_depth)
     })
 }
 
@@ -1227,10 +1301,11 @@ impl<'scope> Scope<'scope> {
     /// Spawn a callback onto the current worker's private deque.
     ///
     /// The owning worker executes local jobs depth-first before consulting the
-    /// global queue. When another worker is stalled, half of the oldest local
-    /// jobs are donated to the global queue. Calls made outside a primary
-    /// worker of this same pool—including calls from the root callback and
-    /// from a worker of a nested, different pool—fall back to the global queue.
+    /// global queue. At a bounded cadence, a worker with stalled peers packages
+    /// the oldest half of its private queue as one global batch. Calls made
+    /// outside a primary worker of this same pool—including calls from the root
+    /// callback and from a worker of a nested, different pool—fall back to the
+    /// global queue.
     pub fn spawn_local<F>(&self, f: F)
     where
         F: FnOnce(&Scope<'scope>) + Send + 'scope,
@@ -1241,6 +1316,41 @@ impl<'scope> Scope<'scope> {
         if let Err(job) = push_current_worker_local(pool, job) {
             pool.enqueue_global(job);
         }
+    }
+
+    /// Return the number of primary workers currently waiting for global work.
+    ///
+    /// This is a cheap, relaxed, advisory snapshot of the scheduler's atomic
+    /// stalled worker gauge. The value may become stale immediately and must
+    /// not be used for correctness decisions or as a reservation of idle
+    /// capacity. Unlike [`ThreadPool::scheduler_metrics`], this method does not
+    /// collect counters, lock stall timers, or scan the pool's workers.
+    pub fn stalled_workers(&self) -> usize {
+        // SAFETY: this scope was created from a live pool, and the pool cannot
+        // be dropped while its borrowed `scope` call is active.
+        unsafe { self.pool.as_ref() }
+            .instrumentation
+            .stalled_workers()
+    }
+
+    /// Return whether any primary worker currently appears to need global work.
+    ///
+    /// This is the boolean convenience form of [`Scope::stalled_workers`] and
+    /// has the same advisory, inherently racy semantics.
+    pub fn has_stalled_workers(&self) -> bool {
+        // SAFETY: see `Scope::stalled_workers`.
+        unsafe { self.pool.as_ref() }
+            .instrumentation
+            .has_stalled_workers()
+    }
+
+    /// Return the current worker's private queue depth.
+    ///
+    /// The result is exact for the current worker because its deque is private.
+    /// Calls made outside a primary worker of this pool return zero.
+    pub fn local_queue_depth(&self) -> usize {
+        // SAFETY: see `Scope::stalled_workers`.
+        current_worker_local_queue_depth(unsafe { self.pool.as_ref() })
     }
 
     fn prepare_job<F>(&self, f: F) -> Job
