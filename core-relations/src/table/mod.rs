@@ -38,9 +38,12 @@ use crate::{
 };
 
 mod rebuild;
+mod sequence;
 mod sharded_hash_table;
 #[cfg(test)]
 mod tests;
+
+pub use sequence::SequenceTable;
 
 const PARALLEL_INSERT_BATCH_SIZE: usize = 1 << 12;
 
@@ -132,20 +135,27 @@ impl ShardHash {
     }
 }
 
-/// A pointer to a row in the table.
+/// A cached hash paired with a table-specific row location.
+///
+/// Fixed-arity tables use a [`RowId`] directly. Variable-arity tables use a
+/// location that also carries the row's backing-vector range, so hash probes
+/// do not need a second metadata lookup before comparing keys.
 #[derive(Clone, Debug)]
 #[repr(C)]
-pub(crate) struct TableEntry {
+pub(crate) struct HashedTableEntry<R> {
     hash: CompactHash,
-    row: RowId,
+    row: R,
 }
 
-impl TableEntry {
+impl<R> HashedTableEntry<R> {
     /// Adapter for hashbrown callbacks, which require the raw `u64`.
     fn raw_probe_hash(&self) -> u64 {
         self.hash.probe().raw()
     }
 }
+
+/// A pointer to a fixed-arity row in the table.
+pub(crate) type TableEntry = HashedTableEntry<RowId>;
 
 /// Producer-local rows for one physical hash-table shard.
 ///
@@ -1418,8 +1428,13 @@ fn get_entry_mut<'a>(
 }
 
 fn shard_hash(shard_data: ShardData, row: &[Value], n_keys: usize) -> ShardHash {
+    shard_hash_values(shard_data, &row[0..n_keys])
+}
+
+/// Hash an arity-independent slice and route it to a physical shard.
+fn shard_hash_values(shard_data: ShardData, values: &[Value]) -> ShardHash {
     let mut hasher = FxHasher::default();
-    for val in &row[0..n_keys] {
+    for val in values {
         hasher.write_usize(val.index());
     }
     ShardHash::from_full(shard_data, FullHash(hasher.finish()))
