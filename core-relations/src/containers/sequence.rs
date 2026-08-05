@@ -14,12 +14,13 @@ use crossbeam_queue::SegQueue;
 use rustc_hash::FxHasher;
 
 use crate::{
-    ExecutionState, Offset, RowId, SequenceTable, Subset, TableVersion, TaggedRowBuffer, Value,
+    ExecutionState, Offset, RowId, SequenceTable, Subset, TableChange, TableVersion,
+    TaggedRowBuffer, Value,
     common::{HashMap, IndexSet, ShardData, ShardId},
     numeric_id::{DenseIdMap, NumericId},
     offsets::Offsets,
     parallel_heuristics::parallelize_intra_container_op,
-    table_spec::{Rebuilder, ValueRebuilder},
+    table_spec::{MaintenanceTable, Rebuilder, ValueRebuilder},
 };
 
 use super::{
@@ -279,11 +280,11 @@ impl<C: ContainerValue> SequenceContainerEnv<C> {
             });
     }
 
-    fn merge_table(&mut self, exec_state: &mut ExecutionState) -> bool {
+    fn merge_table(&mut self, exec_state: &mut ExecutionState) -> TableChange {
         let previous = self.table.version();
         let changed = self.table.merge_with_state(exec_state);
         self.refresh_reverse(&previous);
-        changed.added || changed.removed
+        changed
     }
 
     /// Resolve the union-find delta through the sequence occurrence index.
@@ -339,6 +340,20 @@ impl<C: ContainerValue> SequenceContainerEnv<C> {
     }
 }
 
+impl<C: ContainerValue> MaintenanceTable for SequenceContainerEnv<C> {
+    fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    fn new_buffer(&self) -> Box<dyn crate::MutationBuffer> {
+        self.table.new_buffer()
+    }
+
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
+        self.merge_table(exec_state)
+    }
+}
+
 impl<C: ContainerValue> DynamicContainerEnv for SequenceContainerEnv<C> {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -352,8 +367,12 @@ impl<C: ContainerValue> DynamicContainerEnv for SequenceContainerEnv<C> {
         self.table.len()
     }
 
-    fn merge_pending(&mut self, exec_state: &mut ExecutionState) -> bool {
-        self.merge_table(exec_state)
+    fn maintenance_table(&self) -> Option<&dyn MaintenanceTable> {
+        Some(self)
+    }
+
+    fn maintenance_table_mut(&mut self) -> Option<&mut dyn MaintenanceTable> {
+        Some(self)
     }
 
     fn apply_rebuild(
@@ -537,7 +556,10 @@ mod tests {
         let second = db.with_execution_state(|state| env.get_or_insert(&key, state));
         assert_ne!(first, second);
 
-        db.with_execution_state(|state| assert!(env.merge_table(state)));
+        db.with_execution_state(|state| {
+            let change = env.merge_table(state);
+            assert!(change.added || change.removed);
+        });
         let winner = first.min(second);
         assert_eq!(env.get_container(winner), Some(key));
         assert_eq!(env.get_container(first.max(second)), None);
@@ -552,14 +574,20 @@ mod tests {
                 .map(|index| env.get_or_insert_key(&[value(100 + index)], state))
                 .collect::<Vec<_>>()
         });
-        db.with_execution_state(|state| assert!(env.merge_table(state)));
+        db.with_execution_state(|state| {
+            let change = env.merge_table(state);
+            assert!(change.added || change.removed);
+        });
 
         let mut removals = env.table.new_buffer();
         for index in 0..25 {
             removals.stage_remove(&[value(100 + index)]);
         }
         drop(removals);
-        db.with_execution_state(|state| assert!(env.merge_table(state)));
+        db.with_execution_state(|state| {
+            let change = env.merge_table(state);
+            assert!(change.added || change.removed);
+        });
 
         for (index, id) in ids.into_iter().enumerate() {
             if index < 25 {
@@ -573,6 +601,7 @@ mod tests {
     struct HintRebuilder {
         from: Value,
         to: Value,
+        hint: Option<ColumnId>,
         visits: AtomicUsize,
     }
 
@@ -585,7 +614,7 @@ mod tests {
 
     impl Rebuilder for HintRebuilder {
         fn hint_col(&self) -> Option<ColumnId> {
-            Some(ColumnId::new(0))
+            self.hint
         }
 
         fn rebuild_buf(
@@ -610,6 +639,74 @@ mod tests {
         }
     }
 
+    fn empty_rebuild_table() -> WrappedTable {
+        WrappedTable::new(SortedWritesTable::new(
+            1,
+            1,
+            None,
+            vec![],
+            Box::new(|_, _, _, _| false),
+        ))
+    }
+
+    #[test]
+    fn full_rebuild_marks_a_stable_identity_dirty() {
+        let from = value(10);
+        let to = value(20);
+        let mut db = Database::new();
+        let mut env = test_env(&mut db);
+        let id = db.with_execution_state(|state| env.get_or_insert_key(&[from], state));
+        db.with_execution_state(|state| {
+            let change = env.merge_table(state);
+            assert!(change.added || change.removed);
+        });
+
+        let rebuilder = HintRebuilder {
+            from,
+            to,
+            hint: None,
+            visits: AtomicUsize::new(0),
+        };
+        let summary = db.with_execution_state(|state| {
+            env.apply_rebuild(&empty_rebuild_table(), &rebuilder, None, state)
+        });
+
+        assert!(summary.changed());
+        assert_eq!(
+            summary.dirty_ids().iter().copied().collect::<Vec<_>>(),
+            [id]
+        );
+        assert_eq!(env.get_key(id), Some([to].as_slice()));
+    }
+
+    #[test]
+    fn full_rebuild_remaps_an_outer_identity_without_marking_it_dirty() {
+        let child = value(30);
+        let mut db = Database::new();
+        let mut env = test_env(&mut db);
+        let old_id = db.with_execution_state(|state| env.get_or_insert_key(&[child], state));
+        db.with_execution_state(|state| {
+            let change = env.merge_table(state);
+            assert!(change.added || change.removed);
+        });
+        let new_id = value(old_id.index() + 100_000);
+
+        let rebuilder = HintRebuilder {
+            from: old_id,
+            to: new_id,
+            hint: None,
+            visits: AtomicUsize::new(0),
+        };
+        let summary = db.with_execution_state(|state| {
+            env.apply_rebuild(&empty_rebuild_table(), &rebuilder, None, state)
+        });
+
+        assert!(summary.changed());
+        assert!(summary.dirty_ids().is_empty());
+        assert_eq!(env.get_key(old_id), None);
+        assert_eq!(env.get_key(new_id), Some([child].as_slice()));
+    }
+
     #[test]
     fn incremental_rebuild_uses_value_index_candidates() {
         const CONTAINERS: usize = 1_002;
@@ -629,7 +726,10 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         });
-        db.with_execution_state(|state| assert!(env.merge_table(state)));
+        db.with_execution_state(|state| {
+            let change = env.merge_table(state);
+            assert!(change.added || change.removed);
+        });
 
         let mut dirty = SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false));
         dirty.new_buffer().stage_insert(&[from]);
@@ -641,6 +741,7 @@ mod tests {
         let rebuilder = HintRebuilder {
             from,
             to,
+            hint: Some(ColumnId::new(0)),
             visits: AtomicUsize::new(0),
         };
         let summary = db.with_execution_state(|state| {

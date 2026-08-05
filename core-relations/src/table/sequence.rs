@@ -40,7 +40,9 @@ use crate::{
         parallelize_index_construction, parallelize_rebuild, parallelize_table_op,
     },
     pool::{Pooled, with_pool_set},
-    table_spec::{Generation, MutationBuffer, Offset, Row, TableVersion, ValueRebuilder},
+    table_spec::{
+        Generation, MaintenanceTable, MutationBuffer, Offset, Row, TableVersion, ValueRebuilder,
+    },
 };
 
 use super::{
@@ -916,6 +918,20 @@ pub struct SequenceTable {
 impl Default for SequenceTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl MaintenanceTable for SequenceTable {
+    fn len(&self) -> usize {
+        SequenceTable::len(self)
+    }
+
+    fn new_buffer(&self) -> Box<dyn MutationBuffer> {
+        SequenceTable::new_buffer(self)
+    }
+
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
+        self.merge_with_state(exec_state)
     }
 }
 

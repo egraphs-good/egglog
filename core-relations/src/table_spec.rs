@@ -163,6 +163,17 @@ pub struct Row {
     pub vals: Pooled<Vec<Value>>,
 }
 
+/// The arity-agnostic surface shared by every database storage participant.
+///
+/// Fixed-schema relations expose the larger [`Table`] interface for querying,
+/// while variable-arity sequence tables only need this protocol to share
+/// mutation buffers, notifications, dependency ordering, and merge scheduling.
+pub(crate) trait MaintenanceTable: Send + Sync {
+    fn len(&self) -> usize;
+    fn new_buffer(&self) -> Box<dyn MutationBuffer>;
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange;
+}
+
 /// An interface for a table.
 pub trait Table: Any + Send + Sync {
     /// A variant of clone that returns a boxed trait object; this trait object
@@ -201,7 +212,8 @@ pub trait Table: Any + Send + Sync {
     /// parent-row delta even though the row's key columns do not otherwise
     /// change.
     ///
-    /// One source of such ids is [`crate::ContainerRebuildSummary::dirty_ids`].
+    /// Container maintenance uses this when a canonicalized container keeps
+    /// its identity but changes the values represented by that identity.
     ///
     /// Tables that do not maintain rebuildable id columns can use the default
     /// no-op implementation.
@@ -663,6 +675,20 @@ impl WrappedTable {
     ) {
         self.as_ref()
             .lookup_with_default_vectorized(mask, bindings, args, col, default, out_var)
+    }
+}
+
+impl MaintenanceTable for WrappedTable {
+    fn len(&self) -> usize {
+        WrappedTable::len(self)
+    }
+
+    fn new_buffer(&self) -> Box<dyn MutationBuffer> {
+        self.inner.new_buffer()
+    }
+
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
+        self.inner.merge(exec_state)
     }
 }
 
