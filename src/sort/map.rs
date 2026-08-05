@@ -1,5 +1,9 @@
 use super::*;
+use crate::numeric_id::NumericId;
 use std::collections::BTreeMap;
+
+const REBUILD_KEYS: usize = 1;
+const REBUILD_VALS: usize = 1 << 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MapContainer {
@@ -34,6 +38,146 @@ impl ContainerValue for MapContainer {
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().flat_map(|(k, v)| [k, v]).copied()
     }
+}
+
+impl SequenceContainerValue for MapContainer {
+    fn encode_sequence(&self, out: &mut Vec<Value>) {
+        out.push(map_rebuild_mask(self.do_rebuild_keys, self.do_rebuild_vals));
+        out.extend(self.data.iter().flat_map(|(key, value)| [*key, *value]));
+    }
+
+    fn decode_sequence(sequence: &[Value]) -> Self {
+        let (&mask, data) = sequence
+            .split_first()
+            .expect("serialized MapContainer must include its rebuild mask");
+        let mask = checked_map_mask(mask);
+        assert!(
+            data.len().is_multiple_of(2),
+            "serialized MapContainer must contain key/value pairs"
+        );
+        debug_assert!(
+            data.chunks_exact(2)
+                .map(|pair| pair[0])
+                .is_sorted_by(|left, right| left < right),
+            "serialized MapContainer keys must be sorted and unique"
+        );
+        Self {
+            do_rebuild_keys: mask & REBUILD_KEYS != 0,
+            do_rebuild_vals: mask & REBUILD_VALS != 0,
+            data: data
+                .chunks_exact(2)
+                .map(|pair| (pair[0], pair[1]))
+                .collect(),
+        }
+    }
+
+    fn sequence_values(sequence: &[Value]) -> &[Value] {
+        sequence
+            .get(1..)
+            .expect("serialized MapContainer must include its rebuild mask")
+    }
+
+    fn visit_sequence_values(sequence: &[Value], visitor: &mut dyn FnMut(Value)) {
+        let (&mask, data) = sequence
+            .split_first()
+            .expect("serialized MapContainer must include its rebuild mask");
+        let mask = checked_map_mask(mask);
+        assert!(
+            data.len().is_multiple_of(2),
+            "serialized MapContainer must contain key/value pairs"
+        );
+        for pair in data.chunks_exact(2) {
+            if mask & REBUILD_KEYS != 0 {
+                visitor(pair[0]);
+            }
+            if mask & REBUILD_VALS != 0 {
+                visitor(pair[1]);
+            }
+        }
+    }
+
+    fn rebuild_sequence(
+        sequence: &[Value],
+        rebuilder: &dyn ValueRebuilder,
+        out: &mut Vec<Value>,
+    ) -> bool {
+        let (&header, data) = sequence
+            .split_first()
+            .expect("serialized MapContainer must include its rebuild mask");
+        let mask = checked_map_mask(header);
+        assert!(
+            data.len().is_multiple_of(2),
+            "serialized MapContainer must contain key/value pairs"
+        );
+        if mask == 0 {
+            return false;
+        }
+
+        // Rebuild keys before values, matching `MapContainer::rebuild_contents`.
+        // Iteration is in ascending old-key order, so inserting rebuilt keys in
+        // that order preserves BTreeMap's existing collision rule: when two
+        // old keys canonicalize together, the later old key's value wins.
+        let mut rebuilt = BTreeMap::new();
+        for pair in data.chunks_exact(2) {
+            let key = if mask & REBUILD_KEYS != 0 {
+                rebuilder.rebuild_val(pair[0])
+            } else {
+                pair[0]
+            };
+            rebuilt.insert(key, pair[1]);
+        }
+        if mask & REBUILD_VALS != 0 {
+            for value in rebuilt.values_mut() {
+                *value = rebuilder.rebuild_val(*value);
+            }
+        }
+
+        let rebuilt_data = rebuilt
+            .iter()
+            .flat_map(|(key, value)| [*key, *value])
+            .collect::<Vec<_>>();
+        if rebuilt_data == data {
+            return false;
+        }
+        out.push(header);
+        out.extend(rebuilt_data);
+        true
+    }
+}
+
+fn map_rebuild_mask(rebuild_keys: bool, rebuild_vals: bool) -> Value {
+    Value::from_usize(
+        usize::from(rebuild_keys) * REBUILD_KEYS + usize::from(rebuild_vals) * REBUILD_VALS,
+    )
+}
+
+fn checked_map_mask(mask: Value) -> usize {
+    let mask = mask.index();
+    assert!(
+        mask & !(REBUILD_KEYS | REBUILD_VALS) == 0,
+        "serialized MapContainer has an invalid rebuild mask"
+    );
+    mask
+}
+
+/// Binary-search canonical alternating `[key, value, ...]` storage.
+///
+/// The returned index counts pairs rather than individual values.
+fn find_map_key(data: &[Value], needle: Value) -> Result<usize, usize> {
+    assert!(
+        data.len().is_multiple_of(2),
+        "serialized MapContainer must contain key/value pairs"
+    );
+    let (mut low, mut high) = (0, data.len() / 2);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        match data[mid * 2].cmp(&needle) {
+            std::cmp::Ordering::Less => low = mid + 1,
+            std::cmp::Ordering::Greater => high = mid,
+            std::cmp::Ordering::Equal => return Ok(mid),
+        }
+    }
+    Err(low)
 }
 
 /// The entries of a flat `(map-of k0 v0 ...)` term as a Rust `BTreeMap` in
@@ -157,6 +301,10 @@ impl ContainerSort for MapSort {
         &self.name
     }
 
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_sequence_container_ty::<MapContainer>();
+    }
+
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.key.clone(), self.value.clone()]
     }
@@ -229,11 +377,17 @@ impl ContainerSort for MapSort {
                 (!contains).then(|| termdag.lit(Literal::Unit))
             };
 
-        add_primitive_with_validator!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
-            do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
-            do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
-            data: BTreeMap::new()
-        } }, map_empty_validator);
+        eg.add_pure_primitive(
+            MapEmpty {
+                name: "map-empty".to_string(),
+                map: arc.clone(),
+                rebuild_mask: map_rebuild_mask(
+                    self.key.is_eq_sort() || self.key.is_eq_container_sort(),
+                    self.value.is_eq_sort() || self.value.is_eq_container_sort(),
+                ),
+            },
+            Some(Arc::new(map_empty_validator)),
+        );
 
         // `map-of` is the flat constructor used as the canonical term form. It
         // takes alternating key/value arguments, so it needs a custom type
@@ -248,13 +402,72 @@ impl ContainerSort for MapSort {
             Some(std::sync::Arc::new(normalize_map_term)),
         );
 
-        add_primitive_with_validator!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() }, map_get_validator);
-        add_primitive_with_validator!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }}, map_insert_validator);
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
-
-        add_primitive_with_validator!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 }, map_length_validator);
-        add_primitive_with_validator!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) }, map_contains_validator);
-        add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
+        eg.add_pure_primitive(
+            MapRead {
+                name: "map-get".into(),
+                map: arc.clone(),
+                key: self.key(),
+                value: self.value(),
+                op: MapReadOp::Get,
+            },
+            Some(Arc::new(map_get_validator)),
+        );
+        eg.add_pure_primitive(
+            MapEdit {
+                name: "map-insert".into(),
+                map: arc.clone(),
+                key: self.key(),
+                value: self.value(),
+                rebuild_mask: map_rebuild_mask(
+                    self.key.is_eq_sort() || self.key.is_eq_container_sort(),
+                    self.value.is_eq_sort() || self.value.is_eq_container_sort(),
+                ),
+                op: MapEditOp::Insert,
+            },
+            Some(Arc::new(map_insert_validator)),
+        );
+        eg.add_pure_primitive(
+            MapEdit {
+                name: "map-remove".into(),
+                map: arc.clone(),
+                key: self.key(),
+                value: self.value(),
+                rebuild_mask: map_rebuild_mask(
+                    self.key.is_eq_sort() || self.key.is_eq_container_sort(),
+                    self.value.is_eq_sort() || self.value.is_eq_container_sort(),
+                ),
+                op: MapEditOp::Remove,
+            },
+            None,
+        );
+        for (name, op, validator) in [
+            (
+                "map-length",
+                MapReadOp::Length,
+                Arc::new(map_length_validator) as PrimitiveValidator,
+            ),
+            (
+                "map-contains",
+                MapReadOp::Contains,
+                Arc::new(map_contains_validator) as PrimitiveValidator,
+            ),
+            (
+                "map-not-contains",
+                MapReadOp::NotContains,
+                Arc::new(map_not_contains_validator) as PrimitiveValidator,
+            ),
+        ] {
+            eg.add_pure_primitive(
+                MapRead {
+                    name: name.into(),
+                    map: arc.clone(),
+                    key: self.key(),
+                    value: self.value(),
+                    op,
+                },
+                Some(validator),
+            );
+        }
     }
 
     fn reconstruct_termdag(
@@ -276,6 +489,230 @@ impl ContainerSort for MapSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "map-of".to_owned()
+    }
+}
+
+#[derive(Clone)]
+struct MapEmpty {
+    name: String,
+    map: ArcSort,
+    rebuild_mask: Value,
+}
+
+impl Primitive for MapEmpty {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.map.clone()], span.clone()).into_box()
+    }
+}
+
+impl PurePrim for MapEmpty {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        if !args.is_empty() {
+            return None;
+        }
+        Some(state.register_container_sequence::<MapContainer>(&[self.rebuild_mask]))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MapReadOp {
+    Get,
+    Length,
+    Contains,
+    NotContains,
+}
+
+/// Map reads use binary search over the borrowed canonical sequence and only
+/// reconstruct a `MapContainer` for a legacy backend.
+#[derive(Clone)]
+struct MapRead {
+    name: String,
+    map: ArcSort,
+    key: ArcSort,
+    value: ArcSort,
+    op: MapReadOp,
+}
+
+impl Primitive for MapRead {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let types = match self.op {
+            MapReadOp::Get => vec![self.map.clone(), self.key.clone(), self.value.clone()],
+            MapReadOp::Length => vec![self.map.clone(), I64Sort.to_arcsort()],
+            MapReadOp::Contains | MapReadOp::NotContains => {
+                vec![self.map.clone(), self.key.clone(), UnitSort.to_arcsort()]
+            }
+        };
+        SimpleTypeConstraint::new(self.name(), types, span.clone()).into_box()
+    }
+}
+
+impl PurePrim for MapRead {
+    fn apply<'a, 'db>(&self, state: crate::PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let [map_id, rest @ ..] = args else {
+            return None;
+        };
+        match self.op {
+            MapReadOp::Get => {
+                let [needle] = rest else { return None };
+                state
+                    .with_container_sequence::<MapContainer, _>(*map_id, |data| {
+                        find_map_key(data, *needle)
+                            .ok()
+                            .map(|pair_index| data[pair_index * 2 + 1])
+                    })
+                    .or_else(|| {
+                        state
+                            .value_to_owned_container::<MapContainer>(*map_id)
+                            .map(|map| map.data.get(needle).copied())
+                    })?
+            }
+            MapReadOp::Length => {
+                if !rest.is_empty() {
+                    return None;
+                }
+                let len = state
+                    .with_container_sequence::<MapContainer, _>(*map_id, |data| {
+                        assert!(data.len().is_multiple_of(2));
+                        data.len() / 2
+                    })
+                    .or_else(|| {
+                        state
+                            .value_to_owned_container::<MapContainer>(*map_id)
+                            .map(|map| map.data.len())
+                    })?;
+                Some(state.base_values().get::<i64>(len as i64))
+            }
+            MapReadOp::Contains | MapReadOp::NotContains => {
+                let [needle] = rest else { return None };
+                let contains = state
+                    .with_container_sequence::<MapContainer, _>(*map_id, |data| {
+                        find_map_key(data, *needle).is_ok()
+                    })
+                    .or_else(|| {
+                        state
+                            .value_to_owned_container::<MapContainer>(*map_id)
+                            .map(|map| map.data.contains_key(needle))
+                    })?;
+                let succeeds = match self.op {
+                    MapReadOp::Contains => contains,
+                    MapReadOp::NotContains => !contains,
+                    _ => unreachable!(),
+                };
+                succeeds.then(|| state.base_values().get::<()>(()))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MapEditOp {
+    Insert,
+    Remove,
+}
+
+/// Map updates splice the borrowed alternating sequence directly and only
+/// round-trip through `MapContainer` for a legacy backend.
+#[derive(Clone)]
+struct MapEdit {
+    name: String,
+    map: ArcSort,
+    key: ArcSort,
+    value: ArcSort,
+    rebuild_mask: Value,
+    op: MapEditOp,
+}
+
+impl Primitive for MapEdit {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let types = match self.op {
+            MapEditOp::Insert => vec![
+                self.map.clone(),
+                self.key.clone(),
+                self.value.clone(),
+                self.map.clone(),
+            ],
+            MapEditOp::Remove => vec![self.map.clone(), self.key.clone(), self.map.clone()],
+        };
+        SimpleTypeConstraint::new(self.name(), types, span.clone()).into_box()
+    }
+}
+
+impl PurePrim for MapEdit {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let map_id = *args.first()?;
+        let build_key = |data: &[Value]| -> Option<Vec<Value>> {
+            let needle = *args.get(1)?;
+            let found = find_map_key(data, needle);
+            let mut key = Vec::with_capacity(data.len() + 3);
+            key.push(self.rebuild_mask);
+            match (self.op, found) {
+                (MapEditOp::Insert, Ok(pair_index)) => {
+                    let [_, _, value] = args else { return None };
+                    let value_index = pair_index * 2 + 1;
+                    key.extend_from_slice(&data[..value_index]);
+                    key.push(*value);
+                    key.extend_from_slice(&data[value_index + 1..]);
+                }
+                (MapEditOp::Insert, Err(pair_index)) => {
+                    let [_, _, value] = args else { return None };
+                    let value_index = pair_index * 2;
+                    key.extend_from_slice(&data[..value_index]);
+                    key.extend_from_slice(&[needle, *value]);
+                    key.extend_from_slice(&data[value_index..]);
+                }
+                (MapEditOp::Remove, Ok(pair_index)) => {
+                    let [_, _] = args else { return None };
+                    let value_index = pair_index * 2;
+                    key.extend_from_slice(&data[..value_index]);
+                    key.extend_from_slice(&data[value_index + 2..]);
+                }
+                (MapEditOp::Remove, Err(_)) => {
+                    let [_, _] = args else { return None };
+                    key.extend_from_slice(data);
+                }
+            }
+            Some(key)
+        };
+
+        if let Some(key) = state.with_container_sequence::<MapContainer, _>(map_id, build_key) {
+            return Some(state.register_container_sequence::<MapContainer>(&key?));
+        }
+
+        // Compatibility path for a legacy environment: reconstruct the Rust
+        // map, perform the operation, and let normal container registration
+        // serialize it when the environment is sequence-backed.
+        let mut map = state.value_to_owned_container::<MapContainer>(map_id)?;
+        match self.op {
+            MapEditOp::Insert => {
+                let [_, key, value] = args else { return None };
+                map.data.insert(*key, *value);
+            }
+            MapEditOp::Remove => {
+                let [_, key] = args else { return None };
+                map.data.remove(key);
+            }
+        }
+        Some(state.register_container(map))
     }
 }
 
@@ -315,12 +752,13 @@ impl PurePrim for MapOf {
                 data.insert(*k, *v);
             }
         }
-        let mc = MapContainer {
-            do_rebuild_keys: self.key.is_eq_sort() || self.key.is_eq_container_sort(),
-            do_rebuild_vals: self.value.is_eq_sort() || self.value.is_eq_container_sort(),
-            data,
-        };
-        Some(state.register_container(mc))
+        let mut key = Vec::with_capacity(data.len() * 2 + 1);
+        key.push(map_rebuild_mask(
+            self.key.is_eq_sort() || self.key.is_eq_container_sort(),
+            self.value.is_eq_sort() || self.value.is_eq_container_sort(),
+        ));
+        key.extend(data.into_iter().flat_map(|(key, value)| [key, value]));
+        Some(state.register_container_sequence::<MapContainer>(&key))
     }
 }
 
@@ -369,5 +807,169 @@ impl TypeConstraint for MapOfTypeConstraint {
             cs.push(constraint::assign(arg.clone(), sort));
         }
         cs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Remap(Vec<(Value, Value)>);
+
+    impl ValueRebuilder for Remap {
+        fn rebuild_val(&self, value: Value) -> Value {
+            self.0
+                .iter()
+                .find_map(|(from, to)| (*from == value).then_some(*to))
+                .unwrap_or(value)
+        }
+    }
+
+    fn value(index: usize) -> Value {
+        Value::from_usize(index)
+    }
+
+    fn map(
+        do_rebuild_keys: bool,
+        do_rebuild_vals: bool,
+        entries: &[(usize, usize)],
+    ) -> MapContainer {
+        MapContainer {
+            do_rebuild_keys,
+            do_rebuild_vals,
+            data: entries
+                .iter()
+                .map(|(key, value)| (self::value(*key), self::value(*value)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn sequence_codec_round_trips_and_indexes_only_enabled_lanes() {
+        for (rebuild_keys, rebuild_vals, expected_children) in [
+            (false, false, vec![]),
+            (true, false, vec![value(2), value(4)]),
+            (false, true, vec![value(20), value(40)]),
+            (true, true, vec![value(2), value(20), value(4), value(40)]),
+        ] {
+            let map = map(rebuild_keys, rebuild_vals, &[(2, 20), (4, 40)]);
+            let mut encoded = Vec::new();
+            map.encode_sequence(&mut encoded);
+            assert_eq!(MapContainer::decode_sequence(&encoded), map);
+            assert_eq!(
+                MapContainer::sequence_values(&encoded),
+                &[value(2), value(20), value(4), value(40)]
+            );
+
+            let mut children = Vec::new();
+            MapContainer::visit_sequence_values(&encoded, &mut |child| children.push(child));
+            assert_eq!(children, expected_children);
+        }
+    }
+
+    #[test]
+    fn sequence_rebuild_matches_legacy_key_collision_semantics() {
+        let original = map(true, true, &[(2, 20), (4, 40), (6, 60)]);
+        let rebuilder = Remap(vec![
+            (value(2), value(1)),
+            (value(4), value(1)),
+            (value(6), value(3)),
+            (value(40), value(41)),
+            (value(60), value(61)),
+        ]);
+
+        let mut legacy = original.clone();
+        assert!(legacy.rebuild_contents(&rebuilder));
+        assert_eq!(legacy, map(true, true, &[(1, 41), (3, 61)]));
+
+        let mut encoded = Vec::new();
+        original.encode_sequence(&mut encoded);
+        let mut rebuilt = Vec::new();
+        assert!(MapContainer::rebuild_sequence(
+            &encoded,
+            &rebuilder,
+            &mut rebuilt
+        ));
+        assert_eq!(MapContainer::decode_sequence(&rebuilt), legacy);
+    }
+
+    #[test]
+    fn sequence_rebuild_respects_mask_and_false_leaves_output_empty() {
+        let original = map(false, true, &[(2, 20), (4, 40)]);
+        let mut encoded = Vec::new();
+        original.encode_sequence(&mut encoded);
+        let mut rebuilt = Vec::new();
+        assert!(MapContainer::rebuild_sequence(
+            &encoded,
+            &Remap(vec![(value(2), value(3)), (value(20), value(21))]),
+            &mut rebuilt,
+        ));
+        assert_eq!(
+            MapContainer::decode_sequence(&rebuilt),
+            map(false, true, &[(2, 21), (4, 40)])
+        );
+
+        let mut unchanged = Vec::new();
+        assert!(!MapContainer::rebuild_sequence(
+            &rebuilt,
+            &Remap(vec![(value(2), value(3))]),
+            &mut unchanged,
+        ));
+        assert!(unchanged.is_empty());
+
+        let mut non_rebuildable = Vec::new();
+        map(false, false, &[(2, 20)]).encode_sequence(&mut non_rebuildable);
+        assert!(!MapContainer::rebuild_sequence(
+            &non_rebuildable,
+            &Remap(vec![(value(2), value(3)), (value(20), value(21))]),
+            &mut unchanged,
+        ));
+        assert!(unchanged.is_empty());
+    }
+
+    #[test]
+    fn binary_search_reports_existing_and_insertion_pair_indices() {
+        let data = [
+            value(2),
+            value(20),
+            value(4),
+            value(40),
+            value(8),
+            value(80),
+        ];
+        assert_eq!(find_map_key(&data, value(2)), Ok(0));
+        assert_eq!(find_map_key(&data, value(4)), Ok(1));
+        assert_eq!(find_map_key(&data, value(8)), Ok(2));
+        assert_eq!(find_map_key(&data, value(1)), Err(0));
+        assert_eq!(find_map_key(&data, value(3)), Err(1));
+        assert_eq!(find_map_key(&data, value(7)), Err(2));
+        assert_eq!(find_map_key(&data, value(9)), Err(3));
+    }
+
+    #[test]
+    fn sequence_primitives_use_predictions_and_preserve_last_write_wins() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort IntMap (Map i64 i64))
+                (let m
+                    (map-insert
+                        (map-insert
+                            (map-insert (map-empty) 4 40)
+                            2 20)
+                        4 41))
+                (check (= 2 (map-length m)))
+                (check (= 20 (map-get m 2)))
+                (check (= 41 (map-get m 4)))
+                (check (map-contains m 2))
+                (check (map-not-contains m 3))
+                (check (= 1 (map-length (map-remove m 2))))
+                (check (= m (map-remove m 99)))
+                (check (= 41 (map-get (map-of 4 40 2 20 4 41) 4)))
+                "#,
+            )
+            .unwrap();
     }
 }
