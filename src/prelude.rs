@@ -906,6 +906,9 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &ContainerValues, _: Value) -> Vec<(ArcSort, Value)>;
     fn register_primitives(&self, _eg: &mut EGraph) {}
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_container_ty::<Self::Container>();
+    }
     fn reconstruct_termdag(
         &self,
         _: &ContainerValues,
@@ -944,7 +947,7 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<T::Container>();
+        self.0.register_type(backend);
     }
 
     fn value_type(&self) -> Option<TypeId> {
