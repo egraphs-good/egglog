@@ -1,4 +1,6 @@
 use crate::Write;
+use crate::constraint::AllEqualTypeConstraint;
+use crate::numeric_id::NumericId;
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -20,6 +22,70 @@ impl ContainerValue for VecContainer {
     }
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().copied()
+    }
+}
+
+impl SequenceContainerValue for VecContainer {
+    fn encode_sequence(&self, out: &mut Vec<Value>) {
+        out.push(Value::from_usize(self.do_rebuild as usize));
+        out.extend_from_slice(&self.data);
+    }
+
+    fn decode_sequence(sequence: &[Value]) -> Self {
+        let (&header, data) = sequence
+            .split_first()
+            .expect("serialized VecContainer must include its rebuild flag");
+        assert!(
+            header == Value::from_usize(0) || header == Value::from_usize(1),
+            "serialized VecContainer has an invalid rebuild flag"
+        );
+        Self {
+            do_rebuild: header == Value::from_usize(1),
+            data: data.to_vec(),
+        }
+    }
+
+    fn sequence_values(sequence: &[Value]) -> &[Value] {
+        sequence
+            .get(1..)
+            .expect("serialized VecContainer must include its rebuild flag")
+    }
+
+    fn visit_sequence_values(sequence: &[Value], visitor: &mut dyn FnMut(Value)) {
+        let (&header, data) = sequence
+            .split_first()
+            .expect("serialized VecContainer must include its rebuild flag");
+        match header.index() {
+            0 => {}
+            1 => data.iter().copied().for_each(visitor),
+            _ => panic!("serialized VecContainer has an invalid rebuild flag"),
+        }
+    }
+
+    fn rebuild_sequence(
+        sequence: &[Value],
+        rebuilder: &dyn ValueRebuilder,
+        out: &mut Vec<Value>,
+    ) -> bool {
+        let (&header, data) = sequence
+            .split_first()
+            .expect("serialized VecContainer must include its rebuild flag");
+        if header == Value::from_usize(0) {
+            return false;
+        }
+        assert_eq!(
+            header,
+            Value::from_usize(1),
+            "serialized VecContainer has an invalid rebuild flag"
+        );
+        out.push(header);
+        out.extend_from_slice(data);
+        if rebuilder.rebuild_slice(&mut out[1..]) {
+            true
+        } else {
+            out.clear();
+            false
+        }
     }
 }
 
@@ -111,6 +177,10 @@ impl ContainerSort for VecSort {
         &self.name
     }
 
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_sequence_container_ty::<VecContainer>();
+    }
+
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.element.clone()]
     }
@@ -180,21 +250,67 @@ impl ContainerSort for VecSort {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs                     .collect()
         } }, vec_of_validator);
-        add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.is_eq_container_sort(),
-            data: xs.flat_map(|x| x.data).collect()
-        } });
+        eg.add_pure_primitive(
+            VecAppend {
+                name: "vec-append".into(),
+                vec: arc.clone(),
+            },
+            None,
+        );
 
-        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (arc), x: # (self.element())| -> @VecContainer (arc) {{ xs.data.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (arc)                       | -> @VecContainer (arc) {{ xs.data.pop();   xs }});
+        for (name, op) in [
+            ("vec-push", VecEditOp::Push),
+            ("vec-pop", VecEditOp::Pop),
+            ("vec-set", VecEditOp::Set),
+            ("vec-remove", VecEditOp::Remove),
+        ] {
+            eg.add_pure_primitive(
+                VecEdit {
+                    name: name.into(),
+                    vec: arc.clone(),
+                    element: self.element(),
+                    op,
+                },
+                None,
+            );
+        }
 
-        add_primitive_with_validator!(eg, "vec-length"       = |xs: @VecContainer (arc)| -> i64 { xs.data.len() as i64 }, vec_length_validator);
-        add_primitive_with_validator!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, vec_contains_validator);
-        add_primitive_with_validator!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, vec_not_contains_validator);
-
-        add_primitive_with_validator!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() }, vec_get_validator);
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data[idx] = x; Some(xs) } }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data.remove(idx); Some(xs) } }});
+        eg.add_pure_primitive(
+            VecRead {
+                name: "vec-length".into(),
+                vec: arc.clone(),
+                element: self.element(),
+                op: VecReadOp::Length,
+            },
+            Some(Arc::new(vec_length_validator)),
+        );
+        eg.add_pure_primitive(
+            VecRead {
+                name: "vec-contains".into(),
+                vec: arc.clone(),
+                element: self.element(),
+                op: VecReadOp::Contains,
+            },
+            Some(Arc::new(vec_contains_validator)),
+        );
+        eg.add_pure_primitive(
+            VecRead {
+                name: "vec-not-contains".into(),
+                vec: arc.clone(),
+                element: self.element(),
+                op: VecReadOp::NotContains,
+            },
+            Some(Arc::new(vec_not_contains_validator)),
+        );
+        eg.add_pure_primitive(
+            VecRead {
+                name: "vec-get".into(),
+                vec: arc.clone(),
+                element: self.element(),
+                op: VecReadOp::Get,
+            },
+            Some(Arc::new(vec_get_validator)),
+        );
         if self.element.is_eq_sort() {
             eg.add_write_primitive(
                 Union {
@@ -250,6 +366,233 @@ impl ContainerSort for VecSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "vec-of".to_owned()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VecReadOp {
+    Length,
+    Contains,
+    NotContains,
+    Get,
+}
+
+/// Vec reads with a sequence-slice fast path and a reconstruction fallback.
+#[derive(Clone)]
+struct VecRead {
+    name: String,
+    vec: ArcSort,
+    element: ArcSort,
+    op: VecReadOp,
+}
+
+impl Primitive for VecRead {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let types = match self.op {
+            VecReadOp::Length => vec![self.vec.clone(), I64Sort.to_arcsort()],
+            VecReadOp::Contains | VecReadOp::NotContains => {
+                vec![
+                    self.vec.clone(),
+                    self.element.clone(),
+                    UnitSort.to_arcsort(),
+                ]
+            }
+            VecReadOp::Get => vec![self.vec.clone(), I64Sort.to_arcsort(), self.element.clone()],
+        };
+        SimpleTypeConstraint::new(self.name(), types, span.clone()).into_box()
+    }
+}
+
+impl PurePrim for VecRead {
+    fn apply<'a, 'db>(&self, state: crate::PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let [vec_id, rest @ ..] = args else {
+            return None;
+        };
+        match self.op {
+            VecReadOp::Length => {
+                if !rest.is_empty() {
+                    return None;
+                }
+                let len = state
+                    .with_container_sequence::<VecContainer, _>(*vec_id, |values| values.len())
+                    .or_else(|| {
+                        state
+                            .value_to_owned_container::<VecContainer>(*vec_id)
+                            .map(|vec| vec.data.len())
+                    })?;
+                Some(state.base_values().get::<i64>(len as i64))
+            }
+            VecReadOp::Contains | VecReadOp::NotContains => {
+                let [needle] = rest else { return None };
+                let contains = state
+                    .with_container_sequence::<VecContainer, _>(*vec_id, |values| {
+                        values.contains(needle)
+                    })
+                    .or_else(|| {
+                        state
+                            .value_to_owned_container::<VecContainer>(*vec_id)
+                            .map(|vec| vec.data.contains(needle))
+                    })?;
+                let succeeds = match self.op {
+                    VecReadOp::Contains => contains,
+                    VecReadOp::NotContains => !contains,
+                    _ => unreachable!(),
+                };
+                succeeds.then(|| state.base_values().get::<()>(()))
+            }
+            VecReadOp::Get => {
+                let [index] = rest else { return None };
+                let index = usize::try_from(state.base_values().unwrap::<i64>(*index)).ok()?;
+                state
+                    .with_container_sequence::<VecContainer, _>(*vec_id, |values| {
+                        values.get(index).copied()
+                    })
+                    .or_else(|| {
+                        state
+                            .value_to_owned_container::<VecContainer>(*vec_id)
+                            .map(|vec| vec.data.get(index).copied())
+                    })?
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VecEditOp {
+    Push,
+    Pop,
+    Set,
+    Remove,
+}
+
+/// Vec updates with a serialized-slice fast path and a legacy slow fallback.
+#[derive(Clone)]
+struct VecEdit {
+    name: String,
+    vec: ArcSort,
+    element: ArcSort,
+    op: VecEditOp,
+}
+
+impl Primitive for VecEdit {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let types = match self.op {
+            VecEditOp::Push => vec![self.vec.clone(), self.element.clone(), self.vec.clone()],
+            VecEditOp::Pop => vec![self.vec.clone(), self.vec.clone()],
+            VecEditOp::Set => vec![
+                self.vec.clone(),
+                I64Sort.to_arcsort(),
+                self.element.clone(),
+                self.vec.clone(),
+            ],
+            VecEditOp::Remove => vec![self.vec.clone(), I64Sort.to_arcsort(), self.vec.clone()],
+        };
+        SimpleTypeConstraint::new(self.name(), types, span.clone()).into_box()
+    }
+}
+
+impl PurePrim for VecEdit {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let vec_id = *args.first()?;
+        let build_key = |data: &[Value]| -> Option<Vec<Value>> {
+            let mut key = Vec::with_capacity(data.len() + 2);
+            key.push(Value::from_usize(self.vec.is_eq_container_sort() as usize));
+            match self.op {
+                VecEditOp::Push => {
+                    let [_, value] = args else { return None };
+                    key.extend_from_slice(data);
+                    key.push(*value);
+                }
+                VecEditOp::Pop => {
+                    let [_] = args else { return None };
+                    key.extend_from_slice(data.get(..data.len().saturating_sub(1))?);
+                }
+                VecEditOp::Set => {
+                    let [_, index, value] = args else {
+                        return None;
+                    };
+                    let index = usize::try_from(state.base_values().unwrap::<i64>(*index)).ok()?;
+                    if index >= data.len() {
+                        return None;
+                    }
+                    key.extend_from_slice(data);
+                    key[index + 1] = *value;
+                }
+                VecEditOp::Remove => {
+                    let [_, index] = args else { return None };
+                    let index = usize::try_from(state.base_values().unwrap::<i64>(*index)).ok()?;
+                    if index >= data.len() {
+                        return None;
+                    }
+                    key.extend_from_slice(&data[..index]);
+                    key.extend_from_slice(&data[index + 1..]);
+                }
+            }
+            Some(key)
+        };
+
+        let key = state
+            .with_container_sequence::<VecContainer, _>(vec_id, build_key)
+            .or_else(|| {
+                state
+                    .value_to_owned_container::<VecContainer>(vec_id)
+                    .map(|vec| build_key(&vec.data))
+            })??;
+        Some(state.register_container_sequence::<VecContainer>(&key))
+    }
+}
+
+#[derive(Clone)]
+struct VecAppend {
+    name: String,
+    vec: ArcSort,
+}
+
+impl Primitive for VecAppend {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
+            .with_all_arguments_sort(self.vec.clone())
+            .with_output_sort(self.vec.clone())
+            .into_box()
+    }
+}
+
+impl PurePrim for VecAppend {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let mut key = vec![Value::from_usize(self.vec.is_eq_container_sort() as usize)];
+        for value in args {
+            if state
+                .with_container_sequence::<VecContainer, _>(*value, |values| {
+                    key.extend_from_slice(values);
+                })
+                .is_none()
+            {
+                key.extend_from_slice(
+                    &state.value_to_owned_container::<VecContainer>(*value)?.data,
+                );
+            }
+        }
+        Some(state.register_container_sequence::<VecContainer>(&key))
     }
 }
 
@@ -320,27 +663,28 @@ impl PurePrim for VecMap {
         mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state
-            .container_values()
-            .get_val::<FunctionContainer>(args[0])
-            .unwrap()
-            .clone();
-        let vec = state
-            .container_values()
-            .get_val::<VecContainer>(args[1])
-            .unwrap()
-            .clone();
-        let mut new_data = Vec::with_capacity(vec.data.len());
-        for v in vec.data {
+        let fc = state.value_to_owned_container::<FunctionContainer>(args[0])?;
+        // Copy before invoking the callback: it may intern another Vec and
+        // grow this execution's local prediction storage.
+        let input = state
+            .with_container_sequence::<VecContainer, _>(args[1], <[Value]>::to_vec)
+            .or_else(|| {
+                state
+                    .value_to_owned_container::<VecContainer>(args[1])
+                    .map(|vec| vec.data)
+            })?;
+        let mut new_data = Vec::with_capacity(input.len());
+        for v in input {
             if let Some(mapped) = state.apply_function(&fc, &[v]) {
                 new_data.push(mapped);
             }
         }
-        let new_vec = VecContainer {
-            do_rebuild: self.output_vec.is_eq_container_sort(),
-            data: new_data,
-        };
-        Some(state.register_container(new_vec))
+        let mut key = Vec::with_capacity(new_data.len() + 1);
+        key.push(Value::from_usize(
+            self.output_vec.is_eq_container_sort() as usize
+        ));
+        key.extend_from_slice(&new_data);
+        Some(state.register_container_sequence::<VecContainer>(&key))
     }
 }
 
@@ -378,16 +722,22 @@ impl WritePrim for Union {
         mut state: crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
+        // The union calls below mutate state, so materialize the two borrowed
+        // slices only after taking the allocation-free fast lookup path.
         let left = state
-            .container_values()
-            .get_val::<VecContainer>(args[0])?
-            .clone()
-            .data;
+            .with_container_sequence::<VecContainer, _>(args[0], <[Value]>::to_vec)
+            .or_else(|| {
+                state
+                    .value_to_owned_container::<VecContainer>(args[0])
+                    .map(|vec| vec.data)
+            })?;
         let right = state
-            .container_values()
-            .get_val::<VecContainer>(args[1])?
-            .clone()
-            .data;
+            .with_container_sequence::<VecContainer, _>(args[1], <[Value]>::to_vec)
+            .or_else(|| {
+                state
+                    .value_to_owned_container::<VecContainer>(args[1])
+                    .map(|vec| vec.data)
+            })?;
         if left.len() != right.len() {
             return None;
         }

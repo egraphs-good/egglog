@@ -1,0 +1,17 @@
+;; A sequence-backed container table must rebuild before an ordinary table
+;; whose keys and values both refer to the affected e-classes. Otherwise the
+;; two `image` rows collide while their Vec values are still distinct, and the
+;; `:no-merge` function reports an illegal merge.
+(sort E)
+(constructor a () E)
+(constructor b () E)
+
+(sort VE (Vec E))
+(function image (E) VE :no-merge)
+
+(set (image (a)) (vec-of (a)))
+(set (image (b)) (vec-of (b)))
+
+(union (a) (b))
+
+(check (= (image (a)) (image (b))))
