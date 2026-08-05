@@ -428,7 +428,7 @@ fn nested_set_rebuild_term_only() {
         .unwrap();
 }
 
-/// A sequence-backed `UnstableFn` canonicalizes its rebuildable partial args.
+/// A serialized `UnstableFn` canonicalizes its rebuildable partial args.
 /// `UnstableFn` deliberately has no proof validator, so this runs in ordinary
 /// mode rather than term/proof encoding.
 #[test]

@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use crate::numeric_id::{DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{IdVec, NumericId};
 
 const DEFAULT_TASKS_PER_THREAD: usize = 1;
 const TASKS_PER_THREAD_ENV: &str = "EGGLOG_PARALLEL_TASKS_PER_THREAD";
@@ -141,21 +141,6 @@ where
     });
 
     collect_result_slots(results)
-}
-
-pub(crate) fn map_dense_id_map_mut<K, V, R, F>(map: &mut DenseIdMap<K, V>, f: F) -> Vec<R>
-where
-    K: NumericId,
-    V: Send,
-    R: Send,
-    F: Fn(K, &mut V) -> R + Sync,
-{
-    map_mut(map.raw_mut(), |index, slot| {
-        slot.as_mut().map(|value| f(K::from_usize(index), value))
-    })
-    .into_iter()
-    .flatten()
-    .collect()
 }
 
 pub(crate) fn for_each_id_vec_mut<K, V, F>(map: &mut IdVec<K, V>, f: F)

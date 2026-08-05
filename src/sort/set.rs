@@ -9,22 +9,6 @@ pub struct SetContainer {
 }
 
 impl ContainerValue for SetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        if self.do_rebuild {
-            let mut xs: Vec<_> = self.data.iter().copied().collect();
-            let changed = rebuilder.rebuild_slice(&mut xs);
-            self.data = xs.into_iter().collect();
-            changed
-        } else {
-            false
-        }
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.data.iter().copied()
-    }
-}
-
-impl SequenceContainerValue for SetContainer {
     fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         out.push(Value::from_usize(self.do_rebuild as usize));
         out.extend(self.data.iter().copied());
@@ -184,10 +168,6 @@ impl ContainerSort for SetSort {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_sequence_container_ty::<SetContainer>();
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
