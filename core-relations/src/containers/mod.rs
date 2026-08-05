@@ -486,6 +486,7 @@ impl ContainerValues {
         id: ContainerValueId,
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
+        base_values: crate::BaseValues,
     ) -> ContainerValueId {
         let id = self.container_ids.insert(TypeId::of::<C>(), id);
         self.data.get_or_insert(id, || {
@@ -493,6 +494,7 @@ impl ContainerValues {
                 id,
                 Box::new(merge_fn),
                 id_counter,
+                base_values,
             ))
         });
         assert!(

@@ -31,13 +31,13 @@ impl ContainerValue for PairContainer {
 }
 
 impl SequenceContainerValue for PairContainer {
-    fn encode_sequence(&self, out: &mut Vec<Value>) {
+    fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         let rebuild_mask =
             self.do_rebuild_first as usize | ((self.do_rebuild_second as usize) << 1);
         out.extend_from_slice(&[Value::from_usize(rebuild_mask), self.first, self.second]);
     }
 
-    fn decode_sequence(sequence: &[Value]) -> Self {
+    fn decode_sequence(sequence: &[Value], _base_values: &BaseValues) -> Self {
         let [rebuild_mask, first, second] = sequence else {
             panic!("serialized PairContainer must contain a rebuild mask and two values");
         };
@@ -83,6 +83,7 @@ impl SequenceContainerValue for PairContainer {
 
     fn rebuild_sequence(
         sequence: &[Value],
+        _base_values: &BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
@@ -416,9 +417,12 @@ mod tests {
             second: value(20),
         };
         let mut encoded = Vec::new();
-        pair.encode_sequence(&mut encoded);
+        pair.encode_sequence(&BaseValues::default(), &mut encoded);
         assert_eq!(encoded, vec![value(2), value(10), value(20)]);
-        assert_eq!(PairContainer::decode_sequence(&encoded), pair);
+        assert_eq!(
+            PairContainer::decode_sequence(&encoded, &BaseValues::default()),
+            pair
+        );
         assert_eq!(PairContainer::sequence_values(&encoded), &encoded[1..]);
 
         let mut visited = Vec::new();
@@ -433,6 +437,7 @@ mod tests {
         let mut rebuilt = Vec::new();
         assert!(PairContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &rebuilder,
             &mut rebuilt,
         ));
@@ -451,6 +456,7 @@ mod tests {
         let mut rebuilt = Vec::new();
         assert!(!PairContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &rebuilder,
             &mut rebuilt,
         ));

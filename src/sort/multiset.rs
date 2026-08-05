@@ -106,7 +106,7 @@ impl ContainerValue for MultiSetContainer {
 }
 
 impl SequenceContainerValue for MultiSetContainer {
-    fn encode_sequence(&self, out: &mut Vec<Value>) {
+    fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         assert!(
             i64::try_from(self.data.len()).is_ok(),
             "multiset cardinality exceeds the i64 language representation"
@@ -118,7 +118,7 @@ impl SequenceContainerValue for MultiSetContainer {
         }
     }
 
-    fn decode_sequence(sequence: &[Value]) -> Self {
+    fn decode_sequence(sequence: &[Value], _base_values: &BaseValues) -> Self {
         let (&header, data) = sequence
             .split_first()
             .expect("serialized MultiSetContainer must include its rebuild flag");
@@ -168,6 +168,7 @@ impl SequenceContainerValue for MultiSetContainer {
 
     fn rebuild_sequence(
         sequence: &[Value],
+        _base_values: &BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
@@ -198,7 +199,7 @@ impl SequenceContainerValue for MultiSetContainer {
             do_rebuild: true,
             data: rebuilt,
         }
-        .encode_sequence(out);
+        .encode_sequence(_base_values, out);
         if out.as_slice() == sequence {
             out.clear();
             return false;
@@ -1078,13 +1079,13 @@ impl PurePrim for Map {
         mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[0])?;
+        let function = state.prepare_function(args[0])?;
         // Copy before callbacks: they may intern containers and grow the
         // execution-local prediction storage backing the fast slice.
         let entries = multiset_entries(&state, args[1])?;
         let mut mapped_values = MultiSet::new();
         for (v, count) in entries {
-            if let Some(mapped) = state.apply_function(&fc, &[v]) {
+            if let Some(mapped) = state.apply_prepared_function(&function, &[v]) {
                 mapped_values.checked_insert_multiple_mut(mapped, count)?;
             }
         }
@@ -1133,12 +1134,12 @@ impl FullPrim for FillIndex {
         mut state: crate::FullState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[1])?;
+        let resolved = state.resolve_function_value(args[1])?;
         let entries = multiset_entries(&state, args[0])?
             .into_iter()
             .map(|(value, count)| Some((value, i64::try_from(count).ok()?)))
             .collect::<Option<Vec<_>>>()?;
-        let action = match fc.0 {
+        let action = match resolved.id {
             ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
             // Primitive functions cannot be used with
             // unstable-multiset-fill-index, since they cannot be set.
@@ -1193,9 +1194,9 @@ impl WritePrim for ClearIndex {
         mut state: crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[1])?;
+        let resolved = state.resolve_function_value(args[1])?;
         let entries = multiset_entries(&state, args[0])?;
-        let action = match fc.0 {
+        let action = match resolved.id {
             ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
             // Primitive functions cannot be used with
             // unstable-multiset-clear-index, since they cannot be deleted.
@@ -1244,11 +1245,11 @@ impl PurePrim for FlatMap {
         mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[0])?;
+        let function = state.prepare_function(args[0])?;
         let entries = multiset_entries(&state, args[1])?;
         let mut flattened = MultiSet::new();
         for (v, count) in entries {
-            let mapped = state.apply_function(&fc, &[v]);
+            let mapped = state.apply_prepared_function(&function, &[v]);
             if let Some(mapped_ms) = mapped {
                 for (mapped, mapped_count) in multiset_entries(&state, mapped_ms)? {
                     flattened
@@ -1301,11 +1302,11 @@ impl PurePrim for Filter {
         mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[0])?;
+        let function = state.prepare_function(args[0])?;
         let entries = multiset_entries(&state, args[1])?;
         let mut filtered = Vec::with_capacity(entries.len());
         for (v, count) in entries {
-            let mapped = state.apply_function(&fc, &[v]);
+            let mapped = state.apply_prepared_function(&function, &[v]);
             if mapped.is_some() == self.skip_empty {
                 filtered.push((v, count));
             }
@@ -1400,7 +1401,7 @@ impl PurePrim for Reduce {
         mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[0])?;
+        let function = state.prepare_function(args[0])?;
         let initial = args[1];
         let entries = multiset_entries(&state, args[2])?;
         let mut acc = initial;
@@ -1408,7 +1409,7 @@ impl PurePrim for Reduce {
         for (value, count) in entries {
             for _ in 0..count {
                 if has_value {
-                    acc = state.apply_function(&fc, &[acc, value])?;
+                    acc = state.apply_prepared_function(&function, &[acc, value])?;
                 } else {
                     acc = value;
                     has_value = true;
@@ -1638,9 +1639,12 @@ mod tests {
             data,
         };
         let mut encoded = Vec::new();
-        multiset.encode_sequence(&mut encoded);
+        multiset.encode_sequence(&BaseValues::default(), &mut encoded);
         assert_eq!(encoded.len(), 1 + 2 * MULTISET_ENTRY_WIDTH);
-        assert_eq!(MultiSetContainer::decode_sequence(&encoded), multiset);
+        assert_eq!(
+            MultiSetContainer::decode_sequence(&encoded, &BaseValues::default()),
+            multiset
+        );
 
         let mut children = Vec::new();
         MultiSetContainer::visit_sequence_values(&encoded, &mut |value| children.push(value));
@@ -1649,13 +1653,14 @@ mod tests {
         let mut rebuilt = Vec::new();
         assert!(MultiSetContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &Collapse {
                 from: value(4),
                 to: value(2),
             },
             &mut rebuilt,
         ));
-        let rebuilt = MultiSetContainer::decode_sequence(&rebuilt);
+        let rebuilt = MultiSetContainer::decode_sequence(&rebuilt, &BaseValues::default());
         assert_eq!(
             rebuilt.data.iter_counts().collect::<Vec<_>>(),
             vec![(value(2), 8)]
@@ -1673,9 +1678,12 @@ mod tests {
             data,
         };
         let mut encoded = Vec::new();
-        multiset.encode_sequence(&mut encoded);
+        multiset.encode_sequence(&BaseValues::default(), &mut encoded);
         assert_ne!(encoded[3], value(0));
-        assert_eq!(MultiSetContainer::decode_sequence(&encoded), multiset);
+        assert_eq!(
+            MultiSetContainer::decode_sequence(&encoded, &BaseValues::default()),
+            multiset
+        );
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -1686,7 +1694,7 @@ mod tests {
         encode_count(&mut encoded, i64::MAX as usize);
         encoded.push(value(2));
         encode_count(&mut encoded, 1);
-        MultiSetContainer::decode_sequence(&encoded);
+        MultiSetContainer::decode_sequence(&encoded, &BaseValues::default());
     }
 
     #[test]
