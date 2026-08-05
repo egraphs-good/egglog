@@ -41,7 +41,7 @@ use crate::core_relations::{
 use crate::{
     ast::{FunctionSubtype, Literal, ResolvedExpr},
     core::ResolvedCall,
-    sort::{F, S},
+    sort::{F, FunctionContainer, FunctionSequence, PreparedFunction, ResolvedFunction, S},
     typechecking::FuncType,
 };
 use egglog_bridge::{ActionRegistry, TableAction, TableKind};
@@ -238,14 +238,56 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// context — there is no `ctx` parameter to lie about.
     ///
     /// [`EGraph::add_pure_primitive`]: crate::EGraph::add_pure_primitive
-    fn apply_function(
+    fn apply_function(&mut self, fc: &FunctionContainer, args: &[Value]) -> Option<Value> {
+        let ctx = self.ctx();
+        let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
+        fc.apply(&mut pure, args)
+    }
+
+    /// Dispatch an `UnstableFn` directly from its serialized sequence.
+    ///
+    /// This convenience path prepares the function for one application. The
+    /// partial arguments are copied before invoking the target because the
+    /// callback may intern another container and grow the prediction storage
+    /// backing the borrowed sequence. Higher-order loops should call
+    /// [`Core::prepare_function`] once and reuse the result; rebuild and
+    /// occurrence indexing never resolve the descriptor.
+    fn apply_function_value(&mut self, function: Value, args: &[Value]) -> Option<Value> {
+        let prepared = self.prepare_function(function)?;
+        self.apply_prepared_function(&prepared, args)
+    }
+
+    /// Resolve and copy the immutable portion of an `UnstableFn` once so a
+    /// higher-order primitive can reuse it for many callbacks.
+    fn prepare_function(&self, function: Value) -> Option<PreparedFunction> {
+        let (descriptor, partial_args) =
+            self.with_container_sequence::<FunctionContainer, _>(function, |sequence| {
+                let sequence = FunctionSequence::parse(sequence);
+                (sequence.descriptor(), sequence.args().to_vec())
+            })?;
+        let resolved: ResolvedFunction = self.base_values().unwrap(descriptor);
+        Some(PreparedFunction::new(resolved, partial_args))
+    }
+
+    /// Invoke a function prepared by [`Core::prepare_function`].
+    fn apply_prepared_function(
         &mut self,
-        fc: &crate::sort::FunctionContainer,
+        function: &PreparedFunction,
         args: &[Value],
     ) -> Option<Value> {
         let ctx = self.ctx();
         let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
-        fc.apply(&mut pure, args)
+        function.apply(&mut pure, args)
+    }
+
+    /// Resolve the descriptor of a serialized `UnstableFn` without
+    /// reconstructing its Rust container or partial-argument sorts.
+    fn resolve_function_value(&self, function: Value) -> Option<ResolvedFunction> {
+        let descriptor = self
+            .with_container_sequence::<FunctionContainer, _>(function, |sequence| {
+                FunctionSequence::parse(sequence).descriptor()
+            })?;
+        Some(self.base_values().unwrap(descriptor))
     }
 
     /// Dispatch an already type-specialized primitive in the current
