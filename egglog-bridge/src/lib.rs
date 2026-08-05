@@ -320,9 +320,8 @@ impl EGraph {
     pub fn register_container_ty<C: ContainerValue>(&mut self) {
         let uf_table = self.uf_table;
         let ts_counter = self.timestamp_counter;
-        self.db.container_values_mut().register_type::<C>(
-            self.id_counter,
-            move |state, old, new| {
+        self.db
+            .register_container_type::<C>(self.id_counter, move |state, old, new| {
                 if old != new {
                     let next_ts = Value::from_usize(state.read_counter(ts_counter));
                     state.stage_insert(uf_table, &[old, new, next_ts]);
@@ -330,8 +329,7 @@ impl EGraph {
                 } else {
                     old
                 }
-            },
-        );
+            });
     }
 
     /// Register a container using the variable-arity sequence-table backend.

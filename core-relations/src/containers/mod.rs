@@ -22,13 +22,10 @@ use rustc_hash::FxHasher;
 use crate::{
     ColumnId, CounterId, ExecutionState, Offset, Subset, SubsetRef, TableId, TaggedRowBuffer,
     Value, WrappedTable,
-    common::{DashMap, IndexSet, SubsetTracker},
+    common::{DashMap, HashMap, IndexSet, SubsetTracker},
     parallel,
-    parallel_heuristics::{
-        parallelize_db_level_op, parallelize_inter_container_op, parallelize_intra_container_op,
-        parallelize_rebuild,
-    },
-    table_spec::{Rebuilder, ValueRebuilder},
+    parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
+    table_spec::{MaintenanceTable, Rebuilder, ValueRebuilder},
 };
 
 mod sequence;
@@ -39,7 +36,27 @@ mod tests;
 use sequence::SequenceContainerEnv;
 pub use sequence::SequenceContainerValue;
 
-define_id!(pub ContainerValueId, u32, "an identifier for containers");
+define_id!(
+    pub ContainerValueId,
+    u32,
+    "a typed identifier for a container's variable-arity table"
+);
+
+// Container tables participate in the same dense storage namespace as
+// fixed-arity relation tables. `ContainerValueId` remains a distinct public
+// type so APIs cannot accidentally use a relation as a container, but the
+// representation is the backing table's `TableId`.
+impl From<ContainerValueId> for TableId {
+    fn from(id: ContainerValueId) -> Self {
+        TableId::from_usize(id.index())
+    }
+}
+
+impl ContainerValueId {
+    pub(crate) fn from_table_id(id: TableId) -> Self {
+        ContainerValueId::from_usize(id.index())
+    }
+}
 
 pub trait MergeFn:
     Fn(&mut ExecutionState, Value, Value) -> Value + dyn_clone::DynClone + Send + Sync
@@ -52,22 +69,16 @@ dyn_clone::clone_trait_object!(MergeFn);
 
 #[derive(Clone, Default)]
 struct ContainerIds {
-    ids: IndexSet<TypeId>,
+    ids: HashMap<TypeId, ContainerValueId>,
 }
 
 impl ContainerIds {
-    fn insert(&mut self, ty: TypeId) -> ContainerValueId {
-        if let Some(idx) = self.ids.get_index_of(&ty) {
-            ContainerValueId::from_usize(idx)
-        } else {
-            let idx = self.ids.len();
-            self.ids.insert(ty);
-            ContainerValueId::from_usize(idx)
-        }
+    fn insert(&mut self, ty: TypeId, id: ContainerValueId) -> ContainerValueId {
+        *self.ids.entry(ty).or_insert(id)
     }
 
     fn get(&self, ty: &TypeId) -> Option<ContainerValueId> {
-        self.ids.get_index_of(ty).map(ContainerValueId::from_usize)
+        self.ids.get(ty).copied()
     }
 }
 
@@ -75,6 +86,8 @@ impl ContainerIds {
 pub struct ContainerValues {
     subset_tracker: SubsetTracker,
     container_ids: ContainerIds,
+    // ContainerValueId shares the global TableId representation, so relation
+    // registrations appear as holes in this container-only map.
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
 
@@ -127,12 +140,10 @@ pub struct ContainerRebuildSummary {
 }
 
 impl ContainerRebuildSummary {
-    /// Returns whether any container entry changed during rebuild.
     pub fn changed(&self) -> bool {
         self.changed
     }
 
-    /// Returns the container ids whose parent rows may need retimestamping.
     pub fn dirty_ids(&self) -> &IndexSet<Value> {
         &self.dirty_ids
     }
@@ -146,7 +157,7 @@ impl ContainerRebuildSummary {
         self.dirty_ids.insert(value);
     }
 
-    fn extend(&mut self, other: Self) {
+    pub(crate) fn extend(&mut self, other: Self) {
         self.changed |= other.changed;
         self.dirty_ids.extend(other.dirty_ids);
     }
@@ -165,13 +176,44 @@ pub(crate) enum ContainerBackend {
 
 /// The shared union-find rebuild inputs for one container rebuild cycle.
 ///
-/// Preparing this once is important for incremental rebuilds: consulting the
-/// subset tracker separately for the sequence and legacy passes would advance
-/// its watermark twice and make the second pass miss the relevant UF delta.
-struct ContainerRebuildContext<'a> {
+/// Preparing this once lets the common sequence-table traversal and the
+/// legacy-only compatibility pass share the same incremental delta without
+/// advancing the subset tracker twice.
+pub(crate) struct ContainerRebuildContext<'a> {
     table: &'a WrappedTable,
     rebuilder: Box<dyn Rebuilder + 'a>,
+    to_scan: Option<SubsetRef<'a>>,
+}
+
+/// Owned portion of a container rebuild context. Keeping the union-find subset
+/// separate lets the database detach and restore one dependency stratum at a
+/// time while recreating the short-lived rebuilder borrow from the still-
+/// installed source table.
+pub(crate) struct ContainerRebuildPlan {
     to_scan: Option<Subset>,
+}
+
+impl ContainerRebuildPlan {
+    pub(crate) fn context<'a>(
+        &'a self,
+        table: &'a WrappedTable,
+    ) -> Option<ContainerRebuildContext<'a>> {
+        Some(ContainerRebuildContext {
+            table,
+            rebuilder: table.rebuilder(&[])?,
+            to_scan: self.to_scan.as_ref().map(Subset::as_ref),
+        })
+    }
+}
+
+impl ContainerRebuildContext<'_> {
+    pub(crate) fn apply(
+        &self,
+        environment: &mut (dyn DynamicContainerEnv + Send + Sync),
+        exec_state: &mut ExecutionState,
+    ) -> ContainerRebuildSummary {
+        environment.apply_rebuild(self.table, &*self.rebuilder, self.to_scan, exec_state)
+    }
 }
 
 impl ContainerValues {
@@ -191,6 +233,17 @@ impl ContainerValues {
             .1
             .as_any()
             .downcast_ref::<SequenceContainerEnv<C>>()
+    }
+
+    /// Return the globally allocated storage id for an already registered
+    /// legacy container type.
+    pub(crate) fn registered_type<C: ContainerValue>(&self) -> Option<ContainerValueId> {
+        let (id, env) = self.get_env::<C>()?;
+        assert!(
+            env.as_any().downcast_ref::<ContainerEnv<C>>().is_some(),
+            "container type was already registered with a different backend"
+        );
+        Some(id)
     }
 
     /// Return the id of an already registered sequence environment.
@@ -289,9 +342,8 @@ impl ContainerValues {
     /// unchanged if it is not a registered container of the type behind
     /// `type_id`.
     ///
-    /// Unlike [`ContainerValues::rebuild_all`], which drives rebuilds off the
-    /// backend union-find, the caller supplies the remapping explicitly and
-    /// identifies the container type dynamically by its [`TypeId`].
+    /// The caller supplies the remapping explicitly and identifies the
+    /// container type dynamically by its [`TypeId`].
     pub fn rebuild_val_with(
         &self,
         type_id: TypeId,
@@ -309,104 +361,48 @@ impl ContainerValues {
             .unwrap_or(value)
     }
 
-    /// Apply the given rebuild to the contents of each container.
-    pub fn rebuild_all(
+    /// Prepare the source-table delta once without retaining a borrow of the
+    /// source table. A short-lived [`ContainerRebuildContext`] can then be
+    /// reconstructed for each mixed participant stratum.
+    pub(crate) fn prepare_rebuild_plan(
         &mut self,
         table_id: TableId,
         table: &WrappedTable,
-        exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
-        let Some(context) = self.prepare_rebuild(table_id, table) else {
-            return Default::default();
-        };
-        let mut summary = self.rebuild_sequence_pass(&context, exec_state);
-        summary.extend(self.rebuild_legacy_pass(&context, exec_state));
-        self.finish_rebuild(&mut summary);
-        summary
-    }
-
-    /// Prepare the immutable UF inputs shared by the backend-specific passes
-    /// in one container rebuild cycle.
-    fn prepare_rebuild<'a>(
-        &mut self,
-        table_id: TableId,
-        table: &'a WrappedTable,
-    ) -> Option<ContainerRebuildContext<'a>> {
+    ) -> Option<ContainerRebuildPlan> {
         let rebuilder = table.rebuilder(&[])?;
-        let to_scan = rebuilder.hint_col().map(|_| {
-            // We may attempt an incremental rebuild. This must be computed
-            // exactly once and shared by both backend passes.
-            self.subset_tracker.recent_updates(table_id, table)
-        });
-        Some(ContainerRebuildContext {
-            table,
-            rebuilder,
-            to_scan,
-        })
+        let to_scan = rebuilder
+            .hint_col()
+            .map(|_| self.subset_tracker.recent_updates(table_id, table));
+        Some(ContainerRebuildPlan { to_scan })
     }
 
-    /// Rebuild only sequence-backed container environments.
-    fn rebuild_sequence_pass(
+    /// Rebuild only environments that still use the legacy DashMap storage.
+    ///
+    /// Sequence-backed environments are ordinary maintenance participants and
+    /// are rebuilt by the common dependency traversal. Keeping this pass
+    /// legacy-only means each migrated container immediately leaves the old
+    /// container-wide rebuild loop.
+    pub(crate) fn rebuild_legacy_pass(
         &mut self,
         context: &ContainerRebuildContext<'_>,
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary {
-        self.rebuild_backend_pass(ContainerBackend::Sequence, context, exec_state)
-    }
-
-    /// Rebuild only legacy container environments.
-    fn rebuild_legacy_pass(
-        &mut self,
-        context: &ContainerRebuildContext<'_>,
-        exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
-        self.rebuild_backend_pass(ContainerBackend::Legacy, context, exec_state)
-    }
-
-    fn rebuild_backend_pass(
-        &mut self,
-        backend: ContainerBackend,
-        context: &ContainerRebuildContext<'_>,
-        exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
-        let (selected, selected_rows, largest_env) = self
+        let selected = self
             .data
             .iter()
-            .filter(|(_, env)| env.backend() == backend)
-            .fold(
-                (0usize, 0usize, 0usize),
-                |(count, rows, largest), (_, env)| {
-                    let len = env.len();
-                    (count + 1, rows.saturating_add(len), largest.max(len))
-                },
-            );
+            .filter(|(_, env)| env.backend() == ContainerBackend::Legacy)
+            .count();
         if selected == 0 {
             return ContainerRebuildSummary::default();
         }
 
-        // Sequence environments are themselves tables, so a few large types
-        // are enough useful work to parallelize even when the legacy
-        // environment-count heuristic does not fire. Keep the aggregate-size
-        // alternative sequence-only, and use it only while every individual
-        // sequence scan remains serial. This avoids nesting outer environment
-        // tasks around tables that already use all workers internally; legacy
-        // environments likewise retain their existing nested rebuild policy.
-        let parallelize_large_sequence_batch = backend == ContainerBackend::Sequence
-            && selected > 1
-            && !parallelize_rebuild(largest_env)
-            && parallelize_db_level_op(selected_rows);
-        if parallelize_inter_container_op(selected) || parallelize_large_sequence_batch {
+        if parallelize_inter_container_op(selected) {
             parallel::map_dense_id_map_mut(&mut self.data, |_, env| {
-                if env.backend() != backend {
+                if env.backend() != ContainerBackend::Legacy {
                     return ContainerRebuildSummary::default();
                 }
                 let mut exec_state = exec_state.clone();
-                env.apply_rebuild(
-                    context.table,
-                    &*context.rebuilder,
-                    context.to_scan.as_ref().map(|subset| subset.as_ref()),
-                    &mut exec_state,
-                )
+                context.apply(&mut **env, &mut exec_state)
             })
             .into_iter()
             .fold(ContainerRebuildSummary::default(), |mut acc, summary| {
@@ -416,15 +412,9 @@ impl ContainerValues {
         } else {
             let mut summary = ContainerRebuildSummary::default();
             for (_, env) in self.data.iter_mut() {
-                if env.backend() != backend {
-                    continue;
+                if env.backend() == ContainerBackend::Legacy {
+                    summary.extend(context.apply(&mut **env, exec_state));
                 }
-                summary.extend(env.apply_rebuild(
-                    context.table,
-                    &*context.rebuilder,
-                    context.to_scan.as_ref().map(|subset| subset.as_ref()),
-                    exec_state,
-                ));
             }
             summary
         }
@@ -435,7 +425,7 @@ impl ContainerValues {
     ///
     /// Call this once, after every backend-specific pass has completed and all
     /// temporarily removed environments have been restored.
-    fn finish_rebuild(&self, summary: &mut ContainerRebuildSummary) {
+    pub(crate) fn finish_rebuild(&self, summary: &mut ContainerRebuildSummary) {
         self.expand_dirty_id_closure(summary);
     }
 
@@ -450,7 +440,7 @@ impl ContainerValues {
     /// inner `Vec` id is dirty; the outer `Vec` row is not retimestamped, so a
     /// later rule like `(rewrite (p (vec-of (vec-of (b)))) (b))` can miss the
     /// newly matchable parent row.
-    fn expand_dirty_id_closure(&self, summary: &mut ContainerRebuildSummary) {
+    pub(crate) fn expand_dirty_id_closure(&self, summary: &mut ContainerRebuildSummary) {
         let mut frontier = summary.dirty_ids.clone();
         let mut seen = frontier.iter().copied().collect::<IndexSet<_>>();
 
@@ -475,13 +465,21 @@ impl ContainerValues {
     /// merging conflicting ids (`merge_fn`).
     pub fn register_type<C: ContainerValue>(
         &mut self,
+        id: ContainerValueId,
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
     ) -> ContainerValueId {
-        let id = self.container_ids.insert(TypeId::of::<C>());
+        let id = self.container_ids.insert(TypeId::of::<C>(), id);
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
         });
+        assert!(
+            self.data[id]
+                .as_any()
+                .downcast_ref::<ContainerEnv<C>>()
+                .is_some(),
+            "container type was already registered with a different backend"
+        );
         id
     }
 
@@ -489,10 +487,11 @@ impl ContainerValues {
     /// variable-length sequence followed by one non-key identity value.
     pub(crate) fn register_sequence_type<C: SequenceContainerValue>(
         &mut self,
+        id: ContainerValueId,
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
     ) -> ContainerValueId {
-        let id = self.container_ids.insert(TypeId::of::<C>());
+        let id = self.container_ids.insert(TypeId::of::<C>(), id);
         self.data.get_or_insert(id, || {
             Box::new(SequenceContainerEnv::<C>::new(
                 id,
@@ -532,12 +531,17 @@ impl ContainerValues {
     }
 
     /// Snapshot the ids of all sequence-backed environments.
-    #[cfg(test)]
     pub(crate) fn sequence_env_ids(&self) -> Vec<ContainerValueId> {
         self.data
             .iter()
             .filter_map(|(id, env)| (env.backend() == ContainerBackend::Sequence).then_some(id))
             .collect()
+    }
+
+    /// Return the common maintenance surface for a container's backing
+    /// sequence table.
+    pub(crate) fn maintenance_table(&self, id: ContainerValueId) -> Option<&dyn MaintenanceTable> {
+        self.data.get(id)?.maintenance_table()
     }
 
     pub(crate) fn take_env(
@@ -622,10 +626,18 @@ pub(crate) trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn backend(&self) -> ContainerBackend;
     fn len(&self) -> usize;
-    /// Publish one epoch of staged sequence-table mutations.
-    fn merge_pending(&mut self, _exec_state: &mut ExecutionState) -> bool {
-        false
+
+    /// Return the common maintenance interface when this environment is
+    /// sequence-backed. Legacy environments are intentionally absent from the
+    /// scheduler and return `None`.
+    fn maintenance_table(&self) -> Option<&dyn MaintenanceTable> {
+        None
     }
+
+    fn maintenance_table_mut(&mut self) -> Option<&mut dyn MaintenanceTable> {
+        None
+    }
+
     fn apply_rebuild(
         &mut self,
         table: &WrappedTable,

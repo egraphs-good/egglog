@@ -31,8 +31,8 @@ pub use containers::{
     SequenceContainerValue,
 };
 pub use free_join::{
-    AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, MaintenanceReadDependency,
-    TableId, Variable, make_external_func, plan::PlanStrategy,
+    AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, TableId, Variable,
+    make_external_func, plan::PlanStrategy,
 };
 pub use hash_index::TupleIndex;
 #[doc(hidden)]
