@@ -1,0 +1,17 @@
+;; Rebuilding this relation changes both its ordinary e-class key and the
+;; contents of its stable Vec identity. The rebuilt replacement must be
+;; published before dirty-container refresh scans for rows containing `$v`;
+;; otherwise refresh sees and re-inserts the obsolete `(b, $v)` row.
+(sort E)
+(sort VE (Vec E))
+
+(constructor a () E)
+(constructor b () E)
+(relation R (E VE))
+
+(let $v (vec-of (b)))
+(R (b) $v)
+
+(union (a) (b))
+
+(check (R (a) (vec-of (a))))
