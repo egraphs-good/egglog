@@ -20,16 +20,24 @@ use dashmap::SharedValue;
 use rustc_hash::FxHasher;
 
 use crate::{
-    ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
+    ColumnId, CounterId, ExecutionState, Offset, Subset, SubsetRef, TableId, TaggedRowBuffer,
+    Value, WrappedTable,
     common::{DashMap, IndexSet, SubsetTracker},
     parallel,
-    parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
+    parallel_heuristics::{
+        parallelize_db_level_op, parallelize_inter_container_op, parallelize_intra_container_op,
+        parallelize_rebuild,
+    },
     table_spec::{Rebuilder, ValueRebuilder},
 };
 
+mod sequence;
+
 #[cfg(test)]
 mod tests;
+
+use sequence::SequenceContainerEnv;
+pub use sequence::SequenceContainerValue;
 
 define_id!(pub ContainerValueId, u32, "an identifier for containers");
 
@@ -68,6 +76,32 @@ pub struct ContainerValues {
     subset_tracker: SubsetTracker,
     container_ids: ContainerIds,
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
+}
+
+enum ContainerValueRefInner<'a, C> {
+    Legacy(Box<dyn Deref<Target = C> + 'a>),
+    Sequence(C),
+}
+
+/// A borrowed legacy container or an owned value decoded from a sequence.
+///
+/// Sequence-backed lookups deliberately reconstruct the Rust container: this
+/// is the slow compatibility path. Performance-sensitive primitives should
+/// use [`ExecutionState::container_sequence`] and operate on the serialized
+/// values directly.
+struct ContainerValueRef<'a, C> {
+    inner: ContainerValueRefInner<'a, C>,
+}
+
+impl<C> Deref for ContainerValueRef<'_, C> {
+    type Target = C;
+
+    fn deref(&self) -> &Self::Target {
+        match &self.inner {
+            ContainerValueRefInner::Legacy(value) => value,
+            ContainerValueRefInner::Sequence(value) => value,
+        }
+    }
 }
 
 /// Summary returned by container rebuild.
@@ -118,24 +152,78 @@ impl ContainerRebuildSummary {
     }
 }
 
+/// The storage implementation behind a type-erased container environment.
+///
+/// Sequence environments are eligible to become independently scheduled
+/// database maintenance targets. Legacy environments remain in the registry's
+/// compatibility rebuild pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContainerBackend {
+    Legacy,
+    Sequence,
+}
+
+/// The shared union-find rebuild inputs for one container rebuild cycle.
+///
+/// Preparing this once is important for incremental rebuilds: consulting the
+/// subset tracker separately for the sequence and legacy passes would advance
+/// its watermark twice and make the second pass miss the relevant UF delta.
+struct ContainerRebuildContext<'a> {
+    table: &'a WrappedTable,
+    rebuilder: Box<dyn Rebuilder + 'a>,
+    to_scan: Option<Subset>,
+}
+
 impl ContainerValues {
     pub fn new() -> Self {
         Default::default()
     }
 
-    fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
+    fn get_env<C: ContainerValue>(
+        &self,
+    ) -> Option<(ContainerValueId, &(dyn DynamicContainerEnv + Send + Sync))> {
         let id = self.container_ids.get(&TypeId::of::<C>())?;
-        let res = self.data.get(id)?.as_any();
-        Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
+        Some((id, &**self.data.get(id)?))
+    }
+
+    fn get_sequence_env<C: ContainerValue>(&self) -> Option<&SequenceContainerEnv<C>> {
+        self.get_env::<C>()?
+            .1
+            .as_any()
+            .downcast_ref::<SequenceContainerEnv<C>>()
+    }
+
+    /// Return the id of an already registered sequence environment.
+    ///
+    /// This check does not mutate the registry, so the database can distinguish
+    /// an idempotent registration from a first registration before installing
+    /// the corresponding maintenance-scheduler participant.
+    pub(crate) fn registered_sequence_type<C: SequenceContainerValue>(
+        &self,
+    ) -> Option<ContainerValueId> {
+        let (id, env) = self.get_env::<C>()?;
+        assert!(
+            env.as_any()
+                .downcast_ref::<SequenceContainerEnv<C>>()
+                .is_some(),
+            "container type was already registered with a different backend"
+        );
+        Some(id)
     }
 
     /// Iterate over the containers of the given type.
     pub fn for_each<C: ContainerValue>(&self, mut f: impl FnMut(&C, Value)) {
-        let Some(env) = self.get::<C>() else {
+        let Some((_, env)) = self.get_env::<C>() else {
             return;
         };
-        for ent in env.to_id.iter() {
-            f(ent.key(), *ent.value());
+        if let Some(env) = env.as_any().downcast_ref::<ContainerEnv<C>>() {
+            for ent in env.to_id.iter() {
+                f(ent.key(), *ent.value());
+            }
+        } else if let Some(env) = env.as_any().downcast_ref::<SequenceContainerEnv<C>>() {
+            env.for_each(&mut f);
+        } else {
+            unreachable!("container environment has the wrong concrete value type");
         }
     }
 
@@ -145,7 +233,30 @@ impl ContainerValues {
     /// The return type of this function may contain lock guards. Attempts to modify the contents
     /// of the containers database may deadlock if the given guard has not been dropped.
     pub fn get_val<C: ContainerValue>(&self, val: Value) -> Option<impl Deref<Target = C> + '_> {
-        self.get::<C>()?.get_container(val)
+        let (_, env) = self.get_env::<C>()?;
+        if let Some(env) = env.as_any().downcast_ref::<ContainerEnv<C>>() {
+            return Some(ContainerValueRef {
+                inner: ContainerValueRefInner::Legacy(Box::new(env.get_container(val)?)),
+            });
+        }
+        let env = env
+            .as_any()
+            .downcast_ref::<SequenceContainerEnv<C>>()
+            .expect("container environment has the wrong concrete value type");
+        Some(ContainerValueRef {
+            inner: ContainerValueRefInner::Sequence(env.get_container(val)?),
+        })
+    }
+
+    fn get_owned<C: ContainerValue>(&self, value: Value) -> Option<C> {
+        let (_, env) = self.get_env::<C>()?;
+        if let Some(env) = env.as_any().downcast_ref::<ContainerEnv<C>>() {
+            return Some(env.get_container(value)?.deref().clone());
+        }
+        env.as_any()
+            .downcast_ref::<SequenceContainerEnv<C>>()
+            .expect("container environment has the wrong concrete value type")
+            .get_container(value)
     }
 
     pub fn register_val<C: ContainerValue>(
@@ -153,10 +264,24 @@ impl ContainerValues {
         container: C,
         exec_state: &mut ExecutionState,
     ) -> Value {
-        let env = self
-            .get::<C>()
+        let (_, env) = self
+            .get_env::<C>()
             .expect("must register container type before registering a value");
-        env.get_or_insert(&container, exec_state)
+        if let Some(env) = env.as_any().downcast_ref::<ContainerEnv<C>>() {
+            env.get_or_insert(&container, exec_state)
+        } else {
+            env.as_any()
+                .downcast_ref::<SequenceContainerEnv<C>>()
+                .expect("container environment has the wrong concrete value type")
+                .get_or_insert(&container, exec_state)
+        }
+    }
+
+    /// Return the committed flat value sequence for a sequence-backed
+    /// container. This is the fast read path and performs no Rust-container
+    /// reconstruction.
+    pub fn get_sequence<C: ContainerValue>(&self, value: Value) -> Option<&[Value]> {
+        self.get_sequence_env::<C>()?.get_values(value)
     }
 
     /// Rebuild a single container value by remapping each contained value
@@ -191,20 +316,95 @@ impl ContainerValues {
         table: &WrappedTable,
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary {
-        let Some(rebuilder) = table.rebuilder(&[]) else {
+        let Some(context) = self.prepare_rebuild(table_id, table) else {
             return Default::default();
         };
+        let mut summary = self.rebuild_sequence_pass(&context, exec_state);
+        summary.extend(self.rebuild_legacy_pass(&context, exec_state));
+        self.finish_rebuild(&mut summary);
+        summary
+    }
+
+    /// Prepare the immutable UF inputs shared by the backend-specific passes
+    /// in one container rebuild cycle.
+    fn prepare_rebuild<'a>(
+        &mut self,
+        table_id: TableId,
+        table: &'a WrappedTable,
+    ) -> Option<ContainerRebuildContext<'a>> {
+        let rebuilder = table.rebuilder(&[])?;
         let to_scan = rebuilder.hint_col().map(|_| {
-            // We may attempt an incremental rebuild.
+            // We may attempt an incremental rebuild. This must be computed
+            // exactly once and shared by both backend passes.
             self.subset_tracker.recent_updates(table_id, table)
         });
-        let mut summary = if parallelize_inter_container_op(self.data.next_id().index()) {
+        Some(ContainerRebuildContext {
+            table,
+            rebuilder,
+            to_scan,
+        })
+    }
+
+    /// Rebuild only sequence-backed container environments.
+    fn rebuild_sequence_pass(
+        &mut self,
+        context: &ContainerRebuildContext<'_>,
+        exec_state: &mut ExecutionState,
+    ) -> ContainerRebuildSummary {
+        self.rebuild_backend_pass(ContainerBackend::Sequence, context, exec_state)
+    }
+
+    /// Rebuild only legacy container environments.
+    fn rebuild_legacy_pass(
+        &mut self,
+        context: &ContainerRebuildContext<'_>,
+        exec_state: &mut ExecutionState,
+    ) -> ContainerRebuildSummary {
+        self.rebuild_backend_pass(ContainerBackend::Legacy, context, exec_state)
+    }
+
+    fn rebuild_backend_pass(
+        &mut self,
+        backend: ContainerBackend,
+        context: &ContainerRebuildContext<'_>,
+        exec_state: &mut ExecutionState,
+    ) -> ContainerRebuildSummary {
+        let (selected, selected_rows, largest_env) = self
+            .data
+            .iter()
+            .filter(|(_, env)| env.backend() == backend)
+            .fold(
+                (0usize, 0usize, 0usize),
+                |(count, rows, largest), (_, env)| {
+                    let len = env.len();
+                    (count + 1, rows.saturating_add(len), largest.max(len))
+                },
+            );
+        if selected == 0 {
+            return ContainerRebuildSummary::default();
+        }
+
+        // Sequence environments are themselves tables, so a few large types
+        // are enough useful work to parallelize even when the legacy
+        // environment-count heuristic does not fire. Keep the aggregate-size
+        // alternative sequence-only, and use it only while every individual
+        // sequence scan remains serial. This avoids nesting outer environment
+        // tasks around tables that already use all workers internally; legacy
+        // environments likewise retain their existing nested rebuild policy.
+        let parallelize_large_sequence_batch = backend == ContainerBackend::Sequence
+            && selected > 1
+            && !parallelize_rebuild(largest_env)
+            && parallelize_db_level_op(selected_rows);
+        if parallelize_inter_container_op(selected) || parallelize_large_sequence_batch {
             parallel::map_dense_id_map_mut(&mut self.data, |_, env| {
+                if env.backend() != backend {
+                    return ContainerRebuildSummary::default();
+                }
                 let mut exec_state = exec_state.clone();
                 env.apply_rebuild(
-                    table,
-                    &*rebuilder,
-                    to_scan.as_ref().map(|x| x.as_ref()),
+                    context.table,
+                    &*context.rebuilder,
+                    context.to_scan.as_ref().map(|subset| subset.as_ref()),
                     &mut exec_state,
                 )
             })
@@ -216,17 +416,27 @@ impl ContainerValues {
         } else {
             let mut summary = ContainerRebuildSummary::default();
             for (_, env) in self.data.iter_mut() {
+                if env.backend() != backend {
+                    continue;
+                }
                 summary.extend(env.apply_rebuild(
-                    table,
-                    &*rebuilder,
-                    to_scan.as_ref().map(|x| x.as_ref()),
+                    context.table,
+                    &*context.rebuilder,
+                    context.to_scan.as_ref().map(|subset| subset.as_ref()),
                     exec_state,
                 ));
             }
             summary
-        };
-        self.expand_dirty_id_closure(&mut summary);
-        summary
+        }
+    }
+
+    /// Finish a split container rebuild by propagating stable semantic changes
+    /// through all containing containers.
+    ///
+    /// Call this once, after every backend-specific pass has completed and all
+    /// temporarily removed environments have been restored.
+    fn finish_rebuild(&self, summary: &mut ContainerRebuildSummary) {
+        self.expand_dirty_id_closure(summary);
     }
 
     /// Add ancestor containers to the dirty-id set until it is transitively closed.
@@ -274,6 +484,117 @@ impl ContainerValues {
         });
         id
     }
+
+    /// Register a container type whose canonical representation is a
+    /// variable-length sequence followed by one non-key identity value.
+    pub(crate) fn register_sequence_type<C: SequenceContainerValue>(
+        &mut self,
+        id_counter: CounterId,
+        merge_fn: impl MergeFn + 'static,
+    ) -> ContainerValueId {
+        let id = self.container_ids.insert(TypeId::of::<C>());
+        self.data.get_or_insert(id, || {
+            Box::new(SequenceContainerEnv::<C>::new(
+                id,
+                Box::new(merge_fn),
+                id_counter,
+            ))
+        });
+        assert!(
+            self.data[id]
+                .as_any()
+                .downcast_ref::<SequenceContainerEnv<C>>()
+                .is_some(),
+            "container type was already registered with a different backend"
+        );
+        id
+    }
+
+    /// Return the storage backend for a registered type-erased environment.
+    #[cfg(test)]
+    pub(crate) fn env_backend(&self, id: ContainerValueId) -> ContainerBackend {
+        self.data[id].backend()
+    }
+
+    /// Return the current number of values in a registered environment.
+    #[cfg(test)]
+    pub(crate) fn env_len(&self, id: ContainerValueId) -> usize {
+        self.data[id].len()
+    }
+
+    /// Return the combined number of committed sequence-backed rows.
+    pub(crate) fn sequence_len(&self) -> usize {
+        self.data
+            .iter()
+            .filter(|(_, env)| env.backend() == ContainerBackend::Sequence)
+            .map(|(_, env)| env.len())
+            .sum()
+    }
+
+    /// Snapshot the ids of all sequence-backed environments.
+    #[cfg(test)]
+    pub(crate) fn sequence_env_ids(&self) -> Vec<ContainerValueId> {
+        self.data
+            .iter()
+            .filter_map(|(id, env)| (env.backend() == ContainerBackend::Sequence).then_some(id))
+            .collect()
+    }
+
+    pub(crate) fn take_env(
+        &mut self,
+        id: ContainerValueId,
+    ) -> Box<dyn DynamicContainerEnv + Send + Sync> {
+        self.data
+            .take(id)
+            .expect("pending container environment must still be registered")
+    }
+
+    pub(crate) fn put_env(
+        &mut self,
+        id: ContainerValueId,
+        env: Box<dyn DynamicContainerEnv + Send + Sync>,
+    ) {
+        let old = self.data.insert(id, env);
+        assert!(old.is_none(), "container environment inserted twice");
+    }
+}
+
+impl ExecutionState<'_> {
+    /// Decode a container visible to this execution, including an identity
+    /// predicted earlier by the same execution.
+    ///
+    /// This is the slow compatibility path for primitive implementations.
+    /// Sequence-backed containers are reconstructed from their flat key.
+    pub fn get_container<C: ContainerValue>(&self, value: Value) -> Option<C> {
+        if let Some(env) = self.db.containers.get_sequence_env::<C>() {
+            env.get_container_with_predictions(self, value)
+        } else {
+            self.db.containers.get_owned::<C>(value)
+        }
+    }
+
+    /// Borrow the fast serialized payload for a sequence-backed container
+    /// visible to this execution. No Rust container is constructed. The
+    /// payload may include type-specific metadata, such as compact counts.
+    pub fn container_sequence<C: ContainerValue>(&self, value: Value) -> Option<&[Value]> {
+        self.db
+            .containers
+            .get_sequence_env::<C>()?
+            .get_values_with_predictions(self, value)
+    }
+
+    /// Intern an already serialized key for a sequence-backed container.
+    ///
+    /// This is the fast write path. Callers avoid constructing a Rust
+    /// container but remain responsible for producing that type's canonical
+    /// key format.
+    pub fn register_container_sequence<C: ContainerValue>(&mut self, key: &[Value]) -> Value {
+        let containers = self.db.containers;
+        let env = containers
+            .get_sequence_env::<C>()
+            .expect("container type is not registered with the sequence backend");
+        env.get_or_insert_key(key, self)
+    }
 }
 
 /// A trait implemented by container types.
@@ -297,8 +618,14 @@ pub trait ContainerValue: Hash + Eq + Clone + Send + Sync + 'static {
     fn iter(&self) -> impl Iterator<Item = Value> + '_;
 }
 
-pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
+pub(crate) trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    fn backend(&self) -> ContainerBackend;
+    fn len(&self) -> usize;
+    /// Publish one epoch of staged sequence-table mutations.
+    fn merge_pending(&mut self, _exec_state: &mut ExecutionState) -> bool {
+        false
+    }
     fn apply_rebuild(
         &mut self,
         table: &WrappedTable,
@@ -345,6 +672,14 @@ struct ContainerEnv<C: Eq + Hash> {
 impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn backend(&self) -> ContainerBackend {
+        ContainerBackend::Legacy
+    }
+
+    fn len(&self) -> usize {
+        self.to_id.len()
     }
 
     fn apply_rebuild(
