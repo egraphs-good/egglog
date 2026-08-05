@@ -1,0 +1,18 @@
+;; Rebuilding `w(b)` to `b` changes the Set in place. The enclosing Vec still
+;; contains the same Set id, so its own row is unchanged too. Stable-id dirty
+;; propagation must cross both sequence-container tables and revisit the
+;; ordinary `p` row, allowing the opaque nested matcher to fire.
+(sort E)
+(sort SE (Set E))
+(sort VSE (Vec SE))
+
+(constructor b () E)
+(constructor w (E) E)
+(constructor p (VSE) E)
+
+(rewrite (w x) x)
+(rewrite (p (vec-of (set-of (b)))) (b))
+
+(let $nested (p (vec-of (set-of (w (b))))))
+(run-schedule (saturate (run)))
+(check (= $nested (b)))
