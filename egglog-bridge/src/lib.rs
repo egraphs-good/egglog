@@ -19,8 +19,8 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
-    MergeVal, Offset, PlanStrategy, SequenceContainerValue, SortedWritesTable, TableId,
-    TaggedRowBuffer, Value, WrappedTable,
+    MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
+    WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ThreadPool;
@@ -313,30 +313,15 @@ impl EGraph {
         value
     }
 
-    /// Register the given [`ContainerValue`] type with this EGraph.
+    /// Register a serialized container type with this EGraph.
     ///
-    /// The given container will use the EGraph's union-find to manage rebuilding and the merging
-    /// of containers with a common id.
+    /// Containers use the variable-arity table backend and participate in the
+    /// normal maintenance scheduler. The EGraph's union-find manages rebuilding
+    /// and merges identities whose serialized keys become equal.
     pub fn register_container_ty<C: ContainerValue>(&mut self) {
         let uf_table = self.uf_table;
         let ts_counter = self.timestamp_counter;
-        self.db
-            .register_container_type::<C>(self.id_counter, move |state, old, new| {
-                if old != new {
-                    let next_ts = Value::from_usize(state.read_counter(ts_counter));
-                    state.stage_insert(uf_table, &[old, new, next_ts]);
-                    std::cmp::min(old, new)
-                } else {
-                    old
-                }
-            });
-    }
-
-    /// Register a container using the variable-arity sequence-table backend.
-    pub fn register_sequence_container_ty<C: SequenceContainerValue>(&mut self) {
-        let uf_table = self.uf_table;
-        let ts_counter = self.timestamp_counter;
-        self.db.register_sequence_container_type::<C>(
+        self.db.register_container_type::<C>(
             self.id_counter,
             move |state, old, new| {
                 if old != new {

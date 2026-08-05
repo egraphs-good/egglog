@@ -13,19 +13,6 @@ pub struct VecContainer {
 }
 
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        if self.do_rebuild {
-            rebuilder.rebuild_slice(&mut self.data)
-        } else {
-            false
-        }
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.data.iter().copied()
-    }
-}
-
-impl SequenceContainerValue for VecContainer {
     fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         out.push(Value::from_usize(self.do_rebuild as usize));
         out.extend_from_slice(&self.data);
@@ -176,10 +163,6 @@ impl ContainerSort for VecSort {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_sequence_container_ty::<VecContainer>();
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
