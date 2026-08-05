@@ -194,12 +194,33 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         self.es().base_values().get::<T>(x)
     }
 
-    /// Look up the Rust container behind an egglog [`Value`], if any.
+    /// Look up a committed Rust container behind an egglog [`Value`].
     fn value_to_container<T: ContainerValue>(
         &self,
         x: Value,
     ) -> Option<impl Deref<Target = T> + 'a> {
         self.es().container_values().get_val::<T>(x)
+    }
+
+    /// Reconstruct a container visible to this execution, including a local
+    /// prediction. This is the explicit slow sequence-container path.
+    fn value_to_owned_container<T: ContainerValue>(&self, x: Value) -> Option<T> {
+        self.es().get_container::<T>(x)
+    }
+
+    /// Run `f` over the fast serialized payload of a sequence-backed container
+    /// without reconstructing its Rust container.
+    fn with_container_sequence<T: ContainerValue, R>(
+        &self,
+        x: Value,
+        f: impl FnOnce(&[Value]) -> R,
+    ) -> Option<R> {
+        self.es().container_sequence::<T>(x).map(f)
+    }
+
+    /// Intern an already serialized sequence-container key.
+    fn register_container_sequence<T: ContainerValue>(&mut self, key: &[Value]) -> Value {
+        self.es_mut().register_container_sequence::<T>(key)
     }
 
     /// Intern a Rust container into the e-graph and return its

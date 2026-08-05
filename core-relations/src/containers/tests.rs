@@ -3,20 +3,25 @@
 //! This module has tests that verify specific behavior in a multithreaded setting that are harder
 //! to exercise deterministically when testing end to end.
 
-use std::sync::Arc;
+use std::{iter, sync::Arc};
 
 use crate::numeric_id::NumericId;
 use egglog_concurrency::Notification;
 
 use crate::{
-    ColumnId, Database, ExecutionState, Rebuilder, RowId, Value, ValueRebuilder,
-    row_buffer::RowBuffer, table_spec::WrappedTableRef,
+    ColumnId, Database, ExecutionState, Rebuilder, RowId, SequenceContainerValue,
+    SortedWritesTable, Value, ValueRebuilder, row_buffer::RowBuffer, table_spec::WrappedTableRef,
 };
 
-use super::{ContainerEnv, ContainerRebuildSummary, ContainerValue, hash_container};
+use super::{
+    ContainerBackend, ContainerEnv, ContainerRebuildSummary, ContainerValue, hash_container,
+};
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 struct VecContainer(Vec<Value>);
+
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+struct LegacyVecContainer(Vec<Value>);
 
 fn cont<const N: usize>(values: [usize; N]) -> VecContainer {
     VecContainer(values.iter().map(|&v| Value::from_usize(v)).collect())
@@ -29,6 +34,44 @@ impl ContainerValue for VecContainer {
 
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.0.iter().copied()
+    }
+}
+
+impl ContainerValue for LegacyVecContainer {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
+        rebuilder.rebuild_slice(&mut self.0)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
+        self.0.iter().copied()
+    }
+}
+
+impl SequenceContainerValue for VecContainer {
+    fn encode_sequence(&self, out: &mut Vec<Value>) {
+        out.extend_from_slice(&self.0);
+    }
+
+    fn decode_sequence(sequence: &[Value]) -> Self {
+        Self(sequence.to_vec())
+    }
+
+    fn sequence_values(sequence: &[Value]) -> &[Value] {
+        sequence
+    }
+
+    fn rebuild_sequence(
+        sequence: &[Value],
+        rebuilder: &dyn ValueRebuilder,
+        out: &mut Vec<Value>,
+    ) -> bool {
+        out.extend_from_slice(sequence);
+        if rebuilder.rebuild_slice(out) {
+            true
+        } else {
+            out.clear();
+            false
+        }
     }
 }
 
@@ -221,4 +264,391 @@ fn nonincremental_dirty_ids_only_include_stable_ids() {
 
     run_case(false);
     run_case(true);
+}
+
+#[test]
+fn type_erased_backend_metadata_reports_sequence_lengths() {
+    let mut db = Database::new();
+    let legacy_counter = db.add_counter();
+    let sequence_counter = db.add_reservable_counter(8);
+    let legacy_id = db
+        .container_values_mut()
+        .register_type::<LegacyVecContainer>(legacy_counter, |_state, left, right| left.min(right));
+    let sequence_id = db.register_sequence_container_type::<VecContainer>(
+        sequence_counter,
+        |_state, left, right| left.min(right),
+        iter::empty(),
+        iter::empty(),
+    );
+
+    assert_eq!(
+        db.container_values().env_backend(legacy_id),
+        ContainerBackend::Legacy
+    );
+    assert_eq!(
+        db.container_values().env_backend(sequence_id),
+        ContainerBackend::Sequence
+    );
+    assert_eq!(db.container_values().sequence_env_ids(), vec![sequence_id]);
+
+    db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(LegacyVecContainer(vec![Value::from_usize(1)]), state);
+        containers.register_val(VecContainer(vec![Value::from_usize(2)]), state);
+    });
+    assert_eq!(db.container_values().env_len(legacy_id), 1);
+    assert_eq!(db.container_values().env_len(sequence_id), 0);
+
+    assert!(db.merge_all());
+    assert_eq!(db.container_values().env_len(sequence_id), 1);
+}
+
+#[test]
+fn sequence_backend_round_trips_predictions_through_database_merge() {
+    let mut db = Database::new();
+    let counter = db.add_reservable_counter(8);
+    db.register_sequence_container_type::<VecContainer>(
+        counter,
+        |_state, left, right| left.min(right),
+        iter::empty(),
+        iter::empty(),
+    );
+    let expected = cont([1, 2, 3]);
+
+    let first = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        let id = containers.register_val(expected.clone(), state);
+        assert_eq!(
+            state.get_container::<VecContainer>(id),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            state.container_sequence::<VecContainer>(id),
+            Some(&expected.0[..])
+        );
+        id
+    });
+    let second = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected.clone(), state)
+    });
+    assert_ne!(
+        first, second,
+        "predictions are intentionally execution-local"
+    );
+
+    assert!(db.merge_all());
+    let winner = first.min(second);
+    assert_eq!(
+        db.container_values()
+            .get_val::<VecContainer>(winner)
+            .as_deref(),
+        Some(&expected)
+    );
+    assert!(
+        db.container_values()
+            .get_val::<VecContainer>(first.max(second))
+            .is_none()
+    );
+}
+
+#[test]
+fn cloned_databases_have_independent_sequence_notifications() {
+    let mut original = Database::new();
+    let counter = original.add_reservable_counter(8);
+    original.register_sequence_container_type::<VecContainer>(
+        counter,
+        |_state, left, right| left.min(right),
+        iter::empty(),
+        iter::empty(),
+    );
+    let expected = cont([4, 5, 6]);
+    let id = original.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected.clone(), state)
+    });
+    let mut cloned = original.clone();
+
+    assert!(original.merge_all());
+    assert!(cloned.merge_all());
+    assert_eq!(
+        original
+            .container_values()
+            .get_val::<VecContainer>(id)
+            .as_deref(),
+        Some(&expected)
+    );
+    assert_eq!(
+        cloned
+            .container_values()
+            .get_val::<VecContainer>(id)
+            .as_deref(),
+        Some(&expected)
+    );
+}
+
+#[test]
+fn sequence_merge_writes_participate_in_simple_fixed_point() {
+    let mut db = Database::new();
+    let sink = db.add_table(
+        SortedWritesTable::new(
+            2,
+            2,
+            None,
+            vec![],
+            Box::new(|_, current, incoming, _| {
+                assert_eq!(current, incoming);
+                false
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    );
+    let gate = db.add_table(
+        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+    let counter = db.add_reservable_counter(8);
+    db.register_sequence_container_type::<VecContainer>(
+        counter,
+        move |state, left, right| {
+            assert_eq!(
+                state.get_table(gate).len(),
+                1,
+                "the simple scheduler must honor sequence read dependencies"
+            );
+            state.stage_insert(sink, &[left, right]);
+            left.min(right)
+        },
+        [gate.into()],
+        [sink],
+    );
+    db.with_execution_state(|state| {
+        state.stage_insert(gate, &[Value::from_usize(1)]);
+    });
+    let expected = cont([7, 8]);
+    let first = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected.clone(), state)
+    });
+    let second = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected, state)
+    });
+    assert_ne!(first, second);
+
+    assert!(db.merge_all());
+    assert_eq!(db.get_table(sink).len(), 1);
+}
+
+#[test]
+fn sequence_merge_writes_participate_in_dependency_aware_fixed_point() {
+    let mut db = Database::new();
+    let sink = db.add_table(
+        SortedWritesTable::new(
+            2,
+            2,
+            None,
+            vec![],
+            Box::new(|_, current, incoming, _| {
+                assert_eq!(current, incoming);
+                false
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    );
+    let mut add_flag_table = || {
+        db.add_table(
+            SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+            iter::empty(),
+            iter::empty(),
+        )
+    };
+    let gate = add_flag_table();
+    let first_bystander = add_flag_table();
+    let second_bystander = add_flag_table();
+    let counter = db.add_reservable_counter(8);
+    db.register_sequence_container_type::<VecContainer>(
+        counter,
+        move |state, left, right| {
+            assert_eq!(
+                state.get_table(gate).len(),
+                1,
+                "the sequence merge must run after its read dependency"
+            );
+            state.stage_insert(sink, &[left, right]);
+            left.min(right)
+        },
+        [gate.into()],
+        [sink],
+    );
+
+    db.with_execution_state(|state| {
+        state.stage_insert(gate, &[Value::from_usize(1)]);
+        state.stage_insert(first_bystander, &[Value::from_usize(2)]);
+        state.stage_insert(second_bystander, &[Value::from_usize(3)]);
+    });
+    let expected = cont([9, 10]);
+    let first = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected.clone(), state)
+    });
+    let second = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected, state)
+    });
+    assert_ne!(first, second);
+
+    // The sequence environment plus the three ordinary tables above force
+    // `merge_all` through its dependency-aware (four-or-more participant)
+    // path. The sequence merge then notifies the previously inactive sink,
+    // which must be consumed by the same call's fixed-point loop.
+    assert!(db.merge_all());
+    assert_eq!(db.get_table(sink).len(), 1);
+}
+
+#[test]
+fn relation_merge_can_depend_on_nonzero_level_sequence_container() {
+    let mut db = Database::new();
+    let gate = db.add_table(
+        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+    let bystander = db.add_table(
+        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+    let counter = db.add_reservable_counter(8);
+    let container = db.register_sequence_container_type::<VecContainer>(
+        counter,
+        |_state, left, right| left.min(right),
+        [gate.into()],
+        iter::empty(),
+    );
+    let expected = cont([11, 12]);
+    let relation = db.add_table_with_maintenance_deps(
+        SortedWritesTable::new(
+            1,
+            2,
+            None,
+            vec![],
+            Box::new({
+                let expected = expected.clone();
+                move |state, current, incoming, out| {
+                    let winner = current[0].min(incoming[0]);
+                    assert_eq!(
+                        state.container_sequence::<VecContainer>(winner),
+                        Some(expected.0.as_slice()),
+                        "the relation merge must run after its sequence dependency"
+                    );
+                    if current[0] == winner {
+                        false
+                    } else {
+                        out.push(winner);
+                        true
+                    }
+                }
+            }),
+        ),
+        [container.into()],
+        iter::empty(),
+    );
+
+    db.with_execution_state(|state| {
+        state.stage_insert(gate, &[Value::from_usize(1)]);
+        state.stage_insert(bystander, &[Value::from_usize(2)]);
+    });
+    let first = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected.clone(), state)
+    });
+    let second = db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected, state)
+    });
+    assert_ne!(first, second);
+    db.with_execution_state(|state| {
+        state.stage_insert(relation, &[Value::from_usize(0), first]);
+        state.stage_insert(relation, &[Value::from_usize(0), second]);
+    });
+
+    assert!(db.merge_all());
+    assert_eq!(db.get_table(relation).len(), 1);
+}
+
+#[test]
+fn failed_table_dependency_registration_does_not_mutate_database() {
+    let mut db = Database::new();
+    let expected_id = db.next_table_id();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        db.add_table(
+            SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+            [expected_id],
+            iter::empty(),
+        );
+    }));
+    assert!(result.is_err());
+
+    let actual_id = db.add_table(
+        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+    assert_eq!(actual_id, expected_id);
+    db.with_execution_state(|state| {
+        state.stage_insert(actual_id, &[Value::from_usize(1)]);
+    });
+    assert!(db.merge_all());
+    assert_eq!(db.get_table(actual_id).len(), 1);
+}
+
+#[test]
+fn failed_sequence_dependency_registration_can_be_retried() {
+    let mut db = Database::new();
+    let counter = db.add_reservable_counter(8);
+    let missing_table = db.next_table_id();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        db.register_sequence_container_type::<VecContainer>(
+            counter,
+            |_state, left, right| left.min(right),
+            [missing_table.into()],
+            iter::empty(),
+        );
+    }));
+    assert!(result.is_err());
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        db.register_sequence_container_type::<VecContainer>(
+            counter,
+            |_state, left, right| left.min(right),
+            iter::empty(),
+            [missing_table],
+        );
+    }));
+    assert!(result.is_err());
+
+    let container = db.register_sequence_container_type::<VecContainer>(
+        counter,
+        |_state, left, right| left.min(right),
+        iter::empty(),
+        iter::empty(),
+    );
+    let duplicate = db.register_sequence_container_type::<VecContainer>(
+        counter,
+        |_state, left, right| left.max(right),
+        [missing_table.into()],
+        [missing_table],
+    );
+    assert_eq!(duplicate, container, "the first registration owns the deps");
+    let expected = cont([13, 14]);
+    db.with_execution_state(|state| {
+        let containers = state.container_values();
+        containers.register_val(expected, state);
+    });
+    assert!(db.merge_all());
+    assert_eq!(db.container_values().env_len(container), 1);
 }

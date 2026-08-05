@@ -17,12 +17,13 @@ use egglog_concurrency::{NotificationList, ResettableOnceLock};
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerRebuildSummary, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
+    BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
     action::{
         Bindings, DbView,
         mask::{Mask, MaskIter, ValueSource},
     },
-    dependency_graph::DependencyGraph,
+    containers::SequenceContainerValue,
+    dependency_graph::{DependencyGraph, MaintenanceId},
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
     parallel,
@@ -66,6 +67,37 @@ impl TableId {
 
     pub fn is_dummy(&self) -> bool {
         self.rep == u32::MAX
+    }
+}
+
+/// A storage participant that must be readable before another participant's
+/// merge callback runs.
+///
+/// Write dependencies remain relation-table ids because they are used to
+/// preallocate [`MutationBuffer`]s while a relation stratum is temporarily
+/// removed from the database. Sequence-container buffers are initialized
+/// lazily and their environments remain installed during relation merges.
+///
+/// Dependencies must refer to participants that were previously registered in
+/// the same [`Database`]. This registration order makes the dependency graph
+/// acyclic. A [`MaintenanceReadDependency::SequenceContainer`] must name a
+/// sequence-backed container; legacy container environments are not scheduler
+/// participants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MaintenanceReadDependency {
+    Table(TableId),
+    SequenceContainer(crate::ContainerValueId),
+}
+
+impl From<TableId> for MaintenanceReadDependency {
+    fn from(table: TableId) -> Self {
+        Self::Table(table)
+    }
+}
+
+impl From<crate::ContainerValueId> for MaintenanceReadDependency {
+    fn from(container: crate::ContainerValueId) -> Self {
+        Self::SequenceContainer(container)
     }
 }
 
@@ -366,7 +398,7 @@ impl Counters {
 /// A collection of tables and indexes over them.
 ///
 /// A database also owns the memory pools used by its tables.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
@@ -376,10 +408,13 @@ pub struct Database {
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
-    /// `notification_list` contains the list of tables that have been modified since the last call
-    /// to [`Database::merge_all`].
-    notification_list: NotificationList<TableId>,
-    // Tracks the relative dependencies between tables during merge operations.
+    /// Maps the common maintenance namespace to its concrete storage owner.
+    maintenance_targets: DenseIdMap<MaintenanceId, MaintenanceTarget>,
+    table_maintenance: DenseIdMap<TableId, MaintenanceId>,
+    container_maintenance: DenseIdMap<crate::ContainerValueId, MaintenanceId>,
+    /// Participants modified since the last call to [`Database::merge_all`].
+    notification_list: NotificationList<MaintenanceId>,
+    // Tracks relative dependencies between maintenance participants.
     deps: DependencyGraph,
     base_values: BaseValues,
     /// A rough estimate of the total size of the database.
@@ -387,6 +422,41 @@ pub struct Database {
     /// This is primarily used to determine whether or not to attempt to do some operations in
     /// parallel.
     total_size_estimate: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MaintenanceTarget {
+    Relation(TableId),
+    SequenceContainer(crate::ContainerValueId),
+}
+
+impl Clone for Database {
+    fn clone(&self) -> Self {
+        // Table/container storage owns a deep copy of its pending mutation
+        // epochs, so the scheduler queue must be independent too. The normal
+        // `NotificationList::clone` shares one queue; either database could
+        // then consume the other's only wakeup. Conservatively scheduling all
+        // copied participants preserves every pending epoch without mutating
+        // the source queue, and harmlessly performs one empty merge for
+        // participants that had no work.
+        let notification_list = NotificationList::default();
+        for (participant, _) in self.maintenance_targets.iter() {
+            notification_list.notify(participant);
+        }
+        Self {
+            tables: self.tables.clone(),
+            counters: self.counters.clone(),
+            external_functions: self.external_functions.clone(),
+            container_values: self.container_values.clone(),
+            maintenance_targets: self.maintenance_targets.clone(),
+            table_maintenance: self.table_maintenance.clone(),
+            container_maintenance: self.container_maintenance.clone(),
+            notification_list,
+            deps: self.deps.clone(),
+            base_values: self.base_values.clone(),
+            total_size_estimate: self.total_size_estimate,
+        }
+    }
 }
 
 impl Database {
@@ -432,26 +502,114 @@ impl Database {
         &mut self.container_values
     }
 
-    pub fn rebuild_containers(&mut self, table_id: TableId) -> ContainerRebuildSummary {
-        let mut containers = mem::take(&mut self.container_values);
-        let table = &self.tables[table_id].table;
-        let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
-        self.container_values = containers;
-        res
+    /// Register a sequence-backed container as a normal database maintenance
+    /// participant. Its packed rows remain outside the fixed-schema query
+    /// table interface, but merge notifications and dependency ordering share
+    /// the same scheduler namespace as relation tables.
+    ///
+    /// Registration is idempotent by concrete Rust type. The first call fixes
+    /// that type's counter, merge callback, and dependency set; later calls
+    /// return the existing [`crate::ContainerValueId`].
+    ///
+    /// Every read and write dependency must already be registered in this
+    /// database. Container read dependencies must use the sequence backend.
+    pub fn register_sequence_container_type<C: SequenceContainerValue>(
+        &mut self,
+        id_counter: CounterId,
+        merge_fn: impl Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync + 'static,
+        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
+        write_deps: impl IntoIterator<Item = TableId>,
+    ) -> crate::ContainerValueId {
+        if let Some(container) = self.container_values.registered_sequence_type::<C>() {
+            let existing = self
+                .container_maintenance
+                .get(container)
+                .expect("registered sequence container must have a maintenance target");
+            debug_assert!(matches!(
+                self.maintenance_targets[*existing],
+                MaintenanceTarget::SequenceContainer(id) if id == container
+            ));
+            return container;
+        }
+
+        let read_deps = read_deps.into_iter().collect::<Vec<_>>();
+        let write_deps = write_deps.into_iter().collect::<Vec<_>>();
+        let read_deps = read_deps
+            .into_iter()
+            .map(|dependency| self.resolve_maintenance_dependency(dependency))
+            .collect::<Vec<_>>();
+        self.validate_write_dependencies(&write_deps);
+
+        let container = self
+            .container_values
+            .register_sequence_type::<C>(id_counter, merge_fn);
+        let maintenance = self
+            .maintenance_targets
+            .push(MaintenanceTarget::SequenceContainer(container));
+        self.container_maintenance.insert(container, maintenance);
+        self.deps
+            .add_participant(maintenance, read_deps, write_deps);
+        container
     }
 
-    /// Apply the value-level rebuild encoded by `func_id` to all the tables in `to_rebuild`.
+    fn resolve_maintenance_dependency(
+        &self,
+        dependency: MaintenanceReadDependency,
+    ) -> MaintenanceId {
+        match dependency {
+            MaintenanceReadDependency::Table(table) => *self
+                .table_maintenance
+                .get(table)
+                .unwrap_or_else(|| panic!("table dependency {table:?} is not registered")),
+            MaintenanceReadDependency::SequenceContainer(container) => *self
+                .container_maintenance
+                .get(container)
+                .unwrap_or_else(|| {
+                    panic!("sequence-container dependency {container:?} is not registered")
+                }),
+        }
+    }
+
+    fn validate_write_dependencies(&self, dependencies: &[TableId]) {
+        for table in dependencies {
+            assert!(
+                self.table_maintenance.get(*table).is_some(),
+                "table write dependency {table:?} is not registered"
+            );
+        }
+    }
+
+    /// Apply one ordered database-maintenance cycle using the value-level
+    /// rebuild encoded by `func_id`.
     ///
-    /// The native [`Table::apply_rebuild`] method takes a `next_ts` argument for filling in new
-    /// values in a table like [`crate::SortedWritesTable`] where values in a certain column need
-    /// to be inserted in sorted order; the `next_ts` argument to this method is passed to
-    /// `apply_rebuild` for this purpose.
+    /// Sequence-backed containers use the same notification/dependency
+    /// scheduler as relation tables; legacy environments remain a rebuild-only
+    /// compatibility pass. Container canonicalization runs first because key
+    /// collisions can stage ordinary union-find writes. The common
+    /// [`Database::merge_all`] fixed point publishes those writes before
+    /// dependent fixed-schema relations rebuild. Stable container identities
+    /// are then propagated through the temporary opaque-read refresh path.
     pub fn apply_rebuild(
         &mut self,
         func_id: TableId,
         to_rebuild: &[TableId],
         next_ts: Value,
     ) -> bool {
+        let container_rebuild = {
+            let mut containers = mem::take(&mut self.container_values);
+            let table = &self.tables[func_id].table;
+            let result =
+                self.with_execution_state(|state| containers.rebuild_all(func_id, table, state));
+            self.container_values = containers;
+            result
+        };
+
+        let mut changed = container_rebuild.changed();
+        // This is a correctness barrier, not a separate fixed point: relation
+        // rebuilds must observe identity unions produced by container-key
+        // collisions (notably for :no-merge functions).
+        changed |= self.merge_all();
+
         let func = self.tables.take(func_id).unwrap();
         self.run_on_tables(to_rebuild, |_, info, view| {
             info.table.apply_rebuild(
@@ -462,29 +620,23 @@ impl Database {
             )
         });
         self.tables.insert(func_id, func);
-        self.merge_all()
-    }
+        // Ordinary table rebuilds stage their replacements. Publish those
+        // rows before dirty-id refresh scans the tables, otherwise the refresh
+        // can re-stage an obsolete pre-rebuild row.
+        changed |= self.merge_all();
 
-    pub fn refresh_rows_for_values(
-        &mut self,
-        to_refresh: &[TableId],
-        dirty_ids: &[Value],
-        next_ts: Value,
-    ) -> bool {
-        if dirty_ids.is_empty() {
-            return false;
+        let dirty_ids = container_rebuild
+            .dirty_ids()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        if !dirty_ids.is_empty() {
+            self.run_on_tables(to_rebuild, |_, info, _| {
+                info.table.refresh_rows_for_values(&dirty_ids, next_ts)
+            });
+            changed |= self.merge_all();
         }
-        // This is the follow-up for `ContainerRebuildSummary::dirty_ids()`.
-        // These ids changed semantics without changing identity, so parent
-        // rows can become newly matchable without getting an ordinary table
-        // delta.
-        //
-        // It must run after ordinary table rebuild, which already handles
-        // changed-id cases by rewriting parent rows to the new id.
-        self.run_on_tables(to_refresh, |_, info, _| {
-            info.table.refresh_rows_for_values(dirty_ids, next_ts)
-        });
-        self.merge_all()
+        changed
     }
 
     fn run_on_tables(
@@ -500,7 +652,7 @@ impl Database {
             let view = self.read_only_view();
             parallel::for_each_mut(&mut tables, |_, (id, info)| {
                 if run(*id, info, &view) {
-                    self.notification_list.notify(*id);
+                    self.notification_list.notify(self.table_maintenance[*id]);
                 }
             });
             for (id, info) in tables {
@@ -514,7 +666,7 @@ impl Database {
                     run(*id, &mut info, &view)
                 };
                 if changed {
-                    self.notification_list.notify(*id);
+                    self.notification_list.notify(self.table_maintenance[*id]);
                 }
                 self.tables.insert(*id, info);
             }
@@ -547,6 +699,8 @@ impl Database {
             bases: &self.base_values,
             containers: &self.container_values,
             notification_list: &self.notification_list,
+            table_maintenance: &self.table_maintenance,
+            container_maintenance: &self.container_maintenance,
         }
     }
 
@@ -614,58 +768,91 @@ impl Database {
     pub fn merge_all(&mut self) -> bool {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
-        let mut to_merge = IndexSet::default();
-        // Tables modified during this `merge_all` call. Only these need their cached indexes reset
-        // at the end so future reads refresh them.
+        let sequence_size_before = self.container_values.sequence_len();
+        // Relation tables modified during this `merge_all` call. Only these need their cached
+        // indexes reset at the end so future reads refresh them.
         let mut touched: IndexSet<TableId> = IndexSet::default();
         loop {
-            to_merge.clear();
-            let to_merge_vec = self.notification_list.reset();
-            touched.extend(to_merge_vec.iter().copied());
-            if to_merge_vec.len() < 4 {
-                ever_changed |= self.merge_simple(to_merge_vec, &mut touched);
+            let mut active = self.notification_list.reset();
+            touched.extend(
+                active.iter().filter_map(|participant| {
+                    match self.maintenance_targets[*participant] {
+                        MaintenanceTarget::Relation(table) => Some(table),
+                        MaintenanceTarget::SequenceContainer(_) => None,
+                    }
+                }),
+            );
+            if active.len() < 4 {
+                ever_changed |= self.merge_simple(active, &mut touched);
                 break;
             }
-            for table in to_merge_vec {
-                to_merge.insert(table);
-            }
+            active.sort_unstable_by_key(|participant| self.deps.level(*participant));
 
             let mut changed = false;
-            let mut tables_merging = DenseIdMap::<
+            let mut stratum_start = 0;
+            let mut tables_merging = Vec::<(
                 TableId,
-                (
-                    // The info needed to merge this table.
-                    Option<TableInfo>,
-                    // Pre-allocated write buffers, according to the tables declared write
-                    // dependencies.
-                    DenseIdMap<TableId, Box<dyn MutationBuffer>>,
-                ),
-            >::with_capacity(self.tables.n_ids());
-            for stratum in self.deps.strata() {
-                // Initialize the write dependencies first.
-                for table in stratum.intersection(&to_merge).copied() {
+                Option<TableInfo>,
+                DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+            )>::new();
+            while stratum_start < active.len() {
+                let level = self.deps.level(active[stratum_start]);
+                let stratum_end = active[stratum_start..]
+                    .iter()
+                    .position(|participant| self.deps.level(*participant) != level)
+                    .map_or(active.len(), |offset| stratum_start + offset);
+                let stratum = &active[stratum_start..stratum_end];
+
+                // Keep sequence environments locally owned and merge them one
+                // at a time. This leaves every other environment visible to a
+                // merge callback while still using the common scheduler and
+                // notification fixed point.
+                let sequence_participants = stratum
+                    .iter()
+                    .copied()
+                    .filter_map(|participant| match self.maintenance_targets[participant] {
+                        MaintenanceTarget::SequenceContainer(container) => {
+                            Some((participant, container))
+                        }
+                        MaintenanceTarget::Relation(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                for (participant, container) in sequence_participants {
                     let mut bufs = DenseIdMap::default();
-                    for dep in self.deps.write_deps(table) {
+                    for dep in self.deps.write_deps(participant) {
                         if let Some(info) = self.tables.get(dep) {
                             bufs.insert(dep, info.table.new_buffer());
                         }
                     }
-                    tables_merging.insert(table, (None, bufs));
+                    changed |= self.merge_sequence_container(container, bufs);
                 }
-                // Then initialize read dependencies (this two-phase structure is why we have an
-                // Option in the tables_merging map).
-                for table in stratum.intersection(&to_merge).copied() {
-                    let val = self.tables.unwrap_val(table);
-                    // Maintain `total_size_estimate` incrementally (subtract now, add
-                    // the post-merge length on drain below) so the reset loop no
-                    // longer re-sums every table.
+                let relation_participants = stratum
+                    .iter()
+                    .copied()
+                    .filter_map(|participant| match self.maintenance_targets[participant] {
+                        MaintenanceTarget::Relation(table) => Some((participant, table)),
+                        MaintenanceTarget::SequenceContainer(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                tables_merging.reserve(relation_participants.len());
+                for (participant, table) in &relation_participants {
+                    let mut bufs = DenseIdMap::default();
+                    for dep in self.deps.write_deps(*participant) {
+                        if let Some(info) = self.tables.get(dep) {
+                            bufs.insert(dep, info.table.new_buffer());
+                        }
+                    }
+                    tables_merging.push((*table, None, bufs));
+                }
+                for (table, info, _) in &mut tables_merging {
+                    let value = self.tables.unwrap_val(*table);
                     self.total_size_estimate =
-                        self.total_size_estimate.wrapping_sub(val.table.len());
-                    tables_merging[table].0 = Some(val);
+                        self.total_size_estimate.wrapping_sub(value.table.len());
+                    *info = Some(value);
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    parallel::map_dense_id_map_mut(&mut tables_merging, |_, (info, buffers)| {
+                    parallel::map_mut(&mut tables_merging, |_, (_, info, buffers)| {
                         let mut es = ExecutionState::new(db, mem::take(buffers));
                         info.as_mut().unwrap().table.merge(&mut es).added || es.changed
                     })
@@ -674,19 +861,20 @@ impl Database {
                 } else {
                     tables_merging
                         .iter_mut()
-                        .map(|(_, (info, buffers))| {
+                        .map(|(_, info, buffers)| {
                             let mut es = ExecutionState::new(db, mem::take(buffers));
                             info.as_mut().unwrap().table.merge(&mut es).added || es.changed
                         })
                         .max()
                         .unwrap_or(false)
                 };
-                for (id, (table, _)) in tables_merging.drain() {
-                    let val = table.unwrap();
+                for (id, table, _) in tables_merging.drain(..) {
+                    let value = table.unwrap();
                     self.total_size_estimate =
-                        self.total_size_estimate.wrapping_add(val.table.len());
-                    self.tables.insert(id, val);
+                        self.total_size_estimate.wrapping_add(value.table.len());
+                    self.tables.insert(id, value);
                 }
+                stratum_start = stratum_end;
             }
             ever_changed |= changed;
         }
@@ -697,8 +885,8 @@ impl Database {
         // only after a `reset()`, so a modified-but-unreset table would keep serving
         // a stale cached index. It does — every merged table comes from
         // `notification_list.reset()`, which is exactly what `touched` accumulates.
-        // `total_size_estimate` was maintained incrementally at each merge (above and
-        // in `merge_simple`), so we no longer re-sum every table here.
+        // Relation size is maintained incrementally at each merge (above and in
+        // `merge_simple`), so we no longer re-sum every table here.
         for table in touched.iter().copied() {
             if let Some(info) = self.tables.get_mut(table) {
                 info.column_indexes.update(|_, ti| {
@@ -709,31 +897,76 @@ impl Database {
                 });
             }
         }
+        self.total_size_estimate = self
+            .total_size_estimate
+            .wrapping_sub(sequence_size_before)
+            .wrapping_add(self.container_values.sequence_len());
         ever_changed
     }
 
-    /// A "fast path" merge method that is not optimized for parallelism and does not respect read
-    /// and write dependencies. This ends up being faster than the full "strata-aware" option in
-    /// the body of `merge_all`.
+    fn merge_sequence_container(
+        &mut self,
+        container: crate::ContainerValueId,
+        buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+    ) -> bool {
+        let mut env = self.container_values.take_env(container);
+        let changed = {
+            let mut exec_state = ExecutionState::new(self.read_only_view(), buffers);
+            env.merge_pending(&mut exec_state) || exec_state.changed
+        };
+        self.container_values.put_env(container, env);
+        changed
+    }
+
+    /// A serial fast path for a small number of notified participants.
+    ///
+    /// It follows read-dependency strata, but avoids taking a whole stratum out
+    /// of the database and preallocating its declared write buffers. With only
+    /// a few participants, leaving each destination table installed lets
+    /// [`ExecutionState`] initialize those buffers lazily.
     fn merge_simple(
         &mut self,
-        mut to_merge: SmallVec<[TableId; 4]>,
+        mut to_merge: SmallVec<[MaintenanceId; 4]>,
         touched: &mut IndexSet<TableId>,
     ) -> bool {
         let mut changed = false;
         while !to_merge.is_empty() {
-            for table_id in to_merge.iter().copied() {
-                let mut info = self.tables.unwrap_val(table_id);
-                // Maintain `total_size_estimate` incrementally (see `merge_all`'s
-                // reset loop, which no longer re-sums every table).
-                self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
-                let mut es = ExecutionState::new(self.read_only_view(), Default::default());
-                changed |= info.table.merge(&mut es).added || es.changed;
-                self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
-                self.tables.insert(table_id, info);
+            // Even this small serial path must respect read dependencies:
+            // sequence merge callbacks are allowed to observe an ordinary
+            // table declared as a predecessor. Within one stratum, run
+            // sequence storage first so relation merges can consume writes it
+            // publishes without waiting for another fixed-point turn.
+            to_merge.sort_unstable_by_key(|participant| {
+                let target_order = match self.maintenance_targets[*participant] {
+                    MaintenanceTarget::SequenceContainer(_) => 0usize,
+                    MaintenanceTarget::Relation(_) => 1usize,
+                };
+                (self.deps.level(*participant), target_order)
+            });
+            for participant in to_merge.iter().copied() {
+                match self.maintenance_targets[participant] {
+                    MaintenanceTarget::SequenceContainer(container) => {
+                        changed |= self.merge_sequence_container(container, Default::default());
+                    }
+                    MaintenanceTarget::Relation(table) => {
+                        let mut info = self.tables.unwrap_val(table);
+                        self.total_size_estimate =
+                            self.total_size_estimate.wrapping_sub(info.table.len());
+                        let mut es = ExecutionState::new(self.read_only_view(), Default::default());
+                        changed |= info.table.merge(&mut es).added || es.changed;
+                        self.total_size_estimate =
+                            self.total_size_estimate.wrapping_add(info.table.len());
+                        self.tables.insert(table, info);
+                    }
+                }
             }
             to_merge = self.notification_list.reset();
-            touched.extend(to_merge.iter().copied());
+            touched.extend(to_merge.iter().filter_map(
+                |participant| match self.maintenance_targets[*participant] {
+                    MaintenanceTarget::Relation(table) => Some(table),
+                    MaintenanceTarget::SequenceContainer(_) => None,
+                },
+            ));
         }
         changed
     }
@@ -767,21 +1000,59 @@ impl Database {
     /// Add a table with the given schema to the database.
     ///
     /// The table must have a compatible spec with `types` (e.g. same number of
-    /// columns).
+    /// columns). Every read and write dependency must identify a table already
+    /// registered in this database.
     pub fn add_table<T: Table + Sized + 'static>(
         &mut self,
         table: T,
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
+        self.add_table_impl(
+            table,
+            None,
+            read_deps.into_iter().map(MaintenanceReadDependency::from),
+            write_deps,
+        )
+    }
+
+    /// Add a table whose merge callback may read relation tables, sequence
+    /// containers, or both.
+    ///
+    /// Every read and write dependency must already be registered in this
+    /// database. This ordering keeps the graph acyclic, and container read
+    /// dependencies must use the sequence backend.
+    pub fn add_table_with_maintenance_deps<T: Table + Sized + 'static>(
+        &mut self,
+        table: T,
+        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
+        write_deps: impl IntoIterator<Item = TableId>,
+    ) -> TableId {
         self.add_table_impl(table, None, read_deps, write_deps)
     }
 
+    /// Named variant of [`Database::add_table`].
     pub fn add_table_named<T: Table + Sized + 'static>(
         &mut self,
         table: T,
         name: Arc<str>,
         read_deps: impl IntoIterator<Item = TableId>,
+        write_deps: impl IntoIterator<Item = TableId>,
+    ) -> TableId {
+        self.add_table_impl(
+            table,
+            Some(name),
+            read_deps.into_iter().map(MaintenanceReadDependency::from),
+            write_deps,
+        )
+    }
+
+    /// Named variant of [`Database::add_table_with_maintenance_deps`].
+    pub fn add_table_named_with_maintenance_deps<T: Table + Sized + 'static>(
+        &mut self,
+        table: T,
+        name: Arc<str>,
+        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
         self.add_table_impl(table, Some(name), read_deps, write_deps)
@@ -791,9 +1062,17 @@ impl Database {
         &mut self,
         table: T,
         name: Option<Arc<str>>,
-        read_deps: impl IntoIterator<Item = TableId>,
+        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
+        let read_deps = read_deps.into_iter().collect::<Vec<_>>();
+        let write_deps = write_deps.into_iter().collect::<Vec<_>>();
+        let read_deps = read_deps
+            .into_iter()
+            .map(|dependency| self.resolve_maintenance_dependency(dependency))
+            .collect::<Vec<_>>();
+        self.validate_write_dependencies(&write_deps);
+
         let spec = table.spec();
         let table = WrappedTable::new(table);
         let res = self.tables.push(TableInfo {
@@ -803,7 +1082,12 @@ impl Database {
             indexes: IndexCatalog::new(),
             column_indexes: IndexCatalog::new(),
         });
-        self.deps.add_table(res, read_deps, write_deps);
+        let maintenance = self
+            .maintenance_targets
+            .push(MaintenanceTarget::Relation(res));
+        self.table_maintenance.insert(res, maintenance);
+        self.deps
+            .add_participant(maintenance, read_deps, write_deps);
         res
     }
 
@@ -845,7 +1129,7 @@ impl Database {
     /// Unlike calling [`Table::new_buffer`] on a table returned from a getter, this method also
     /// triggers change notification metadata that is read by [`Database::merge_all`].
     pub fn new_buffer(&self, id: TableId) -> Box<dyn MutationBuffer> {
-        self.notification_list.notify(id);
+        self.notification_list.notify(self.table_maintenance[id]);
         self.get_table(id).new_buffer()
     }
 
