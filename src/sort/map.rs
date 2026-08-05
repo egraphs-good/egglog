@@ -13,34 +13,6 @@ pub struct MapContainer {
 }
 
 impl ContainerValue for MapContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        let mut changed = false;
-        if self.do_rebuild_keys {
-            self.data = self
-                .data
-                .iter()
-                .map(|(old, v)| {
-                    let new = rebuilder.rebuild_val(*old);
-                    changed |= *old != new;
-                    (new, *v)
-                })
-                .collect();
-        }
-        if self.do_rebuild_vals {
-            for old in self.data.values_mut() {
-                let new = rebuilder.rebuild_val(*old);
-                changed |= *old != new;
-                *old = new;
-            }
-        }
-        changed
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.data.iter().flat_map(|(k, v)| [k, v]).copied()
-    }
-}
-
-impl SequenceContainerValue for MapContainer {
     fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         out.push(map_rebuild_mask(self.do_rebuild_keys, self.do_rebuild_vals));
         out.extend(self.data.iter().flat_map(|(key, value)| [*key, *value]));
@@ -114,10 +86,10 @@ impl SequenceContainerValue for MapContainer {
             return false;
         }
 
-        // Rebuild keys before values, matching `MapContainer::rebuild_contents`.
-        // Iteration is in ascending old-key order, so inserting rebuilt keys in
-        // that order preserves BTreeMap's existing collision rule: when two
-        // old keys canonicalize together, the later old key's value wins.
+        // Rebuild keys before values. Iteration is in ascending old-key order,
+        // so inserting rebuilt keys in that order preserves BTreeMap's existing
+        // collision rule: when two old keys canonicalize together, the later
+        // old key's value wins.
         let mut rebuilt = BTreeMap::new();
         for pair in data.chunks_exact(2) {
             let key = if mask & REBUILD_KEYS != 0 {
@@ -300,10 +272,6 @@ impl ContainerSort for MapSort {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_sequence_container_ty::<MapContainer>();
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
@@ -531,8 +499,8 @@ enum MapReadOp {
     NotContains,
 }
 
-/// Map reads use binary search over the borrowed canonical sequence and only
-/// reconstruct a `MapContainer` for a legacy backend.
+/// Map reads use binary search over the borrowed canonical sequence, with an
+/// explicit decode-based slow fallback.
 #[derive(Clone)]
 struct MapRead {
     name: String,
@@ -623,8 +591,8 @@ enum MapEditOp {
     Remove,
 }
 
-/// Map updates splice the borrowed alternating sequence directly and only
-/// round-trip through `MapContainer` for a legacy backend.
+/// Map updates splice the borrowed alternating sequence directly, with an
+/// explicit decode/edit/encode slow fallback.
 #[derive(Clone)]
 struct MapEdit {
     name: String,
@@ -699,9 +667,8 @@ impl PurePrim for MapEdit {
             return Some(state.register_container_sequence::<MapContainer>(&key?));
         }
 
-        // Compatibility path for a legacy environment: reconstruct the Rust
-        // map, perform the operation, and let normal container registration
-        // serialize it when the environment is sequence-backed.
+        // Slow compatibility path: reconstruct the Rust map, perform the
+        // operation, and let normal container registration serialize it again.
         let mut map = state.value_to_owned_container::<MapContainer>(map_id)?;
         match self.op {
             MapEditOp::Insert => {
@@ -872,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn sequence_rebuild_matches_legacy_key_collision_semantics() {
+    fn sequence_rebuild_preserves_last_old_key_on_collision() {
         let original = map(true, true, &[(2, 20), (4, 40), (6, 60)]);
         let rebuilder = Remap(vec![
             (value(2), value(1)),
@@ -881,10 +848,6 @@ mod tests {
             (value(40), value(41)),
             (value(60), value(61)),
         ]);
-
-        let mut legacy = original.clone();
-        assert!(legacy.rebuild_contents(&rebuilder));
-        assert_eq!(legacy, map(true, true, &[(1, 41), (3, 61)]));
 
         let mut encoded = Vec::new();
         original.encode_sequence(&BaseValues::default(), &mut encoded);
@@ -897,7 +860,7 @@ mod tests {
         ));
         assert_eq!(
             MapContainer::decode_sequence(&rebuilt, &BaseValues::default()),
-            legacy
+            map(true, true, &[(1, 41), (3, 61)])
         );
     }
 

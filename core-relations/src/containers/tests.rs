@@ -12,48 +12,19 @@ use std::{
 };
 
 use crate::numeric_id::NumericId;
-use egglog_concurrency::Notification;
 
 use crate::{
-    ColumnId, Database, DisplacedTable, ExecutionState, Rebuilder, RowId, SequenceContainerValue,
-    SortedWritesTable, Value, ValueRebuilder, row_buffer::RowBuffer, table_spec::WrappedTableRef,
-};
-
-use super::{
-    ContainerBackend, ContainerEnv, ContainerRebuildSummary, ContainerValue, hash_container,
+    ColumnId, ContainerValue, Database, DisplacedTable, SortedWritesTable, Value, ValueRebuilder,
 };
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 struct VecContainer(Vec<Value>);
-
-#[derive(Hash, PartialEq, Eq, Clone, Debug)]
-struct LegacyVecContainer(Vec<Value>);
 
 fn cont<const N: usize>(values: [usize; N]) -> VecContainer {
     VecContainer(values.iter().map(|&v| Value::from_usize(v)).collect())
 }
 
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        rebuilder.rebuild_slice(&mut self.0)
-    }
-
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.0.iter().copied()
-    }
-}
-
-impl ContainerValue for LegacyVecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        rebuilder.rebuild_slice(&mut self.0)
-    }
-
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.0.iter().copied()
-    }
-}
-
-impl SequenceContainerValue for VecContainer {
     fn encode_sequence(&self, _base_values: &crate::BaseValues, out: &mut Vec<Value>) {
         out.extend_from_slice(&self.0);
     }
@@ -82,233 +53,28 @@ impl SequenceContainerValue for VecContainer {
     }
 }
 
-/// A tiny rebuilder used to isolate outer-id canonicalization from inner
-/// container rewrites in the unit tests below.
-struct FakeRebuilder {
-    old_outer_id: Option<Value>,
-    new_outer_id: Option<Value>,
-    old_inner_val: Option<Value>,
-    new_inner_val: Option<Value>,
-}
-
-impl ValueRebuilder for FakeRebuilder {
-    fn rebuild_val(&self, val: Value) -> Value {
-        match (self.old_outer_id, self.new_outer_id) {
-            (Some(old), Some(new)) if val == old => new,
-            _ => val,
-        }
-    }
-
-    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
-        let mut changed = false;
-        for val in vals {
-            if let (Some(old), Some(new)) = (self.old_inner_val, self.new_inner_val)
-                && *val == old
-            {
-                *val = new;
-                changed = true;
-            }
-        }
-        changed
-    }
-}
-
-// Also exercised via the table-level rebuild path, so it implements the full
-// `Rebuilder`; that path only calls the value-level methods for containers.
-impl Rebuilder for FakeRebuilder {
-    fn hint_col(&self) -> Option<ColumnId> {
-        None
-    }
-
-    fn rebuild_buf(
-        &self,
-        _buf: &RowBuffer,
-        _start: RowId,
-        _end: RowId,
-        _out: &mut crate::TaggedRowBuffer,
-        _exec_state: &mut ExecutionState,
-    ) {
-        unreachable!("FakeRebuilder does not support rebuild_buf")
-    }
-
-    fn rebuild_subset(
-        &self,
-        _other: WrappedTableRef,
-        _subset: crate::SubsetRef,
-        _out: &mut crate::TaggedRowBuffer,
-        _exec_state: &mut ExecutionState,
-    ) {
-        unreachable!("FakeRebuilder does not support rebuild_subset")
-    }
-}
-
 #[test]
-fn racing_inserts() {
+fn type_erased_registry_reports_container_lengths() {
     let mut db = Database::new();
-    let counter = db.add_counter();
-    let db = Arc::new(db);
-    let start = Arc::new(Notification::new());
-    let env = Arc::new(ContainerEnv::<VecContainer>::new(
-        Box::new(|_state, v1, v2| {
-            assert_eq!(v1, v2, "this test shouldn't merge anything");
-            v1
-        }),
+    let counter = db.add_reservable_counter(8);
+    let container_id = db.register_container_type::<VecContainer>(
         counter,
-    ));
-    let threads = (0..10)
-        .map(|_| {
-            let start = start.clone();
-            let env = env.clone();
-            let db = db.clone();
-            std::thread::spawn(move || {
-                db.with_execution_state(|es| {
-                    start.wait();
-                    env.get_or_insert(&cont([1, 2, 3]), es)
-                })
-            })
-        })
-        .collect::<Vec<_>>();
-    start.notify();
-    let results = Vec::from_iter(threads.into_iter().map(|t| t.join().unwrap()));
-
-    for result in &results {
-        assert_eq!(
-            &*env.get_container(*result).unwrap_or_else(|| {
-                panic!("container {result:?} not found");
-            }),
-            &cont([1, 2, 3])
-        );
-    }
-    assert!(
-        results.windows(2).all(|w| w[0] == w[1]),
-        "all containers should be the same, got {results:?}"
-    );
-}
-
-#[test]
-fn incremental_reinsert_canonicalizes_displaced_outer_id() {
-    let mut db = Database::new();
-    let counter = db.add_counter();
-    let mut env = ContainerEnv::<VecContainer>::new(
-        Box::new(|_state, v1, v2| {
-            assert_eq!(v1, v2, "this test shouldn't merge anything");
-            v1
-        }),
-        counter,
-    );
-    let container = cont([1, 2, 3]);
-
-    db.with_execution_state(|es| {
-        let old_id = env.get_or_insert(&container, es);
-        let new_id = Value::from_usize(old_id.index() + 1000);
-        let hc = hash_container(&container);
-        let target_map = env.to_id.determine_map(&container);
-        let shard_mut = env.to_id.shards_mut()[target_map].get_mut();
-        let (container, _) = shard_mut
-            .remove_entry(hc as u64, |(_, v)| *v.get() == old_id)
-            .expect("container should be present before reinsertion");
-
-        let mut summary = ContainerRebuildSummary::default();
-        env.reinsert_incremental(container, old_id, new_id, false, es, &mut summary);
-
-        assert!(summary.changed());
-        assert!(summary.dirty_ids().is_empty());
-        assert!(env.get_container(old_id).is_none());
-        assert_eq!(&*env.get_container(new_id).unwrap(), &cont([1, 2, 3]));
-    });
-}
-
-#[test]
-fn nonincremental_dirty_ids_only_include_stable_ids() {
-    let mut db = Database::new();
-    let counter = db.add_counter();
-    let old_inner = Value::from_usize(1);
-    let new_inner = Value::from_usize(2);
-
-    let run_case = |outer_id_changes: bool| {
-        let mut env = ContainerEnv::<VecContainer>::new(
-            Box::new(|_state, v1, v2| {
-                assert_eq!(v1, v2, "this test shouldn't merge anything");
-                v1
-            }),
-            counter,
-        );
-        db.with_execution_state(|es| {
-            let old_id = env.get_or_insert(&VecContainer(vec![old_inner]), es);
-            let new_id = if outer_id_changes {
-                Value::from_usize(old_id.index() + 1000)
-            } else {
-                old_id
-            };
-            let rebuilder = FakeRebuilder {
-                old_outer_id: outer_id_changes.then_some(old_id),
-                new_outer_id: outer_id_changes.then_some(new_id),
-                old_inner_val: Some(old_inner),
-                new_inner_val: Some(new_inner),
-            };
-
-            let summary = env.apply_rebuild_nonincremental(&rebuilder, es);
-            assert!(summary.changed());
-            if outer_id_changes {
-                assert!(summary.dirty_ids().is_empty());
-                assert!(env.get_container(old_id).is_none());
-                assert_eq!(
-                    &*env.get_container(new_id).unwrap(),
-                    &VecContainer(vec![new_inner])
-                );
-            } else {
-                assert_eq!(
-                    summary.dirty_ids().iter().copied().collect::<Vec<_>>(),
-                    vec![old_id]
-                );
-                assert_eq!(
-                    &*env.get_container(old_id).unwrap(),
-                    &VecContainer(vec![new_inner])
-                );
-            }
-        });
-    };
-
-    run_case(false);
-    run_case(true);
-}
-
-#[test]
-fn type_erased_backend_metadata_reports_sequence_lengths() {
-    let mut db = Database::new();
-    let legacy_counter = db.add_counter();
-    let sequence_counter = db.add_reservable_counter(8);
-    let legacy_id = db
-        .register_container_type::<LegacyVecContainer>(legacy_counter, |_state, left, right| {
-            left.min(right)
-        });
-    let sequence_id = db.register_sequence_container_type::<VecContainer>(
-        sequence_counter,
         |_state, left, right| left.min(right),
         iter::empty(),
         iter::empty(),
     );
 
-    assert_eq!(
-        db.container_values().env_backend(legacy_id),
-        ContainerBackend::Legacy
-    );
-    assert_eq!(
-        db.container_values().env_backend(sequence_id),
-        ContainerBackend::Sequence
-    );
-    assert_eq!(db.container_values().sequence_env_ids(), vec![sequence_id]);
+    assert_eq!(db.container_values().env_ids(), vec![container_id]);
 
     db.with_execution_state(|state| {
         let containers = state.container_values();
-        containers.register_val(LegacyVecContainer(vec![Value::from_usize(1)]), state);
         containers.register_val(VecContainer(vec![Value::from_usize(2)]), state);
     });
-    assert_eq!(db.container_values().env_len(legacy_id), 1);
-    assert_eq!(db.container_values().env_len(sequence_id), 0);
+    assert_eq!(db.container_values().env_len(container_id), 0);
 
     assert!(db.merge_all());
-    assert_eq!(db.container_values().env_len(sequence_id), 1);
+    assert_eq!(db.container_values().env_len(container_id), 1);
+    assert_eq!(db.container_values().container_len(), 1);
 }
 
 #[test]
@@ -320,8 +86,12 @@ fn relations_and_containers_share_one_table_id_namespace() {
         iter::empty(),
     );
     let counter = db.add_reservable_counter(8);
-    let container =
-        db.register_container_type::<VecContainer>(counter, |_state, left, right| left.min(right));
+    let container = db.register_container_type::<VecContainer>(
+        counter,
+        |_state, left, right| left.min(right),
+        iter::empty(),
+        iter::empty(),
+    );
     let second_relation = db.add_table(
         SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
         iter::empty(),
@@ -332,10 +102,7 @@ fn relations_and_containers_share_one_table_id_namespace() {
     assert_eq!(crate::TableId::from(container).index(), 1);
     assert_eq!(second_relation.index(), 2);
     assert_eq!(db.next_table_id().index(), 3);
-    assert_eq!(
-        db.container_values().env_backend(container),
-        ContainerBackend::Legacy
-    );
+    assert_eq!(db.container_values().env_ids(), [container]);
 }
 
 #[test]
@@ -345,7 +112,7 @@ fn shared_rebuild_defers_relations_until_nested_container_collisions_converge() 
     let collision_merges = Arc::new(AtomicUsize::new(0));
     let collision_merges_for_callback = Arc::clone(&collision_merges);
     let counter = db.add_reservable_counter(8);
-    db.register_sequence_container_type::<VecContainer>(
+    db.register_container_type::<VecContainer>(
         counter,
         move |state, left, right| {
             assert!(
@@ -446,7 +213,7 @@ fn shared_rebuild_defers_relations_until_nested_container_collisions_converge() 
 fn containers_round_trip_predictions_through_database_merge() {
     let mut db = Database::new();
     let counter = db.add_reservable_counter(8);
-    db.register_sequence_container_type::<VecContainer>(
+    db.register_container_type::<VecContainer>(
         counter,
         |_state, left, right| left.min(right),
         iter::empty(),
@@ -492,10 +259,10 @@ fn containers_round_trip_predictions_through_database_merge() {
 }
 
 #[test]
-fn cloned_databases_have_independent_sequence_notifications() {
+fn cloned_databases_have_independent_container_notifications() {
     let mut original = Database::new();
     let counter = original.add_reservable_counter(8);
-    original.register_sequence_container_type::<VecContainer>(
+    original.register_container_type::<VecContainer>(
         counter,
         |_state, left, right| left.min(right),
         iter::empty(),
@@ -527,7 +294,7 @@ fn cloned_databases_have_independent_sequence_notifications() {
 }
 
 #[test]
-fn sequence_merge_writes_participate_in_simple_fixed_point() {
+fn container_merge_writes_participate_in_simple_fixed_point() {
     let mut db = Database::new();
     let sink = db.add_table(
         SortedWritesTable::new(
@@ -549,13 +316,13 @@ fn sequence_merge_writes_participate_in_simple_fixed_point() {
         iter::empty(),
     );
     let counter = db.add_reservable_counter(8);
-    db.register_sequence_container_type::<VecContainer>(
+    db.register_container_type::<VecContainer>(
         counter,
         move |state, left, right| {
             assert_eq!(
                 state.get_table(gate).len(),
                 1,
-                "the simple scheduler must honor sequence read dependencies"
+                "the simple scheduler must honor container read dependencies"
             );
             state.stage_insert(sink, &[left, right]);
             left.min(right)
@@ -582,7 +349,7 @@ fn sequence_merge_writes_participate_in_simple_fixed_point() {
 }
 
 #[test]
-fn sequence_merge_writes_participate_in_dependency_aware_fixed_point() {
+fn container_merge_writes_participate_in_dependency_aware_fixed_point() {
     let mut db = Database::new();
     let sink = db.add_table(
         SortedWritesTable::new(
@@ -609,13 +376,13 @@ fn sequence_merge_writes_participate_in_dependency_aware_fixed_point() {
     let first_bystander = add_flag_table();
     let second_bystander = add_flag_table();
     let counter = db.add_reservable_counter(8);
-    db.register_sequence_container_type::<VecContainer>(
+    db.register_container_type::<VecContainer>(
         counter,
         move |state, left, right| {
             assert_eq!(
                 state.get_table(gate).len(),
                 1,
-                "the sequence merge must run after its read dependency"
+                "the container merge must run after its read dependency"
             );
             state.stage_insert(sink, &[left, right]);
             left.min(right)
@@ -640,16 +407,16 @@ fn sequence_merge_writes_participate_in_dependency_aware_fixed_point() {
     });
     assert_ne!(first, second);
 
-    // The sequence environment plus the three ordinary tables above force
+    // The container environment plus the three ordinary tables above force
     // `merge_all` through its dependency-aware (four-or-more participant)
-    // path. The sequence merge then notifies the previously inactive sink,
+    // path. The container merge then notifies the previously inactive sink,
     // which must be consumed by the same call's fixed-point loop.
     assert!(db.merge_all());
     assert_eq!(db.get_table(sink).len(), 1);
 }
 
 #[test]
-fn relation_merge_can_depend_on_nonzero_level_sequence_container() {
+fn relation_merge_can_depend_on_nonzero_level_container() {
     let mut db = Database::new();
     let gate = db.add_table(
         SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
@@ -662,7 +429,7 @@ fn relation_merge_can_depend_on_nonzero_level_sequence_container() {
         iter::empty(),
     );
     let counter = db.add_reservable_counter(8);
-    let container = db.register_sequence_container_type::<VecContainer>(
+    let container = db.register_container_type::<VecContainer>(
         counter,
         |_state, left, right| left.min(right),
         [gate],
@@ -682,7 +449,7 @@ fn relation_merge_can_depend_on_nonzero_level_sequence_container() {
                     assert_eq!(
                         state.container_sequence::<VecContainer>(winner),
                         Some(expected.0.as_slice()),
-                        "the relation merge must run after its sequence dependency"
+                        "the relation merge must run after its container dependency"
                     );
                     if current[1] == winner {
                         false
@@ -723,7 +490,7 @@ fn relation_merge_can_depend_on_nonzero_level_sequence_container() {
 fn same_stratum_relation_merge_can_read_active_container() {
     let mut db = Database::new();
     let counter = db.add_reservable_counter(8);
-    db.register_sequence_container_type::<VecContainer>(
+    db.register_container_type::<VecContainer>(
         counter,
         |_state, left, right| left.min(right),
         iter::empty(),
@@ -813,12 +580,12 @@ fn failed_table_dependency_registration_does_not_mutate_database() {
 }
 
 #[test]
-fn failed_sequence_dependency_registration_can_be_retried() {
+fn failed_container_dependency_registration_can_be_retried() {
     let mut db = Database::new();
     let counter = db.add_reservable_counter(8);
     let missing_table = db.next_table_id();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        db.register_sequence_container_type::<VecContainer>(
+        db.register_container_type::<VecContainer>(
             counter,
             |_state, left, right| left.min(right),
             [missing_table],
@@ -828,7 +595,7 @@ fn failed_sequence_dependency_registration_can_be_retried() {
     assert!(result.is_err());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        db.register_sequence_container_type::<VecContainer>(
+        db.register_container_type::<VecContainer>(
             counter,
             |_state, left, right| left.min(right),
             iter::empty(),
@@ -837,13 +604,13 @@ fn failed_sequence_dependency_registration_can_be_retried() {
     }));
     assert!(result.is_err());
 
-    let container = db.register_sequence_container_type::<VecContainer>(
+    let container = db.register_container_type::<VecContainer>(
         counter,
         |_state, left, right| left.min(right),
         iter::empty(),
         iter::empty(),
     );
-    let duplicate = db.register_sequence_container_type::<VecContainer>(
+    let duplicate = db.register_container_type::<VecContainer>(
         counter,
         |_state, left, right| left.max(right),
         [missing_table],

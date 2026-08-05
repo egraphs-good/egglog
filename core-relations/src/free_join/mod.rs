@@ -24,7 +24,7 @@ use crate::{
     },
     containers::{
         ContainerRebuildContext, ContainerRebuildPlan, ContainerRebuildSummary, ContainerValue,
-        DynamicContainerEnv, SequenceContainerValue,
+        DynamicContainerEnv,
     },
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
@@ -388,10 +388,6 @@ pub struct Database {
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
-    /// Next id in the storage namespace shared by relations and both
-    /// container backends. Legacy containers deliberately consume an id
-    /// without becoming dependency-graph participants.
-    next_storage_id: usize,
     /// Participants modified since the last call to [`Database::merge_all`].
     notification_list: NotificationList<TableId>,
     // Tracks relative dependencies between maintenance participants.
@@ -442,9 +438,7 @@ impl OwnedParticipant {
     fn maintenance_table_mut(&mut self) -> &mut dyn MaintenanceTable {
         match self {
             OwnedParticipant::Relation { info, .. } => &mut info.table,
-            OwnedParticipant::Container { env, .. } => env
-                .maintenance_table_mut()
-                .expect("scheduled containers must use sequence storage"),
+            OwnedParticipant::Container { env, .. } => &mut **env,
         }
     }
 
@@ -499,7 +493,6 @@ impl Clone for Database {
             counters: self.counters.clone(),
             external_functions: self.external_functions.clone(),
             container_values: self.container_values.clone(),
-            next_storage_id: self.next_storage_id,
             notification_list,
             deps: self.deps.clone(),
             base_values: self.base_values.clone(),
@@ -551,31 +544,7 @@ impl Database {
         &mut self.container_values
     }
 
-    /// Register a legacy container in the database-wide storage namespace.
-    ///
-    /// Legacy environments keep their existing compatibility rebuild loop and
-    /// are not maintenance-scheduler participants. Allocating their ids here
-    /// nevertheless prevents a later relation or sequence container from
-    /// reusing the same physical slot while both backends coexist.
-    pub fn register_container_type<C: ContainerValue>(
-        &mut self,
-        id_counter: CounterId,
-        merge_fn: impl Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync + 'static,
-    ) -> crate::ContainerValueId {
-        if let Some(container) = self.container_values.registered_type::<C>() {
-            return container;
-        }
-
-        let participant = self.allocate_storage_id();
-        let container = crate::ContainerValueId::from_table_id(participant);
-        let registered = self
-            .container_values
-            .register_type::<C>(container, id_counter, merge_fn);
-        assert_eq!(registered, container);
-        container
-    }
-
-    /// Register a sequence-backed container as a normal database maintenance
+    /// Register a container as a normal database maintenance
     /// participant. Its packed rows remain outside the fixed-schema query
     /// table interface, but merge notifications and dependency ordering share
     /// the same scheduler namespace as relation tables.
@@ -585,15 +554,15 @@ impl Database {
     /// return the existing [`crate::ContainerValueId`].
     ///
     /// Every read and write dependency must already be registered in this
-    /// database. Container read dependencies must use the sequence backend.
-    pub fn register_sequence_container_type<C: SequenceContainerValue>(
+    /// database.
+    pub fn register_container_type<C: ContainerValue>(
         &mut self,
         id_counter: CounterId,
         merge_fn: impl Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync + 'static,
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> crate::ContainerValueId {
-        if let Some(container) = self.container_values.registered_sequence_type::<C>() {
+        if let Some(container) = self.container_values.registered_type::<C>() {
             return container;
         }
 
@@ -602,15 +571,12 @@ impl Database {
         self.validate_dependencies(&read_deps, "read");
         self.validate_dependencies(&write_deps, "write");
 
-        let base_values = self.base_values.clone();
-        let participant = self.allocate_storage_id();
+        let participant = self.deps.next_id();
         let container = crate::ContainerValueId::from_table_id(participant);
-        let registered = self.container_values.register_sequence_type::<C>(
-            container,
-            id_counter,
-            merge_fn,
-            base_values,
-        );
+        let base_values = self.base_values.clone();
+        let registered =
+            self.container_values
+                .register_type::<C>(container, id_counter, merge_fn, base_values);
         assert_eq!(registered, container);
         self.deps
             .add_participant(participant, read_deps, write_deps);
@@ -626,29 +592,22 @@ impl Database {
         }
     }
 
-    fn allocate_storage_id(&mut self) -> TableId {
-        let id = TableId::from_usize(self.next_storage_id);
-        self.next_storage_id = self
-            .next_storage_id
-            .checked_add(1)
-            .expect("database storage id space exhausted");
-        assert!(!id.is_dummy(), "database storage id space exhausted");
-        id
-    }
-
     /// Apply one database-maintenance round using the value-level rebuild
     /// encoded by `func_id`.
     ///
-    /// Sequence-backed containers use the same notification/dependency
-    /// scheduler and rebuild traversal as relation tables. Unmigrated legacy
-    /// environments retain their compatibility pass, but consume the same
-    /// prepared union-find delta. Both kinds of container rebuild before the
-    /// publication barrier because canonicalizing their keys can create new
-    /// identities in the rebuild source.
+    /// Fixed- and variable-arity tables share the same dependency-ordered
+    /// participant traversal. Variable-arity container tables form the first
+    /// batch because canonicalizing their keys can create new identities in the
+    /// rebuild source. Publishing that batch before rebuilding fixed-schema
+    /// relations is a correctness barrier: a relation whose keys collapse must
+    /// see any simultaneously-collapsing container values before invoking its
+    /// merge policy. If publication changes the source, relation rebuilding is
+    /// deferred to the caller's next outer `apply_rebuild` round. This handles
+    /// nested-container collision chains without adding a container-only inner
+    /// fixpoint; both batches use the common participant implementation.
     ///
-    /// If publication changes the source, relation rebuilding is deferred to
-    /// the caller's next outer round. Stable container identities additionally
-    /// require the post-publication dirty-parent refresh below.
+    /// Stable container identities additionally require the post-publication
+    /// dirty-parent refresh below.
     pub fn apply_rebuild(
         &mut self,
         func_id: TableId,
@@ -657,7 +616,7 @@ impl Database {
     ) -> bool {
         let containers = self
             .container_values
-            .sequence_env_ids()
+            .env_ids()
             .into_iter()
             .map(TableId::from)
             .collect::<Vec<_>>();
@@ -672,26 +631,6 @@ impl Database {
         let source_before = self.tables[func_id].table.version();
 
         let mut rebuild = self.rebuild_batch(containers, func_id, next_ts, container_plan.as_ref());
-
-        // Legacy environments are intentionally outside the common scheduler,
-        // but they must observe exactly the same incremental UF subset as the
-        // sequence participants. Keep their old pass until the final legacy
-        // backend is migrated.
-        if let Some(plan) = container_plan.as_ref() {
-            let mut container_values = mem::take(&mut self.container_values);
-            let (legacy, staged) = {
-                let source = &self.tables[func_id].table;
-                let context = plan
-                    .context(source)
-                    .expect("a prepared container rebuild plan must remain applicable");
-                self.with_execution_state_tracked(|state| {
-                    container_values.rebuild_legacy_pass(&context, state)
-                })
-            };
-            self.container_values = container_values;
-            rebuild.changed |= legacy.changed() || staged;
-            rebuild.containers.extend(legacy);
-        }
 
         // A container collision can add an identity union to `func_id`.
         // Publish it before constructing relation rebuilders or mutation
@@ -723,7 +662,7 @@ impl Database {
         rebuild: &mut ParticipantRebuild,
     ) {
         self.container_values
-            .finish_rebuild(&mut rebuild.containers);
+            .expand_dirty_id_closure(&mut rebuild.containers);
         let dirty_ids = rebuild
             .containers
             .dirty_ids()
@@ -964,7 +903,7 @@ impl Database {
     pub fn merge_all(&mut self) -> bool {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
-        let sequence_size_before = self.container_values.sequence_len();
+        let container_size_before = self.container_values.container_len();
         // Relation tables modified during this `merge_all` call. Only these need their cached
         // indexes reset at the end so future reads refresh them.
         let mut touched: IndexSet<TableId> = IndexSet::default();
@@ -1039,8 +978,8 @@ impl Database {
         }
         self.total_size_estimate = self
             .total_size_estimate
-            .wrapping_sub(sequence_size_before)
-            .wrapping_add(self.container_values.sequence_len());
+            .wrapping_sub(container_size_before)
+            .wrapping_add(self.container_values.container_len());
         ever_changed
     }
 
@@ -1221,7 +1160,7 @@ impl Database {
     /// This can be useful for "knot tying", when tables need to reference their
     /// own id.
     pub fn next_table_id(&self) -> TableId {
-        TableId::from_usize(self.next_storage_id)
+        self.deps.next_id()
     }
 
     /// Add a table with the given schema to the database.
@@ -1263,7 +1202,7 @@ impl Database {
 
         let spec = table.spec();
         let table = WrappedTable::new(table);
-        let res = self.allocate_storage_id();
+        let res = self.deps.next_id();
         let old = self.tables.insert(
             res,
             TableInfo {
