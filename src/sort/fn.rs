@@ -198,23 +198,6 @@ impl Hash for FunctionContainer {
 }
 
 impl ContainerValue for FunctionContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        let mut changed = false;
-        for (s, old) in &mut self.1 {
-            if s.is_eq_sort() || s.is_eq_container_sort() {
-                let new = rebuilder.rebuild_val(*old);
-                changed |= *old != new;
-                *old = new;
-            }
-        }
-        changed
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.1.iter().map(|(_, v)| v).copied()
-    }
-}
-
-impl SequenceContainerValue for FunctionContainer {
     fn encode_sequence(&self, base_values: &BaseValues, out: &mut Vec<Value>) {
         let partial_arcsorts = self
             .1
@@ -411,7 +394,7 @@ impl Sort for FunctionSort {
         backend
             .base_values_mut()
             .register_type::<ResolvedFunction>();
-        backend.register_sequence_container_ty::<FunctionContainer>();
+        backend.register_container_ty::<FunctionContainer>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

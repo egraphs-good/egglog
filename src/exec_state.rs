@@ -203,13 +203,13 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     }
 
     /// Reconstruct a container visible to this execution, including a local
-    /// prediction. This is the explicit slow sequence-container path.
+    /// prediction. This is the explicit slow serialized-container path.
     fn value_to_owned_container<T: ContainerValue>(&self, x: Value) -> Option<T> {
         self.es().get_container::<T>(x)
     }
 
-    /// Run `f` over the fast serialized payload of a sequence-backed container
-    /// without reconstructing its Rust container.
+    /// Run `f` over a container's serialized payload without reconstructing its
+    /// Rust representation.
     fn with_container_sequence<T: ContainerValue, R>(
         &self,
         x: Value,
@@ -218,7 +218,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         self.es().container_sequence::<T>(x).map(f)
     }
 
-    /// Intern an already serialized sequence-container key.
+    /// Intern an already serialized container key.
     fn register_container_sequence<T: ContainerValue>(&mut self, key: &[Value]) -> Value {
         self.es_mut().register_container_sequence::<T>(key)
     }

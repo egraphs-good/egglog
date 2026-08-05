@@ -11,7 +11,7 @@ use std::{
 
 use crate::core_relations;
 use crate::core_relations::{
-    ContainerValue, ExternalFunctionId, Value, ValueRebuilder, make_external_func,
+    BaseValues, ContainerValue, ExternalFunctionId, Value, ValueRebuilder, make_external_func,
 };
 use crate::numeric_id::NumericId;
 use log::debug;
@@ -449,11 +449,31 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct VecContainer(Vec<Value>);
 impl ContainerValue for VecContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        rebuilder.rebuild_slice(&mut self.0)
+    fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
+        out.extend_from_slice(&self.0);
     }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.0.iter().copied()
+
+    fn decode_sequence(sequence: &[Value], _base_values: &BaseValues) -> Self {
+        Self(sequence.to_vec())
+    }
+
+    fn sequence_values(sequence: &[Value]) -> &[Value] {
+        sequence
+    }
+
+    fn rebuild_sequence(
+        sequence: &[Value],
+        _base_values: &BaseValues,
+        rebuilder: &dyn ValueRebuilder,
+        out: &mut Vec<Value>,
+    ) -> bool {
+        out.extend_from_slice(sequence);
+        if rebuilder.rebuild_slice(out) {
+            true
+        } else {
+            out.clear();
+            false
+        }
     }
 }
 
