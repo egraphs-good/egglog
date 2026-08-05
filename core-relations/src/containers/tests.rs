@@ -54,11 +54,11 @@ impl ContainerValue for LegacyVecContainer {
 }
 
 impl SequenceContainerValue for VecContainer {
-    fn encode_sequence(&self, out: &mut Vec<Value>) {
+    fn encode_sequence(&self, _base_values: &crate::BaseValues, out: &mut Vec<Value>) {
         out.extend_from_slice(&self.0);
     }
 
-    fn decode_sequence(sequence: &[Value]) -> Self {
+    fn decode_sequence(sequence: &[Value], _base_values: &crate::BaseValues) -> Self {
         Self(sequence.to_vec())
     }
 
@@ -68,6 +68,7 @@ impl SequenceContainerValue for VecContainer {
 
     fn rebuild_sequence(
         sequence: &[Value],
+        _base_values: &crate::BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
