@@ -845,7 +845,7 @@ impl<'a> ExecutionState<'a> {
         self.db.containers
     }
 
-    /// Predict and stage a sequence-backed container row.
+    /// Predict and stage a container row.
     ///
     /// The row is `key` followed by one fresh identity allocated from
     /// `counter`. Repeated keys within this execution reuse the first identity
@@ -877,7 +877,7 @@ impl<'a> ExecutionState<'a> {
         identity
     }
 
-    /// Return a sequence-backed container row predicted by this execution.
+    /// Return a container row predicted by this execution.
     pub(crate) fn predicted_container_row(
         &self,
         container: ContainerValueId,

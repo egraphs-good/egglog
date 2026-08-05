@@ -43,6 +43,12 @@ impl DependencyGraph {
         self.to_level.insert(participant, level);
     }
 
+    /// Return the globally unique id that will be assigned to the next
+    /// relation or container table registered with the database.
+    pub(crate) fn next_id(&self) -> TableId {
+        self.to_level.next_id()
+    }
+
     pub(crate) fn contains(&self, participant: TableId) -> bool {
         self.to_level.contains_key(participant)
     }
@@ -85,16 +91,13 @@ mod tests {
     }
 
     #[test]
-    fn participant_ids_may_have_legacy_storage_holes() {
+    fn participant_ids_are_allocated_from_the_dependency_graph() {
         let mut graph = DependencyGraph::default();
-        graph.add_participant(TableId::new(3), [], []);
-        graph.add_participant(TableId::new(7), [TableId::new(3)], []);
+        assert_eq!(graph.next_id(), TableId::new(0));
 
-        assert!(!graph.contains(TableId::new(0)));
-        assert!(graph.contains(TableId::new(3)));
-        assert_eq!(
-            graph.participants().collect::<Vec<_>>(),
-            [TableId::new(3), TableId::new(7)]
-        );
+        graph.add_participant(graph.next_id(), [], []);
+        assert_eq!(graph.next_id(), TableId::new(1));
+        assert!(graph.contains(TableId::new(0)));
+        assert_eq!(graph.participants().collect::<Vec<_>>(), [TableId::new(0)]);
     }
 }
