@@ -2267,9 +2267,14 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.with_execution_state(|state| {
-            self.backend.container_values().register_val::<T>(x, state)
-        })
+        let (value, changed) = self.backend.with_execution_state_tracked(|state| {
+            let containers = state.container_values();
+            containers.register_val::<T>(x, state)
+        });
+        if changed {
+            self.backend.flush_updates();
+        }
+        value
     }
 
     /// Get the size of a function in the e-graph.
