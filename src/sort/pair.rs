@@ -1,3 +1,5 @@
+use crate::numeric_id::NumericId;
+
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -25,6 +27,84 @@ impl ContainerValue for PairContainer {
     }
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         [self.first, self.second].into_iter()
+    }
+}
+
+impl SequenceContainerValue for PairContainer {
+    fn encode_sequence(&self, out: &mut Vec<Value>) {
+        let rebuild_mask =
+            self.do_rebuild_first as usize | ((self.do_rebuild_second as usize) << 1);
+        out.extend_from_slice(&[Value::from_usize(rebuild_mask), self.first, self.second]);
+    }
+
+    fn decode_sequence(sequence: &[Value]) -> Self {
+        let [rebuild_mask, first, second] = sequence else {
+            panic!("serialized PairContainer must contain a rebuild mask and two values");
+        };
+        assert!(
+            rebuild_mask.index() < 4,
+            "serialized PairContainer has an invalid rebuild mask"
+        );
+        Self {
+            do_rebuild_first: rebuild_mask.index() & 1 != 0,
+            do_rebuild_second: rebuild_mask.index() & 2 != 0,
+            first: *first,
+            second: *second,
+        }
+    }
+
+    fn sequence_values(sequence: &[Value]) -> &[Value] {
+        let [_, values @ ..] = sequence else {
+            unreachable!()
+        };
+        assert_eq!(
+            values.len(),
+            2,
+            "serialized PairContainer must contain exactly two values"
+        );
+        values
+    }
+
+    fn visit_sequence_values(sequence: &[Value], visitor: &mut dyn FnMut(Value)) {
+        let [rebuild_mask, first, second] = sequence else {
+            panic!("serialized PairContainer must contain a rebuild mask and two values");
+        };
+        match rebuild_mask.index() {
+            0 => {}
+            1 => visitor(*first),
+            2 => visitor(*second),
+            3 => {
+                visitor(*first);
+                visitor(*second);
+            }
+            _ => panic!("serialized PairContainer has an invalid rebuild mask"),
+        }
+    }
+
+    fn rebuild_sequence(
+        sequence: &[Value],
+        rebuilder: &dyn ValueRebuilder,
+        out: &mut Vec<Value>,
+    ) -> bool {
+        let [rebuild_mask, first, second] = sequence else {
+            panic!("serialized PairContainer must contain a rebuild mask and two values");
+        };
+        let (mut rebuilt_first, mut rebuilt_second) = (*first, *second);
+        match rebuild_mask.index() {
+            0 => return false,
+            1 => rebuilt_first = rebuilder.rebuild_val(*first),
+            2 => rebuilt_second = rebuilder.rebuild_val(*second),
+            3 => {
+                rebuilt_first = rebuilder.rebuild_val(*first);
+                rebuilt_second = rebuilder.rebuild_val(*second);
+            }
+            _ => panic!("serialized PairContainer has an invalid rebuild mask"),
+        }
+        if rebuilt_first == *first && rebuilt_second == *second {
+            return false;
+        }
+        out.extend_from_slice(&[*rebuild_mask, rebuilt_first, rebuilt_second]);
+        true
     }
 }
 
@@ -115,6 +195,10 @@ impl ContainerSort for PairSort {
         &self.name
     }
 
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_sequence_container_ty::<PairContainer>();
+    }
+
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.first.clone(), self.second.clone()]
     }
@@ -161,17 +245,37 @@ impl ContainerSort for PairSort {
             pair_term_children(termdag, *pair).map(|(_, second)| second)
         };
 
-        add_primitive_with_validator!(eg, "pair" = {self.clone(): PairSort} |x: # (self.first()), y: # (self.second())| -> @PairContainer (arc) {
-            PairContainer {
-                do_rebuild_first: self.ctx.first.is_eq_sort() || self.ctx.first.is_eq_container_sort(),
-                do_rebuild_second: self.ctx.second.is_eq_sort() || self.ctx.second.is_eq_container_sort(),
-                first: x,
-                second: y,
-            }
-        }, pair_term);
-
-        add_primitive_with_validator!(eg, "pair-first"  = |xs: @PairContainer (arc)| -> # (self.first())  { xs.first  }, pair_first_validator);
-        add_primitive_with_validator!(eg, "pair-second" = |xs: @PairContainer (arc)| -> # (self.second()) { xs.second }, pair_second_validator);
+        eg.add_pure_primitive(
+            PairConstruct {
+                name: "pair".into(),
+                pair: arc.clone(),
+                first: self.first(),
+                second: self.second(),
+                rebuild_mask: self.first.is_eq_sort() as usize
+                    | ((self.second.is_eq_sort() as usize) << 1)
+                    | (self.first.is_eq_container_sort() as usize)
+                    | ((self.second.is_eq_container_sort() as usize) << 1),
+            },
+            Some(Arc::new(pair_term)),
+        );
+        eg.add_pure_primitive(
+            PairProject {
+                name: "pair-first".into(),
+                pair: arc.clone(),
+                output: self.first(),
+                index: 0,
+            },
+            Some(Arc::new(pair_first_validator)),
+        );
+        eg.add_pure_primitive(
+            PairProject {
+                name: "pair-second".into(),
+                pair: arc,
+                output: self.second(),
+                index: 1,
+            },
+            Some(Arc::new(pair_second_validator)),
+        );
     }
 
     fn reconstruct_termdag(
@@ -191,5 +295,181 @@ impl ContainerSort for PairSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         self.name().to_owned()
+    }
+}
+
+/// Construct a pair directly in its canonical flat representation.
+#[derive(Clone)]
+struct PairConstruct {
+    name: String,
+    pair: ArcSort,
+    first: ArcSort,
+    second: ArcSort,
+    rebuild_mask: usize,
+}
+
+impl Primitive for PairConstruct {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.first.clone(), self.second.clone(), self.pair.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+
+impl PurePrim for PairConstruct {
+    fn apply<'a, 'db>(
+        &self,
+        mut state: crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let [first, second] = args else { return None };
+        Some(state.register_container_sequence::<PairContainer>(&[
+            Value::from_usize(self.rebuild_mask),
+            *first,
+            *second,
+        ]))
+    }
+}
+
+/// Project one pair lane through a borrowed sequence lookup, falling back to
+/// the compatibility decoder for externally registered legacy storage.
+#[derive(Clone)]
+struct PairProject {
+    name: String,
+    pair: ArcSort,
+    output: ArcSort,
+    index: usize,
+}
+
+impl Primitive for PairProject {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.pair.clone(), self.output.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+
+impl PurePrim for PairProject {
+    fn apply<'a, 'db>(&self, state: crate::PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let [pair] = args else { return None };
+        state
+            .with_container_sequence::<PairContainer, _>(*pair, |values| {
+                values.get(self.index).copied()
+            })
+            .or_else(|| {
+                state
+                    .value_to_owned_container::<PairContainer>(*pair)
+                    .map(|pair| {
+                        Some(match self.index {
+                            0 => pair.first,
+                            1 => pair.second,
+                            _ => unreachable!(),
+                        })
+                    })
+            })?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    struct SelectiveRebuilder {
+        from: Value,
+        to: Value,
+        calls: AtomicUsize,
+    }
+
+    impl ValueRebuilder for SelectiveRebuilder {
+        fn rebuild_val(&self, value: Value) -> Value {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if value == self.from { self.to } else { value }
+        }
+    }
+
+    fn value(index: usize) -> Value {
+        Value::from_usize(index)
+    }
+
+    #[test]
+    fn sequence_codec_round_trips_and_selectively_rebuilds() {
+        let pair = PairContainer {
+            do_rebuild_first: false,
+            do_rebuild_second: true,
+            first: value(10),
+            second: value(20),
+        };
+        let mut encoded = Vec::new();
+        pair.encode_sequence(&mut encoded);
+        assert_eq!(encoded, vec![value(2), value(10), value(20)]);
+        assert_eq!(PairContainer::decode_sequence(&encoded), pair);
+        assert_eq!(PairContainer::sequence_values(&encoded), &encoded[1..]);
+
+        let mut visited = Vec::new();
+        PairContainer::visit_sequence_values(&encoded, &mut |value| visited.push(value));
+        assert_eq!(visited, vec![value(20)]);
+
+        let rebuilder = SelectiveRebuilder {
+            from: value(20),
+            to: value(30),
+            calls: AtomicUsize::new(0),
+        };
+        let mut rebuilt = Vec::new();
+        assert!(PairContainer::rebuild_sequence(
+            &encoded,
+            &rebuilder,
+            &mut rebuilt,
+        ));
+        assert_eq!(rebuilt, vec![value(2), value(10), value(30)]);
+        assert_eq!(rebuilder.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn sequence_codec_leaves_output_empty_when_unchanged() {
+        let encoded = vec![value(1), value(10), value(20)];
+        let rebuilder = SelectiveRebuilder {
+            from: value(20),
+            to: value(30),
+            calls: AtomicUsize::new(0),
+        };
+        let mut rebuilt = Vec::new();
+        assert!(!PairContainer::rebuild_sequence(
+            &encoded,
+            &rebuilder,
+            &mut rebuilt,
+        ));
+        assert!(rebuilt.is_empty());
+        assert_eq!(rebuilder.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn sequence_primitives_consume_local_predictions() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort IntPair (Pair i64 i64))
+                (check (= (pair-first (pair 10 20)) 10))
+                (check (= (pair-second (pair 10 20)) 20))
+                "#,
+            )
+            .unwrap();
     }
 }
