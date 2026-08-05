@@ -21,7 +21,6 @@ use rustc_hash::FxHasher;
 use crate::{
     BaseValues, ContainerValueId, ContainerValues, ExternalFunctionId, WrappedTable,
     common::Value,
-    dependency_graph::MaintenanceId,
     free_join::{
         CounterId, CounterReservation, Counters, ExternalFunctions, TableId, TableInfo, Variable,
     },
@@ -292,45 +291,12 @@ pub(crate) struct ExtractedBinding {
     pub(crate) vals: Pooled<Vec<Value>>,
 }
 
-/// Namespace-qualified owner of a predicted row.
-///
-/// Tables and sequence-backed container types use independent dense `u32` id
-/// spaces. The high bit distinguishes them without widening [`PredictedEntry`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-struct PredictionOwner(u32);
-
-impl PredictionOwner {
-    const CONTAINER_TAG: u32 = 1 << 31;
-
-    fn table(table: TableId) -> Self {
-        Self::new(table.rep(), false)
-    }
-
-    fn container(container: ContainerValueId) -> Self {
-        Self::new(container.rep(), true)
-    }
-
-    fn new(rep: u32, is_container: bool) -> Self {
-        assert_eq!(
-            rep & Self::CONTAINER_TAG,
-            0,
-            "prediction owner id exceeds its 31-bit namespace"
-        );
-        Self(rep | if is_container { Self::CONTAINER_TAG } else { 0 })
-    }
-
-    fn rep(self) -> u32 {
-        self.0
-    }
-}
-
 #[derive(Clone, Copy)]
 struct PredictedEntry {
     hash: u64,
     index: u32,
     row_end: u32,
-    owner: PredictionOwner,
+    owner: TableId,
     key_arity: u32,
 }
 
@@ -339,7 +305,7 @@ struct PredictedValueEntry {
     hash: u64,
     index: u32,
     row_end: u32,
-    owner: PredictionOwner,
+    owner: TableId,
 }
 
 #[derive(Default)]
@@ -368,10 +334,10 @@ impl Clear for PredictedVals {
 impl PredictedVals {
     #[cfg(test)]
     fn hash(table: TableId, key: &[Value]) -> u64 {
-        Self::owner_hash(PredictionOwner::table(table), key)
+        Self::owner_hash(table, key)
     }
 
-    fn owner_hash(owner: PredictionOwner, key: &[Value]) -> u64 {
+    fn owner_hash(owner: TableId, key: &[Value]) -> u64 {
         let mut hasher = FxHasher::default();
         hasher.write_u32(owner.rep());
         hasher.write_usize(key.len());
@@ -381,7 +347,7 @@ impl PredictedVals {
         hasher.finish()
     }
 
-    fn value_hash(owner: PredictionOwner, value: Value) -> u64 {
+    fn value_hash(owner: TableId, value: Value) -> u64 {
         let mut hasher = FxHasher::default();
         hasher.write_u32(owner.rep());
         hasher.write_u32(value.rep());
@@ -396,13 +362,7 @@ impl PredictedVals {
         &self.values[entry.index as usize..entry.row_end as usize]
     }
 
-    fn matches(
-        &self,
-        entry: &PredictedEntry,
-        hash: u64,
-        owner: PredictionOwner,
-        key: &[Value],
-    ) -> bool {
+    fn matches(&self, entry: &PredictedEntry, hash: u64, owner: TableId, key: &[Value]) -> bool {
         if entry.hash != hash || entry.owner != owner || entry.key_arity as usize != key.len() {
             return false;
         }
@@ -413,7 +373,7 @@ impl PredictedVals {
         &self,
         entry: &PredictedValueEntry,
         hash: u64,
-        owner: PredictionOwner,
+        owner: TableId,
         value: Value,
     ) -> bool {
         entry.hash == hash
@@ -433,7 +393,7 @@ impl PredictedVals {
         container: ContainerValueId,
         value: Value,
     ) -> Option<&[Value]> {
-        let owner = PredictionOwner::container(container);
+        let owner = TableId::from(container);
         let hash = Self::value_hash(owner, value);
         let entry = self
             .by_value
@@ -481,13 +441,7 @@ impl PredictedVals {
         row_arity: usize,
         default: impl FnOnce(&mut Vec<Value>, usize),
     ) -> (&[Value], bool) {
-        self.get_or_insert_impl(
-            PredictionOwner::table(table),
-            key,
-            row_arity,
-            false,
-            default,
-        )
+        self.get_or_insert_impl(table, key, row_arity, false, default)
     }
 
     /// Predict a row with exactly one non-key value and index it in both
@@ -506,18 +460,12 @@ impl PredictedVals {
             .len()
             .checked_add(1)
             .expect("predicted container row arity overflow");
-        self.get_or_insert_impl(
-            PredictionOwner::container(container),
-            key,
-            row_arity,
-            true,
-            default,
-        )
+        self.get_or_insert_impl(TableId::from(container), key, row_arity, true, default)
     }
 
     fn get_or_insert_impl(
         &mut self,
-        owner: PredictionOwner,
+        owner: TableId,
         key: &[Value],
         row_arity: usize,
         index_value: bool,
@@ -573,9 +521,26 @@ pub(crate) struct DbView<'a> {
     pub(crate) external_funcs: &'a ExternalFunctions,
     pub(crate) bases: &'a BaseValues,
     pub(crate) containers: &'a ContainerValues,
-    pub(crate) notification_list: &'a NotificationList<MaintenanceId>,
-    pub(crate) table_maintenance: &'a DenseIdMap<TableId, MaintenanceId>,
-    pub(crate) container_maintenance: &'a DenseIdMap<ContainerValueId, MaintenanceId>,
+    pub(crate) notification_list: &'a NotificationList<TableId>,
+}
+
+impl DbView<'_> {
+    /// Create a mutation buffer for any installed maintenance participant.
+    ///
+    /// Relations and sequence-backed containers share the [`TableId`]
+    /// namespace, so action execution should not need to know which owner map
+    /// contains a write destination. A participant temporarily detached for
+    /// merge or rebuild is intentionally absent from this view; callers seed
+    /// buffers for those destinations before detaching the participant group.
+    fn new_buffer(&self, table: TableId) -> Box<dyn MutationBuffer> {
+        if let Some(info) = self.table_info.get(table) {
+            return info.table.new_buffer();
+        }
+        self.containers
+            .maintenance_table(ContainerValueId::from_table_id(table))
+            .unwrap_or_else(|| panic!("write destination {table:?} has no maintenance storage"))
+            .new_buffer()
+    }
 }
 
 /// A handle on a database that may be in the process of running a rule.
@@ -610,7 +575,6 @@ pub struct ExecutionState<'a> {
     pub(crate) db: DbView<'a>,
     counter_reservations: CounterReservations,
     buffers: MutationBuffers<'a>,
-    container_buffers: DenseIdMap<ContainerValueId, Box<dyn MutationBuffer>>,
     /// Whether any mutations have been staged via this ExecutionState.
     pub(crate) changed: bool,
     /// Atomic flag for early stopping of rule execution.
@@ -646,12 +610,7 @@ impl<'db> ExecutionStateSeed<'db, '_> {
             predicted: Default::default(),
             db: self.db,
             counter_reservations: Default::default(),
-            buffers: MutationBuffers::new(
-                self.db.notification_list,
-                self.db.table_maintenance,
-                Default::default(),
-            ),
-            container_buffers: Default::default(),
+            buffers: MutationBuffers::new(self.db.notification_list, Default::default()),
             changed: false,
             stop_match: Arc::clone(self.stop_match),
         }
@@ -665,15 +624,13 @@ impl<'db> ExecutionStateSeed<'db, '_> {
 /// A basic wrapper around an map from table id to a mutation buffer for that table that also
 /// tracks if a table has been modified.
 struct MutationBuffers<'a> {
-    notify_list: &'a NotificationList<MaintenanceId>,
-    table_maintenance: &'a DenseIdMap<TableId, MaintenanceId>,
+    notify_list: &'a NotificationList<TableId>,
     buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
 }
 
 impl Clone for MutationBuffers<'_> {
     fn clone(&self) -> Self {
-        let mut res =
-            MutationBuffers::new(self.notify_list, self.table_maintenance, Default::default());
+        let mut res = MutationBuffers::new(self.notify_list, Default::default());
         for (id, buf) in self.buffers.iter() {
             res.buffers.insert(id, buf.fresh_handle());
         }
@@ -681,25 +638,13 @@ impl Clone for MutationBuffers<'_> {
     }
 }
 
-fn fresh_container_buffers(
-    buffers: &DenseIdMap<ContainerValueId, Box<dyn MutationBuffer>>,
-) -> DenseIdMap<ContainerValueId, Box<dyn MutationBuffer>> {
-    let mut result = DenseIdMap::new();
-    for (id, buffer) in buffers.iter() {
-        result.insert(id, buffer.fresh_handle());
-    }
-    result
-}
-
 impl<'a> MutationBuffers<'a> {
     fn new(
-        notify_list: &'a NotificationList<MaintenanceId>,
-        table_maintenance: &'a DenseIdMap<TableId, MaintenanceId>,
+        notify_list: &'a NotificationList<TableId>,
         buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
     ) -> MutationBuffers<'a> {
         MutationBuffers {
             notify_list,
-            table_maintenance,
             buffers,
         }
     }
@@ -708,12 +653,12 @@ impl<'a> MutationBuffers<'a> {
     }
     fn stage_insert(&mut self, table_id: TableId, row: &[Value]) {
         self.buffers[table_id].stage_insert(row);
-        self.notify_list.notify(self.table_maintenance[table_id]);
+        self.notify_list.notify(table_id);
     }
 
     fn stage_remove(&mut self, table_id: TableId, key: &[Value]) {
         self.buffers[table_id].stage_remove(key);
-        self.notify_list.notify(self.table_maintenance[table_id]);
+        self.notify_list.notify(table_id);
     }
 }
 
@@ -724,7 +669,6 @@ impl Clone for ExecutionState<'_> {
             db: self.db,
             counter_reservations: Default::default(),
             buffers: self.buffers.clone(),
-            container_buffers: fresh_container_buffers(&self.container_buffers),
             changed: false,
             stop_match: Arc::clone(&self.stop_match),
         }
@@ -740,8 +684,7 @@ impl<'a> ExecutionState<'a> {
             predicted: Default::default(),
             db,
             counter_reservations: Default::default(),
-            buffers: MutationBuffers::new(db.notification_list, db.table_maintenance, buffers),
-            container_buffers: Default::default(),
+            buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
             stop_match: Arc::new(AtomicBool::new(false)),
         }
@@ -762,8 +705,7 @@ impl<'a> ExecutionState<'a> {
     ///
     /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn stage_insert(&mut self, table: TableId, row: &[Value]) {
-        self.buffers
-            .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+        self.buffers.lazy_init(table, || self.db.new_buffer(table));
         self.buffers.stage_insert(table, row);
         self.changed = true;
     }
@@ -772,8 +714,7 @@ impl<'a> ExecutionState<'a> {
     ///
     /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn stage_remove(&mut self, table: TableId, key: &[Value]) {
-        self.buffers
-            .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+        self.buffers.lazy_init(table, || self.db.new_buffer(table));
         self.buffers.stage_remove(table, key);
         self.changed = true;
     }
@@ -823,8 +764,8 @@ impl<'a> ExecutionState<'a> {
     ///
     /// The row is `key` followed by one fresh identity allocated from
     /// `counter`. Repeated keys within this execution reuse the first identity
-    /// and are staged only once. The buffer cache is separate from ordinary
-    /// table buffers because its namespace is [`ContainerValueId`].
+    /// and are staged only once. Container and relation tables share one
+    /// backing-table namespace and mutation-buffer cache.
     pub(crate) fn predict_container_value(
         &mut self,
         container: ContainerValueId,
@@ -832,6 +773,7 @@ impl<'a> ExecutionState<'a> {
         counter: CounterId,
         new_buffer: impl FnOnce() -> Box<dyn MutationBuffer>,
     ) -> Value {
+        let table = TableId::from(container);
         let counters = self.db.counters;
         let counter_reservations = &mut self.counter_reservations;
         let (row, inserted) =
@@ -843,14 +785,8 @@ impl<'a> ExecutionState<'a> {
                 });
         let identity = row[row.len() - 1];
         if inserted {
-            self.container_buffers
-                .get_or_insert(container, new_buffer)
-                .stage_insert(row);
-            // Standalone SequenceContainerEnv tests do not register a
-            // database scheduler target; database-owned environments do.
-            if let Some(maintenance) = self.db.container_maintenance.get(container) {
-                self.db.notification_list.notify(*maintenance);
-            }
+            self.buffers.lazy_init(table, new_buffer);
+            self.buffers.stage_insert(table, row);
             self.changed = true;
         }
         identity
