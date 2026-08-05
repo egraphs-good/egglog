@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((b 1)
+ (p 1)
+ (w 1))
