@@ -21,16 +21,20 @@ use crate::{
         Bindings, DbView,
         mask::{Mask, MaskIter, ValueSource},
     },
-    containers::SequenceContainerValue,
-    dependency_graph::{DependencyGraph, MaintenanceId},
+    containers::{
+        ContainerRebuildContext, ContainerRebuildPlan, ContainerRebuildSummary, ContainerValue,
+        DynamicContainerEnv, SequenceContainerValue,
+    },
+    dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
     parallel,
-    parallel_heuristics::parallelize_db_level_op,
+    parallel_heuristics::{parallelize_db_level_op, parallelize_rebuild},
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
     table_spec::{
-        ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable, WrappedTableRef,
+        ColumnId, Constraint, MaintenanceTable, MutationBuffer, Table, TableSpec, WrappedTable,
+        WrappedTableRef,
     },
 };
 
@@ -57,7 +61,11 @@ impl Variable {
     }
 }
 
-define_id!(pub TableId, u32, "a table in the database");
+define_id!(
+    pub TableId,
+    u32,
+    "a fixed- or variable-arity table in the database"
+);
 
 impl TableId {
     pub fn dummy() -> TableId {
@@ -66,37 +74,6 @@ impl TableId {
 
     pub fn is_dummy(&self) -> bool {
         self.rep == u32::MAX
-    }
-}
-
-/// A storage participant that must be readable before another participant's
-/// merge callback runs.
-///
-/// Write dependencies remain relation-table ids because they are used to
-/// preallocate [`MutationBuffer`]s while a relation stratum is temporarily
-/// removed from the database. Sequence-container buffers are initialized
-/// lazily and their environments remain installed during relation merges.
-///
-/// Dependencies must refer to participants that were previously registered in
-/// the same [`Database`]. This registration order makes the dependency graph
-/// acyclic. A [`MaintenanceReadDependency::SequenceContainer`] must name a
-/// sequence-backed container; legacy container environments are not scheduler
-/// participants.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MaintenanceReadDependency {
-    Table(TableId),
-    SequenceContainer(crate::ContainerValueId),
-}
-
-impl From<TableId> for MaintenanceReadDependency {
-    fn from(table: TableId) -> Self {
-        Self::Table(table)
-    }
-}
-
-impl From<crate::ContainerValueId> for MaintenanceReadDependency {
-    fn from(container: crate::ContainerValueId) -> Self {
-        Self::SequenceContainer(container)
     }
 }
 
@@ -401,18 +378,21 @@ impl Counters {
 pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
+    //
+    // TableId is shared with container tables, so this relation-only map may
+    // contain holes occupied by `ContainerValues`.
     pub(crate) tables: DenseIdMap<TableId, TableInfo>,
     // Reservable counters amortize shared atomic increments across an
     // ExecutionState. Exact counters retain one atomic increment per value.
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
-    /// Maps the common maintenance namespace to its concrete storage owner.
-    maintenance_targets: DenseIdMap<MaintenanceId, MaintenanceTarget>,
-    table_maintenance: DenseIdMap<TableId, MaintenanceId>,
-    container_maintenance: DenseIdMap<crate::ContainerValueId, MaintenanceId>,
+    /// Next id in the storage namespace shared by relations and both
+    /// container backends. Legacy containers deliberately consume an id
+    /// without becoming dependency-graph participants.
+    next_storage_id: usize,
     /// Participants modified since the last call to [`Database::merge_all`].
-    notification_list: NotificationList<MaintenanceId>,
+    notification_list: NotificationList<TableId>,
     // Tracks relative dependencies between maintenance participants.
     deps: DependencyGraph,
     base_values: BaseValues,
@@ -423,10 +403,81 @@ pub struct Database {
     total_size_estimate: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum MaintenanceTarget {
-    Relation(TableId),
-    SequenceContainer(crate::ContainerValueId),
+/// A maintenance participant temporarily removed from its typed owner map.
+///
+/// This is only an ownership adapter for constructing a read-only database
+/// view while a mixed relation/container stratum is merged. Persistent
+/// identity, notifications, buffers, and dependencies all use [`TableId`].
+enum OwnedParticipant {
+    Relation {
+        id: TableId,
+        info: TableInfo,
+    },
+    Container {
+        id: crate::ContainerValueId,
+        env: Box<dyn DynamicContainerEnv + Send + Sync>,
+    },
+}
+
+struct ParticipantWork {
+    participant: OwnedParticipant,
+    buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+}
+
+#[derive(Default)]
+struct ParticipantRebuild {
+    changed: bool,
+    containers: ContainerRebuildSummary,
+}
+
+impl ParticipantRebuild {
+    fn extend(&mut self, other: Self) {
+        self.changed |= other.changed;
+        self.containers.extend(other.containers);
+    }
+}
+
+impl OwnedParticipant {
+    fn maintenance_table_mut(&mut self) -> &mut dyn MaintenanceTable {
+        match self {
+            OwnedParticipant::Relation { info, .. } => &mut info.table,
+            OwnedParticipant::Container { env, .. } => env
+                .maintenance_table_mut()
+                .expect("scheduled containers must use sequence storage"),
+        }
+    }
+
+    fn merge(&mut self, exec_state: &mut ExecutionState<'_>) -> bool {
+        let change = self.maintenance_table_mut().merge(exec_state);
+        change.added || change.removed || exec_state.changed
+    }
+
+    fn apply_rebuild(
+        &mut self,
+        table_id: TableId,
+        table: &WrappedTable,
+        next_ts: Value,
+        container_context: Option<&ContainerRebuildContext<'_>>,
+        exec_state: &mut ExecutionState<'_>,
+    ) -> ParticipantRebuild {
+        match self {
+            OwnedParticipant::Relation { info, .. } => ParticipantRebuild {
+                changed: info
+                    .table
+                    .apply_rebuild(table_id, table, next_ts, exec_state),
+                containers: ContainerRebuildSummary::default(),
+            },
+            OwnedParticipant::Container { env, .. } => {
+                let containers = container_context
+                    .map(|context| context.apply(&mut **env, exec_state))
+                    .unwrap_or_default();
+                ParticipantRebuild {
+                    changed: containers.changed(),
+                    containers,
+                }
+            }
+        }
+    }
 }
 
 impl Clone for Database {
@@ -439,7 +490,7 @@ impl Clone for Database {
         // the source queue, and harmlessly performs one empty merge for
         // participants that had no work.
         let notification_list = NotificationList::default();
-        for (participant, _) in self.maintenance_targets.iter() {
+        for participant in self.deps.participants() {
             notification_list.notify(participant);
         }
         Self {
@@ -447,9 +498,7 @@ impl Clone for Database {
             counters: self.counters.clone(),
             external_functions: self.external_functions.clone(),
             container_values: self.container_values.clone(),
-            maintenance_targets: self.maintenance_targets.clone(),
-            table_maintenance: self.table_maintenance.clone(),
-            container_maintenance: self.container_maintenance.clone(),
+            next_storage_id: self.next_storage_id,
             notification_list,
             deps: self.deps.clone(),
             base_values: self.base_values.clone(),
@@ -501,6 +550,30 @@ impl Database {
         &mut self.container_values
     }
 
+    /// Register a legacy container in the database-wide storage namespace.
+    ///
+    /// Legacy environments keep their existing compatibility rebuild loop and
+    /// are not maintenance-scheduler participants. Allocating their ids here
+    /// nevertheless prevents a later relation or sequence container from
+    /// reusing the same physical slot while both backends coexist.
+    pub fn register_container_type<C: ContainerValue>(
+        &mut self,
+        id_counter: CounterId,
+        merge_fn: impl Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync + 'static,
+    ) -> crate::ContainerValueId {
+        if let Some(container) = self.container_values.registered_type::<C>() {
+            return container;
+        }
+
+        let participant = self.allocate_storage_id();
+        let container = crate::ContainerValueId::from_table_id(participant);
+        let registered = self
+            .container_values
+            .register_type::<C>(container, id_counter, merge_fn);
+        assert_eq!(registered, container);
+        container
+    }
+
     /// Register a sequence-backed container as a normal database maintenance
     /// participant. Its packed rows remain outside the fixed-schema query
     /// table interface, but merge notifications and dependency ordering share
@@ -516,126 +589,247 @@ impl Database {
         &mut self,
         id_counter: CounterId,
         merge_fn: impl Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync + 'static,
-        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
+        read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> crate::ContainerValueId {
         if let Some(container) = self.container_values.registered_sequence_type::<C>() {
-            let existing = self
-                .container_maintenance
-                .get(container)
-                .expect("registered sequence container must have a maintenance target");
-            debug_assert!(matches!(
-                self.maintenance_targets[*existing],
-                MaintenanceTarget::SequenceContainer(id) if id == container
-            ));
             return container;
         }
 
         let read_deps = read_deps.into_iter().collect::<Vec<_>>();
         let write_deps = write_deps.into_iter().collect::<Vec<_>>();
-        let read_deps = read_deps
-            .into_iter()
-            .map(|dependency| self.resolve_maintenance_dependency(dependency))
-            .collect::<Vec<_>>();
-        self.validate_write_dependencies(&write_deps);
+        self.validate_dependencies(&read_deps, "read");
+        self.validate_dependencies(&write_deps, "write");
 
-        let container = self
+        let participant = self.allocate_storage_id();
+        let container = crate::ContainerValueId::from_table_id(participant);
+        let registered = self
             .container_values
-            .register_sequence_type::<C>(id_counter, merge_fn);
-        let maintenance = self
-            .maintenance_targets
-            .push(MaintenanceTarget::SequenceContainer(container));
-        self.container_maintenance.insert(container, maintenance);
+            .register_sequence_type::<C>(container, id_counter, merge_fn);
+        assert_eq!(registered, container);
         self.deps
-            .add_participant(maintenance, read_deps, write_deps);
+            .add_participant(participant, read_deps, write_deps);
         container
     }
 
-    fn resolve_maintenance_dependency(
-        &self,
-        dependency: MaintenanceReadDependency,
-    ) -> MaintenanceId {
-        match dependency {
-            MaintenanceReadDependency::Table(table) => *self
-                .table_maintenance
-                .get(table)
-                .unwrap_or_else(|| panic!("table dependency {table:?} is not registered")),
-            MaintenanceReadDependency::SequenceContainer(container) => *self
-                .container_maintenance
-                .get(container)
-                .unwrap_or_else(|| {
-                    panic!("sequence-container dependency {container:?} is not registered")
-                }),
-        }
-    }
-
-    fn validate_write_dependencies(&self, dependencies: &[TableId]) {
-        for table in dependencies {
+    fn validate_dependencies(&self, dependencies: &[TableId], kind: &str) {
+        for participant in dependencies {
             assert!(
-                self.table_maintenance.get(*table).is_some(),
-                "table write dependency {table:?} is not registered"
+                self.deps.contains(*participant),
+                "maintenance {kind} dependency {participant:?} is not registered"
             );
         }
     }
 
-    /// Apply one ordered database-maintenance cycle using the value-level
-    /// rebuild encoded by `func_id`.
+    fn allocate_storage_id(&mut self) -> TableId {
+        let id = TableId::from_usize(self.next_storage_id);
+        self.next_storage_id = self
+            .next_storage_id
+            .checked_add(1)
+            .expect("database storage id space exhausted");
+        assert!(!id.is_dummy(), "database storage id space exhausted");
+        id
+    }
+
+    /// Apply one database-maintenance round using the value-level rebuild
+    /// encoded by `func_id`.
     ///
     /// Sequence-backed containers use the same notification/dependency
-    /// scheduler as relation tables; legacy environments remain a rebuild-only
-    /// compatibility pass. Container canonicalization runs first because key
-    /// collisions can stage ordinary union-find writes. The common
-    /// [`Database::merge_all`] fixed point publishes those writes before
-    /// dependent fixed-schema relations rebuild. Stable container identities
-    /// are then propagated through the temporary opaque-read refresh path.
+    /// scheduler and rebuild traversal as relation tables. Unmigrated legacy
+    /// environments retain their compatibility pass, but consume the same
+    /// prepared union-find delta. Both kinds of container rebuild before the
+    /// publication barrier because canonicalizing their keys can create new
+    /// identities in the rebuild source.
+    ///
+    /// If publication changes the source, relation rebuilding is deferred to
+    /// the caller's next outer round. Stable container identities additionally
+    /// require the post-publication dirty-parent refresh below.
     pub fn apply_rebuild(
         &mut self,
         func_id: TableId,
         to_rebuild: &[TableId],
         next_ts: Value,
     ) -> bool {
-        let container_rebuild = {
-            let mut containers = mem::take(&mut self.container_values);
-            let table = &self.tables[func_id].table;
-            let result =
-                self.with_execution_state(|state| containers.rebuild_all(func_id, table, state));
-            self.container_values = containers;
-            result
-        };
+        let containers = self
+            .container_values
+            .sequence_env_ids()
+            .into_iter()
+            .map(TableId::from)
+            .collect::<Vec<_>>();
+        let relations = to_rebuild.to_vec();
+        assert!(
+            !containers.contains(&func_id) && !relations.contains(&func_id),
+            "the rebuild source cannot also be a mutable rebuild participant"
+        );
+        let container_plan = self
+            .container_values
+            .prepare_rebuild_plan(func_id, &self.tables[func_id].table);
+        let source_before = self.tables[func_id].table.version();
 
-        let mut changed = container_rebuild.changed();
-        // This is a correctness barrier, not a separate fixed point: relation
-        // rebuilds must observe identity unions produced by container-key
-        // collisions (notably for :no-merge functions).
-        changed |= self.merge_all();
+        let mut rebuild = self.rebuild_batch(containers, func_id, next_ts, container_plan.as_ref());
 
-        let func = self.tables.take(func_id).unwrap();
-        self.run_on_tables(to_rebuild, |_, info, view| {
-            info.table.apply_rebuild(
-                func_id,
-                &func.table,
-                next_ts,
-                &mut ExecutionState::new(*view, Default::default()),
-            )
-        });
-        self.tables.insert(func_id, func);
-        // Ordinary table rebuilds stage their replacements. Publish those
-        // rows before dirty-id refresh scans the tables, otherwise the refresh
-        // can re-stage an obsolete pre-rebuild row.
-        changed |= self.merge_all();
+        // Legacy environments are intentionally outside the common scheduler,
+        // but they must observe exactly the same incremental UF subset as the
+        // sequence participants. Keep their old pass until the final legacy
+        // backend is migrated.
+        if let Some(plan) = container_plan.as_ref() {
+            let mut container_values = mem::take(&mut self.container_values);
+            let (legacy, staged) = {
+                let source = &self.tables[func_id].table;
+                let context = plan
+                    .context(source)
+                    .expect("a prepared container rebuild plan must remain applicable");
+                self.with_execution_state_tracked(|state| {
+                    container_values.rebuild_legacy_pass(&context, state)
+                })
+            };
+            self.container_values = container_values;
+            rebuild.changed |= legacy.changed() || staged;
+            rebuild.containers.extend(legacy);
+        }
 
-        let dirty_ids = container_rebuild
+        // A container collision can add an identity union to `func_id`.
+        // Publish it before constructing relation rebuilders or mutation
+        // buffers; otherwise a relation can collapse its key while retaining
+        // two still-distinct container values and spuriously invoke :no-merge.
+        rebuild.changed |= self.merge_all();
+        if self.tables[func_id].table.version() != source_before {
+            // A nested container can expose another collision only after this
+            // source delta is visible. Preserve stable-id notifications from
+            // this round, then let the existing outer rebuild loop run the
+            // container batch again before any fixed-table observer proceeds.
+            self.refresh_dirty_container_parents(to_rebuild, next_ts, &mut rebuild);
+            return true;
+        }
+        rebuild.extend(self.rebuild_batch(relations, func_id, next_ts, None));
+
+        // Publish every rebuilt participant before dirty-id refresh scans the
+        // relation tables; otherwise it can re-stage an obsolete pre-rebuild
+        // row.
+        rebuild.changed |= self.merge_all();
+        self.refresh_dirty_container_parents(to_rebuild, next_ts, &mut rebuild);
+        rebuild.changed
+    }
+
+    fn refresh_dirty_container_parents(
+        &mut self,
+        to_rebuild: &[TableId],
+        next_ts: Value,
+        rebuild: &mut ParticipantRebuild,
+    ) {
+        self.container_values
+            .finish_rebuild(&mut rebuild.containers);
+        let dirty_ids = rebuild
+            .containers
             .dirty_ids()
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        if !dirty_ids.is_empty() {
-            self.run_on_tables(to_rebuild, |_, info, _| {
-                info.table.refresh_rows_for_values(&dirty_ids, next_ts)
-            });
-            changed |= self.merge_all();
+        if dirty_ids.is_empty() {
+            return;
         }
-        changed
+        self.run_on_tables(to_rebuild, |_, info, _| {
+            info.table.refresh_rows_for_values(&dirty_ids, next_ts)
+        });
+        rebuild.changed |= self.merge_all();
+    }
+
+    /// Order one homogeneous rebuild batch and run it through the common
+    /// fixed-/variable-arity participant implementation.
+    ///
+    /// Destination buffers are constructed after any preceding publication
+    /// barrier, so none can retain a detached pending epoch across that barrier.
+    fn rebuild_batch(
+        &mut self,
+        mut participants: Vec<TableId>,
+        func_id: TableId,
+        next_ts: Value,
+        container_plan: Option<&ContainerRebuildPlan>,
+    ) -> ParticipantRebuild {
+        participants.sort_unstable();
+        participants.dedup();
+        participants.sort_unstable_by_key(|participant| self.deps.level(*participant));
+
+        self.rebuild_participants(&participants, func_id, next_ts, container_plan)
+    }
+
+    /// Rebuild a mixed set of fixed- and variable-arity participants through
+    /// one dependency-ordered traversal.
+    ///
+    /// Only one read-dependency stratum is detached at a time. Consequently a
+    /// callback can still read every declared predecessor, including the
+    /// rebuild source itself, while same-level participants remain eligible
+    /// for outer parallelism.
+    fn rebuild_participants(
+        &mut self,
+        scheduled: &[TableId],
+        func_id: TableId,
+        next_ts: Value,
+        container_plan: Option<&ContainerRebuildPlan>,
+    ) -> ParticipantRebuild {
+        let mut result = ParticipantRebuild::default();
+        let mut stratum_start = 0usize;
+        while stratum_start < scheduled.len() {
+            let level = self.deps.level(scheduled[stratum_start]);
+            let stratum_end = scheduled[stratum_start..]
+                .iter()
+                .position(|participant| self.deps.level(*participant) != level)
+                .map_or(scheduled.len(), |offset| stratum_start + offset);
+            let stratum = &scheduled[stratum_start..stratum_end];
+
+            let (rows, largest) =
+                stratum
+                    .iter()
+                    .fold((0usize, 0usize), |(rows, largest), participant| {
+                        let len = self.maintenance_table(*participant).len();
+                        (rows.saturating_add(len), largest.max(len))
+                    });
+            let do_parallel =
+                stratum.len() > 1 && !parallelize_rebuild(largest) && parallelize_db_level_op(rows);
+
+            let rebuild = |db: DbView<'_>, work: &mut ParticipantWork| {
+                let source = &db.table_info[func_id].table;
+                let container_context = container_plan.and_then(|plan| plan.context(source));
+                let mut exec_state = ExecutionState::new(db, mem::take(&mut work.buffers));
+                let mut outcome = work.participant.apply_rebuild(
+                    func_id,
+                    source,
+                    next_ts,
+                    container_context.as_ref(),
+                    &mut exec_state,
+                );
+                outcome.changed |= exec_state.changed;
+                outcome
+            };
+            let outcomes = if do_parallel {
+                self.with_participants(stratum, |db, rebuilding| {
+                    parallel::map_mut(rebuilding, |_, work| rebuild(db, work))
+                })
+            } else {
+                // A serial rebuild does not need to detach an entire stratum.
+                // Keeping installed destinations in the DbView lets their
+                // mutation buffers remain lazy, matching ordinary rule
+                // execution and avoiding per-stratum setup proportional to the
+                // number of declared write dependencies.
+                stratum
+                    .iter()
+                    .map(|participant| {
+                        self.with_participants(std::slice::from_ref(participant), |db, work| {
+                            rebuild(db, &mut work[0])
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            for (participant, outcome) in stratum.iter().copied().zip(outcomes) {
+                if outcome.changed {
+                    self.notification_list.notify(participant);
+                }
+                result.extend(outcome);
+            }
+            stratum_start = stratum_end;
+        }
+        result
     }
 
     fn run_on_tables(
@@ -651,7 +845,7 @@ impl Database {
             let view = self.read_only_view();
             parallel::for_each_mut(&mut tables, |_, (id, info)| {
                 if run(*id, info, &view) {
-                    self.notification_list.notify(self.table_maintenance[*id]);
+                    self.notification_list.notify(*id);
                 }
             });
             for (id, info) in tables {
@@ -665,7 +859,7 @@ impl Database {
                     run(*id, &mut info, &view)
                 };
                 if changed {
-                    self.notification_list.notify(self.table_maintenance[*id]);
+                    self.notification_list.notify(*id);
                 }
                 self.tables.insert(*id, info);
             }
@@ -698,8 +892,6 @@ impl Database {
             bases: &self.base_values,
             containers: &self.container_values,
             notification_list: &self.notification_list,
-            table_maintenance: &self.table_maintenance,
-            container_maintenance: &self.container_maintenance,
         }
     }
 
@@ -759,7 +951,7 @@ impl Database {
     }
 
     /// A helper for merging all pending updates. Used to write to the database after updates have
-    /// been staged. Returns true if any tuples were added.
+    /// been staged. Returns true if any participant changed or staged downstream work.
     ///
     /// Exposed for testing purposes.
     ///
@@ -777,11 +969,6 @@ impl Database {
 
             let mut changed = false;
             let mut stratum_start = 0;
-            let mut tables_merging = Vec::<(
-                TableId,
-                Option<TableInfo>,
-                DenseIdMap<TableId, Box<dyn MutationBuffer>>,
-            )>::new();
             while stratum_start < active.len() {
                 let level = self.deps.level(active[stratum_start]);
                 let stratum_end = active[stratum_start..]
@@ -790,72 +977,29 @@ impl Database {
                     .map_or(active.len(), |offset| stratum_start + offset);
                 let stratum = &active[stratum_start..stratum_end];
 
-                // Keep sequence environments locally owned and merge them one
-                // at a time. This leaves every other environment visible to a
-                // merge callback while still using the common scheduler and
-                // notification fixed point.
-                let sequence_participants = stratum
+                // Primitive merge callbacks can read containers without those
+                // reads appearing in the dependency graph. Preserve that
+                // existing API contract by publishing each active container
+                // before removing any same-stratum relations. Containers run
+                // one at a time so every other container also remains visible.
+                // This is only a visibility phase: both kinds still use the
+                // same ids, dependency graph, buffers, notifications, and
+                // participant merge implementation.
+                let containers = stratum
                     .iter()
                     .copied()
-                    .filter_map(|participant| match self.maintenance_targets[participant] {
-                        MaintenanceTarget::SequenceContainer(container) => {
-                            Some((participant, container))
-                        }
-                        MaintenanceTarget::Relation(_) => None,
-                    })
+                    .filter(|participant| !self.tables.contains_key(*participant))
                     .collect::<Vec<_>>();
-                for (participant, container) in sequence_participants {
-                    let mut bufs = DenseIdMap::default();
-                    for dep in self.deps.write_deps(participant) {
-                        if let Some(info) = self.tables.get(dep) {
-                            bufs.insert(dep, info.table.new_buffer());
-                        }
-                    }
-                    changed |= self.merge_sequence_container(container, bufs);
+                let relations = stratum
+                    .iter()
+                    .copied()
+                    .filter(|participant| self.tables.contains_key(*participant))
+                    .collect::<Vec<_>>();
+                for participant in containers {
+                    changed |= self.merge_participants(std::slice::from_ref(&participant), false);
                 }
 
-                let relation_participants = stratum
-                    .iter()
-                    .copied()
-                    .filter_map(|participant| match self.maintenance_targets[participant] {
-                        MaintenanceTarget::Relation(table) => Some((participant, table)),
-                        MaintenanceTarget::SequenceContainer(_) => None,
-                    })
-                    .collect::<Vec<_>>();
-                tables_merging.reserve(relation_participants.len());
-                for (participant, table) in &relation_participants {
-                    let mut bufs = DenseIdMap::default();
-                    for dep in self.deps.write_deps(*participant) {
-                        if let Some(info) = self.tables.get(dep) {
-                            bufs.insert(dep, info.table.new_buffer());
-                        }
-                    }
-                    tables_merging.push((*table, None, bufs));
-                }
-                for (table, info, _) in &mut tables_merging {
-                    *info = Some(self.tables.unwrap_val(*table));
-                }
-                let db = self.read_only_view();
-                changed |= if do_parallel {
-                    parallel::map_mut(&mut tables_merging, |_, (_, info, buffers)| {
-                        let mut es = ExecutionState::new(db, mem::take(buffers));
-                        info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                    })
-                    .into_iter()
-                    .any(|changed| changed)
-                } else {
-                    tables_merging
-                        .iter_mut()
-                        .map(|(_, info, buffers)| {
-                            let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                        })
-                        .max()
-                        .unwrap_or(false)
-                };
-                for (id, table, _) in tables_merging.drain(..) {
-                    self.tables.insert(id, table.unwrap());
-                }
+                changed |= self.merge_participants(&relations, do_parallel);
                 stratum_start = stratum_end;
             }
             ever_changed |= changed;
@@ -876,53 +1020,142 @@ impl Database {
         ever_changed
     }
 
-    fn merge_sequence_container(
+    fn maintenance_table(&self, participant: TableId) -> &dyn MaintenanceTable {
+        if let Some(info) = self.tables.get(participant) {
+            return &info.table;
+        }
+        self.container_values
+            .maintenance_table(crate::ContainerValueId::from_table_id(participant))
+            .unwrap_or_else(|| panic!("maintenance participant {participant:?} has no storage"))
+    }
+
+    fn write_buffers(
+        &self,
+        participant: TableId,
+        detached: Option<&DenseIdMap<TableId, ()>>,
+    ) -> DenseIdMap<TableId, Box<dyn MutationBuffer>> {
+        let mut buffers = DenseIdMap::default();
+        for dependency in self.deps.write_deps(participant) {
+            let is_detached = detached.map_or(dependency == participant, |participants| {
+                participants.contains_key(dependency)
+            });
+            if is_detached {
+                buffers.insert(dependency, self.maintenance_table(dependency).new_buffer());
+            }
+        }
+        buffers
+    }
+
+    /// Temporarily own a participant group while retaining a read-only view of
+    /// every other table.
+    ///
+    /// Merge and rebuild both use this ownership protocol. Only destinations
+    /// in the detached group need buffers created up front; installed relation
+    /// and container destinations are initialized lazily through [`DbView`].
+    /// This keeps same-group writes attached to the destination's current
+    /// pending epoch without paying for declared writes that never occur.
+    fn with_participants<R>(
         &mut self,
-        container: crate::ContainerValueId,
-        buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
-    ) -> bool {
-        let mut env = self.container_values.take_env(container);
-        let changed = {
-            let mut exec_state = ExecutionState::new(self.read_only_view(), buffers);
-            env.merge_pending(&mut exec_state) || exec_state.changed
-        };
-        self.container_values.put_env(container, env);
-        changed
+        participants: &[TableId],
+        run: impl for<'a> FnOnce(DbView<'a>, &mut [ParticipantWork]) -> R,
+    ) -> R {
+        if let [participant] = participants {
+            let buffers = self.write_buffers(*participant, None);
+            let mut work = ParticipantWork {
+                participant: self.take_participant(*participant),
+                buffers,
+            };
+            let result = run(self.read_only_view(), std::slice::from_mut(&mut work));
+            self.put_participant(work.participant);
+            return result;
+        }
+
+        let mut detached = DenseIdMap::with_capacity(participants.len());
+        for participant in participants {
+            detached.insert(*participant, ());
+        }
+        let buffers = participants
+            .iter()
+            .map(|participant| self.write_buffers(*participant, Some(&detached)))
+            .collect::<Vec<_>>();
+        let mut work = participants
+            .iter()
+            .copied()
+            .zip(buffers)
+            .map(|(participant, buffers)| ParticipantWork {
+                participant: self.take_participant(participant),
+                buffers,
+            })
+            .collect::<Vec<_>>();
+        let result = run(self.read_only_view(), &mut work);
+        for work in work {
+            self.put_participant(work.participant);
+        }
+        result
+    }
+
+    /// Merge one visibility-compatible group through the common participant
+    /// interface, optionally in parallel.
+    ///
+    /// Declared destination buffers are created before any participant is
+    /// removed. This retains access to a same-group destination's pending
+    /// state while its storage is temporarily owned by another worker.
+    fn merge_participants(&mut self, participants: &[TableId], do_parallel: bool) -> bool {
+        self.with_participants(participants, |db, merging| {
+            let merge_one = |work: &mut ParticipantWork| {
+                let mut es = ExecutionState::new(db, mem::take(&mut work.buffers));
+                work.participant.merge(&mut es)
+            };
+            if do_parallel {
+                parallel::map_mut(merging, |_, work| merge_one(work))
+                    .into_iter()
+                    .any(|changed| changed)
+            } else {
+                merging.iter_mut().map(merge_one).max().unwrap_or(false)
+            }
+        })
+    }
+
+    fn take_participant(&mut self, participant: TableId) -> OwnedParticipant {
+        if let Some(info) = self.tables.take(participant) {
+            return OwnedParticipant::Relation {
+                id: participant,
+                info,
+            };
+        }
+        let id = crate::ContainerValueId::from_table_id(participant);
+        OwnedParticipant::Container {
+            id,
+            env: self.container_values.take_env(id),
+        }
+    }
+
+    fn put_participant(&mut self, participant: OwnedParticipant) {
+        match participant {
+            OwnedParticipant::Relation { id, info } => {
+                let old = self.tables.insert(id, info);
+                assert!(old.is_none(), "relation maintenance storage inserted twice");
+            }
+            OwnedParticipant::Container { id, env } => {
+                self.container_values.put_env(id, env);
+            }
+        }
     }
 
     /// A serial fast path for a small number of notified participants.
     ///
     /// It follows read-dependency strata, but avoids taking a whole stratum out
-    /// of the database and preallocating its declared write buffers. With only
-    /// a few participants, leaving each destination table installed lets
-    /// [`ExecutionState`] initialize those buffers lazily.
-    fn merge_simple(&mut self, mut to_merge: SmallVec<[MaintenanceId; 4]>) -> bool {
+    /// of the database. Declared write buffers are still initialized before
+    /// detaching the participant, which also supports self-directed writes.
+    fn merge_simple(&mut self, mut to_merge: SmallVec<[TableId; 4]>) -> bool {
         let mut changed = false;
         while !to_merge.is_empty() {
-            // Even this small serial path must respect read dependencies:
-            // sequence merge callbacks are allowed to observe an ordinary
-            // table declared as a predecessor. Within one stratum, run
-            // sequence storage first so relation merges can consume writes it
-            // publishes without waiting for another fixed-point turn.
             to_merge.sort_unstable_by_key(|participant| {
-                let target_order = match self.maintenance_targets[*participant] {
-                    MaintenanceTarget::SequenceContainer(_) => 0usize,
-                    MaintenanceTarget::Relation(_) => 1usize,
-                };
-                (self.deps.level(*participant), target_order)
+                let relation_order = usize::from(self.tables.contains_key(*participant));
+                (self.deps.level(*participant), relation_order)
             });
-            for participant in to_merge.iter().copied() {
-                match self.maintenance_targets[participant] {
-                    MaintenanceTarget::SequenceContainer(container) => {
-                        changed |= self.merge_sequence_container(container, Default::default());
-                    }
-                    MaintenanceTarget::Relation(table) => {
-                        let mut info = self.tables.unwrap_val(table);
-                        let mut es = ExecutionState::new(self.read_only_view(), Default::default());
-                        changed |= info.table.merge(&mut es).added || es.changed;
-                        self.tables.insert(table, info);
-                    }
-                }
+            for participant in &to_merge {
+                changed |= self.merge_participants(std::slice::from_ref(participant), false);
             }
             to_merge = self.notification_list.reset();
         }
@@ -952,38 +1185,18 @@ impl Database {
     /// This can be useful for "knot tying", when tables need to reference their
     /// own id.
     pub fn next_table_id(&self) -> TableId {
-        self.tables.next_id()
+        TableId::from_usize(self.next_storage_id)
     }
 
     /// Add a table with the given schema to the database.
     ///
     /// The table must have a compatible spec with `types` (e.g. same number of
-    /// columns). Every read and write dependency must identify a table already
-    /// registered in this database.
+    /// columns). Every read and write dependency must identify a maintenance
+    /// participant already registered in this database.
     pub fn add_table<T: Table + Sized + 'static>(
         &mut self,
         table: T,
         read_deps: impl IntoIterator<Item = TableId>,
-        write_deps: impl IntoIterator<Item = TableId>,
-    ) -> TableId {
-        self.add_table_impl(
-            table,
-            None,
-            read_deps.into_iter().map(MaintenanceReadDependency::from),
-            write_deps,
-        )
-    }
-
-    /// Add a table whose merge callback may read relation tables, sequence
-    /// containers, or both.
-    ///
-    /// Every read and write dependency must already be registered in this
-    /// database. This ordering keeps the graph acyclic, and container read
-    /// dependencies must use the sequence backend.
-    pub fn add_table_with_maintenance_deps<T: Table + Sized + 'static>(
-        &mut self,
-        table: T,
-        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
         self.add_table_impl(table, None, read_deps, write_deps)
@@ -997,22 +1210,6 @@ impl Database {
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
-        self.add_table_impl(
-            table,
-            Some(name),
-            read_deps.into_iter().map(MaintenanceReadDependency::from),
-            write_deps,
-        )
-    }
-
-    /// Named variant of [`Database::add_table_with_maintenance_deps`].
-    pub fn add_table_named_with_maintenance_deps<T: Table + Sized + 'static>(
-        &mut self,
-        table: T,
-        name: Arc<str>,
-        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
-        write_deps: impl IntoIterator<Item = TableId>,
-    ) -> TableId {
         self.add_table_impl(table, Some(name), read_deps, write_deps)
     }
 
@@ -1020,32 +1217,32 @@ impl Database {
         &mut self,
         table: T,
         name: Option<Arc<str>>,
-        read_deps: impl IntoIterator<Item = MaintenanceReadDependency>,
+        read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
         let read_deps = read_deps.into_iter().collect::<Vec<_>>();
         let write_deps = write_deps.into_iter().collect::<Vec<_>>();
-        let read_deps = read_deps
-            .into_iter()
-            .map(|dependency| self.resolve_maintenance_dependency(dependency))
-            .collect::<Vec<_>>();
-        self.validate_write_dependencies(&write_deps);
+        self.validate_dependencies(&read_deps, "read");
+        self.validate_dependencies(&write_deps, "write");
 
         let spec = table.spec();
         let table = WrappedTable::new(table);
-        let res = self.tables.push(TableInfo {
-            name,
-            spec,
-            table,
-            indexes: IndexCatalog::new(),
-            column_indexes: IndexCatalog::new(),
-        });
-        let maintenance = self
-            .maintenance_targets
-            .push(MaintenanceTarget::Relation(res));
-        self.table_maintenance.insert(res, maintenance);
-        self.deps
-            .add_participant(maintenance, read_deps, write_deps);
+        let res = self.allocate_storage_id();
+        let old = self.tables.insert(
+            res,
+            TableInfo {
+                name,
+                spec,
+                table,
+                indexes: IndexCatalog::new(),
+                column_indexes: IndexCatalog::new(),
+            },
+        );
+        assert!(
+            old.is_none(),
+            "global maintenance id already owns relation storage"
+        );
+        self.deps.add_participant(res, read_deps, write_deps);
         res
     }
 
@@ -1087,7 +1284,7 @@ impl Database {
     /// Unlike calling [`Table::new_buffer`] on a table returned from a getter, this method also
     /// triggers change notification metadata that is read by [`Database::merge_all`].
     pub fn new_buffer(&self, id: TableId) -> Box<dyn MutationBuffer> {
-        self.notification_list.notify(self.table_maintenance[id]);
+        self.notification_list.notify(id);
         self.get_table(id).new_buffer()
     }
 
