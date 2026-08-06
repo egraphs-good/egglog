@@ -1,6 +1,7 @@
 use std::hash::Hasher;
 
 use crate::Context;
+use crate::FunctionSchemas;
 use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
@@ -44,6 +45,7 @@ impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
 struct RegistryPrimWrapper<T, S> {
     prim: T,
     registry: Arc<RwLock<ActionRegistry>>,
+    schemas: Arc<RwLock<FunctionSchemas>>,
     /// Stamped onto the state wrapper.
     ctx: Context,
     _wrap: std::marker::PhantomData<fn() -> S>,
@@ -56,6 +58,7 @@ trait RegistryWrap<T>: Clone + Send + Sync {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
+        schemas: &FunctionSchemas,
     ) -> Option<Value>;
 }
 
@@ -69,8 +72,9 @@ impl<T: ReadPrim> RegistryWrap<T> for WrapRead {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
+        schemas: &FunctionSchemas,
     ) -> Option<Value> {
-        prim.apply(ReadState::wrap(exec_state, registry, ctx), args)
+        prim.apply(ReadState::wrap(exec_state, registry, schemas, ctx), args)
     }
 }
 #[derive(Clone)]
@@ -83,8 +87,9 @@ impl<T: WritePrim> RegistryWrap<T> for WrapWrite {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
+        schemas: &FunctionSchemas,
     ) -> Option<Value> {
-        prim.apply(WriteState::wrap(exec_state, registry, ctx), args)
+        prim.apply(WriteState::wrap(exec_state, registry, schemas, ctx), args)
     }
 }
 #[derive(Clone)]
@@ -97,8 +102,9 @@ impl<T: FullPrim> RegistryWrap<T> for WrapFull {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
+        schemas: &FunctionSchemas,
     ) -> Option<Value> {
-        prim.apply(FullState::wrap(exec_state, registry, ctx), args)
+        prim.apply(FullState::wrap(exec_state, registry, schemas, ctx), args)
     }
 }
 
@@ -107,7 +113,8 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let registry = self.registry.read().unwrap();
-        S::invoke(&self.prim, exec_state, self.ctx, args, &registry)
+        let schemas = self.schemas.read().unwrap();
+        S::invoke(&self.prim, exec_state, self.ctx, args, &registry, &schemas)
     }
 }
 
@@ -328,10 +335,12 @@ impl EGraph {
         S: RegistryWrap<T> + 'static,
     {
         let registry = self.backend.action_registry().clone();
+        let schemas = self.function_schemas.clone();
         self.register_per_context(x, validator, valid_ctxs, move |x, ctx| {
             Box::new(RegistryPrimWrapper::<T, S> {
                 prim: x,
                 registry: registry.clone(),
+                schemas: schemas.clone(),
                 ctx,
                 _wrap: std::marker::PhantomData,
             })

@@ -44,7 +44,8 @@ use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
-    Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
+    Context, Core, Enode, FullState, FunctionEntry, FunctionSchemas, PureState, Read, ReadState,
+    Write, WriteState,
 };
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
@@ -68,7 +69,7 @@ use std::io::{Read as _, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::PrimitiveValidator;
@@ -307,6 +308,11 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    /// Declared column sorts by table name. Shared (via `Arc<RwLock<_>>`)
+    /// with the state wrappers, which cannot reach [`TypeInfo`] from a
+    /// primitive body, and read through [`Read::table_schema`]. `push`/`pop`
+    /// snapshot and restore its contents, so a popped table stops resolving.
+    pub(crate) function_schemas: Arc<RwLock<FunctionSchemas>>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -416,6 +422,7 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            function_schemas: Default::default(),
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
@@ -714,6 +721,11 @@ impl EGraph {
         let prev_prev: Option<Box<Self>> = self.pushed_egraph.take();
         let mut prev = self.clone();
         prev.pushed_egraph = prev_prev;
+        // The live schemas are shared with the registered primitives, so the
+        // saved copy gets its own cell rather than a handle to the one that
+        // keeps being appended to.
+        prev.function_schemas =
+            Arc::new(RwLock::new(self.function_schemas.read().unwrap().clone()));
         self.pushed_egraph = Some(Box::new(prev));
     }
 
@@ -729,7 +741,13 @@ impl EGraph {
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
+                // Restore the pushed schemas into the cell the registered
+                // primitives hold, rather than swapping in the saved cell they
+                // have no handle to.
+                let live_schemas = self.function_schemas.clone();
+                *live_schemas.write().unwrap() = e.function_schemas.read().unwrap().clone();
                 *self = *e;
+                self.function_schemas = live_schemas;
                 Ok(())
             }
             None => Err(Error::Pop(span!())),
@@ -843,9 +861,15 @@ impl EGraph {
             can_subsume,
         });
 
+        let schema = ResolvedSchema { input, output };
+        self.function_schemas
+            .write()
+            .unwrap()
+            .declare(&decl.name, decl.subtype, schema.clone());
+
         let function = Function {
             decl: decl.clone(),
-            schema: ResolvedSchema { input, output },
+            schema,
             can_subsume,
             backend_id,
         };
@@ -1231,8 +1255,11 @@ impl EGraph {
     pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
+        let schemas = self.function_schemas.read().unwrap();
         self.backend
-            .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
+            .with_execution_state_tracked(|es| {
+                f(ReadState::wrap(es, &guard, &schemas, Context::Read))
+            })
             .0
     }
 
@@ -2379,9 +2406,12 @@ impl EGraph {
     ) -> Result<R, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        let (result, changed) = self
-            .backend
-            .with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
+        let schemas = self.function_schemas.clone();
+        let schemas = schemas.read().unwrap();
+        let (result, changed) = self.backend.with_execution_state_tracked(|es| {
+            f(FullState::wrap(es, &guard, &schemas, Context::Full))
+        });
+        drop(schemas);
         drop(guard);
         // A read-only closure stages nothing, so `flush_updates` would only do
         // a no-op merge plus a spurious timestamp bump and rebuild check. Skip

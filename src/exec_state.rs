@@ -39,6 +39,7 @@ use crate::core_relations::{
     Value,
 };
 use crate::{
+    ResolvedSchema,
     ast::{FunctionSubtype, Literal, ResolvedExpr},
     core::ResolvedCall,
     sort::{F, S},
@@ -82,6 +83,28 @@ pub enum Context {
 
 impl Context {
     pub const ALL: [Context; 4] = [Context::Pure, Context::Write, Context::Read, Context::Full];
+}
+
+/// The declared column sorts of every table, by name.
+///
+/// The [`ActionRegistry`] resolves a table name to the handle that reads and
+/// writes it, but it lives in the backend and so knows nothing about egglog
+/// sorts. This is the matching name-indexed view of the *types*, kept by the
+/// e-graph and shared with the state wrappers so a primitive body — which
+/// cannot reach `TypeInfo` — can still ask what a column holds.
+#[derive(Clone, Default)]
+pub struct FunctionSchemas {
+    tables: crate::util::HashMap<String, (FunctionSubtype, ResolvedSchema)>,
+}
+
+impl FunctionSchemas {
+    pub(crate) fn declare(&mut self, name: &str, subtype: FunctionSubtype, schema: ResolvedSchema) {
+        self.tables.insert(name.to_owned(), (subtype, schema));
+    }
+
+    fn get(&self, name: &str) -> Option<&(FunctionSubtype, ResolvedSchema)> {
+        self.tables.get(name)
+    }
 }
 
 // =====================================================================
@@ -142,6 +165,9 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
 /// name through it.
 pub(crate) trait RegistrySealed<'a, 'db: 'a>: Internal<'a, 'db> {
     fn registry(&self) -> &ActionRegistry;
+    /// Borrowed for `'a` rather than for `&self`, so a caller can hold a
+    /// column sort while it goes on to write through the same state.
+    fn schemas(&self) -> &'a FunctionSchemas;
 }
 
 // =====================================================================
@@ -181,6 +207,29 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         let cv = self.container_values();
         let es = self.es_mut();
         cv.register_val(container, es)
+    }
+
+    /// Rebuild the contents of a container value through `remap`,
+    /// returning the interned value of the result (or `value` unchanged
+    /// if it is not a registered container of `type_id`, or if nothing
+    /// inside it was remapped). `type_id` comes from
+    /// [`Sort::value_type`](crate::sort::Sort::value_type).
+    ///
+    /// `remap` sees every value the container stores, including ones of
+    /// sorts it does not care about, so it should return its argument
+    /// unchanged for those.
+    fn rebuild_container(
+        &mut self,
+        type_id: std::any::TypeId,
+        value: Value,
+        remap: &(dyn Fn(Value) -> Value + Send + Sync),
+    ) -> Value {
+        // Same borrow shape as `register_container`: the `ContainerValues`
+        // reference is tied to the inner ExecutionState's lifetime, not
+        // to `&self`, so it survives the `&mut` reborrow.
+        let cv = self.container_values();
+        let es = self.es_mut();
+        cv.rebuild_val_with(type_id, value, es, remap)
     }
 
     /// Convert an egglog [`Value`] to a Rust base type, assuming that the
@@ -304,8 +353,9 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// The single-entry methods (`lookup`, `eclass_of`, `contains`)
 /// return `None` if absent — never insert. The iteration /
 /// introspection methods (`function_entries`, `constructor_enodes`,
-/// `table_size`, `table_sizes`) walk the current contents of the
-/// database.
+/// `enodes_for_eclass`, `table_size`, `table_sizes`) walk the current
+/// contents of the database, and `table_schema` / `table_subtype`
+/// report how a table is declared rather than what it holds.
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort
@@ -347,6 +397,20 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values).is_some())
+    }
+
+    /// The declared sorts of a table's columns, or `None` if no table with
+    /// that name is registered. Pair with [`Read::table_sizes`] to walk every
+    /// table, and with [`Read::table_subtype`] to tell a constructor's eclass
+    /// column from a function's output column.
+    fn table_schema(&self, name: &str) -> Option<&'a ResolvedSchema> {
+        self.schemas().get(name).map(|(_, schema)| schema)
+    }
+
+    /// Whether the named table is a `constructor` or a `function`, or `None`
+    /// if no table with that name is registered.
+    fn table_subtype(&self, name: &str) -> Option<FunctionSubtype> {
+        self.schemas().get(name).map(|(subtype, _)| *subtype)
     }
 
     /// Return the current row count for the named table, or `None` if no table
@@ -391,6 +455,34 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
                 eclass: *eclass,
                 subsumed: row.subsumed,
             })
+        });
+        Ok(())
+    }
+
+    /// Call `f` on each [`Enode`] of a constructor / relation table whose
+    /// output eclass is `eclass`.
+    ///
+    /// This uses the backend's indexed output-column lookup instead of scanning
+    /// the whole constructor table. Errors with `WrongSubtype` if `name` is a
+    /// function.
+    fn enodes_for_eclass(
+        &self,
+        name: &str,
+        eclass: Value,
+        mut f: impl FnMut(Enode<'_>),
+    ) -> Result<(), Error> {
+        let action = lookup_action(self.registry(), name)?;
+        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        action.for_each_output_value(self.es(), eclass, |row| {
+            let (eclass, children) = row
+                .vals
+                .split_last()
+                .expect("constructor row has at least an eclass column");
+            f(Enode {
+                children,
+                eclass: *eclass,
+                subsumed: row.subsumed,
+            });
         });
         Ok(())
     }
@@ -626,6 +718,7 @@ pub struct PureState<'a, 'db> {
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
+    pub(crate) schemas: &'a FunctionSchemas,
     pub(crate) ctx: Context,
 }
 
@@ -640,6 +733,7 @@ pub struct ReadState<'a, 'db> {
 pub struct WriteState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
+    pub(crate) schemas: &'a FunctionSchemas,
     pub(crate) ctx: Context,
 }
 
@@ -654,6 +748,7 @@ pub struct WriteState<'a, 'db> {
 pub struct FullState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
+    pub(crate) schemas: &'a FunctionSchemas,
     pub(crate) ctx: Context,
 }
 
@@ -670,11 +765,13 @@ impl<'a, 'db: 'a> ReadState<'a, 'db> {
     pub(crate) fn wrap(
         es: &'a mut ExecutionState<'db>,
         registry: &'a ActionRegistry,
+        schemas: &'a FunctionSchemas,
         ctx: Context,
     ) -> Self {
         Self {
             inner: es,
             registry,
+            schemas,
             ctx,
         }
     }
@@ -687,11 +784,13 @@ impl<'a, 'db: 'a> WriteState<'a, 'db> {
     pub(crate) fn wrap(
         es: &'a mut ExecutionState<'db>,
         registry: &'a ActionRegistry,
+        schemas: &'a FunctionSchemas,
         ctx: Context,
     ) -> Self {
         Self {
             inner: es,
             registry,
+            schemas,
             ctx,
         }
     }
@@ -704,11 +803,13 @@ impl<'a, 'db: 'a> FullState<'a, 'db> {
     pub(crate) fn wrap(
         es: &'a mut ExecutionState<'db>,
         registry: &'a ActionRegistry,
+        schemas: &'a FunctionSchemas,
         ctx: Context,
     ) -> Self {
         Self {
             inner: es,
             registry,
+            schemas,
             ctx,
         }
     }
@@ -753,6 +854,9 @@ impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for ReadState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
+    fn schemas(&self) -> &'a FunctionSchemas {
+        self.schemas
+    }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for ReadState<'a, 'db> {}
 impl<'a, 'db: 'a> Read<'a, 'db> for ReadState<'a, 'db> {}
@@ -775,6 +879,9 @@ impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for WriteState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
+    fn schemas(&self) -> &'a FunctionSchemas {
+        self.schemas
+    }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for WriteState<'a, 'db> {}
 impl<'a, 'db: 'a> Write<'a, 'db> for WriteState<'a, 'db> {}
@@ -796,6 +903,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for FullState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
+    }
+    fn schemas(&self) -> &'a FunctionSchemas {
+        self.schemas
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for FullState<'a, 'db> {}
