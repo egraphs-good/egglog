@@ -11,26 +11,6 @@ pub struct PairContainer {
 }
 
 impl ContainerValue for PairContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        let mut changed = false;
-        if self.do_rebuild_first {
-            let new = rebuilder.rebuild_val(self.first);
-            changed |= self.first != new;
-            self.first = new;
-        }
-        if self.do_rebuild_second {
-            let new = rebuilder.rebuild_val(self.second);
-            changed |= self.second != new;
-            self.second = new;
-        }
-        changed
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        [self.first, self.second].into_iter()
-    }
-}
-
-impl SequenceContainerValue for PairContainer {
     fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         let rebuild_mask =
             self.do_rebuild_first as usize | ((self.do_rebuild_second as usize) << 1);
@@ -194,10 +174,6 @@ impl ContainerSort for PairSort {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_sequence_container_ty::<PairContainer>();
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {

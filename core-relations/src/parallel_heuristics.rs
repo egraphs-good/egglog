@@ -10,7 +10,6 @@ const DEFAULT_INDEX_CONSTRUCTION_CUTOFF: usize = 400_000;
 const DEFAULT_REBUILD_CUTOFF: usize = 400_000;
 const DEFAULT_INCREMENTAL_REBUILD_CUTOFF: usize = 16 * 1024;
 const DEFAULT_INTRA_CONTAINER_CUTOFF: usize = 10_000;
-const DEFAULT_INTER_CONTAINER_CUTOFF: usize = 8;
 const DEFAULT_TABLE_OP_CUTOFF: usize = 400_000;
 const DEFAULT_FREE_JOIN_FORK_DEPTH: usize = 2;
 const DEFAULT_ACTION_BATCH_SIZE: usize = 8 * 1024;
@@ -27,7 +26,6 @@ struct Cutoffs {
     rebuild: usize,
     incremental_rebuild: usize,
     intra_container: usize,
-    inter_container: usize,
     table_op: usize,
     free_join_fork_depth: usize,
     action_batch_size: usize,
@@ -63,12 +61,6 @@ pub(crate) fn parallelize_incremental_rebuild(dirty_ids: usize) -> bool {
 /// Whether or not to perform an operation for a given container memo table.
 pub(crate) fn parallelize_intra_container_op(num_containers: usize) -> bool {
     should_parallelize(num_containers, cutoffs().intra_container)
-}
-
-/// Whether or not to perform an operation in parallel across a set of different container memo
-/// tables.
-pub(crate) fn parallelize_inter_container_op(num_containers: usize) -> bool {
-    should_parallelize(num_containers, cutoffs().inter_container)
 }
 
 #[track_caller]
@@ -108,10 +100,6 @@ fn cutoffs() -> &'static Cutoffs {
         intra_container: cutoff(
             "EGGLOG_PARALLEL_INTRA_CONTAINER_CUTOFF",
             DEFAULT_INTRA_CONTAINER_CUTOFF,
-        ),
-        inter_container: cutoff(
-            "EGGLOG_PARALLEL_INTER_CONTAINER_CUTOFF",
-            DEFAULT_INTER_CONTAINER_CUTOFF,
         ),
         table_op: cutoff("EGGLOG_PARALLEL_TABLE_OP_CUTOFF", DEFAULT_TABLE_OP_CUTOFF),
         free_join_fork_depth: cutoff(
