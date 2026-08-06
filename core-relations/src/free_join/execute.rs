@@ -1,7 +1,7 @@
 //! Core free join execution.
 
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     cmp, mem,
     ops::Range,
     sync::{
@@ -401,7 +401,12 @@ type RootContinuationSlots = Box<[Box<[OnceLock<usize>]>]>;
 enum RootContinuationStorage {
     /// The atom has one statically possible indexed successor.  This is the
     /// existing compact path: one continuation slot per physical root key.
-    Direct(RootContinuationSlots),
+    /// Defer allocating that grid until a probe actually asks for a child;
+    /// many shallow plans prepare a possible successor but never descend.
+    Direct {
+        shard_lens: Box<[usize]>,
+        slots: OnceLock<RootContinuationSlots>,
+    },
     /// More than one access may follow.  Allocate the dense per-position slots
     /// for a family only when DVO actually selects it.
     Dynamic {
@@ -449,9 +454,10 @@ impl RootContinuationCache {
             let shard_lens = (0..shard_count).map(shard_len).collect::<Box<[_]>>();
             match child_shape {
                 ChildShape::Leaf => unreachable!(),
-                ChildShape::Direct => {
-                    RootContinuationStorage::Direct(Self::allocate_slots(&shard_lens))
-                }
+                ChildShape::Direct => RootContinuationStorage::Direct {
+                    shard_lens,
+                    slots: OnceLock::new(),
+                },
                 ChildShape::Dynamic { families } => RootContinuationStorage::Dynamic {
                     shard_lens,
                     families: std::iter::repeat_with(OnceLock::new)
@@ -462,7 +468,7 @@ impl RootContinuationCache {
         });
         debug_assert!(
             match (child_shape, storage) {
-                (ChildShape::Direct, RootContinuationStorage::Direct(_)) => true,
+                (ChildShape::Direct, RootContinuationStorage::Direct { .. }) => true,
                 (
                     ChildShape::Dynamic { families: expected },
                     RootContinuationStorage::Dynamic { families, .. },
@@ -479,7 +485,7 @@ impl RootContinuationCache {
             .get()
             .expect("root continuations must be prepared before probing");
         #[cfg(debug_assertions)]
-        if matches!(storage, RootContinuationStorage::Direct(_)) {
+        if matches!(storage, RootContinuationStorage::Direct { .. }) {
             let expected = self.direct_access.get_or_init(|| access);
             debug_assert_eq!(
                 *expected, access,
@@ -487,7 +493,9 @@ impl RootContinuationCache {
             );
         }
         match storage {
-            RootContinuationStorage::Direct(slots) => slots,
+            RootContinuationStorage::Direct { shard_lens, slots } => {
+                slots.get_or_init(|| Self::allocate_slots(shard_lens))
+            }
             RootContinuationStorage::Dynamic {
                 shard_lens,
                 families,
@@ -509,17 +517,39 @@ impl RootContinuationCache {
 /// execution without constructing indexes for plan accesses that choose a
 /// residual-local strategy at runtime. Initialized slots are dropped before
 /// the database resets its indexes during `merge_all`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PreparedIndexKind {
-    Tuple(OnceLock<HashIndex>),
-    Column(OnceLock<HashColumnIndex>),
+    Tuple,
+    Column,
     /// The table specification forbids a global cache for at least one key
     /// column, so execution must use its existing dynamic-index path.
     Uncacheable,
 }
 
-struct PreparedIndexSlot {
-    kind: PreparedIndexKind,
-    access: AccessId,
+#[derive(Clone, Copy, Debug)]
+struct PreparedIndexStateId(u32);
+
+impl PreparedIndexStateId {
+    fn new(index: usize) -> Self {
+        Self(u32::try_from(index).expect("a join block has more than u32::MAX index states"))
+    }
+
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+enum PreparedIndexCache {
+    Tuple(OnceLock<HashIndex>),
+    Column(OnceLock<HashColumnIndex>),
+    Uncacheable,
+}
+
+/// Execution-local mutable state for one prepared index access. Keeping these
+/// large cache objects out of the stage `SmallVec`s leaves their inline entries
+/// as compact, copyable descriptors.
+struct PreparedIndexState {
+    cache: PreparedIndexCache,
     root_continuations: RootContinuationCache,
     /// Handle to a shared, final-form root index for this logical access.
     /// Keeping the Arc in the prepared sidecar lets probers borrow its arrays
@@ -530,16 +560,44 @@ struct PreparedIndexSlot {
     packed_root: OnceLock<usize>,
 }
 
-impl PreparedIndexSlot {
-    fn new(kind: PreparedIndexKind, access: AccessId) -> Self {
+impl PreparedIndexState {
+    fn new(kind: PreparedIndexKind) -> Self {
+        let cache = match kind {
+            PreparedIndexKind::Tuple => PreparedIndexCache::Tuple(OnceLock::new()),
+            PreparedIndexKind::Column => PreparedIndexCache::Column(OnceLock::new()),
+            PreparedIndexKind::Uncacheable => PreparedIndexCache::Uncacheable,
+        };
         Self {
-            kind,
-            access,
+            cache,
             root_continuations: RootContinuationCache::default(),
             projected_root: OnceLock::new(),
             packed_root: OnceLock::new(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreparedIndexSlot {
+    kind: PreparedIndexKind,
+    access: AccessId,
+    state: PreparedIndexStateId,
+}
+
+impl PreparedIndexSlot {
+    fn new(kind: PreparedIndexKind, access: AccessId, state: PreparedIndexStateId) -> Self {
+        Self {
+            kind,
+            access,
+            state,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PreparedIndexRef<'a> {
+    kind: PreparedIndexKind,
+    access: AccessId,
+    state: &'a PreparedIndexState,
 }
 
 fn columns_are_cacheable(info: &TableInfo, cols: &[ColumnId]) -> bool {
@@ -674,18 +732,39 @@ impl PreparedTailMasks {
 
 /// Index handles for one immutable [`JoinStages`] value, positionally aligned
 /// with `JoinStages::instrs` and with each stage's scans.
-struct PreparedJoinIndexes {
-    stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
-    access_counts: DenseIdMap<AtomId, usize>,
-    tail_masks: Option<PreparedTailMasks>,
+enum PreparedJoinIndexes {
+    /// A block made entirely of cover scans cannot build a packed node or use
+    /// an index. Avoid constructing any index sidecar for these blocks; unary
+    /// rules hit this path especially often.
+    NoIndexes,
+    Indexed {
+        stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
+        states: Box<[PreparedIndexState]>,
+        access_counts: DenseIdMap<AtomId, usize>,
+        tail_masks: Option<PreparedTailMasks>,
+    },
 }
 
 impl PreparedJoinIndexes {
     fn new(db: &Database, atoms: &Arc<DenseIdMap<AtomId, Atom>>, stages: &JoinStages) -> Self {
+        let index_count = stages
+            .instrs
+            .iter()
+            .map(|stage| match stage {
+                JoinStage::Intersect { scans, .. } => scans.len(),
+                JoinStage::FusedIntersect { to_intersect, .. }
+                | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len(),
+            })
+            .sum::<usize>();
+        if index_count == 0 {
+            return Self::NoIndexes;
+        }
+
         fn make_slot(
             db: &Database,
             atoms: &DenseIdMap<AtomId, Atom>,
             access_counts: &mut DenseIdMap<AtomId, usize>,
+            states: &mut Vec<PreparedIndexState>,
             atom: AtomId,
             cols: &[ColumnId],
         ) -> PreparedIndexSlot {
@@ -696,15 +775,18 @@ impl PreparedJoinIndexes {
             let kind = if !columns_are_cacheable(info, cols) {
                 PreparedIndexKind::Uncacheable
             } else if cols.len() == 1 {
-                PreparedIndexKind::Column(OnceLock::new())
+                PreparedIndexKind::Column
             } else {
-                PreparedIndexKind::Tuple(OnceLock::new())
+                PreparedIndexKind::Tuple
             };
-            PreparedIndexSlot::new(kind, access)
+            let state = PreparedIndexStateId::new(states.len());
+            states.push(PreparedIndexState::new(kind));
+            PreparedIndexSlot::new(kind, access, state)
         }
 
         let mut access_counts = DenseIdMap::with_capacity(atoms.n_ids());
         let mut prepared_stages = Vec::with_capacity(stages.instrs.len());
+        let mut states = Vec::with_capacity(index_count);
         for stage in stages.instrs.iter() {
             let mut handles = SmallVec::new();
             match stage {
@@ -714,6 +796,7 @@ impl PreparedJoinIndexes {
                             db,
                             atoms,
                             &mut access_counts,
+                            &mut states,
                             scan.atom,
                             std::slice::from_ref(&scan.column),
                         )
@@ -726,6 +809,7 @@ impl PreparedJoinIndexes {
                             db,
                             atoms,
                             &mut access_counts,
+                            &mut states,
                             scan.to_index.atom,
                             scan.to_index.vars.as_slice(),
                         )
@@ -735,23 +819,50 @@ impl PreparedJoinIndexes {
             prepared_stages.push(handles);
         }
         let tail_masks = PreparedTailMasks::new(&stages.instrs, &prepared_stages, atoms.n_ids());
-        Self {
+        Self::Indexed {
             stages: prepared_stages.into_boxed_slice(),
+            states: states.into_boxed_slice(),
             access_counts,
             tail_masks,
         }
     }
 
     fn stage(&self, index: usize) -> &[PreparedIndexSlot] {
-        &self.stages[index]
+        match self {
+            Self::NoIndexes => &[],
+            Self::Indexed { stages, .. } => &stages[index],
+        }
     }
 
     fn access_count(&self, atom: AtomId) -> usize {
-        self.access_counts.get(atom).copied().unwrap_or_default()
+        match self {
+            Self::NoIndexes => 0,
+            Self::Indexed { access_counts, .. } => {
+                access_counts.get(atom).copied().unwrap_or_default()
+            }
+        }
+    }
+
+    fn resolve<'a>(&'a self, slot: &PreparedIndexSlot) -> PreparedIndexRef<'a> {
+        let Self::Indexed { states, .. } = self else {
+            unreachable!("an index slot cannot belong to a block without indexes")
+        };
+        PreparedIndexRef {
+            kind: slot.kind,
+            access: slot.access,
+            state: &states[slot.state.index()],
+        }
     }
 
     fn all_stage_mask(&self) -> Option<u64> {
-        self.tail_masks.as_ref().map(|masks| masks.all_stages)
+        self.tail_masks().map(|masks| masks.all_stages)
+    }
+
+    fn tail_masks(&self) -> Option<&PreparedTailMasks> {
+        match self {
+            Self::NoIndexes => None,
+            Self::Indexed { tail_masks, .. } => tail_masks.as_ref(),
+        }
     }
 }
 
@@ -931,6 +1042,27 @@ enum ProbeMatch<'rows, 'exec> {
     Rows(AtomRows<'rows, 'exec>),
 }
 
+/// Worker-local arena handle initialized only by a path that actually builds
+/// a packed node. Cover-only queries and scalar projected-root probes never
+/// touch the arena allocator.
+struct LazyArenaHandle<'exec> {
+    arena: &'exec SharedArena,
+    handle: OnceCell<Handle<'exec>>,
+}
+
+impl<'exec> LazyArenaHandle<'exec> {
+    fn new(arena: &'exec SharedArena) -> Self {
+        Self {
+            arena,
+            handle: OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> &Handle<'exec> {
+        self.handle.get_or_init(|| self.arena.new_handle())
+    }
+}
+
 impl<'rows, 'exec> ProbeMatch<'rows, 'exec> {
     #[inline]
     fn refine(self, atom: AtomId, updates: &mut FrameUpdates<'rows, 'exec>) {
@@ -944,7 +1076,7 @@ struct PackedProbe<'ctx, 'rows, 'exec> {
     first: &'rows PackedTrieNode<'exec>,
     columns: SmallVec<[ColumnId; 4]>,
     table: WrappedTableRef<'ctx>,
-    handle: &'ctx Handle<'exec>,
+    handle: &'ctx LazyArenaHandle<'exec>,
     scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
     terminal_child_shape: ChildShape,
 }
@@ -958,7 +1090,7 @@ struct RootProjectionProbe<'ctx, 'rows, 'exec> {
     table: WrappedTableRef<'ctx>,
     continuations: &'rows RootContinuationCache,
     access: AccessId,
-    handle: &'ctx Handle<'exec>,
+    handle: &'ctx LazyArenaHandle<'exec>,
     scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
     terminal_child_shape: ChildShape,
 }
@@ -992,7 +1124,7 @@ where
             .slot(ContinuationPosition::unsharded(key_index), self.access);
         let address = *slot.get_or_init(|| {
             PackedTrieNode::build_from_subset(
-                self.handle,
+                self.handle.get(),
                 self.table,
                 self.first.subset_at(key_index),
                 self.columns[1],
@@ -1028,7 +1160,7 @@ where
                     self.terminal_child_shape
                 };
                 node = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -1059,7 +1191,7 @@ where
                     self.terminal_child_shape
                 };
                 let child = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -1107,7 +1239,7 @@ where
                     self.terminal_child_shape
                 };
                 node = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -1138,7 +1270,7 @@ where
                     self.terminal_child_shape
                 };
                 let child = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -1169,7 +1301,7 @@ struct ProbeRequest<'scan, 'rows> {
     constraints: &'scan [Constraint],
     keep_rows: bool,
     terminal_child_shape: ChildShape,
-    prepared: &'rows PreparedIndexSlot,
+    prepared: PreparedIndexRef<'rows>,
 }
 
 impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
@@ -1177,7 +1309,7 @@ impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
         scan: &'scan SingleScanSpec,
         keep_rows: bool,
         terminal_child_shape: ChildShape,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> Self {
         Self {
             atom: scan.atom,
@@ -1193,7 +1325,7 @@ impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
         scan: &'scan ScanSpec,
         keep_rows: bool,
         terminal_child_shape: ChildShape,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> Self {
         Self {
             atom: scan.to_index.atom,
@@ -1238,6 +1370,24 @@ where
         }
     }
 
+    /// Return a terminal catalog result without retaining an index position.
+    ///
+    /// A leaf can still feed a cover/barrier, so `keep_rows` may require the
+    /// subset even though no packed continuation can be built from it.
+    fn terminal_catalog_match(
+        subset: SubsetRef<'rows>,
+        keep_rows: bool,
+    ) -> ProbeMatch<'rows, 'exec> {
+        if keep_rows {
+            ProbeMatch::Rows(AtomRows::Catalog {
+                subset,
+                continuation: None,
+            })
+        } else {
+            ProbeMatch::Present
+        }
+    }
+
     fn get_subset(&self, key: &[Value]) -> Option<ProbeMatch<'rows, 'exec>> {
         match &self.ix {
             ProbeIndex::CachedTuple {
@@ -1247,6 +1397,16 @@ where
                 child_shape,
             } => {
                 let table: &'rows Index<TupleIndex> = table;
+                if *child_shape == ChildShape::Leaf || !self.keep_rows {
+                    debug_assert!(self.keep_rows || *child_shape == ChildShape::Leaf);
+                    let subset = table.get_subset(key)?;
+                    let subset = if let Some(range) = intersect_outer {
+                        intersect_with_dense_ref(subset, *range)?
+                    } else {
+                        subset
+                    };
+                    return Some(Self::terminal_catalog_match(subset, self.keep_rows));
+                }
                 let (position, subset) = table.get_subset_positioned(key)?;
                 let subset = if let Some(range) = intersect_outer {
                     intersect_with_dense_ref(subset, *range)?
@@ -1269,6 +1429,16 @@ where
             } => {
                 debug_assert_eq!(key.len(), 1);
                 let table: &'rows Index<ColumnIndex> = table;
+                if *child_shape == ChildShape::Leaf || !self.keep_rows {
+                    debug_assert!(self.keep_rows || *child_shape == ChildShape::Leaf);
+                    let subset = table.get_subset(&key[0])?;
+                    let subset = if let Some(range) = intersect_outer {
+                        intersect_with_dense_ref(subset, *range)?
+                    } else {
+                        subset
+                    };
+                    return Some(Self::terminal_catalog_match(subset, self.keep_rows));
+                }
                 let (position, subset) = table.get_subset_positioned(&key[0])?;
                 let subset = if let Some(range) = intersect_outer {
                     intersect_with_dense_ref(subset, *range)?
@@ -1559,11 +1729,29 @@ impl Database {
                         // logical query. A nested scope ensures no descendant task
                         // can retain an arena reference after this job reclaims it.
                         let arena = SharedArena::new();
-                        let prepared_index = PreparedPlanIndexes::new(db, plan);
                         let search_and_apply_timer = Instant::now();
+                        let join_state = JoinState::new(db, exec_state, trie_cache, &arena);
+                        let mut binding_info = BindingInfo::default();
+                        let mut roots_ready = true;
+                        for (id, info) in plan.atoms().iter() {
+                            let headers: SmallVec<[&JoinHeader; 2]> =
+                                plan.header().iter().filter(|h| h.atom == id).collect();
+                            match join_state.root_node(info.table, &headers) {
+                                Some(node) => binding_info.insert_node(id, node),
+                                None => {
+                                    roots_ready = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Prepared slots are execution-local and can be large.
+                        // Empty roots are common in fixpoint confirmation
+                        // passes, so do not construct the sidecar until the
+                        // query can actually run.
+                        let prepared_index =
+                            roots_ready.then(|| PreparedPlanIndexes::new(db, plan));
                         let search_and_apply_time = egglog_concurrency::scope(|query_scope| {
-                            let join_state = JoinState::new(db, exec_state, trie_cache, &arena);
-                            let mut binding_info = BindingInfo::default();
                             let mut action_buf = ScopedActionBuffer::new(
                                 query_scope,
                                 rule_set,
@@ -1571,16 +1759,10 @@ impl Database {
                             );
 
                             'eval: {
-                                for (id, info) in plan.atoms().iter() {
-                                    let headers: SmallVec<[&JoinHeader; 2]> =
-                                        plan.header().iter().filter(|h| h.atom == id).collect();
-                                    match join_state.root_node(info.table, &headers) {
-                                        Some(node) => binding_info.insert_node(id, node),
-                                        None => break 'eval,
-                                    }
-                                }
-
-                                match (plan, &prepared_index) {
+                                let Some(prepared_index) = prepared_index.as_ref() else {
+                                    break 'eval;
+                                };
+                                match (plan, prepared_index) {
                                     (
                                         Plan::SinglePlan(plan),
                                         PreparedPlanIndexes::Single(prepared),
@@ -1695,9 +1877,9 @@ impl Database {
                             search_and_apply_time
                         });
 
-                        // Prepared slots can contain arena addresses, so destroy
-                        // them before reclaiming the arena.
+                        drop(binding_info);
                         drop(prepared_index);
+                        drop(join_state);
                         drop(arena);
 
                         let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
@@ -1728,7 +1910,6 @@ impl Database {
                 // to prove that every arena reference dies before this query's
                 // arena is reclaimed.
                 let arena = SharedArena::new();
-                let prepared_index = PreparedPlanIndexes::new(self, plan);
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
@@ -1750,6 +1931,10 @@ impl Database {
                                 None => break 'eval,
                             }
                         }
+                        // See the parallel path above. This also ensures any
+                        // arena addresses in prepared slots are dropped inside
+                        // the arena's lexical lifetime.
+                        let prepared_index = PreparedPlanIndexes::new(self, plan);
                         match (plan, &prepared_index) {
                             (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
                                 join_state.run_join_stages(
@@ -1824,7 +2009,6 @@ impl Database {
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
-                drop(prepared_index);
                 drop(arena);
 
                 // TODO: unnecessary cloning in many cases
@@ -1899,7 +2083,7 @@ struct JoinState<'db, 'state, 'exec> {
     /// sharing is disabled (small run, or nothing reused across plans).
     trie_cache: Option<Arc<TrieCache>>,
     arena: &'exec SharedArena,
-    handle: Handle<'exec>,
+    handle: LazyArenaHandle<'exec>,
     packed_scratch: RefCell<Vec<(Value, RowId)>>,
 }
 
@@ -2289,7 +2473,7 @@ fn atom_tail_use(
     instr_order: &InstrOrder,
     resume_pos: usize,
 ) -> AtomTailUse {
-    let Some((masks, remaining_stages)) = prepared.tail_masks.as_ref().zip(remaining_stages) else {
+    let Some((masks, remaining_stages)) = prepared.tail_masks().zip(remaining_stages) else {
         return scan_atom_tail_use(atom, stages, prepared, instr_order, resume_pos);
     };
     let result = masks.atom_tail_use(atom, remaining_stages, prepared.access_count(atom));
@@ -2452,7 +2636,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             pool: with_pool_set(|ps| ps.get_pool()),
             trie_cache,
             arena,
-            handle: arena.new_handle(),
+            handle: LazyArenaHandle::new(arena),
             packed_scratch: RefCell::new(Vec::new()),
         }
     }
@@ -2539,7 +2723,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Table scans already omit stale SortedWritesTable rows, so a
             // separate live-subset pass would only scan the same root twice.
             return PackedTrieNode::build_from_subset(
-                &self.handle,
+                self.handle.get(),
                 table,
                 subset,
                 column,
@@ -2553,7 +2737,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         filtered = table.refine(filtered, constraints);
         PackedTrieNode::build_from_subset(
-            &self.handle,
+            self.handle.get(),
             table,
             filtered.as_ref(),
             column,
@@ -2572,14 +2756,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         table: WrappedTableRef<'_>,
         constraints: &[Constraint],
         column: ColumnId,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> Option<&'rows RootProjection> {
         self.trie_cache.as_ref()?;
-        let slot = if let Some(slot) = prepared.projected_root.get() {
+        let slot = if let Some(slot) = prepared.state.projected_root.get() {
             slot
         } else {
             let candidate = root.projection_slot(column, constraints)?;
-            prepared.projected_root.get_or_init(|| candidate)
+            prepared.state.projected_root.get_or_init(|| candidate)
         };
         let projection = slot.get_or_init(|| {
             let filtered = if constraints.is_empty() {
@@ -2621,14 +2805,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         constraints: &[Constraint],
         column: ColumnId,
         child_shape: ChildShape,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> &'exec PackedTrieNode<'exec>
     where
         'exec: 'rows,
     {
         match rows {
             AtomRows::Root(root) => {
-                let address = *prepared.packed_root.get_or_init(|| {
+                let address = *prepared.state.packed_root.get_or_init(|| {
                     self.build_packed_node(
                         table,
                         root.subset.as_ref(),
@@ -2663,8 +2847,11 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 assert_eq!(node.child_shape(), child_shape);
                 node
             }
-            AtomRows::Packed(cursor) => {
-                cursor.child_index_with(&self.handle, prepared.access.index(), child_shape, || {
+            AtomRows::Packed(cursor) => cursor.child_index_with(
+                self.handle.get(),
+                prepared.access.index(),
+                child_shape,
+                || {
                     self.build_packed_node(
                         table,
                         cursor.subset(),
@@ -2673,8 +2860,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         column,
                         child_shape,
                     )
-                })
-            }
+                },
+            ),
             AtomRows::Inline(..) => {
                 unreachable!("inline residuals must use a stack-owned probe")
             }
@@ -2749,7 +2936,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 !(whole_table.is_dense() && source.subset().bounds() == whole_table.bounds());
             let intersect_outer = needs_intersect.then_some(range);
             if cols.len() == 1 {
-                let PreparedIndexKind::Column(index) = &prepared.kind else {
+                debug_assert_eq!(prepared.kind, PreparedIndexKind::Column);
+                let PreparedIndexCache::Column(index) = &prepared.state.cache else {
                     unreachable!("single-column scan must have a prepared column index")
                 };
                 let index = index
@@ -2757,7 +2945,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     .get()
                     .expect("prepared column index must already be refreshed");
                 if terminal_child_shape != ChildShape::Leaf {
-                    prepared.root_continuations.prepare(
+                    prepared.state.root_continuations.prepare(
                         terminal_child_shape,
                         index.shard_count(),
                         |shard| index.shard_len(shard),
@@ -2766,11 +2954,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 ProbeIndex::CachedColumn {
                     intersect_outer,
                     table: index,
-                    continuations: &prepared.root_continuations,
+                    continuations: &prepared.state.root_continuations,
                     child_shape: terminal_child_shape,
                 }
             } else {
-                let PreparedIndexKind::Tuple(index) = &prepared.kind else {
+                debug_assert_eq!(prepared.kind, PreparedIndexKind::Tuple);
+                let PreparedIndexCache::Tuple(index) = &prepared.state.cache else {
                     unreachable!("multi-column scan must have a prepared tuple index")
                 };
                 let index = index
@@ -2778,7 +2967,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     .get()
                     .expect("prepared tuple index must already be refreshed");
                 if terminal_child_shape != ChildShape::Leaf {
-                    prepared.root_continuations.prepare(
+                    prepared.state.root_continuations.prepare(
                         terminal_child_shape,
                         index.shard_count(),
                         |shard| index.shard_len(shard),
@@ -2787,7 +2976,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 ProbeIndex::CachedTuple {
                     intersect_outer,
                     table: index,
-                    continuations: &prepared.root_continuations,
+                    continuations: &prepared.state.root_continuations,
                     child_shape: terminal_child_shape,
                 }
             }
@@ -2810,6 +2999,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             if let Some(first) = projected_root {
                 if first_child_shape != ChildShape::Leaf {
                     prepared
+                        .state
                         .root_continuations
                         .prepare(first_child_shape, 1, |_| first.len());
                 }
@@ -2817,7 +3007,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     first,
                     columns: cols,
                     table: info.table.as_ref(),
-                    continuations: &prepared.root_continuations,
+                    continuations: &prepared.state.root_continuations,
                     access: prepared.access,
                     handle: &self.handle,
                     scratch: &self.packed_scratch,
@@ -2862,7 +3052,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     fn top_index_shards<'rows>(
         &self,
         stage: &JoinStage,
-        prepared: &'rows [PreparedIndexSlot],
+        prepared_join: &'rows PreparedJoinIndexes,
+        prepared: &[PreparedIndexSlot],
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         workers: usize,
@@ -2908,7 +3099,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             let prober = self.get_index(
                 atoms,
                 binding_info,
-                ProbeRequest::column(scan, false, ChildShape::Leaf, prepared),
+                ProbeRequest::column(
+                    scan,
+                    false,
+                    ChildShape::Leaf,
+                    prepared_join.resolve(prepared),
+                ),
             );
             let size = prober.len();
             if size < leader_size {
@@ -2956,6 +3152,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let stage_index = order.get(0);
         self.top_index_shards(
             &stages.instrs[stage_index],
+            prepared,
             prepared.stage(stage_index),
             atoms,
             binding_info,
@@ -3320,7 +3517,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             a,
                             tail.keep_rows,
                             tail.child_shape,
-                            &prepared_indexes[0],
+                            prepared.resolve(&prepared_indexes[0]),
                         ),
                     );
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -3351,7 +3548,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             a,
                             a_tail.keep_rows,
                             a_tail.child_shape,
-                            &prepared_indexes[0],
+                            prepared.resolve(&prepared_indexes[0]),
                         ),
                     );
                     let b_tail = atom_tail_use(
@@ -3369,7 +3566,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             b,
                             b_tail.keep_rows,
                             b_tail.child_shape,
-                            &prepared_indexes[1],
+                            prepared.resolve(&prepared_indexes[1]),
                         ),
                     );
 
@@ -3418,7 +3615,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 scan,
                                 tail.keep_rows,
                                 tail.child_shape,
-                                prepared_slot,
+                                prepared.resolve(prepared_slot),
                             ),
                         );
                         let size = prober.len();
@@ -3596,7 +3793,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     spec,
                                     tail.keep_rows,
                                     tail.child_shape,
-                                    &prepared_indexes[i],
+                                    prepared.resolve(&prepared_indexes[i]),
                                 ),
                             ),
                         )
@@ -3793,7 +3990,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     spec,
                                     tail.keep_rows,
                                     tail.child_shape,
-                                    prepared_slot,
+                                    prepared.resolve(prepared_slot),
                                 ),
                             )
                         })
@@ -5101,28 +5298,54 @@ mod top_index_tests {
         },
     };
 
+    use egglog_concurrency::SharedArena;
     use smallvec::{SmallVec, smallvec};
 
     use crate::{
         common::{IndexMap, Value},
         free_join::{
             AtomId, SubAtom, Variable,
-            plan::{JoinStage, MatId, MatScanMode, ScanSpec, SingleScanSpec},
+            plan::{JoinStage, JoinStages, MatId, MatScanMode, ScanSpec, SingleScanSpec},
         },
-        numeric_id::NumericId,
+        numeric_id::{DenseIdMap, NumericId},
         offsets::Subset,
         row_buffer::RowBuffer,
         table_spec::ColumnId,
     };
 
     use super::{
-        AccessId, BindingInfo, CatalogContinuation, ContinuationPosition, InstrOrder,
-        PreparedIndexKind, PreparedIndexSlot, PreparedJoinIndexes, PreparedTailMasks,
-        RootContinuationCache, RootProjection, SmallColumnIndex, SmallColumnSink, TrieNode,
-        for_each_stage_atom, materialization_is_live_in_tail, packed_child_shape_in_tail,
-        scan_atom_tail_use, sort_plan_by_size_inner, top_index_shape_is_eligible,
+        AccessId, BindingInfo, CatalogContinuation, ContinuationPosition, Database, InstrOrder,
+        LazyArenaHandle, PreparedIndexKind, PreparedIndexSlot, PreparedIndexState,
+        PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMasks, RootContinuationCache,
+        RootProjection, SmallColumnIndex, SmallColumnSink, TrieNode, for_each_stage_atom,
+        materialization_is_live_in_tail, packed_child_shape_in_tail, scan_atom_tail_use,
+        sort_plan_by_size_inner, top_index_shape_is_eligible,
     };
     use crate::free_join::packed_trie::ChildShape;
+
+    #[test]
+    fn cover_only_stages_skip_prepared_index_state() {
+        let stages = JoinStages {
+            instrs: Arc::new(vec![JoinStage::Intersect {
+                var: Variable::from_usize(0),
+                scans: SmallVec::new(),
+            }]),
+        };
+        let atoms = Arc::new(DenseIdMap::new());
+        assert!(matches!(
+            PreparedJoinIndexes::new(&Database::new(), &atoms, &stages),
+            PreparedJoinIndexes::NoIndexes
+        ));
+    }
+
+    #[test]
+    fn arena_handle_is_created_only_on_first_packed_allocation() {
+        let arena = SharedArena::new();
+        let handle = LazyArenaHandle::new(&arena);
+        assert!(handle.handle.get().is_none());
+        handle.get();
+        assert!(handle.handle.get().is_some());
+    }
 
     #[test]
     fn continuation_positions_remain_compact() {
@@ -5415,6 +5638,7 @@ mod top_index_tests {
 
     fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
         let mut access_counts = crate::numeric_id::DenseIdMap::new();
+        let mut states = Vec::new();
         let prepared_stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]> = stages
             .iter()
             .map(|stage| {
@@ -5434,14 +5658,18 @@ mod top_index_tests {
                         let next = access_counts.get_or_default(atom);
                         let access = AccessId::new(*next);
                         *next += 1;
-                        PreparedIndexSlot::new(PreparedIndexKind::Uncacheable, access)
+                        let kind = PreparedIndexKind::Uncacheable;
+                        let state = PreparedIndexStateId::new(states.len());
+                        states.push(PreparedIndexState::new(kind));
+                        PreparedIndexSlot::new(kind, access, state)
                     })
                     .collect()
             })
             .collect();
         let tail_masks = PreparedTailMasks::new(stages, &prepared_stages, access_counts.n_ids());
-        PreparedJoinIndexes {
+        PreparedJoinIndexes::Indexed {
             stages: prepared_stages,
+            states: states.into_boxed_slice(),
             access_counts,
             tail_masks,
         }
@@ -5482,7 +5710,7 @@ mod top_index_tests {
             intersect_stage(2, 0),
         ];
         let prepared = prepared_for(&stages);
-        let masks = prepared.tail_masks.as_ref().unwrap();
+        let masks = prepared.tail_masks().unwrap();
         let mut orders = Vec::new();
         permutations(&mut [0, 1, 2, 3], 0, &mut orders);
         for order in orders {
@@ -5509,15 +5737,12 @@ mod top_index_tests {
             .map(|column| intersect_stage(0, column))
             .collect::<Vec<_>>();
         let prepared_64 = prepared_for(&stages_64);
-        assert_eq!(
-            prepared_64.tail_masks.as_ref().unwrap().all_stages,
-            u64::MAX
-        );
+        assert_eq!(prepared_64.tail_masks().unwrap().all_stages, u64::MAX);
 
         let stages_65 = (0..65)
             .map(|column| intersect_stage(0, column))
             .collect::<Vec<_>>();
-        assert!(prepared_for(&stages_65).tail_masks.is_none());
+        assert!(prepared_for(&stages_65).tail_masks().is_none());
     }
 
     #[test]
