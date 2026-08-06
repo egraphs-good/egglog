@@ -41,12 +41,12 @@ impl ContainerValue for MapContainer {
 }
 
 impl SequenceContainerValue for MapContainer {
-    fn encode_sequence(&self, out: &mut Vec<Value>) {
+    fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         out.push(map_rebuild_mask(self.do_rebuild_keys, self.do_rebuild_vals));
         out.extend(self.data.iter().flat_map(|(key, value)| [*key, *value]));
     }
 
-    fn decode_sequence(sequence: &[Value]) -> Self {
+    fn decode_sequence(sequence: &[Value], _base_values: &BaseValues) -> Self {
         let (&mask, data) = sequence
             .split_first()
             .expect("serialized MapContainer must include its rebuild mask");
@@ -98,6 +98,7 @@ impl SequenceContainerValue for MapContainer {
 
     fn rebuild_sequence(
         sequence: &[Value],
+        _base_values: &BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
@@ -854,8 +855,11 @@ mod tests {
         ] {
             let map = map(rebuild_keys, rebuild_vals, &[(2, 20), (4, 40)]);
             let mut encoded = Vec::new();
-            map.encode_sequence(&mut encoded);
-            assert_eq!(MapContainer::decode_sequence(&encoded), map);
+            map.encode_sequence(&BaseValues::default(), &mut encoded);
+            assert_eq!(
+                MapContainer::decode_sequence(&encoded, &BaseValues::default()),
+                map
+            );
             assert_eq!(
                 MapContainer::sequence_values(&encoded),
                 &[value(2), value(20), value(4), value(40)]
@@ -883,44 +887,51 @@ mod tests {
         assert_eq!(legacy, map(true, true, &[(1, 41), (3, 61)]));
 
         let mut encoded = Vec::new();
-        original.encode_sequence(&mut encoded);
+        original.encode_sequence(&BaseValues::default(), &mut encoded);
         let mut rebuilt = Vec::new();
         assert!(MapContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &rebuilder,
             &mut rebuilt
         ));
-        assert_eq!(MapContainer::decode_sequence(&rebuilt), legacy);
+        assert_eq!(
+            MapContainer::decode_sequence(&rebuilt, &BaseValues::default()),
+            legacy
+        );
     }
 
     #[test]
     fn sequence_rebuild_respects_mask_and_false_leaves_output_empty() {
         let original = map(false, true, &[(2, 20), (4, 40)]);
         let mut encoded = Vec::new();
-        original.encode_sequence(&mut encoded);
+        original.encode_sequence(&BaseValues::default(), &mut encoded);
         let mut rebuilt = Vec::new();
         assert!(MapContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &Remap(vec![(value(2), value(3)), (value(20), value(21))]),
             &mut rebuilt,
         ));
         assert_eq!(
-            MapContainer::decode_sequence(&rebuilt),
+            MapContainer::decode_sequence(&rebuilt, &BaseValues::default()),
             map(false, true, &[(2, 21), (4, 40)])
         );
 
         let mut unchanged = Vec::new();
         assert!(!MapContainer::rebuild_sequence(
             &rebuilt,
+            &BaseValues::default(),
             &Remap(vec![(value(2), value(3))]),
             &mut unchanged,
         ));
         assert!(unchanged.is_empty());
 
         let mut non_rebuildable = Vec::new();
-        map(false, false, &[(2, 20)]).encode_sequence(&mut non_rebuildable);
+        map(false, false, &[(2, 20)]).encode_sequence(&BaseValues::default(), &mut non_rebuildable);
         assert!(!MapContainer::rebuild_sequence(
             &non_rebuildable,
+            &BaseValues::default(),
             &Remap(vec![(value(2), value(3)), (value(20), value(21))]),
             &mut unchanged,
         ));
