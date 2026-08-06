@@ -30,6 +30,7 @@
 //! [`ReadPrim`]: crate::ReadPrim
 //! [`FullPrim`]: crate::FullPrim
 
+use std::any::TypeId;
 use std::ops::Deref;
 
 use crate::Error;
@@ -44,6 +45,7 @@ use crate::{
     core::ResolvedCall,
     sort::{F, S},
     typechecking::FuncType,
+    util::HashMap,
 };
 use egglog_bridge::{ActionRegistry, TableAction, TableKind};
 use smallvec::SmallVec;
@@ -85,16 +87,12 @@ impl Context {
     pub const ALL: [Context; 4] = [Context::Pure, Context::Write, Context::Read, Context::Full];
 }
 
-/// The declared column sorts of every table, by name.
-///
-/// The [`ActionRegistry`] resolves a table name to the handle that reads and
-/// writes it, but it lives in the backend and so knows nothing about egglog
-/// sorts. This is the matching name-indexed view of the *types*, kept by the
-/// e-graph and shared with the state wrappers so a primitive body — which
-/// cannot reach `TypeInfo` — can still ask what a column holds.
+/// The declared column sorts of every table, by name. Read through
+/// [`Read::constructor_schema`], [`Read::function_schema`], and
+/// [`Read::table_subtype`].
 #[derive(Clone, Default)]
 pub struct FunctionSchemas {
-    tables: crate::util::HashMap<String, (FunctionSubtype, ResolvedSchema)>,
+    tables: HashMap<String, (FunctionSubtype, ResolvedSchema)>,
 }
 
 impl FunctionSchemas {
@@ -165,8 +163,8 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
 /// name through it.
 pub(crate) trait RegistrySealed<'a, 'db: 'a>: Internal<'a, 'db> {
     fn registry(&self) -> &ActionRegistry;
-    /// Borrowed for `'a` rather than for `&self`, so a caller can hold a
-    /// column sort while it goes on to write through the same state.
+    /// Borrowed for `'a`, not for `&self`, so a caller can hold a column sort
+    /// across a write through the same state.
     fn schemas(&self) -> &'a FunctionSchemas;
 }
 
@@ -220,7 +218,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// unchanged for those.
     fn rebuild_container(
         &mut self,
-        type_id: std::any::TypeId,
+        type_id: TypeId,
         value: Value,
         remap: &(dyn Fn(Value) -> Value + Send + Sync),
     ) -> Value {
@@ -354,8 +352,9 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// return `None` if absent — never insert. The iteration /
 /// introspection methods (`function_entries`, `constructor_enodes`,
 /// `enodes_for_eclass`, `table_size`, `table_sizes`) walk the current
-/// contents of the database, and `table_schema` / `table_subtype`
-/// report how a table is declared rather than what it holds.
+/// contents of the database, while `constructor_schema` /
+/// `function_schema` / `table_subtype` report how a table is declared
+/// rather than what it holds.
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort
@@ -399,16 +398,28 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
-    /// The declared sorts of a table's columns, or `None` if no table with
-    /// that name is registered. Pair with [`Read::table_sizes`] to walk every
-    /// table, and with [`Read::table_subtype`] to tell a constructor's eclass
-    /// column from a function's output column.
-    fn table_schema(&self, name: &str) -> Option<&'a ResolvedSchema> {
-        self.schemas().get(name).map(|(_, schema)| schema)
+    /// The declared sorts of a constructor's columns: its inputs followed by
+    /// the eclass column. Pair with [`Read::table_sizes`] to walk every table.
+    ///
+    /// **Only valid for constructor tables.** Functions error; use
+    /// [`Read::function_schema`] for those.
+    fn constructor_schema(&self, name: &str) -> Result<&'a ResolvedSchema, Error> {
+        schema_of(self.schemas(), name, FunctionSubtype::Constructor)
+    }
+
+    /// The declared sorts of a function's columns: its inputs followed by the
+    /// output column.
+    ///
+    /// **Only valid for `function` tables.** Constructors error; use
+    /// [`Read::constructor_schema`] for those.
+    fn function_schema(&self, name: &str) -> Result<&'a ResolvedSchema, Error> {
+        schema_of(self.schemas(), name, FunctionSubtype::Custom)
     }
 
     /// Whether the named table is a `constructor` or a `function`, or `None`
-    /// if no table with that name is registered.
+    /// if no table with that name is registered. Unlike the two schema
+    /// accessors, a mismatch is not an error, so this is the one to dispatch
+    /// on when either subtype is acceptable.
     fn table_subtype(&self, name: &str) -> Option<FunctionSubtype> {
         self.schemas().get(name).map(|(subtype, _)| *subtype)
     }
@@ -631,6 +642,35 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         self.es_mut().call_external_func(panic_id, &[]);
         None
     }
+}
+
+fn subtype_label(subtype: FunctionSubtype) -> &'static str {
+    match subtype {
+        FunctionSubtype::Constructor => "constructor",
+        FunctionSubtype::Custom => "function",
+    }
+}
+
+fn schema_of<'a>(
+    schemas: &'a FunctionSchemas,
+    name: &str,
+    expected: FunctionSubtype,
+) -> Result<&'a ResolvedSchema, Error> {
+    let Some((subtype, schema)) = schemas.get(name) else {
+        return Err(ApiError::MissingTable {
+            name: name.to_string(),
+        }
+        .into());
+    };
+    if *subtype != expected {
+        return Err(ApiError::WrongSubtype {
+            name: name.to_string(),
+            expected: subtype_label(expected),
+            actual: subtype_label(*subtype),
+        }
+        .into());
+    }
+    Ok(schema)
 }
 
 fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {

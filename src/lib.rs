@@ -310,8 +310,8 @@ pub struct EGraph {
     proof_check_program: Vec<ResolvedNCommand>,
     /// Declared column sorts by table name. Shared (via `Arc<RwLock<_>>`)
     /// with the state wrappers, which cannot reach [`TypeInfo`] from a
-    /// primitive body, and read through [`Read::table_schema`]. `push`/`pop`
-    /// snapshot and restore its contents, so a popped table stops resolving.
+    /// primitive body. `push`/`pop` snapshot and restore its contents, so a
+    /// popped table stops resolving.
     pub(crate) function_schemas: Arc<RwLock<FunctionSchemas>>,
 }
 
