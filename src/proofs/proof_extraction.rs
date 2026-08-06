@@ -41,7 +41,7 @@ impl ProofInstrumentor<'_> {
             .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
 
         let backend_id = function.backend_id;
-        let output_sort = function.schema.output.clone();
+        let output_sort = function.func_type.output.clone();
 
         let mut termdag = TermDag::default();
         let mut witness_value = None;
@@ -79,7 +79,7 @@ impl ProofInstrumentor<'_> {
                     func.name
                 )
             })
-            .schema
+            .func_type
             .output
             .clone();
         let proof_value = self

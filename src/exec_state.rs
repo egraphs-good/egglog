@@ -32,6 +32,7 @@
 
 use std::any::TypeId;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::Error;
 use crate::api::{ApiError, IntoValue, IntoValues};
@@ -40,12 +41,10 @@ use crate::core_relations::{
     Value,
 };
 use crate::{
-    ResolvedSchema,
     ast::{FunctionSubtype, Literal, ResolvedExpr},
     core::ResolvedCall,
     sort::{F, S},
-    typechecking::FuncType,
-    util::HashMap,
+    typechecking::{FuncType, SharedFuncTypes},
 };
 use egglog_bridge::{ActionRegistry, TableAction, TableKind};
 use smallvec::SmallVec;
@@ -85,24 +84,6 @@ pub enum Context {
 
 impl Context {
     pub const ALL: [Context; 4] = [Context::Pure, Context::Write, Context::Read, Context::Full];
-}
-
-/// The declared column sorts of every table, by name. Read through
-/// [`Read::constructor_schema`], [`Read::function_schema`], and
-/// [`Read::table_subtype`].
-#[derive(Clone, Default)]
-pub struct FunctionSchemas {
-    tables: HashMap<String, (FunctionSubtype, ResolvedSchema)>,
-}
-
-impl FunctionSchemas {
-    pub(crate) fn declare(&mut self, name: &str, subtype: FunctionSubtype, schema: ResolvedSchema) {
-        self.tables.insert(name.to_owned(), (subtype, schema));
-    }
-
-    fn get(&self, name: &str) -> Option<&(FunctionSubtype, ResolvedSchema)> {
-        self.tables.get(name)
-    }
 }
 
 // =====================================================================
@@ -163,9 +144,9 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
 /// name through it.
 pub(crate) trait RegistrySealed<'a, 'db: 'a>: Internal<'a, 'db> {
     fn registry(&self) -> &ActionRegistry;
-    /// Borrowed for `'a`, not for `&self`, so a caller can hold a column sort
-    /// across a write through the same state.
-    fn schemas(&self) -> &'a FunctionSchemas;
+    /// The e-graph's signature map, unlocked. The schema accessors lock it
+    /// only when they are called, so a primitive that never asks pays nothing.
+    fn func_types(&self) -> &'a SharedFuncTypes;
 }
 
 // =====================================================================
@@ -398,22 +379,21 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
-    /// The declared sorts of a constructor's columns: its inputs followed by
-    /// the eclass column. Pair with [`Read::table_sizes`] to walk every table.
+    /// A constructor's declared signature: its input sorts and the sort of the
+    /// eclass column. Pair with [`Read::table_sizes`] to walk every table.
     ///
     /// **Only valid for constructor tables.** Functions error; use
     /// [`Read::function_schema`] for those.
-    fn constructor_schema(&self, name: &str) -> Result<&'a ResolvedSchema, Error> {
-        schema_of(self.schemas(), name, FunctionSubtype::Constructor)
+    fn constructor_schema(&self, name: &str) -> Result<Arc<FuncType>, Error> {
+        func_type_of(self.func_types(), name, FunctionSubtype::Constructor)
     }
 
-    /// The declared sorts of a function's columns: its inputs followed by the
-    /// output column.
+    /// A function's declared signature: its input sorts and its output sort.
     ///
     /// **Only valid for `function` tables.** Constructors error; use
     /// [`Read::constructor_schema`] for those.
-    fn function_schema(&self, name: &str) -> Result<&'a ResolvedSchema, Error> {
-        schema_of(self.schemas(), name, FunctionSubtype::Custom)
+    fn function_schema(&self, name: &str) -> Result<Arc<FuncType>, Error> {
+        func_type_of(self.func_types(), name, FunctionSubtype::Custom)
     }
 
     /// Whether the named table is a `constructor` or a `function`, or `None`
@@ -421,7 +401,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// accessors, a mismatch is not an error, so this is the one to dispatch
     /// on when either subtype is acceptable.
     fn table_subtype(&self, name: &str) -> Option<FunctionSubtype> {
-        self.schemas().get(name).map(|(subtype, _)| *subtype)
+        let func_types = self.func_types().read().unwrap();
+        func_types.get(name).map(|func_type| func_type.subtype)
     }
 
     /// Return the current row count for the named table, or `None` if no table
@@ -651,26 +632,27 @@ fn subtype_label(subtype: FunctionSubtype) -> &'static str {
     }
 }
 
-fn schema_of<'a>(
-    schemas: &'a FunctionSchemas,
+fn func_type_of(
+    func_types: &SharedFuncTypes,
     name: &str,
     expected: FunctionSubtype,
-) -> Result<&'a ResolvedSchema, Error> {
-    let Some((subtype, schema)) = schemas.get(name) else {
+) -> Result<Arc<FuncType>, Error> {
+    let func_type = func_types.read().unwrap().get(name).cloned();
+    let Some(func_type) = func_type else {
         return Err(ApiError::MissingTable {
             name: name.to_string(),
         }
         .into());
     };
-    if *subtype != expected {
+    if func_type.subtype != expected {
         return Err(ApiError::WrongSubtype {
             name: name.to_string(),
             expected: subtype_label(expected),
-            actual: subtype_label(*subtype),
+            actual: subtype_label(func_type.subtype),
         }
         .into());
     }
-    Ok(schema)
+    Ok(func_type)
 }
 
 fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
@@ -758,7 +740,7 @@ pub struct PureState<'a, 'db> {
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
-    pub(crate) schemas: &'a FunctionSchemas,
+    pub(crate) func_types: &'a SharedFuncTypes,
     pub(crate) ctx: Context,
 }
 
@@ -773,7 +755,7 @@ pub struct ReadState<'a, 'db> {
 pub struct WriteState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
-    pub(crate) schemas: &'a FunctionSchemas,
+    pub(crate) func_types: &'a SharedFuncTypes,
     pub(crate) ctx: Context,
 }
 
@@ -788,7 +770,7 @@ pub struct WriteState<'a, 'db> {
 pub struct FullState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
-    pub(crate) schemas: &'a FunctionSchemas,
+    pub(crate) func_types: &'a SharedFuncTypes,
     pub(crate) ctx: Context,
 }
 
@@ -805,13 +787,13 @@ impl<'a, 'db: 'a> ReadState<'a, 'db> {
     pub(crate) fn wrap(
         es: &'a mut ExecutionState<'db>,
         registry: &'a ActionRegistry,
-        schemas: &'a FunctionSchemas,
+        func_types: &'a SharedFuncTypes,
         ctx: Context,
     ) -> Self {
         Self {
             inner: es,
             registry,
-            schemas,
+            func_types,
             ctx,
         }
     }
@@ -824,13 +806,13 @@ impl<'a, 'db: 'a> WriteState<'a, 'db> {
     pub(crate) fn wrap(
         es: &'a mut ExecutionState<'db>,
         registry: &'a ActionRegistry,
-        schemas: &'a FunctionSchemas,
+        func_types: &'a SharedFuncTypes,
         ctx: Context,
     ) -> Self {
         Self {
             inner: es,
             registry,
-            schemas,
+            func_types,
             ctx,
         }
     }
@@ -843,13 +825,13 @@ impl<'a, 'db: 'a> FullState<'a, 'db> {
     pub(crate) fn wrap(
         es: &'a mut ExecutionState<'db>,
         registry: &'a ActionRegistry,
-        schemas: &'a FunctionSchemas,
+        func_types: &'a SharedFuncTypes,
         ctx: Context,
     ) -> Self {
         Self {
             inner: es,
             registry,
-            schemas,
+            func_types,
             ctx,
         }
     }
@@ -894,8 +876,8 @@ impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for ReadState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
-    fn schemas(&self) -> &'a FunctionSchemas {
-        self.schemas
+    fn func_types(&self) -> &'a SharedFuncTypes {
+        self.func_types
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for ReadState<'a, 'db> {}
@@ -919,8 +901,8 @@ impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for WriteState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
-    fn schemas(&self) -> &'a FunctionSchemas {
-        self.schemas
+    fn func_types(&self) -> &'a SharedFuncTypes {
+        self.func_types
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for WriteState<'a, 'db> {}
@@ -944,8 +926,8 @@ impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for FullState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
-    fn schemas(&self) -> &'a FunctionSchemas {
-        self.schemas
+    fn func_types(&self) -> &'a SharedFuncTypes {
+        self.func_types
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for FullState<'a, 'db> {}
