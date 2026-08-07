@@ -3,6 +3,7 @@
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::{
+    any::Any,
     ops::Deref,
     sync::{
         Arc,
@@ -326,6 +327,7 @@ impl PredictedVals {
 
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
+    pub(crate) external_context: ExternalContext<'a>,
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a ExternalFunctions,
@@ -333,6 +335,18 @@ pub(crate) struct DbView<'a> {
     pub(crate) containers: &'a ContainerValues,
     pub(crate) notification_list: &'a NotificationList<TableId>,
 }
+
+/// A borrowed value an embedder can make visible to every [`ExecutionState`]
+/// created for one operation, for its [`ExternalFunction`]s to read back with
+/// [`ExecutionState::external_context`].
+///
+/// Passing it per operation, rather than storing it in the database, is what
+/// lets an external function see borrowed embedder state: the borrow is live
+/// for exactly the call that supplied it, so the embedder cannot mutate that
+/// state while a rule is running.
+///
+/// [`ExternalFunction`]: crate::ExternalFunction
+pub type ExternalContext<'a> = Option<&'a (dyn Any + Send + Sync)>;
 
 /// A handle on a database that may be in the process of running a rule.
 ///
@@ -464,6 +478,12 @@ impl<'a> ExecutionState<'a> {
         args: &[Value],
     ) -> Option<Value> {
         self.db.external_funcs[func].invoke(self, args)
+    }
+
+    /// The value the caller of this operation supplied as its
+    /// [`ExternalContext`], if any.
+    pub fn external_context(&self) -> ExternalContext<'a> {
+        self.db.external_context
     }
 
     pub fn inc_counter(&self, ctr: CounterId) -> usize {

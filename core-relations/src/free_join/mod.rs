@@ -34,7 +34,7 @@ use crate::{
 };
 
 use self::plan::Plan;
-use crate::action::ExecutionState;
+use crate::action::{ExecutionState, ExternalContext};
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
@@ -357,7 +357,8 @@ impl Database {
     pub fn rebuild_containers(&mut self, table_id: TableId) -> ContainerRebuildSummary {
         let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
-        let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
+        let res =
+            self.with_execution_state(None, |state| containers.rebuild_all(table_id, table, state));
         self.container_values = containers;
         res
     }
@@ -444,8 +445,15 @@ impl Database {
     }
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.
-    pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState) -> R) -> R {
-        let mut state = ExecutionState::new(self.read_only_view(), Default::default());
+    ///
+    /// `context` is visible to any external function the closure reaches; pass
+    /// `None` if there is nothing to share.
+    pub fn with_execution_state<R>(
+        &self,
+        context: ExternalContext<'_>,
+        f: impl FnOnce(&mut ExecutionState) -> R,
+    ) -> R {
+        let mut state = ExecutionState::new(self.read_only_view_with(context), Default::default());
         f(&mut state)
     }
 
@@ -454,15 +462,23 @@ impl Database {
     /// flag to skip a subsequent `merge_all` when the closure was read-only.
     pub fn with_execution_state_tracked<R>(
         &self,
+        context: ExternalContext<'_>,
         f: impl FnOnce(&mut ExecutionState) -> R,
     ) -> (R, bool) {
-        let mut state = ExecutionState::new(self.read_only_view(), Default::default());
+        let mut state = ExecutionState::new(self.read_only_view_with(context), Default::default());
         let result = f(&mut state);
         (result, state.changed)
     }
 
     pub(crate) fn read_only_view(&self) -> DbView<'_> {
+        self.read_only_view_with(None)
+    }
+
+    /// Like [`Database::read_only_view`], but with an [`ExternalContext`] that
+    /// every [`ExecutionState`] built from the view will expose.
+    pub(crate) fn read_only_view_with<'a>(&'a self, context: ExternalContext<'a>) -> DbView<'a> {
         DbView {
+            external_context: context,
             table_info: &self.tables,
             counters: &self.counters,
             external_funcs: &self.external_functions,

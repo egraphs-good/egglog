@@ -44,7 +44,6 @@ impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
 struct RegistryPrimWrapper<T, S> {
     prim: T,
     registry: Arc<RwLock<ActionRegistry>>,
-    func_types: SharedFuncTypes,
     /// Stamped onto the state wrapper.
     ctx: Context,
     _wrap: std::marker::PhantomData<fn() -> S>,
@@ -57,7 +56,6 @@ trait RegistryWrap<T>: Clone + Send + Sync {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
-        func_types: &SharedFuncTypes,
     ) -> Option<Value>;
 }
 
@@ -71,9 +69,8 @@ impl<T: ReadPrim> RegistryWrap<T> for WrapRead {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
-        func_types: &SharedFuncTypes,
     ) -> Option<Value> {
-        prim.apply(ReadState::wrap(exec_state, registry, func_types, ctx), args)
+        prim.apply(ReadState::wrap(exec_state, registry, ctx), args)
     }
 }
 #[derive(Clone)]
@@ -86,12 +83,8 @@ impl<T: WritePrim> RegistryWrap<T> for WrapWrite {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
-        func_types: &SharedFuncTypes,
     ) -> Option<Value> {
-        prim.apply(
-            WriteState::wrap(exec_state, registry, func_types, ctx),
-            args,
-        )
+        prim.apply(WriteState::wrap(exec_state, registry, ctx), args)
     }
 }
 #[derive(Clone)]
@@ -104,9 +97,8 @@ impl<T: FullPrim> RegistryWrap<T> for WrapFull {
         ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
-        func_types: &SharedFuncTypes,
     ) -> Option<Value> {
-        prim.apply(FullState::wrap(exec_state, registry, func_types, ctx), args)
+        prim.apply(FullState::wrap(exec_state, registry, ctx), args)
     }
 }
 
@@ -115,14 +107,7 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let registry = self.registry.read().unwrap();
-        S::invoke(
-            &self.prim,
-            exec_state,
-            self.ctx,
-            args,
-            &registry,
-            &self.func_types,
-        )
+        S::invoke(&self.prim, exec_state, self.ctx, args, &registry)
     }
 }
 
@@ -179,15 +164,6 @@ impl Hash for FuncType {
         }
     }
 }
-/// Every declared function's signature, by name.
-///
-/// Shared (via `Arc<RwLock<_>>`) with the state wrappers, which cannot reach
-/// [`TypeInfo`] from a primitive body and read it through
-/// [`Read::constructor_schema`] / [`Read::function_schema`]. `EGraph`'s
-/// `push`/`pop` snapshot and restore its contents so a popped declaration
-/// stops resolving.
-pub(crate) type SharedFuncTypes = Arc<RwLock<HashMap<String, Arc<FuncType>>>>;
-
 /// Validators take a termdag and arguments (as TermIds) and return
 /// a newly computed TermId if the primitive application is valid,
 /// or None if it is invalid.
@@ -240,35 +216,17 @@ impl Debug for PrimitiveWithId {
 }
 
 /// Stores resolved typechecking information.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TypeInfo {
     mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
-    func_types: SharedFuncTypes,
+    func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
-}
-
-impl Clone for TypeInfo {
-    /// `func_types` is deep-copied rather than shared. A clone is an
-    /// independent e-graph — a `push`ed copy, or the parallel typechecking the
-    /// proof checker keeps — and declaring a function in one must not make it
-    /// resolve in the other.
-    fn clone(&self) -> Self {
-        Self {
-            mksorts: self.mksorts.clone(),
-            reserved_primitives: self.reserved_primitives.clone(),
-            sorts: self.sorts.clone(),
-            primitives: self.primitives.clone(),
-            func_types: Arc::new(RwLock::new(self.func_types.read().unwrap().clone())),
-            global_sorts: self.global_sorts.clone(),
-            non_unionable_sorts: self.non_unionable_sorts.clone(),
-        }
-    }
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -291,13 +249,7 @@ impl EGraph {
         span: Span,
     ) -> Result<(), TypeError> {
         let name = name.into();
-        if self
-            .type_info
-            .func_types
-            .read()
-            .unwrap()
-            .contains_key(&name)
-        {
+        if self.type_info.func_types.contains_key(&name) {
             return Err(TypeError::FunctionAlreadyBound(name, span));
         }
 
@@ -388,12 +340,10 @@ impl EGraph {
         S: RegistryWrap<T> + 'static,
     {
         let registry = self.backend.action_registry().clone();
-        let func_types = self.type_info.func_types_handle().clone();
         self.register_per_context(x, validator, valid_ctxs, move |x, ctx| {
             Box::new(RegistryPrimWrapper::<T, S> {
                 prim: x,
                 registry: registry.clone(),
-                func_types: func_types.clone(),
                 ctx,
                 _wrap: std::marker::PhantomData,
             })
@@ -634,10 +584,7 @@ impl EGraph {
                         span.clone(),
                     ));
                 }
-                ResolvedNCommand::ProveExists(
-                    span.clone(),
-                    ResolvedCall::Func(func_type.as_ref().clone()),
-                )
+                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -851,8 +798,6 @@ impl TypeInfo {
         let ftype = self.function_to_functype(fdecl)?;
         if self
             .func_types
-            .write()
-            .unwrap()
             .insert(fdecl.name.clone(), Arc::new(ftype))
             .is_some()
         {
@@ -879,7 +824,6 @@ impl TypeInfo {
             resolved_schema: ResolvedCall::Func(
                 self.get_func_type(&fdecl.name)
                     .expect("just inserted")
-                    .as_ref()
                     .clone(),
             ),
             merge: match &fdecl.merge {
@@ -1214,28 +1158,20 @@ impl TypeInfo {
             .any(|p| p.context_ids.iter().any(|(_, pid)| *pid == Some(id)) && p.validator.is_some())
     }
 
-    pub fn get_func_type(&self, sym: &str) -> Option<Arc<FuncType>> {
-        self.func_types.read().unwrap().get(sym).cloned()
+    pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
+        self.func_types.get(sym).map(Arc::as_ref)
+    }
+
+    /// The signature as a shared handle, for callers that keep it around.
+    pub(crate) fn func_type_arc(&self, sym: &str) -> Option<Arc<FuncType>> {
+        self.func_types.get(sym).cloned()
     }
 
     /// Record a signature for a function that did not come through
     /// typechecking — desugaring generates some (global bindings, proof
     /// tables) directly.
     pub(crate) fn declare_func_type(&mut self, func_type: Arc<FuncType>) {
-        self.func_types
-            .write()
-            .unwrap()
-            .insert(func_type.name.clone(), func_type);
-    }
-
-    /// The shared signature map, for sharing with the state wrappers.
-    pub(crate) fn func_types_handle(&self) -> &SharedFuncTypes {
-        &self.func_types
-    }
-
-    /// Adopt an existing shared cell as this `TypeInfo`'s signature map.
-    pub(crate) fn set_func_types_handle(&mut self, func_types: SharedFuncTypes) {
-        self.func_types = func_types;
+        self.func_types.insert(func_type.name.clone(), func_type);
     }
 
     pub fn is_constructor(&self, sym: &str) -> bool {

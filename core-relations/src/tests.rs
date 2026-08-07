@@ -122,7 +122,7 @@ fn basic_query_inner() {
     rules.build_with_description("add");
     let rule_set = rsb.build();
 
-    let report = db.run_rule_set(&rule_set, ReportLevel::TimeOnly);
+    let report = db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None);
 
     assert!(report.changed, "{report:?}");
     assert_eq!(report.num_matches("add"), 5, "{report:?}");
@@ -192,7 +192,10 @@ fn line_graph_1_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
+    assert!(
+        db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None)
+            .changed
+    );
 
     let mut expected = Vec::from_iter(
         nodes
@@ -273,7 +276,10 @@ fn line_graph_2_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
+    assert!(
+        db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None)
+            .changed
+    );
 
     let mut expected = Vec::from_iter(
         nodes.windows(2).map(|x| vec![x[0], x[1]]).chain(
@@ -358,7 +364,10 @@ fn intersection_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
+    assert!(
+        db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None)
+            .changed
+    );
 
     let expected = Vec::from_iter((6..10).map(|x| vec![Value::new(x)]));
 
@@ -479,7 +488,7 @@ fn minimal_ac_inner() {
     rules.build();
     let rule_set = rsb.build();
 
-    db.run_rule_set(&rule_set, ReportLevel::TimeOnly);
+    db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None);
     let add_table = db.get_table(add);
     let all_add = add_table.all();
     let items = add_table.scan(all_add.as_ref());
@@ -674,7 +683,7 @@ fn ac_test_inner(strat: PlanStrategy) {
             .unwrap();
         rules.build();
         let rule_set = rsb.build();
-        db.run_rule_set(&rule_set, ReportLevel::TimeOnly)
+        db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None)
     };
 
     let rebuild = |db: &mut Database, cur_ts: Value| -> (Value, bool) {
@@ -788,7 +797,7 @@ fn ac_test_inner(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly, None).changed;
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_l = rsb.new_rule();
@@ -829,7 +838,7 @@ fn ac_test_inner(strat: PlanStrategy) {
             rules.build();
 
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly, None).changed;
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_r = rsb.new_rule();
@@ -869,7 +878,7 @@ fn ac_test_inner(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly, None).changed;
         } else {
             // nonincremental. Just run one rule and recanonicalize everything.
             // add(x, y, id, t1) =>
@@ -918,7 +927,7 @@ fn ac_test_inner(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly, None).changed;
         }
         (next_ts, changed)
     };
@@ -1095,7 +1104,7 @@ fn lookup_with_fallback_partial_success_inner() {
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
-    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly).changed);
+    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly, None).changed);
 
     let h = db.get_table(h);
     let all = h.all();
@@ -1187,7 +1196,7 @@ fn call_external_with_fallback_inner() {
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
-    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly).changed);
+    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly, None).changed);
 
     let h = db.get_table(h);
     let all = h.all();
@@ -1253,7 +1262,7 @@ fn early_stop_inner() {
     rb.build_with_description("early_stop_test");
     let rs = rsb.build();
 
-    let report = db.run_rule_set(&rs, ReportLevel::TimeOnly);
+    let report = db.run_rule_set(&rs, ReportLevel::TimeOnly, None);
 
     let matches = report.num_matches("early_stop_test");
 

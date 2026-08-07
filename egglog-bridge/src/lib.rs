@@ -18,9 +18,9 @@ use std::{
 
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
-    CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
-    MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
+    CounterId, Database, DisplacedTable, ExecutionState, ExternalContext, ExternalFunction,
+    ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId,
+    TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ThreadPool;
@@ -301,8 +301,9 @@ impl EGraph {
     /// Intern the given container value into the EGraph.
     pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
-        self.db
-            .with_execution_state(|state| state.clone().container_values().register_val(val, state))
+        self.db.with_execution_state(None, |state| {
+            state.clone().container_values().register_val(val, state)
+        })
     }
 
     /// Register the given [`ContainerValue`] type with this EGraph.
@@ -656,17 +657,31 @@ impl EGraph {
     /// Run the given rules, returning whether the database changed.
     ///
     /// If the given rules are malformed, this method can return an error.
-    pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+    pub fn run_rules(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
         let thread_pool = self.thread_pool();
-        install_thread_pool(thread_pool, || self.run_rules_inner(rules))
+        install_thread_pool(thread_pool, || self.run_rules_inner(rules, context))
     }
 
-    fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+    fn run_rules_inner(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
         let ts = self.next_ts();
 
         let uf_size_before = self.db.get_table(self.uf_table).len();
-        let rule_set_report =
-            run_rules_impl(&mut self.db, &mut self.rules, rules, ts, self.report_level)?;
+        let rule_set_report = run_rules_impl(
+            &mut self.db,
+            &mut self.rules,
+            rules,
+            ts,
+            self.report_level,
+            context,
+        )?;
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
@@ -789,6 +804,7 @@ impl EGraph {
                                 &[*rule],
                                 ts,
                                 ReportLevel::TimeOnly,
+                                None,
                             )?
                             .changed;
                         }
@@ -804,6 +820,7 @@ impl EGraph {
                             &[info.nonincremental_rebuild_rule],
                             ts,
                             ReportLevel::TimeOnly,
+                            None,
                         )?
                         .changed;
                         for rule in &info.incremental_rebuild_rules {
@@ -877,6 +894,7 @@ impl EGraph {
                 &scratch,
                 ts,
                 ReportLevel::TimeOnly,
+                None,
             )?
             .changed;
             scratch.clear();
@@ -893,6 +911,7 @@ impl EGraph {
                     &scratch,
                     ts,
                     ReportLevel::TimeOnly,
+                    None,
                 )?
                 .changed;
                 scratch.clear();
@@ -1013,9 +1032,13 @@ impl EGraph {
     /// / global-action context: appropriate for one-shot database
     /// manipulation from outside any rule, not for use inside
     /// primitive implementations.
-    pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
+    pub fn with_execution_state<R>(
+        &self,
+        context: ExternalContext<'_>,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> R {
         let thread_pool = self.thread_pool();
-        install_thread_pool(thread_pool, || self.db.with_execution_state(f))
+        install_thread_pool(thread_pool, || self.db.with_execution_state(context, f))
     }
 
     /// Like [`EGraph::with_execution_state`], but also reports whether `f`
@@ -1024,9 +1047,10 @@ impl EGraph {
     /// no-op merge plus a spurious timestamp bump.
     pub fn with_execution_state_tracked<R>(
         &self,
+        context: ExternalContext<'_>,
         f: impl FnOnce(&mut ExecutionState<'_>) -> R,
     ) -> (R, bool) {
-        self.db.with_execution_state_tracked(f)
+        self.db.with_execution_state_tracked(context, f)
     }
 
     /// Flush the pending update buffers to the EGraph.
@@ -1582,6 +1606,7 @@ fn run_rules_impl(
     rules: &[RuleId],
     next_ts: Timestamp,
     report_level: ReportLevel,
+    context: ExternalContext<'_>,
 ) -> Result<RuleSetReport> {
     for rule in rules {
         let info = &mut rule_info[*rule];
@@ -1598,7 +1623,7 @@ fn run_rules_impl(
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();
-    Ok(db.run_rule_set(&ruleset, report_level))
+    Ok(db.run_rule_set(&ruleset, report_level, context))
 }
 
 // These markers are just used to make it easy to distinguish time spent in

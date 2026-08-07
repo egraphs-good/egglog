@@ -255,25 +255,27 @@ impl EGraph {
 
             let query_iter_report = self
                 .backend
-                .run_rules(&query_rules)
+                .run_rules(&query_rules, Some(&self.type_info))
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
             // Step 3: let the scheduler decide which matches need to be kept
-            self.backend.with_execution_state(|state| {
-                for (rule_id, _rule) in rules.iter() {
-                    let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+            self.backend
+                .with_execution_state(Some(&self.type_info), |state| {
+                    for (rule_id, _rule) in rules.iter() {
+                        let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
-                    let matches: Vec<Value> =
-                        std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                    let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                    rule_info.should_seek =
-                        record
-                            .scheduler
-                            .filter_matches(rule_id, ruleset, &mut matches);
-                    let table_action = TableAction::new(&self.backend, rule_info.decided);
-                    *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
-                }
-            });
+                        let matches: Vec<Value> =
+                            std::mem::take(rule_info.matches.lock().unwrap().as_mut());
+                        let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+                        rule_info.should_seek =
+                            record
+                                .scheduler
+                                .filter_matches(rule_id, ruleset, &mut matches);
+                        let table_action = TableAction::new(&self.backend, rule_info.decided);
+                        *rule_info.matches.lock().unwrap() =
+                            matches.instantiate(state, &table_action);
+                    }
+                });
             self.backend.flush_updates();
 
             // Step 4: run the action rules
@@ -286,7 +288,7 @@ impl EGraph {
                 .collect::<Vec<_>>();
             let action_iter_report = self
                 .backend
-                .run_rules(&action_rules)
+                .run_rules(&action_rules, Some(&self.type_info))
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
             // Step 5: combine the reports

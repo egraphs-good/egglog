@@ -158,7 +158,7 @@ impl ResolvedCall {
             let expected = ty.input.iter().map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return Some(ResolvedCall::Func(ty.as_ref().clone()));
+                return Some(ResolvedCall::Func(ty.clone()));
             }
         }
         None
@@ -175,7 +175,7 @@ impl ResolvedCall {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return Ok(ResolvedCall::Func(ty.as_ref().clone()));
+                return Ok(ResolvedCall::Func(ty.clone()));
             }
         }
 

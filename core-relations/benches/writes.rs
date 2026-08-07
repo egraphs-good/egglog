@@ -140,7 +140,7 @@ fn bench_workload<const K: usize, const C: usize>(
                             }
                         }
                     });
-                    db.with_execution_state(|es| table.merge(es));
+                    db.with_execution_state(None, |es| table.merge(es));
                 }
             })
         })

@@ -714,14 +714,7 @@ impl EGraph {
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
-                // Restore the pushed signatures into the cell the registered
-                // primitives hold, rather than swapping in the saved cell they
-                // have no handle to.
-                let live_func_types = self.type_info.func_types_handle().clone();
-                let restored = e.type_info.func_types_handle().read().unwrap().clone();
                 *self = *e;
-                *live_func_types.write().unwrap() = restored;
-                self.type_info.set_func_types_handle(live_func_types);
                 Ok(())
             }
             None => Err(Error::Pop(span!())),
@@ -795,7 +788,7 @@ impl EGraph {
         // resolving the sorts again into a second copy. Desugaring generates
         // some functions (global bindings, proof tables) without typechecking
         // them, so those are resolved and recorded here instead.
-        let func_type = match self.type_info.get_func_type(&decl.name) {
+        let func_type = match self.type_info.func_type_arc(&decl.name) {
             Some(func_type) => func_type,
             None => {
                 let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
@@ -1134,7 +1127,7 @@ impl EGraph {
 
         let iteration_report = self
             .backend
-            .run_rules(&rule_ids)
+            .run_rules(&rule_ids, Some(&self.type_info))
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         Ok(RunReport::singleton(ruleset, iteration_report))
@@ -1211,7 +1204,7 @@ impl EGraph {
         );
         translator.actions(&actions)?;
         let id = translator.build();
-        let result = self.backend.run_rules(&[id]);
+        let result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
 
         match result {
@@ -1238,10 +1231,9 @@ impl EGraph {
     pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        let func_types = self.type_info.func_types_handle();
         self.backend
-            .with_execution_state_tracked(|es| {
-                f(ReadState::wrap(es, &guard, func_types, Context::Read))
+            .with_execution_state_tracked(Some(&self.type_info), |es| {
+                f(ReadState::wrap(es, &guard, Context::Read))
             })
             .0
     }
@@ -1521,7 +1513,7 @@ impl EGraph {
         );
 
         let id = translator.build();
-        let rule_result = self.backend.run_rules(&[id]);
+        let rule_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
@@ -1588,7 +1580,7 @@ impl EGraph {
                 "this function will never panic".to_string()
             });
         let id = translator.build();
-        let run_result = self.backend.run_rules(&[id]);
+        let run_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         run_result.map_err(|e| Error::BackendError(e.to_string()))?;
@@ -1969,21 +1961,23 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    table_action.insert(es, row.iter().copied());
-                }
-                Some(unit_val)
-            });
+            self.backend
+                .with_execution_state(Some(&self.type_info), |es| {
+                    for row in parsed_contents.iter() {
+                        table_action.insert(es, row.iter().copied());
+                    }
+                    Some(unit_val)
+                });
         } else {
-            self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    // Constructor semantics: mint a fresh eclass id for
-                    // each missing key.
-                    table_action.lookup_or_insert(es, row);
-                }
-                Some(unit_val)
-            });
+            self.backend
+                .with_execution_state(Some(&self.type_info), |es| {
+                    for row in parsed_contents.iter() {
+                        // Constructor semantics: mint a fresh eclass id for
+                        // each missing key.
+                        table_action.lookup_or_insert(es, row);
+                    }
+                    Some(unit_val)
+                });
         }
 
         self.backend.flush_updates();
@@ -2277,9 +2271,10 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.with_execution_state(|state| {
-            self.backend.container_values().register_val::<T>(x, state)
-        })
+        self.backend
+            .with_execution_state(Some(&self.type_info), |state| {
+                self.backend.container_values().register_val::<T>(x, state)
+            })
     }
 
     /// Get the size of a function in the e-graph.
@@ -2389,10 +2384,11 @@ impl EGraph {
     ) -> Result<R, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        let func_types = self.type_info.func_types_handle().clone();
-        let (result, changed) = self.backend.with_execution_state_tracked(|es| {
-            f(FullState::wrap(es, &guard, &func_types, Context::Full))
-        });
+        let (result, changed) = self
+            .backend
+            .with_execution_state_tracked(Some(&self.type_info), |es| {
+                f(FullState::wrap(es, &guard, Context::Full))
+            });
         drop(guard);
         // A read-only closure stages nothing, so `flush_updates` would only do
         // a no-op merge plus a spurious timestamp bump and rebuild check. Skip

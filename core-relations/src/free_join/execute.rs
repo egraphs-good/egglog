@@ -10,6 +10,7 @@ use std::{
 };
 
 use crate::{
+    action::ExternalContext,
     common::{HashMap, HashSet, IndexMap},
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
@@ -430,7 +431,12 @@ impl Prober {
 }
 
 impl Database {
-    pub fn run_rule_set(&mut self, rule_set: &RuleSet, report_level: ReportLevel) -> RuleSetReport {
+    pub fn run_rule_set(
+        &mut self,
+        rule_set: &RuleSet,
+        report_level: ReportLevel,
+        context: ExternalContext<'_>,
+    ) -> RuleSetReport {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
@@ -461,7 +467,7 @@ impl Database {
         let search_and_apply_timer = Instant::now();
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
         let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
-        let exec_state = ExecutionState::new(self.read_only_view(), Default::default());
+        let exec_state = ExecutionState::new(self.read_only_view_with(context), Default::default());
         if parallelize_db_level_op(self.total_size_estimate) {
             let dash_rule_reports: Arc<DashMap<Arc<str>, Vec<RuleReport>>> =
                 Arc::new(DashMap::default());
