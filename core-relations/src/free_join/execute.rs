@@ -431,6 +431,10 @@ impl Prober {
 }
 
 impl Database {
+    /// Run `rule_set` to completion.
+    ///
+    /// `context` is visible to any external function the rules reach; pass
+    /// `None` if there is nothing to share.
     pub fn run_rule_set(
         &mut self,
         rule_set: &RuleSet,

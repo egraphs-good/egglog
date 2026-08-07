@@ -1292,3 +1292,40 @@ fn early_stop_inner() {
         "External function called {final_count} times, should be much less than 10k"
     );
 }
+
+/// An external function sees the [`ExternalContext`] the caller of the
+/// operation supplied, and `None` when the caller supplied none.
+#[test]
+fn external_context_reaches_external_functions() {
+    use std::sync::{Arc, Mutex};
+
+    let mut db = Database::new();
+    // What the external function read back, per invocation.
+    let seen: Arc<Mutex<Vec<Option<i64>>>> = Default::default();
+    let recorder = seen.clone();
+    let read_context = db.add_external_function(Box::new(make_external_func(
+        move |exec_state: &mut crate::action::ExecutionState, _args: &[Value]| {
+            let context = exec_state
+                .external_context()
+                .and_then(|context| context.downcast_ref::<i64>())
+                .copied();
+            recorder.lock().unwrap().push(context);
+            Some(Value::new(0))
+        },
+    )));
+
+    let shared: i64 = 7;
+    db.with_execution_state(Some(&shared), |state| {
+        state.call_external_func(read_context, &[]);
+    });
+    db.with_execution_state(None, |state| {
+        state.call_external_func(read_context, &[]);
+    });
+    // A context of the wrong type reads back as absent rather than misparsed.
+    let wrong_type: u8 = 7;
+    db.with_execution_state(Some(&wrong_type), |state| {
+        state.call_external_func(read_context, &[]);
+    });
+
+    assert_eq!(*seen.lock().unwrap(), vec![Some(7), None, None]);
+}

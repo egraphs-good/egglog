@@ -119,18 +119,6 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
-impl FuncType {
-    /// The sort at column `index`, counting the output column as
-    /// `input.len()`.
-    pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
-        if self.input.len() == index {
-            Some(&self.output)
-        } else {
-            self.input.get(index)
-        }
-    }
-}
-
 impl PartialEq for FuncType {
     fn eq(&self, other: &Self) -> bool {
         if self.name == other.name

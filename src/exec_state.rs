@@ -149,10 +149,7 @@ pub(crate) trait RegistrySealed<'a, 'db: 'a>: Internal<'a, 'db> {
     /// in an execution the e-graph did not supply one for (its internal
     /// rebuild rules, whose actions never read a signature).
     ///
-    /// This is a borrow rather than a shared handle, which is what keeps a
-    /// declaration from racing a running rule: the e-graph passes `&TypeInfo`
-    /// into the execution, so it cannot be `&mut` borrowed to declare anything
-    /// until that execution ends.
+    /// Borrowed for the operation, so nothing can be declared while it runs.
     fn type_info(&self) -> Option<&'db TypeInfo> {
         self.es().external_context()?.downcast_ref()
     }
@@ -460,11 +457,9 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// Call `f` on each [`Enode`] of a constructor / relation table whose
-    /// output eclass is `eclass`.
-    ///
-    /// This uses the backend's indexed output-column lookup instead of scanning
-    /// the whole constructor table. Errors with `WrongSubtype` if `name` is a
-    /// function.
+    /// eclass column holds exactly `eclass`. Rows whose eclass has since been
+    /// merged into another are matched under the id they store, not their
+    /// canonical one. Errors with `WrongSubtype` if `name` is a function.
     fn enodes_for_eclass(
         &self,
         name: &str,
@@ -645,7 +640,13 @@ fn func_type_of<'db>(
     name: &str,
     expected: FunctionSubtype,
 ) -> Result<&'db FuncType, Error> {
-    let Some(func_type) = type_info.and_then(|type_info| type_info.get_func_type(name)) else {
+    let Some(type_info) = type_info else {
+        return Err(ApiError::SchemasUnavailable {
+            name: name.to_string(),
+        }
+        .into());
+    };
+    let Some(func_type) = type_info.get_func_type(name) else {
         return Err(ApiError::MissingTable {
             name: name.to_string(),
         }

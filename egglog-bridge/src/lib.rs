@@ -656,6 +656,9 @@ impl EGraph {
 
     /// Run the given rules, returning whether the database changed.
     ///
+    /// `context` is visible to any external function the rules reach; pass
+    /// `None` if there is nothing to share.
+    ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(
         &mut self,
@@ -1022,6 +1025,9 @@ impl EGraph {
     ///
     /// The staged updates are not immediately reflected in the EGraph, so you may want to
     /// manually flush the updates using [`EGraph::flush_updates`].
+    ///
+    /// `context` is visible to any external function the closure reaches; pass
+    /// `None` if there is nothing to share.
     ///
     /// # Seminaive-safety trust boundary
     ///
@@ -1478,11 +1484,7 @@ impl TableAction {
         drain_buf!(buf);
     }
 
-    /// Iterate over rows whose output column is `value`.
-    ///
-    /// This reaches the table through an [`ExecutionState`], so read-capable
-    /// state wrappers can use the same lazy column indexes as direct backend
-    /// callers without exposing lower-level scan buffers or projection details.
+    /// Call `f` on each row whose output column is `value`.
     pub fn for_each_output_value(
         &self,
         state: &ExecutionState,

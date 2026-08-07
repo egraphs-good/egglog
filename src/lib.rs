@@ -327,7 +327,6 @@ pub trait UserDefinedCommand: Send + Sync {
 #[derive(Clone)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
-    /// Shared with [`TypeInfo`], which is where a signature is resolved.
     func_type: Arc<FuncType>,
     can_subsume: bool,
     backend_id: egglog_bridge::FunctionId,
@@ -792,6 +791,18 @@ impl EGraph {
     /// keeps every declared function's signature reachable by name.
     fn record_signature(&mut self, decl: &ResolvedFunctionDecl) -> Result<Arc<FuncType>, Error> {
         if let Some(func_type) = self.type_info.func_type_arc(&decl.name) {
+            debug_assert!(
+                func_type.subtype == decl.subtype
+                    && func_type.input.len() == decl.schema.input.len()
+                    && func_type
+                        .input
+                        .iter()
+                        .zip(&decl.schema.input)
+                        .all(|(sort, name)| sort.name() == name)
+                    && func_type.output.name() == decl.schema.output,
+                "recorded signature for {} disagrees with its declaration",
+                decl.name
+            );
             return Ok(func_type);
         }
         let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {

@@ -113,8 +113,6 @@ impl Hash for SpecializedPrimitive {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedCall {
-    /// Shares the signature `TypeInfo` resolved, rather than copying it into
-    /// every resolved call site.
     Func(Arc<FuncType>),
     Primitive(SpecializedPrimitive),
 }
@@ -134,8 +132,6 @@ impl ResolvedCall {
         }
     }
 
-    /// Gives the types for a term's child with the given resolved call.
-    /// For functions this includes the output sort, for constructors it's just the inputs.
     // Different from `from_resolution`, this function only considers function types and not primitives.
     // As a result, it only requires input argument types, so types.len() == func.input.len(),
     // while for `from_resolution`, types.len() == func.input.len() + 1 to account for the output type
@@ -201,9 +197,7 @@ impl ResolvedCall {
             span: span.clone(),
         })
     }
-}
 
-impl ResolvedCall {
     /// Whether this call is to a `function` table, as opposed to a constructor
     /// or a primitive.
     pub(crate) fn is_custom_func(&self) -> bool {

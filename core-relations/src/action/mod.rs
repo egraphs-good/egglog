@@ -340,10 +340,8 @@ pub(crate) struct DbView<'a> {
 /// created for one operation, for its [`ExternalFunction`]s to read back with
 /// [`ExecutionState::external_context`].
 ///
-/// Passing it per operation, rather than storing it in the database, is what
-/// lets an external function see borrowed embedder state: the borrow is live
-/// for exactly the call that supplied it, so the embedder cannot mutate that
-/// state while a rule is running.
+/// It is borrowed for exactly the operation that supplied it, so an embedder
+/// cannot mutate the state it shared while that operation runs.
 ///
 /// [`ExternalFunction`]: crate::ExternalFunction
 pub type ExternalContext<'a> = Option<&'a (dyn Any + Send + Sync)>;
@@ -505,11 +503,8 @@ impl<'a> ExecutionState<'a> {
         &self.db.table_info[table].table
     }
 
-    /// Iterate over visible rows in `table` whose `col` equals `value`.
-    ///
-    /// Cacheable columns use the table's lazy column index; uncacheable columns
-    /// fall back to scanning with the equality constraint. The callback
-    /// receives each matching row as a full value slice.
+    /// Call `f` on each visible row in `table` whose `col` equals `value`,
+    /// with the whole row as a value slice.
     pub fn for_each_matching_col(
         &self,
         table: TableId,

@@ -457,9 +457,10 @@ impl Database {
         f(&mut state)
     }
 
-    /// Like [`Database::with_execution_state`], but also reports whether `f`
-    /// staged any mutation through the execution state. Callers can use the
-    /// flag to skip a subsequent `merge_all` when the closure was read-only.
+    /// Like [`Database::with_execution_state`], including its `context`, but
+    /// also reports whether `f` staged any mutation through the execution
+    /// state. Callers can use the flag to skip a subsequent `merge_all` when
+    /// the closure was read-only.
     pub fn with_execution_state_tracked<R>(
         &self,
         context: ExternalContext<'_>,
