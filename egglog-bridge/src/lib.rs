@@ -34,6 +34,8 @@ use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
+const FRESH_ID_RESERVATION_SIZE: usize = 256;
+
 pub mod macros;
 pub(crate) mod rule;
 #[cfg(test)]
@@ -204,7 +206,7 @@ impl EGraph {
                     iter::empty(),
                     iter::empty(),
                 );
-                let id_counter = db.add_counter();
+                let id_counter = db.add_reservable_counter(FRESH_ID_RESERVATION_SIZE);
                 let ts_counter = db.add_counter();
                 // Start the timestamp counter at 1.
                 db.inc_counter(ts_counter);

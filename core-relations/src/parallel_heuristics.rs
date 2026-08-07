@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 const DEFAULT_DB_LEVEL_OP_CUTOFF: usize = 10_000;
 const DEFAULT_INDEX_CONSTRUCTION_CUTOFF: usize = 400_000;
 const DEFAULT_REBUILD_CUTOFF: usize = 400_000;
+const DEFAULT_INCREMENTAL_REBUILD_CUTOFF: usize = 16 * 1024;
 const DEFAULT_INTRA_CONTAINER_CUTOFF: usize = 10_000;
 const DEFAULT_INTER_CONTAINER_CUTOFF: usize = 8;
 const DEFAULT_TABLE_OP_CUTOFF: usize = 400_000;
@@ -24,6 +25,7 @@ struct Cutoffs {
     db_level_op: usize,
     index_construction: usize,
     rebuild: usize,
+    incremental_rebuild: usize,
     intra_container: usize,
     inter_container: usize,
     table_op: usize,
@@ -46,6 +48,13 @@ pub(crate) fn parallelize_index_construction(items_to_insert: usize) -> bool {
 /// Whether or not to use a parallel algorithm to rebuild a [`crate::table::SortedWritesTable`].
 pub(crate) fn parallelize_rebuild(table_size: usize) -> bool {
     should_parallelize(table_size, cutoffs().rebuild)
+}
+
+/// Whether to process the dirty-id scan of an incremental table rebuild in
+/// parallel. Incremental rebuilds reuse coarse worker-local state and need a
+/// much lower cutoff than full rebuilds to amortize dispatch.
+pub(crate) fn parallelize_incremental_rebuild(dirty_ids: usize) -> bool {
+    should_parallelize(dirty_ids, cutoffs().incremental_rebuild)
 }
 
 /// Whether or not to perform an operation for a given container memo table.
@@ -89,6 +98,10 @@ fn cutoffs() -> &'static Cutoffs {
             DEFAULT_INDEX_CONSTRUCTION_CUTOFF,
         ),
         rebuild: cutoff("EGGLOG_PARALLEL_REBUILD_CUTOFF", DEFAULT_REBUILD_CUTOFF),
+        incremental_rebuild: cutoff(
+            "EGGLOG_PARALLEL_INCREMENTAL_REBUILD_CUTOFF",
+            DEFAULT_INCREMENTAL_REBUILD_CUTOFF,
+        ),
         intra_container: cutoff(
             "EGGLOG_PARALLEL_INTRA_CONTAINER_CUTOFF",
             DEFAULT_INTRA_CONTAINER_CUTOFF,
