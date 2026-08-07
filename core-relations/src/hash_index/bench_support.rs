@@ -113,7 +113,7 @@ impl IndexInput {
             }
         }
         let db = Database::default();
-        db.with_execution_state(|es| {
+        db.with_execution_state(None, |es| {
             table.merge(es);
         });
         IndexInput {

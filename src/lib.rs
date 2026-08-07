@@ -71,6 +71,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
+pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
@@ -220,7 +221,7 @@ impl std::fmt::Display for CommandOutput {
                 write!(f, "Overall statistics:\n{run_report}")
             }
             CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
-                let out_is_unit = function.schema.output.name() == UnitSort.name();
+                let out_is_unit = function.func_type.output.name() == UnitSort.name();
                 if *mode == PrintFunctionMode::CSV {
                     let mut wtr = Writer::from_writer(vec![]);
                     for (term_id, output) in terms_and_outputs {
@@ -326,7 +327,7 @@ pub trait UserDefinedCommand: Send + Sync {
 #[derive(Clone)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
-    schema: ResolvedSchema,
+    func_type: Arc<FuncType>,
     can_subsume: bool,
     backend_id: egglog_bridge::FunctionId,
 }
@@ -337,9 +338,9 @@ impl Function {
         &self.decl.name
     }
 
-    /// Get the schema of the function.
-    pub fn schema(&self) -> &ResolvedSchema {
-        &self.schema
+    /// The function's resolved signature.
+    pub fn func_type(&self) -> &FuncType {
+        &self.func_type
     }
 
     /// Whether this function supports subsumption.
@@ -366,28 +367,11 @@ impl Function {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ResolvedSchema {
-    pub input: Vec<ArcSort>,
-    pub output: ArcSort,
-}
-
-impl ResolvedSchema {
-    /// Get the type at position `index`, counting the `output` sort as at position `input.len()`.
-    pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
-        if self.input.len() == index {
-            Some(&self.output)
-        } else {
-            self.input.get(index)
-        }
-    }
-}
-
 impl Debug for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Function")
             .field("decl", &self.decl)
-            .field("schema", &self.schema)
+            .field("func_type", &self.func_type)
             .finish()
     }
 }
@@ -798,7 +782,29 @@ impl EGraph {
         }
     }
 
-    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+    /// The signature for `decl`, recording it if this is the first time the
+    /// e-graph has seen the declaration.
+    ///
+    /// Typechecking records what it resolves, so this returns that. Desugaring
+    /// also generates declarations (the functions global bindings lower to,
+    /// proof tables) without typechecking them; resolving those here is what
+    /// keeps every declared function's signature reachable by name.
+    fn record_signature(&mut self, decl: &ResolvedFunctionDecl) -> Result<Arc<FuncType>, Error> {
+        if let Some(func_type) = self.type_info.func_type_arc(&decl.name) {
+            debug_assert!(
+                func_type.subtype == decl.subtype
+                    && func_type.input.len() == decl.schema.input.len()
+                    && func_type
+                        .input
+                        .iter()
+                        .zip(&decl.schema.input)
+                        .all(|(sort, name)| sort.name() == name)
+                    && func_type.output.name() == decl.schema.output,
+                "recorded signature for {} disagrees with its declaration",
+                decl.name
+            );
+            return Ok(func_type);
+        }
         let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
             Some(sort) => Ok(sort.clone()),
             None => Err(Error::TypeError(TypeError::UndefinedSort(
@@ -806,14 +812,23 @@ impl EGraph {
                 decl.span.clone(),
             ))),
         };
+        let func_type = Arc::new(FuncType {
+            name: decl.name.clone(),
+            subtype: decl.subtype,
+            input: decl
+                .schema
+                .input
+                .iter()
+                .map(get_sort)
+                .collect::<Result<Vec<_>, _>>()?,
+            output: get_sort(&decl.schema.output)?,
+        });
+        self.type_info.declare_func_type(func_type.clone());
+        Ok(func_type)
+    }
 
-        let input = decl
-            .schema
-            .input
-            .iter()
-            .map(get_sort)
-            .collect::<Result<Vec<_>, _>>()?;
-        let output = get_sort(&decl.schema.output)?;
+    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        let func_type = self.record_signature(decl)?;
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
@@ -823,9 +838,10 @@ impl EGraph {
 
         use egglog_bridge::{DefaultVal, MergeFn};
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
-            schema: input
+            schema: func_type
+                .input
                 .iter()
-                .chain([&output])
+                .chain([&func_type.output])
                 .map(|sort| sort.column_ty(&self.backend))
                 .collect(),
             default: match decl.subtype {
@@ -845,7 +861,7 @@ impl EGraph {
 
         let function = Function {
             decl: decl.clone(),
-            schema: ResolvedSchema { input, output },
+            func_type,
             can_subsume,
             backend_id,
         };
@@ -1127,7 +1143,7 @@ impl EGraph {
 
         let iteration_report = self
             .backend
-            .run_rules(&rule_ids)
+            .run_rules(&rule_ids, Some(&self.type_info))
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         Ok(RunReport::singleton(ruleset, iteration_report))
@@ -1204,7 +1220,7 @@ impl EGraph {
         );
         translator.actions(&actions)?;
         let id = translator.build();
-        let result = self.backend.run_rules(&[id]);
+        let result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
 
         match result {
@@ -1232,7 +1248,9 @@ impl EGraph {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
         self.backend
-            .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
+            .with_execution_state_tracked(Some(&self.type_info), |es| {
+                f(ReadState::wrap(es, &guard, Context::Read))
+            })
             .0
     }
 
@@ -1511,7 +1529,7 @@ impl EGraph {
         );
 
         let id = translator.build();
-        let rule_result = self.backend.run_rules(&[id]);
+        let rule_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
@@ -1578,7 +1596,7 @@ impl EGraph {
                 "this function will never panic".to_string()
             });
         let id = translator.build();
-        let run_result = self.backend.run_rules(&[id]);
+        let run_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         run_result.map_err(|e| Error::BackendError(e.to_string()))?;
@@ -1874,7 +1892,7 @@ impl EGraph {
 
         // check that the function uses supported types
 
-        for t in &func.schema.input {
+        for t in &func.func_type.input {
             match t.name() {
                 "i64" | "f64" | "String" => {}
                 s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
@@ -1882,7 +1900,7 @@ impl EGraph {
         }
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            match func.schema.output.name() {
+            match func.func_type.output.name() {
                 "i64" | "String" | "Unit" => {}
                 s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
             }
@@ -1898,9 +1916,9 @@ impl EGraph {
         // Can also do a row-major Vec<Value>
         let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
 
-        let mut row_schema = func.schema.input.clone();
+        let mut row_schema = func.func_type.input.clone();
         if function_type.subtype == FunctionSubtype::Custom {
-            row_schema.push(func.schema.output.clone());
+            row_schema.push(func.func_type.output.clone());
         }
 
         log::debug!("{row_schema:?}");
@@ -1959,21 +1977,23 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    table_action.insert(es, row.iter().copied());
-                }
-                Some(unit_val)
-            });
+            self.backend
+                .with_execution_state(Some(&self.type_info), |es| {
+                    for row in parsed_contents.iter() {
+                        table_action.insert(es, row.iter().copied());
+                    }
+                    Some(unit_val)
+                });
         } else {
-            self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    // Constructor semantics: mint a fresh eclass id for
-                    // each missing key.
-                    table_action.lookup_or_insert(es, row);
-                }
-                Some(unit_val)
-            });
+            self.backend
+                .with_execution_state(Some(&self.type_info), |es| {
+                    for row in parsed_contents.iter() {
+                        // Constructor semantics: mint a fresh eclass id for
+                        // each missing key.
+                        table_action.lookup_or_insert(es, row);
+                    }
+                    Some(unit_val)
+                });
         }
 
         self.backend.flush_updates();
@@ -2267,9 +2287,10 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.with_execution_state(|state| {
-            self.backend.container_values().register_val::<T>(x, state)
-        })
+        self.backend
+            .with_execution_state(Some(&self.type_info), |state| {
+                self.backend.container_values().register_val::<T>(x, state)
+            })
     }
 
     /// Get the size of a function in the e-graph.
@@ -2381,7 +2402,9 @@ impl EGraph {
         let guard = registry.read().unwrap();
         let (result, changed) = self
             .backend
-            .with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
+            .with_execution_state_tracked(Some(&self.type_info), |es| {
+                f(FullState::wrap(es, &guard, Context::Full))
+            });
         drop(guard);
         // A read-only closure stages nothing, so `flush_updates` would only do
         // a no-op merge plus a spurious timestamp bump and rebuild check. Skip

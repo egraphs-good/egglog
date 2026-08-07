@@ -3,6 +3,7 @@
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::{
+    any::Any,
     ops::Deref,
     sync::{
         Arc,
@@ -12,18 +13,20 @@ use std::{
 
 use crate::{
     common::HashMap,
-    free_join::{invoke_batch, invoke_batch_assign},
+    free_join::{get_column_index_from_tableinfo, invoke_batch, invoke_batch_assign},
     numeric_id::{DenseIdMap, NumericId},
 };
 use egglog_concurrency::NotificationList;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
+    BaseValues, ContainerValues, ExternalFunctionId, Offset, WrappedTable,
     common::Value,
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
+    offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
-    table_spec::{ColumnId, MutationBuffer},
+    row_buffer::TaggedRowBuffer,
+    table_spec::{ColumnId, Constraint, MutationBuffer},
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
@@ -324,6 +327,7 @@ impl PredictedVals {
 
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
+    pub(crate) external_context: ExternalContext<'a>,
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a ExternalFunctions,
@@ -331,6 +335,16 @@ pub(crate) struct DbView<'a> {
     pub(crate) containers: &'a ContainerValues,
     pub(crate) notification_list: &'a NotificationList<TableId>,
 }
+
+/// A borrowed value an embedder can make visible to every [`ExecutionState`]
+/// created for one operation, for its [`ExternalFunction`]s to read back with
+/// [`ExecutionState::external_context`].
+///
+/// It is borrowed for exactly the operation that supplied it, so an embedder
+/// cannot mutate the state it shared while that operation runs.
+///
+/// [`ExternalFunction`]: crate::ExternalFunction
+pub type ExternalContext<'a> = Option<&'a (dyn Any + Send + Sync)>;
 
 /// A handle on a database that may be in the process of running a rule.
 ///
@@ -464,6 +478,12 @@ impl<'a> ExecutionState<'a> {
         self.db.external_funcs[func].invoke(self, args)
     }
 
+    /// The value the caller of this operation supplied as its
+    /// [`ExternalContext`], if any.
+    pub fn external_context(&self) -> ExternalContext<'a> {
+        self.db.external_context
+    }
+
     pub fn inc_counter(&self, ctr: CounterId) -> usize {
         self.db.counters.inc(ctr)
     }
@@ -481,6 +501,63 @@ impl<'a> ExecutionState<'a> {
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
         &self.db.table_info[table].table
+    }
+
+    /// Call `f` on each visible row in `table` whose `col` equals `value`,
+    /// with the whole row as a value slice.
+    pub fn for_each_matching_col(
+        &self,
+        table: TableId,
+        col: ColumnId,
+        value: Value,
+        mut f: impl FnMut(&[Value]),
+    ) {
+        let table_info = &self.db.table_info[table];
+        let constraint = Constraint::EqConst { col, val: value };
+        let (mut subset, _fast, mut slow) = table_info
+            .table
+            .split_fast_slow(std::slice::from_ref(&constraint));
+
+        debug_assert!(slow.iter().all(|c| matches!(c, Constraint::EqConst { .. })));
+
+        if !*table_info
+            .spec
+            .uncacheable_columns
+            .get(col)
+            .unwrap_or(&false)
+        {
+            let index = get_column_index_from_tableinfo(table_info, col);
+            match index.get().unwrap().get_subset(&value) {
+                Some(s) => {
+                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
+                }
+                None => {
+                    subset = Subset::empty();
+                }
+            }
+            slow.clear();
+        }
+
+        let imp = &table_info.table;
+        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
+
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    f(row);
+                }
+                $buf.clear();
+            };
+        }
+
+        while let Some(next) = imp.scan_project(subset.as_ref(), &cols, cur, 1024, &slow, &mut buf)
+        {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
     }
 
     /// Get the human-readable name for a table, if one exists.

@@ -115,7 +115,11 @@ impl RootExtractor {
                 let num_children = func.extraction_num_children();
                 let mut ch_terms = Vec::with_capacity(num_children);
                 let mut valid = true;
-                for (value, sort) in row.iter().take(num_children).zip(func.schema.input.iter()) {
+                for (value, sort) in row
+                    .iter()
+                    .take(num_children)
+                    .zip(func.func_type.input.iter())
+                {
                     match self.extract(egraph, termdag, *value, sort) {
                         Some(term) => ch_terms.push(term),
                         None => {
