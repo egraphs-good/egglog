@@ -49,7 +49,7 @@ fn function_entries_on_constructor_errors() -> Result<(), Error> {
     Ok(())
 }
 
-/// `egraph.query(vars![x: i64], facts![(R x)])` matches and binds `x`
+/// `egraph.query(vars![x: i64], query![(R x)].unwrap())` matches and binds `x`
 /// for every row in the relation. Each match is a
 /// `HashMap<String, Value>` keyed by variable name.
 #[test]
@@ -66,7 +66,7 @@ fn query_pattern_relation_one_var() -> Result<(), Error> {
     )?;
 
     let mut results: Vec<i64> = egraph
-        .query(vars![x: i64], facts![(R x)])?
+        .query(vars![x: i64], query![(R x)].unwrap())?
         .into_iter()
         .map(|m| egraph.value_to_base::<i64>(m["x"]))
         .collect();
@@ -75,7 +75,7 @@ fn query_pattern_relation_one_var() -> Result<(), Error> {
     Ok(())
 }
 
-/// `egraph.query(vars![], facts![(R 1 2)])` — zero-var case.
+/// `egraph.query(vars![], query![(R 1 2)].unwrap())` — zero-var case.
 ///
 /// With zero `vars`, every match still produces a `HashMap` (which
 /// will be empty since there are no variables to bind), so `.len()`
@@ -91,10 +91,10 @@ fn query_pattern_zero_vars_match() -> Result<(), Error> {
 ",
     )?;
 
-    let hits = egraph.query(vars![], facts![(R 1 2)])?;
+    let hits = egraph.query(vars![], query![(R 1 2)].unwrap())?;
     assert_eq!(hits.len(), 1);
 
-    let misses = egraph.query(vars![], facts![(R 5 5)])?;
+    let misses = egraph.query(vars![], query![(R 5 5)].unwrap())?;
     assert_eq!(misses.len(), 0);
 
     Ok(())
@@ -161,7 +161,7 @@ fn constructor_enodes_relation() -> Result<(), Error> {
 
     // To get just the inputs, use the pattern-query form.
     let mut inputs: Vec<i64> = egraph
-        .query(vars![x: i64], facts![(R x)])?
+        .query(vars![x: i64], query![(R x)].unwrap())?
         .into_iter()
         .map(|m| egraph.value_to_base::<i64>(m["x"]))
         .collect();
@@ -185,7 +185,7 @@ fn query_pattern_two_vars() -> Result<(), Error> {
     )?;
 
     let mut rows: Vec<(i64, i64)> = egraph
-        .query(vars![x: i64, y: i64], facts![(= (f x) y)])?
+        .query(vars![x: i64, y: i64], query![(= (f x) y)].unwrap())?
         .into_iter()
         .map(|m| {
             (

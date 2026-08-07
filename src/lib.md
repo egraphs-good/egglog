@@ -40,3 +40,30 @@ global name to it (`(let $root ...)`), resolve the global with
 [`EGraph::extract_value_with_cost_model`] / a custom
 [`extract::CostModel`] when you want non-default costs. The
 [`extract`] module has the full extractor API.
+
+# Writing egglog inline from Rust
+The quasiquote macros let you write egglog right in your Rust source:
+[`egglog!`] for a whole program, [`expr!`] / [`query!`] / [`command!`] /
+[`rule!`] / [`action!`] for a single form. Splice Rust values in with `#`, and
+reach for the `resolve_*!` / `run_*!` variants to typecheck or execute against
+an e-graph. For a program fully known at compile time and checked while your
+crate builds, reach for the `egglog-checked` crate instead (`egglog_checked!` /
+`run_egglog_checked!` / `egglog_header!`).
+
+```
+use egglog::prelude::*;
+let mut egraph = EGraph::default();
+run_egglog!(
+    &mut egraph,
+    (datatype Math (Num i64) (Add Math Math))
+    (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
+)?;
+
+let n = 2;
+assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
+# Ok::<(), egglog::Error>(())
+```
+
+See [`prelude`] for the full guide — every macro, the parse / `resolve_*` /
+`run_*` variants, and the splice forms — alongside the rest of the Rust API
+(custom rules, primitives, and sorts).

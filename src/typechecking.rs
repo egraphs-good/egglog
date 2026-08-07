@@ -1257,6 +1257,38 @@ pub enum TypeError {
     },
 }
 
+impl TypeError {
+    /// The source span this type error is anchored to, if the variant carries
+    /// one.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            TypeError::Arity { expr, .. }
+            | TypeError::Mismatch { expr, .. }
+            | TypeError::InferenceFailure(expr) => Some(expr.span()),
+            TypeError::Unbound(_, span)
+            | TypeError::Ungrounded(_, span)
+            | TypeError::UndefinedSort(_, span)
+            | TypeError::UnboundFunction(_, span)
+            | TypeError::ProveExistsRequiresConstructor(_, span)
+            | TypeError::FunctionAlreadyBound(_, span)
+            | TypeError::SortAlreadyBound(_, span)
+            | TypeError::PrimitiveAlreadyBound(_, span)
+            | TypeError::PresortNotFound(_, span)
+            | TypeError::AlreadyDefined(_, span)
+            | TypeError::ConstructorOutputNotSort(_, span)
+            | TypeError::LookupInRuleDisallowed(_, span)
+            | TypeError::SetConstructorDisallowed(_, span)
+            | TypeError::NonEqsortUnion(_, span)
+            | TypeError::NonUnionableSort(_, span)
+            | TypeError::TermConstructorNoInputs(_, span) => Some(span.clone()),
+            TypeError::NonGlobalPrefixed { span, .. }
+            | TypeError::GlobalMissingPrefix { span, .. } => Some(span.clone()),
+            TypeError::AllAlternativeFailed(errors) => errors.iter().find_map(TypeError::span),
+            TypeError::FunctionTypeMismatch(..) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{EGraph, Error, typechecking::TypeError};
@@ -1278,6 +1310,23 @@ mod test {
                 assert_eq!(e.span().string(), "(f a b c)");
             }
             _ => panic!("Expected arity mismatch, got: {res:?}"),
+        }
+    }
+
+    #[test]
+    fn error_span_locates_the_offending_source() {
+        use crate::ast::Span;
+        let mut egraph = EGraph::default();
+        // `Nonexistent` is not a declared sort.
+        let err = egraph
+            .resolve_program(None, "(relation r (Nonexistent))")
+            .unwrap_err();
+        match err.span() {
+            Some(Span::Egglog(s)) => {
+                let quoted = &s.file.contents[s.i..s.j];
+                assert!(quoted.contains("Nonexistent"), "span text: {quoted}");
+            }
+            _ => panic!("expected an egglog span from {err:?}"),
         }
     }
 }

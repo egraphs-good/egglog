@@ -12,7 +12,13 @@ readme = { workspace = true }
 
 [dependencies]
 ordered-float = { workspace = true }
+# Only for the `tokens` feature (token → egglog-source rendering shared by the
+# quasiquote proc-macro crates); off by default, so normal builds don't pull it.
+proc-macro2 = { workspace = true, optional = true, features = ["span-locations"] }
 
 
 [features]
 default = []
+# Helpers for turning Rust proc-macro tokens into egglog atoms. Enabled by the
+# `egglog-quote` and `egglog-checked` proc-macro crates.
+tokens = ["dep:proc-macro2"]

@@ -1,0 +1,29 @@
+[package]
+name = "egglog-checked"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+quote = { workspace = true }
+# Shared token → egglog-atom rendering (also used by `egglog-quote`), so both
+# crates reconstruct atoms identically.
+egglog-ast = { workspace = true, features = ["tokens"] }
+# Depends on egglog so `egglog_checked!` / `run_egglog_checked!` can run egglog's
+# parser and typechecker at macro-expansion time (compile-time validation).
+# No cycle: egglog does NOT depend on this crate — it is a leaf that downstream
+# crates opt into.
+egglog = { path = "..", default-features = false }
+
+[dev-dependencies]
+# The macros' expansions reference `::egglog::…`, so the integration tests
+# (separate crates) need egglog at run time too.
+egglog = { path = "..", default-features = false }

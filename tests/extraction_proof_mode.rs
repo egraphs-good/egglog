@@ -92,11 +92,9 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     egraph_normal.parse_and_run_program(None, setup).unwrap();
 
     add_ruleset(&mut egraph_normal, "my_rules").unwrap();
-    rule(
+    run_egglog!(
         &mut egraph_normal,
-        "my_rules",
-        facts![(= (Add a b) e)],
-        actions![(union e (Add b a))],
+        (rule ((= (Add a b) e)) ((union e (Add b a))) :ruleset my_rules)
     )
     .unwrap();
 
@@ -115,11 +113,9 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
 
     // Add the same rule
     add_ruleset(&mut egraph_proofs, "my_rules").unwrap();
-    rule(
+    run_egglog!(
         &mut egraph_proofs,
-        "my_rules",
-        facts![(= (Add a b) e)],
-        actions![(union e (Add b a))],
+        (rule ((= (Add a b) e)) ((union e (Add b a))) :ruleset my_rules)
     )
     .unwrap();
 
