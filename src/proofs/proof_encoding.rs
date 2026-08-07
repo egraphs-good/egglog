@@ -60,6 +60,29 @@ pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
 }
 
+/// The signature typechecking resolved for `fdecl`.
+///
+/// Encoding also runs over decls desugaring generated after typechecking, which
+/// no `TypeInfo` knows about yet, so it reads the signature off the decl rather
+/// than looking it up by name.
+fn resolved_signature(fdecl: &ResolvedFunctionDecl) -> &FuncType {
+    fdecl
+        .resolved_schema
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} reached encoding unresolved", fdecl.name))
+}
+
+/// The declared sorts of `fdecl`'s columns, inputs followed by the output.
+fn column_sorts(fdecl: &ResolvedFunctionDecl) -> Vec<ArcSort> {
+    let func_type = resolved_signature(fdecl);
+    func_type
+        .input
+        .iter()
+        .chain([&func_type.output])
+        .cloned()
+        .collect()
+}
+
 impl<'a> ProofInstrumentor<'a> {
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
@@ -557,7 +580,7 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
-        let types = fdecl.resolved_schema.view_types();
+        let types = column_sorts(fdecl);
         let proofs_enabled = self.egraph.proof_state.proofs_enabled;
 
         // Check if there are any rebuildable columns at all; if not, no rule needed.
@@ -734,9 +757,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// Rules that update the to_subsume tables when children change.
     /// copied from above and changed to remove last param since we dont deal with output value in to subsumed rows, removed proof flags since we dont need proofs for this, and changed from function returning unit to constructor for to subsume
     fn rebuilding_subsumed_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
-        let ResolvedCall::Func(FuncType { input, .. }) = &fdecl.resolved_schema else {
-            panic!("cannot create subsumed rules for primitives")
-        };
+        let input = &resolved_signature(fdecl).input;
 
         // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
         if !input.iter().any(|t| t.is_eq_sort()) {

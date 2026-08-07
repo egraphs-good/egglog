@@ -93,12 +93,13 @@ impl GlobalRemover<'_> {
                 GenericAction::Let(span, name, expr) => {
                     let ty = expr.output_type();
 
-                    let resolved_call = ResolvedCall::Func(FuncType {
+                    let func_type = Arc::new(FuncType {
                         name: name.name.clone(),
                         subtype: FunctionSubtype::Custom,
                         input: vec![],
                         output: ty.clone(),
                     });
+                    let resolved_call = ResolvedCall::Func(func_type.as_ref().clone());
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,
                         subtype: FunctionSubtype::Custom,
@@ -106,7 +107,7 @@ impl GlobalRemover<'_> {
                             input: vec![],
                             output: ty.name().to_owned(),
                         },
-                        resolved_schema: resolved_call.clone(),
+                        resolved_schema: Some(func_type.clone()),
                         merge: None,
                         cost: None,
                         unextractable: true,

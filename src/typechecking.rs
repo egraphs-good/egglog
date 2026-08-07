@@ -821,10 +821,9 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
-            resolved_schema: ResolvedCall::Func(
-                self.get_func_type(&fdecl.name)
-                    .expect("just inserted")
-                    .clone(),
+            resolved_schema: Some(
+                self.func_type_arc(&fdecl.name)
+                    .expect("the signature was just recorded"),
             ),
             merge: match &fdecl.merge {
                 // Merge expressions run as part of action-side table updates:
