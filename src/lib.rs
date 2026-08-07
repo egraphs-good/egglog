@@ -783,36 +783,41 @@ impl EGraph {
         }
     }
 
-    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
-        // Typechecking resolved this signature already; reuse it rather than
-        // resolving the sorts again into a second copy. Desugaring generates
-        // some functions (global bindings, proof tables) without typechecking
-        // them, so those are resolved and recorded here instead.
-        let func_type = match self.type_info.func_type_arc(&decl.name) {
-            Some(func_type) => func_type,
-            None => {
-                let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
-                    Some(sort) => Ok(sort.clone()),
-                    None => Err(Error::TypeError(TypeError::UndefinedSort(
-                        name.to_owned(),
-                        decl.span.clone(),
-                    ))),
-                };
-                let func_type = Arc::new(FuncType {
-                    name: decl.name.clone(),
-                    subtype: decl.subtype,
-                    input: decl
-                        .schema
-                        .input
-                        .iter()
-                        .map(get_sort)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    output: get_sort(&decl.schema.output)?,
-                });
-                self.type_info.declare_func_type(func_type.clone());
-                func_type
-            }
+    /// The signature for `decl`, recording it if this is the first time the
+    /// e-graph has seen the declaration.
+    ///
+    /// Typechecking records what it resolves, so this returns that. Desugaring
+    /// also generates declarations (the functions global bindings lower to,
+    /// proof tables) without typechecking them; resolving those here is what
+    /// keeps every declared function's signature reachable by name.
+    fn record_signature(&mut self, decl: &ResolvedFunctionDecl) -> Result<Arc<FuncType>, Error> {
+        if let Some(func_type) = self.type_info.func_type_arc(&decl.name) {
+            return Ok(func_type);
+        }
+        let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
+            Some(sort) => Ok(sort.clone()),
+            None => Err(Error::TypeError(TypeError::UndefinedSort(
+                name.to_owned(),
+                decl.span.clone(),
+            ))),
         };
+        let func_type = Arc::new(FuncType {
+            name: decl.name.clone(),
+            subtype: decl.subtype,
+            input: decl
+                .schema
+                .input
+                .iter()
+                .map(get_sort)
+                .collect::<Result<Vec<_>, _>>()?,
+            output: get_sort(&decl.schema.output)?,
+        });
+        self.type_info.declare_func_type(func_type.clone());
+        Ok(func_type)
+    }
+
+    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        let func_type = self.record_signature(decl)?;
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,

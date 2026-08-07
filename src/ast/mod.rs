@@ -1320,16 +1320,9 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
-    /// Untyped schema, as written in the source.
+    /// The schema as written. The resolved signature lives in `TypeInfo`,
+    /// keyed by `name`.
     pub schema: Schema,
-    /// The resolved signature, once typechecking has run.
-    ///
-    /// The same signature is in `TypeInfo`, keyed by `name`, and that is where
-    /// to read it from. This carries it for the one consumer that cannot:
-    /// proof encoding runs over decls that desugaring generated *after*
-    /// typechecking (global bindings), which no `TypeInfo` knows about until
-    /// they are executed.
-    pub resolved_schema: Option<Arc<FuncType>>,
     pub merge: Option<GenericExpr<Head, Leaf>>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
@@ -1397,7 +1390,6 @@ impl FunctionDecl {
             name,
             subtype: FunctionSubtype::Custom,
             schema,
-            resolved_schema: None,
             merge,
             cost: None,
             unextractable: true,
@@ -1420,7 +1412,6 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
-            resolved_schema: None,
             schema,
             merge: None,
             cost,
@@ -1446,7 +1437,6 @@ where
             name: self.name,
             subtype: self.subtype,
             schema: self.schema,
-            resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
             unextractable: self.unextractable,

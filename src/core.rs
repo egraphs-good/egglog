@@ -113,7 +113,9 @@ impl Hash for SpecializedPrimitive {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedCall {
-    Func(FuncType),
+    /// Shares the signature `TypeInfo` resolved, rather than copying it into
+    /// every resolved call site.
+    Func(Arc<FuncType>),
     Primitive(SpecializedPrimitive),
 }
 
@@ -142,12 +144,12 @@ impl ResolvedCall {
         types: &[ArcSort],
         typeinfo: &TypeInfo,
     ) -> Option<ResolvedCall> {
-        if let Some(ty) = typeinfo.get_func_type(head) {
+        if let Some(ty) = typeinfo.func_type_arc(head) {
             // As long as input types match, a result is returned.
             let expected = ty.input.iter().map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return Some(ResolvedCall::Func(ty.clone()));
+                return Some(ResolvedCall::Func(ty));
             }
         }
         None
@@ -160,11 +162,11 @@ impl ResolvedCall {
         ctx: crate::Context,
         span: &Span,
     ) -> Result<ResolvedCall, TypeError> {
-        if let Some(ty) = typeinfo.get_func_type(head) {
+        if let Some(ty) = typeinfo.func_type_arc(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return Ok(ResolvedCall::Func(ty.clone()));
+                return Ok(ResolvedCall::Func(ty));
             }
         }
 
@@ -198,6 +200,14 @@ impl ResolvedCall {
             ctx,
             span: span.clone(),
         })
+    }
+}
+
+impl ResolvedCall {
+    /// Whether this call is to a `function` table, as opposed to a constructor
+    /// or a primitive.
+    pub(crate) fn is_custom_func(&self) -> bool {
+        matches!(self, ResolvedCall::Func(func) if func.subtype == FunctionSubtype::Custom)
     }
 }
 

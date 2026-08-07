@@ -60,29 +60,6 @@ pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
 }
 
-/// The signature typechecking resolved for `fdecl`.
-///
-/// Encoding also runs over decls desugaring generated after typechecking, which
-/// no `TypeInfo` knows about yet, so it reads the signature off the decl rather
-/// than looking it up by name.
-fn resolved_signature(fdecl: &ResolvedFunctionDecl) -> &FuncType {
-    fdecl
-        .resolved_schema
-        .as_ref()
-        .unwrap_or_else(|| panic!("{} reached encoding unresolved", fdecl.name))
-}
-
-/// The declared sorts of `fdecl`'s columns, inputs followed by the output.
-fn column_sorts(fdecl: &ResolvedFunctionDecl) -> Vec<ArcSort> {
-    let func_type = resolved_signature(fdecl);
-    func_type
-        .input
-        .iter()
-        .chain([&func_type.output])
-        .cloned()
-        .collect()
-}
-
 impl<'a> ProofInstrumentor<'a> {
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
@@ -578,9 +555,50 @@ impl<'a> ProofInstrumentor<'a> {
         "".to_string()
     }
 
+    /// The sort named `name`.
+    ///
+    /// Encoding runs over the program the pre-instrumentation typechecking
+    /// resolved, so that is where to look first — the same way a container
+    /// sort is resolved.
+    fn sort_by_name(&self, name: &str) -> ArcSort {
+        self.egraph
+            .proof_state
+            .original_typechecking
+            .as_ref()
+            .and_then(|typechecking| typechecking.get_sort_by_name(name))
+            .or_else(|| self.egraph.get_sort_by_name(name))
+            .cloned()
+            .unwrap_or_else(|| panic!("sort {name} not found while encoding"))
+    }
+
+    /// The declared sorts of `fdecl`'s columns, inputs followed by the output.
+    ///
+    /// Resolved from the declaration's own schema rather than looked up by
+    /// name: encoding also runs over declarations desugaring generated, which
+    /// are not typechecked until after this pass.
+    fn column_sorts(&self, fdecl: &ResolvedFunctionDecl) -> Vec<ArcSort> {
+        fdecl
+            .schema
+            .input
+            .iter()
+            .chain([&fdecl.schema.output])
+            .map(|name| self.sort_by_name(name))
+            .collect()
+    }
+
+    /// The declared sorts of `fdecl`'s input columns.
+    fn input_sorts(&self, fdecl: &ResolvedFunctionDecl) -> Vec<ArcSort> {
+        fdecl
+            .schema
+            .input
+            .iter()
+            .map(|name| self.sort_by_name(name))
+            .collect()
+    }
+
     /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
-        let types = column_sorts(fdecl);
+        let types = self.column_sorts(fdecl);
         let proofs_enabled = self.egraph.proof_state.proofs_enabled;
 
         // Check if there are any rebuildable columns at all; if not, no rule needed.
@@ -757,7 +775,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// Rules that update the to_subsume tables when children change.
     /// copied from above and changed to remove last param since we dont deal with output value in to subsumed rows, removed proof flags since we dont need proofs for this, and changed from function returning unit to constructor for to subsume
     fn rebuilding_subsumed_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
-        let input = &resolved_signature(fdecl).input;
+        let input = &self.input_sorts(fdecl);
 
         // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
         if !input.iter().any(|t| t.is_eq_sort()) {
@@ -844,17 +862,10 @@ impl<'a> ProofInstrumentor<'a> {
             // In proof normal form, this is the only way that function calls appear.
             ResolvedFact::Eq(
                 _span,
-                ResolvedExpr::Call(
-                    _span2,
-                    head @ ResolvedCall::Func(FuncType {
-                        subtype: FunctionSubtype::Custom,
-                        ..
-                    }),
-                    args,
-                ),
+                ResolvedExpr::Call(_span2, head @ ResolvedCall::Func(_), args),
                 // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
                 ResolvedExpr::Var(_span3, v),
-            ) => {
+            ) if head.is_custom_func() => {
                 let mut new_args = vec![];
                 let mut arg_proofs = vec![];
                 for arg in args {

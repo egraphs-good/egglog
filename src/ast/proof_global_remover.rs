@@ -37,12 +37,12 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         var.is_global_ref,
         "resolved_var_to_call called on non-global var"
     );
-    ResolvedCall::Func(FuncType {
+    ResolvedCall::Func(Arc::new(FuncType {
         name: var.name.clone(),
         subtype: FunctionSubtype::Constructor,
         input: vec![],
         output: var.sort.clone(),
-    })
+    }))
 }
 
 /// TODO (yz) it would be better to implement replace_global_var
@@ -75,13 +75,12 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                     panic!("Global variable {} has non-eq sort {}", name, ty.name());
                 }
 
-                let func_type = Arc::new(FuncType {
+                let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                     name: name.name.clone(),
                     subtype: FunctionSubtype::Constructor,
                     input: vec![],
                     output: ty.clone(),
-                });
-                let resolved_call = ResolvedCall::Func(func_type.as_ref().clone());
+                }));
                 let func_decl = ResolvedFunctionDecl {
                     name: name.name,
                     subtype: FunctionSubtype::Constructor,
@@ -89,7 +88,6 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                         input: vec![],
                         output: ty.name().to_owned(),
                     },
-                    resolved_schema: Some(func_type.clone()),
                     merge: None,
                     cost: None,
                     unextractable: true,

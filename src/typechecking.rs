@@ -584,7 +584,10 @@ impl EGraph {
                         span.clone(),
                     ));
                 }
-                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
+                ResolvedNCommand::ProveExists(
+                    span.clone(),
+                    ResolvedCall::Func(Arc::new(func_type.clone())),
+                )
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -821,10 +824,6 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
-            resolved_schema: Some(
-                self.func_type_arc(&fdecl.name)
-                    .expect("the signature was just recorded"),
-            ),
             merge: match &fdecl.merge {
                 // Merge expressions run as part of action-side table updates:
                 // writes are allowed, but live DB reads would be untracked by
