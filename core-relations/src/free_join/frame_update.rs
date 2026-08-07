@@ -12,9 +12,7 @@
 //! those bindings in recursive calls. When parallelism is enabled, this data-structure allows us
 //! hand over an entire batch of recursive calls to a separate thread to process independently.
 
-use std::sync::Arc;
-
-use crate::free_join::execute::TrieNode;
+use crate::free_join::execute::AtomRows;
 use crate::numeric_id::define_id;
 use crate::offsets::OffsetRange;
 
@@ -25,9 +23,9 @@ use super::{AtomId, Variable};
 define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 
 #[derive(Debug)]
-pub(super) enum UpdateInstr {
+pub(super) enum UpdateInstr<'rows, 'exec> {
     PushBinding(Variable, Value),
-    RefineAtom(AtomId, Arc<TrieNode>),
+    RefineAtom(AtomId, AtomRows<'rows, 'exec>),
     /// Refine an atom to a dense offset range, avoiding an Arc<TrieNode> allocation.
     RefineAtomDense(AtomId, OffsetRange),
     /// Marks the end of the current frame. Time to make a recursive call.
@@ -36,14 +34,14 @@ pub(super) enum UpdateInstr {
 
 /// A flat buffer of updates that is used to prepare a sequence of recursive calls to free join.
 #[derive(Default)]
-pub(super) struct FrameUpdates {
-    updates: Vec<UpdateInstr>,
+pub(super) struct FrameUpdates<'rows, 'exec> {
+    updates: Vec<UpdateInstr<'rows, 'exec>>,
     frames: usize,
     last_start: usize,
 }
 
-impl FrameUpdates {
-    pub(super) fn with_capacity(capacity: usize) -> FrameUpdates {
+impl<'rows, 'exec> FrameUpdates<'rows, 'exec> {
+    pub(super) fn with_capacity(capacity: usize) -> FrameUpdates<'rows, 'exec> {
         FrameUpdates {
             updates: Vec::with_capacity(capacity * 2),
             frames: 0,
@@ -57,8 +55,9 @@ impl FrameUpdates {
     }
 
     /// Refine `atom` to consider only the given `subset` in the current frame.
-    pub(super) fn refine_atom(&mut self, atom: AtomId, node: Arc<TrieNode>) {
-        self.updates.push(UpdateInstr::RefineAtom(atom, node));
+    pub(super) fn refine_atom(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
+        self.updates
+            .push(UpdateInstr::RefineAtom(atom, node.into()));
     }
 
     /// Refine `atom` to consider only the given dense offset range, without
@@ -89,7 +88,7 @@ impl FrameUpdates {
         self.updates.clear();
     }
 
-    pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
+    pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr<'rows, 'exec>)) {
         let start = 0;
         self.updates.drain(start..).for_each(f);
         self.frames = 0;
@@ -98,7 +97,7 @@ impl FrameUpdates {
 
     // for debugging
     #[allow(dead_code)]
-    pub(super) fn updates(&self) -> &[UpdateInstr] {
+    pub(super) fn updates(&self) -> &[UpdateInstr<'rows, 'exec>] {
         &self.updates
     }
 }
