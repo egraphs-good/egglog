@@ -18,4 +18,4 @@ When you edit the files, make sure to respect the following:
 - When running tests, always use the `--release` mode. Alternatively, you can also run `make test`.
 - If your change is performance-critical, use `script/bench.py` as the ground truth to evaluate the performance impact.
 - Keep your documentation concise and avoid duplicate information. The `tidy-diff-docs` skill (`.claude/skills/tidy-diff-docs/`) cleans the doc and code comments in a diff down to the caller-facing contract.
-- Update CHANGELOG.md with a concise bullet when you make major changes (e.g., breaking changes or new features added) in the codebase.
+- Update CHANGELOG.md with a concise bullet when you make major changes (e.g., breaking changes or new features added) in the codebase. Don't update CHANGELOG.md if it's just a bug fix or if it's not a user-facing change. However, major performance improvements (e.g., using a new join algorithm or introducing a new sort of indices) should be documented.
