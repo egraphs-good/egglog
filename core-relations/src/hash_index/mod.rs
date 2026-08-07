@@ -95,7 +95,7 @@ impl<TI: IndexBase> Index<TI> {
 
     /// Get the nonempty subset of rows associated with this key, if there is
     /// one.
-    pub(crate) fn get_subset<'a>(&'a self, key: &'a TI::Key) -> Option<SubsetRef<'a>> {
+    pub(crate) fn get_subset<'a>(&'a self, key: &TI::Key) -> Option<SubsetRef<'a>> {
         self.table.get_subset(key)
     }
 
@@ -137,6 +137,39 @@ impl<TI: IndexBase> Index<TI> {
         }
 
         self.updated_to = cur_version;
+    }
+
+    /// Refresh an index whose source cannot be expressed as fixed columns.
+    ///
+    /// The callback receives the underlying index, the first physical row not
+    /// already indexed (zero after a major-version clear), and whether this is
+    /// a full rebuild. It must merge rows through the current table version.
+    /// This keeps generation/minor-version bookkeeping shared between fixed
+    /// and variable-arity tables while allowing the latter to project an
+    /// arbitrary number of semantic values from each key.
+    pub(crate) fn refresh_with(
+        &mut self,
+        cur_version: TableVersion,
+        refresh: impl FnOnce(&mut TI, Offset, bool),
+    ) {
+        if cur_version == self.updated_to {
+            return;
+        }
+        let is_full = cur_version.major != self.updated_to.major;
+        let start = if is_full {
+            self.table.clear();
+            Offset::new(0)
+        } else {
+            self.updated_to.minor
+        };
+        refresh(&mut self.table, start, is_full);
+        self.updated_to = cur_version;
+    }
+
+    /// Clear the index and mark it current at an empty table version.
+    pub(crate) fn clear_to(&mut self, version: TableVersion) {
+        self.table.clear();
+        self.updated_to = version;
     }
 
     /// Update the contents of the index to the current version of the table.
@@ -902,6 +935,52 @@ impl ColumnIndex {
             });
             ColumnIndex { shard_data, shards }
         })
+    }
+
+    /// Merge arbitrary `(value, row)` occurrence pairs into this index.
+    ///
+    /// Each input chunk must have been collected in ascending `RowId` order,
+    /// and chunks themselves must cover non-overlapping ascending row ranges.
+    /// Values may repeat within a row: sorting and de-duplication give every
+    /// `(value, row)` pair the same set semantics as [`IndexBase::add_row`].
+    ///
+    /// This is the variable-arity counterpart of `merge_parallel`: callers
+    /// whose rows cannot be projected through fixed [`ColumnId`]s can collect
+    /// precisely the semantic value occurrences they want indexed, while
+    /// retaining the same sharded `Value -> Subset<RowId>` representation.
+    pub(crate) fn merge_value_row_chunks(&mut self, mut chunks: Vec<Vec<(Value, RowId)>>) {
+        let pair_count = chunks.iter().map(Vec::len).sum::<usize>();
+        if pair_count == 0 {
+            return;
+        }
+
+        let shard_data = self.shard_data;
+        run_in_index_thread_pool(|| {
+            let chunks = if parallelize_index_construction(pair_count) {
+                parallel::map_mut(&mut chunks, |_, pairs| {
+                    sort_index_chunk(mem::take(pairs), shard_data)
+                })
+            } else {
+                chunks
+                    .into_iter()
+                    .map(|pairs| sort_index_chunk(pairs, shard_data))
+                    .collect::<Vec<_>>()
+            };
+
+            let merge_shard = |shard_id: ShardId, shard: &mut ColumnIndexShard| {
+                for chunk in &chunks {
+                    let range = chunk.shard_ranges[shard_id].clone();
+                    shard.merge_sorted_pairs(&chunk.pairs[range]);
+                }
+            };
+            if parallelize_index_construction(pair_count) {
+                parallel::for_each_id_vec_mut(&mut self.shards, merge_shard);
+            } else {
+                for (shard_id, shard) in self.shards.iter_mut() {
+                    merge_shard(shard_id, shard);
+                }
+            }
+        });
     }
 
     /// Build each key's subset from `pairs`, which must be sorted by (Value, RowId) and
