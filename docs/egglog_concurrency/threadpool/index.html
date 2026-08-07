@@ -1,0 +1,79 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A small scoped thread pool backed by a shared crossbeam channel."><title>egglog_concurrency::threadpool - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-e56847b5.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="egglog_concurrency" data-themes="" data-resource-suffix="" data-rustdoc-version="1.91.0 (f8297e351 2025-10-28)" data-channel="1.91.0" data-search-js="search-e256b49e.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-6dc2a7f3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module threadpool</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../egglog_concurrency/index.html">egglog_<wbr>concurrency</a><span class="version">2.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module threadpool</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#examples" title="Examples">Examples</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate egglog_<wbr>concurrency</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">egglog_concurrency</a></div><h1>Module <span>threadpool</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/egglog_concurrency/threadpool/mod.rs.html#1-983">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A small scoped thread pool backed by a shared crossbeam channel.</p>
+<p><a href="struct.ThreadPool.html" title="struct egglog_concurrency::threadpool::ThreadPool"><code>ThreadPool</code></a> owns a fixed set of primary worker threads. Each worker
+receives boxed <code>'static</code> jobs from a shared channel and exits when the
+channel is closed. A primary worker that blocks waiting for nested scoped
+work helps drain queued jobs until that nested scope completes, so the pool
+does not lose a worker while work it needs may still be queued. <a href="struct.Scope.html" title="struct egglog_concurrency::threadpool::Scope"><code>Scope</code></a>
+provides the safe scoped API on top of those <code>'static</code> jobs by erasing task
+lifetimes when work is sent to the channel, then waiting for all work in the
+scope before returning to the caller.</p>
+<p>The root callback runs on the caller thread, and spawned callbacks run on
+worker threads. Spawned callbacks receive the same scope reference as the
+root callback, so they can add nested work. The high half of the scope
+counter tracks expected work and is incremented before each task is
+enqueued; the low half tracks completed work. The root callback is counted
+as one expected item, so the scope is complete once the callback and every
+spawned task have completed.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::atomic::{AtomicUsize, Ordering};
+<span class="kw">use </span>egglog_concurrency::ThreadPool;
+
+<span class="kw">let </span>pool = ThreadPool::new(<span class="number">4</span>);
+<span class="kw">let </span>values = [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>];
+<span class="kw">let </span>sum = AtomicUsize::new(<span class="number">0</span>);
+
+pool.scope(|scope| {
+    <span class="kw">for </span>value <span class="kw">in </span><span class="kw-2">&amp;</span>values {
+        scope.spawn(|<span class="kw">_</span>| {
+            sum.fetch_add(<span class="kw-2">*</span>value, Ordering::Relaxed);
+        });
+    }
+});
+
+<span class="macro">assert_eq!</span>(sum.load(Ordering::Relaxed), <span class="number">10</span>);</code></pre></div>
+<p>A spawned callback cannot store references that would outlive the borrowed
+data, even though the implementation erases the callback’s lifetime before
+sending it to a worker:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog_concurrency::ThreadPool;
+
+<span class="kw">let </span>pool = ThreadPool::new(<span class="number">1</span>);
+<span class="kw">let </span><span class="kw-2">mut </span>escaped = <span class="prelude-val">None</span>;
+
+pool.scope(|scope| {
+    <span class="kw">let </span>local = <span class="number">10</span>;
+    scope.spawn(|<span class="kw">_</span>| {
+        escaped = <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>local);
+    });
+});
+
+<span class="macro">assert_eq!</span>(escaped, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="number">10</span>));</code></pre></div>
+<p>Nested spawned callbacks cannot borrow data owned by the parent spawned
+callback, because the parent callback may return before its nested work runs:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog_concurrency::ThreadPool;
+
+<span class="kw">let </span>pool = ThreadPool::new(<span class="number">1</span>);
+pool.scope(|scope| {
+    scope.spawn(|scope| {
+        <span class="kw">let </span>local = <span class="number">10</span>;
+        scope.spawn(|<span class="kw">_</span>| {
+            <span class="macro">println!</span>(<span class="string">"{local}"</span>);
+        });
+    });
+});</code></pre></div>
+<p>The scope itself also cannot be stored outside the call to
+<a href="struct.ThreadPool.html#method.scope" title="method egglog_concurrency::threadpool::ThreadPool::scope"><code>ThreadPool::scope</code></a>:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog_concurrency::{Scope, ThreadPool};
+
+<span class="kw">let </span>pool = ThreadPool::new(<span class="number">1</span>);
+<span class="kw">let </span><span class="kw-2">mut </span>escaped: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Scope&lt;<span class="lifetime">'_</span>&gt;&gt; = <span class="prelude-val">None</span>;
+
+pool.scope(|scope| {
+    scope.spawn(|scope| {
+        escaped = <span class="prelude-val">Some</span>(scope);
+    });
+});
+
+escaped.unwrap().spawn(|<span class="kw">_</span>| {});</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Scope.html" title="struct egglog_concurrency::threadpool::Scope">Scope</a></dt><dd>A scoped handle for spawning non-<code>'static</code> work onto a <a href="struct.ThreadPool.html" title="struct egglog_concurrency::threadpool::ThreadPool"><code>ThreadPool</code></a>.</dd><dt><a class="struct" href="struct.ThreadPool.html" title="struct egglog_concurrency::threadpool::ThreadPool">Thread<wbr>Pool</a></dt><dd>A thread pool using a single shared work queue.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.current_num_threads.html" title="fn egglog_concurrency::threadpool::current_num_threads">current_<wbr>num_<wbr>threads</a></dt><dd>Return the number of threads in the currently installed thread pool.</dd><dt><a class="fn" href="fn.scope.html" title="fn egglog_concurrency::threadpool::scope">scope</a></dt><dd>Run <code>f</code> in a scope on the currently installed thread pool.</dd><dt><a class="fn" href="fn.without_current_pool.html" title="fn egglog_concurrency::threadpool::without_current_pool">without_<wbr>current_<wbr>pool</a></dt><dd>Run <code>f</code> with no current thread pool installed on this thread.</dd></dl></section></div></main></body></html>

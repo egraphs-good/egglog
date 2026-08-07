@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["current_num_threads","scope","without_current_pool"],"struct":["Scope","ThreadPool"]};
