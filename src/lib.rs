@@ -307,6 +307,7 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    extractor_cache: extract::ExtractorCache,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -416,6 +417,7 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            extractor_cache: Default::default(),
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
@@ -1696,12 +1698,18 @@ impl EGraph {
 
                 let mut termdag = TermDag::default();
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    Some(vec![sort]),
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
-                return if n == 0 {
+                // Consecutive extracts against an unchanged e-graph reuse the
+                // previous extractor instead of recomputing all costs.
+                let versions = self.backend.table_versions();
+                let extractor = match self.extractor_cache.take_if_valid(sort.name(), &versions) {
+                    Some(data) => Extractor::from_data(data),
+                    None => Extractor::compute_costs_from_rootsorts(
+                        Some(vec![sort.clone()]),
+                        self,
+                        TreeAdditiveCostModel::default(),
+                    ),
+                };
+                let output = if n == 0 {
                     if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
@@ -1731,6 +1739,9 @@ impl EGraph {
                     }
                     Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
                 };
+                self.extractor_cache
+                    .store(sort.name().to_owned(), versions, extractor.into_data());
+                return output;
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
