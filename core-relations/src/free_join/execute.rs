@@ -664,7 +664,7 @@ impl Database {
         // immutable plans before any worker starts. A slot acquires and refreshes
         // its Arc through the regular catalog helper on first cached use. The
         // sidecars are dropped before `merge_all` resets catalog entries.
-        let prepared_plans = rule_set
+        let prepared_indexes = rule_set
             .plans
             .values()
             .map(|(plan, _, _)| PreparedPlanIndexes::new(self, plan))
@@ -677,8 +677,8 @@ impl Database {
                 Arc::new(DashMap::default());
             let db: &Database = self;
             egglog_concurrency::scope(|scope| {
-                for ((plan, desc, symbol_map), prepared_plan) in
-                    rule_set.plans.values().zip(&prepared_plans)
+                for ((plan, desc, symbol_map), prepared_index) in
+                    rule_set.plans.values().zip(&prepared_indexes)
                 {
                     // TODO: add stats
                     let report_plan = match report_level {
@@ -710,7 +710,7 @@ impl Database {
                                 }
                             }
 
-                            match (plan, prepared_plan) {
+                            match (plan, prepared_index) {
                                 (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
                                     join_state.run_join_stages(
                                         &plan.stages,
@@ -828,8 +828,8 @@ impl Database {
                 match_counter: match_counter.as_ref(),
                 batches: Default::default(),
             };
-            for ((plan, desc, symbol_map), prepared_plan) in
-                rule_set.plans.values().zip(&prepared_plans)
+            for ((plan, desc, symbol_map), prepared_index) in
+                rule_set.plans.values().zip(&prepared_indexes)
             {
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
@@ -849,7 +849,7 @@ impl Database {
                             None => break 'eval,
                         }
                     }
-                    match (plan, prepared_plan) {
+                    match (plan, prepared_index) {
                         (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
                             join_state.run_join_stages(
                                 &plan.stages,
@@ -947,7 +947,7 @@ impl Database {
         // `merge_all` requires each catalog Arc to be uniquely owned so it can
         // reset the corresponding ResettableOnceLock. No scoped worker can
         // survive to this point.
-        drop(prepared_plans);
+        drop(prepared_indexes);
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
         let merge_timer = Instant::now();
@@ -1501,10 +1501,7 @@ impl<'a> JoinState<'a> {
             let prober =
                 self.get_column_index(atoms, binding_info, scan.atom, scan.column, prepared);
             let size = prober.len();
-            // The two-way hot path historically breaks ties in favor of the
-            // second scan.  Match it so partition discovery and execution use
-            // the same physical index.
-            if size < leader_size || (scans.len() == 2 && size == leader_size) {
+            if size < leader_size {
                 leader = i;
                 leader_size = size;
             }
@@ -1588,8 +1585,11 @@ impl<'a> JoinState<'a> {
         // A cached top index is already partitioned by hash. Schedule one
         // coarse global job per nonempty shard and run each shard's subtree
         // serially. Besides avoiding an intermediate key copy, this keeps
-        // related nested probes on one worker. Buffers that cannot construct an
-        // independent partition (the in-place executors) decline this path.
+        // related nested probes on one worker. Selecting this path commits the
+        // whole subtree to coarse-only parallelism: `recur_global_serial`
+        // supplies a serial buffer whose recursive work stays inline. Buffers
+        // that cannot construct an independent partition (the in-place
+        // executors) decline this path.
         if !stages.instrs.is_empty()
             && action_buf.supports_global_partition()
             && let Some(shards) =
@@ -1657,8 +1657,11 @@ impl<'a> JoinState<'a> {
     ///
     /// This method takes the plan, mutable data structures for variable binding
     /// and staging actions, and `cur`, the current stage of the plan. A top-level
-    /// coarse partition also passes `index_shard`; recursive calls clear it so
-    /// only the first intersection is restricted to that physical shard.
+    /// coarse partition also passes `index_shard`; `Some` is only supplied with
+    /// a serial action buffer, so no nested parallelism is available in that
+    /// subtree. Recursive calls clear the value so only the first intersection
+    /// is restricted to that physical shard, while the serial buffer continues
+    /// to keep later work inline.
     #[allow(clippy::too_many_arguments)]
     fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
@@ -1924,7 +1927,7 @@ impl<'a> JoinState<'a> {
                     );
 
                     let ((smaller, smaller_scan), (larger, larger_scan)) =
-                        if a_prober.len() < b_prober.len() {
+                        if a_prober.len() <= b_prober.len() {
                             ((&a_prober, a), (&b_prober, b))
                         } else {
                             ((&b_prober, b), (&a_prober, a))
@@ -2767,7 +2770,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
 
 /// Strictly serial action buffer used inside one globally scheduled top-index
 /// shard. It shares the rule-set match counter with sibling shards, but executes
-/// all recursive join and action work inline.
+/// all recursive join and action work inline. It deliberately has no
+/// `needs_flush` flag: its owner unconditionally flushes it once after the shard
+/// callback returns, and recursive calls reuse the same buffer synchronously.
 struct SerialScopedActionBuffer<'scope> {
     rule_set: &'scope RuleSet,
     match_counter: Arc<MatchCounter>,
@@ -2975,6 +2980,8 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         self.scope.spawn_global(move |_| {
             let mut buf = SerialScopedActionBuffer::new(rule_set, match_counter);
             work(inner.borrow_mut(), &mut buf);
+            // Unlike a nested `ScopedActionBuffer`, this buffer is owned by the
+            // one shard job and is always flushed exactly once before it exits.
             buf.flush(&mut to_exec_state());
         });
     }
