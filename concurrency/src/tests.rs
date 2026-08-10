@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 
 use crate::{
     BitSet, ConcurrentVec, Notification, NotificationList, ParallelVecWriter, ReadOptimizedLock,
-    ResettableOnceLock, SharedArena, SharedRef, parallel_writer::write_cell_slice,
+    ResettableOnceLock, SharedArena, parallel_writer::write_cell_slice,
 };
 
 #[test]
@@ -683,7 +683,7 @@ fn shared_arena_allocates_from_scoped_threads() {
         .into_inner()
         .unwrap()
         .into_iter()
-        .map(|value| *value)
+        .copied()
         .collect::<Vec<_>>();
     values.sort_unstable();
     assert_eq!(values, (0..N_THREADS * PER_THREAD).collect::<Vec<_>>());
@@ -704,7 +704,7 @@ fn shared_arena_raw_layout_honors_alignment() {
     assert_eq!(raw.layout(), layout);
     assert_eq!((raw.as_mut_ptr() as usize) % layout.align(), 0);
     // SAFETY: The raw allocation has exactly `AlignedHeader`'s layout. We
-    // initialize the complete no-drop header before publishing it and retain
+    // initialize the complete header before publishing it and retain
     // no pointer used for mutation afterward.
     let published = unsafe {
         raw.as_mut_ptr()
@@ -735,7 +735,7 @@ fn shared_arena_raw_layout_publishes_header_with_trailing_data() {
     let base = raw.as_mut_ptr();
 
     // SAFETY: `Layout::extend` produced both offsets. We initialize the full
-    // no-drop header and every trailing `u32` before publishing, and all writes
+    // header and every trailing `u32` before publishing, and all writes
     // end before the resulting shared reference is created.
     let published = unsafe {
         base.cast::<PackedHeader>().write(PackedHeader {
@@ -748,7 +748,7 @@ fn shared_arena_raw_layout_publishes_header_with_trailing_data() {
         }
         raw.assume_init_no_drop::<PackedHeader>()
     };
-    let header = published.into_ref();
+    let header = published;
 
     // SAFETY: The header and tail came from the checked packed layout above,
     // and `header.len` elements were initialized before publication.
@@ -781,7 +781,7 @@ fn shared_arena_raw_publications_outlive_parallel_handles() {
                 let handle = arena.new_handle();
                 let mut raw = handle.alloc_layout(Layout::new::<ParallelHeader>());
                 // SAFETY: The allocation has the header's exact layout and the
-                // complete no-drop header is initialized before publication.
+                // complete header is initialized before publication.
                 let shared = unsafe {
                     raw.as_mut_ptr()
                         .cast::<ParallelHeader>()
@@ -799,7 +799,7 @@ fn shared_arena_raw_publications_outlive_parallel_handles() {
         .into_inner()
         .unwrap()
         .into_iter()
-        .map(|value| value.into_ref().0)
+        .map(|value| value.0)
         .collect::<Vec<_>>();
     values.sort_unstable();
     assert_eq!(values, (0..N_THREADS).collect::<Vec<_>>());
@@ -810,13 +810,10 @@ fn shared_arena_raw_initialization_panic_does_not_publish() {
     #[repr(transparent)]
     struct Header(usize);
 
-    fn build<'arena>(
-        handle: &crate::Handle<'arena>,
-        panic_before_publish: bool,
-    ) -> SharedRef<'arena, Header> {
+    fn build<'arena>(handle: &crate::Handle<'arena>, panic_before_publish: bool) -> &'arena Header {
         let mut raw = handle.alloc_layout(Layout::new::<Header>());
         // SAFETY: The allocation has `Header`'s exact layout and this writes the
-        // complete no-drop header. It is not yet published.
+        // complete header. It is not yet published.
         unsafe {
             raw.as_mut_ptr().cast::<Header>().write(Header(41));
         }
@@ -835,23 +832,16 @@ fn shared_arena_raw_initialization_panic_does_not_publish() {
 
     // The abandoned allocation registered no destructor and published no
     // reference; another allocation in the same local arena remains usable.
-    assert_eq!(build(&handle, false).into_ref().0, 41);
+    assert_eq!(build(&handle, false).0, 41);
 }
 
 #[test]
-fn shared_arena_raw_publication_validates_header_requirements() {
+fn shared_arena_raw_publication_validates_header_layout() {
     #[repr(C)]
     struct WideHeader([usize; 2]);
 
     #[repr(C, align(64))]
     struct OverAlignedHeader([u8; 64]);
-
-    struct DropHeader {
-        _value: u8,
-    }
-    impl Drop for DropHeader {
-        fn drop(&mut self) {}
-    }
 
     let arena = SharedArena::new();
     let handle = arena.new_handle();
@@ -873,23 +863,36 @@ fn shared_arena_raw_publication_validates_header_requirements() {
         let _ = unsafe { under_aligned.assume_init_no_drop::<OverAlignedHeader>() };
     }));
     assert!(result.is_err());
+}
 
-    let mut needs_drop = handle.alloc_layout(Layout::new::<DropHeader>());
-    // SAFETY: Initialize a valid header so the only rejected condition is its
-    // destructor. The raw API deliberately forgets the value after rejecting
-    // it; this test type's destructor owns no resources.
-    unsafe {
-        needs_drop
-            .as_mut_ptr()
-            .cast::<DropHeader>()
-            .write(DropHeader { _value: 0 });
+#[test]
+fn shared_arena_raw_publication_deliberately_forgets_drop_header() {
+    struct DropHeader<'a>(&'a AtomicUsize);
+
+    impl Drop for DropHeader<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // SAFETY: The storage contains a valid `DropHeader`; the method must
-        // reject it before publication because raw headers may not need drop.
-        let _ = unsafe { needs_drop.assume_init_no_drop::<DropHeader>() };
-    }));
-    assert!(result.is_err());
+
+    let drops = AtomicUsize::new(0);
+    {
+        let arena = SharedArena::new();
+        let handle = arena.new_handle();
+        let mut raw = handle.alloc_layout(Layout::new::<DropHeader<'_>>());
+        // SAFETY: The allocation has the header's exact layout. The complete
+        // header is initialized before publication, and this test deliberately
+        // uses the raw path to omit its otherwise observable destructor.
+        let published = unsafe {
+            raw.as_mut_ptr()
+                .cast::<DropHeader<'_>>()
+                .write(DropHeader(&drops));
+            raw.assume_init_no_drop::<DropHeader<'_>>()
+        };
+        assert!(mem::needs_drop::<DropHeader<'_>>());
+        assert_eq!(published.0.load(Ordering::Relaxed), 0);
+    }
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -927,7 +930,6 @@ fn shared_arena_send_sync_bounds() {
     fn assert_send_sync<T: Send + Sync>() {}
 
     assert_send_sync::<SharedArena>();
-    assert_send_sync::<SharedRef<'static, usize>>();
 }
 
 #[test]

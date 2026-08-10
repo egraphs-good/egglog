@@ -2,14 +2,12 @@
 //!
 //! A node is one allocation containing an immutable sorted column index and,
 //! when another level follows it, one child publication slot per distinct key.
-//! The allocation is tied to a [`Handle`] and deliberately has no destructor:
-//! its only non-`Copy` trailing values are `OnceLock`s containing references
-//! into the same execution-scoped arena.
+//! The raw allocation is tied to a [`Handle`] and never runs destructors.
 
 use std::{
     alloc::Layout,
     marker::PhantomData,
-    mem::{ManuallyDrop, align_of, size_of},
+    mem::{align_of, size_of},
     ptr,
     sync::{
         OnceLock,
@@ -20,17 +18,71 @@ use std::{
 use egglog_concurrency::Handle;
 
 use crate::{
-    OffsetRange, SubsetRef, Value,
-    numeric_id::NumericId,
+    SubsetRef, Value,
     offsets::{RowId, SortedOffsetSlice},
     table_spec::{ColumnId, WrappedTableRef},
 };
 
-const HAS_CHILDREN: u32 = 1 << 31;
-const DYNAMIC_CHILDREN: u32 = 1 << 30;
-const KEY_LEN_MASK: u32 = DYNAMIC_CHILDREN - 1;
+/// A packed distinct-key count and description of the trailing child storage.
+///
+/// The low 30 bits store the key count. Bit 30 selects dynamic child families,
+/// while bit 31 records that the node has children at all.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PackedKeyLen(u32);
+
+impl PackedKeyLen {
+    const HAS_CHILDREN: u32 = 1 << 31;
+    const DYNAMIC_CHILDREN: u32 = 1 << 30;
+    const LEN_MASK: u32 = Self::DYNAMIC_CHILDREN - 1;
+
+    fn new(key_len: usize, child_shape: ChildShape) -> Self {
+        assert!(
+            key_len <= Self::LEN_MASK as usize,
+            "a packed trie node cannot contain 2^30 or more keys"
+        );
+        let flags = match child_shape {
+            ChildShape::Leaf => 0,
+            ChildShape::Direct => Self::HAS_CHILDREN,
+            ChildShape::Dynamic { families } => {
+                assert!(
+                    families > 0,
+                    "a dynamic packed trie node needs at least one child family"
+                );
+                assert!(
+                    u32::try_from(families).is_ok(),
+                    "a packed trie node cannot contain more than u32::MAX child families"
+                );
+                Self::HAS_CHILDREN | Self::DYNAMIC_CHILDREN
+            }
+        };
+        Self(key_len as u32 | flags)
+    }
+
+    fn len(self) -> usize {
+        (self.0 & Self::LEN_MASK) as usize
+    }
+
+    fn has_children(self) -> bool {
+        self.0 & Self::HAS_CHILDREN != 0
+    }
+
+    fn has_dynamic_children(self) -> bool {
+        self.0 & Self::DYNAMIC_CHILDREN != 0
+    }
+}
 
 type ChildSlot<'exec> = OnceLock<&'exec PackedTrieNode<'exec>>;
+
+/// The child-publication storage trailing a packed trie node.
+///
+/// Returning slices from one accessor centralizes the unsafe offset arithmetic
+/// for both inline direct slots and lazily allocated dynamic families.
+enum PackedChildren<'node, 'exec> {
+    Leaf,
+    Direct(&'node [ChildSlot<'exec>]),
+    Families(&'node [AtomicPtr<ChildSlot<'exec>>]),
+}
 
 /// How one packed trie level reaches its children.
 ///
@@ -46,35 +98,48 @@ pub(crate) enum ChildShape {
     Dynamic { families: usize },
 }
 
-impl ChildShape {
-    fn flags(self) -> u32 {
-        match self {
-            Self::Leaf => 0,
-            Self::Direct => HAS_CHILDREN,
-            Self::Dynamic { families } => {
-                assert!(
-                    families > 0,
-                    "a dynamic packed trie node needs at least one child family"
-                );
-                assert!(
-                    u32::try_from(families).is_ok(),
-                    "a packed trie node cannot contain more than u32::MAX child families"
-                );
-                HAS_CHILDREN | DYNAMIC_CHILDREN
-            }
-        }
-    }
-}
-
 /// One immutable, scalar trie level allocated for the lifetime of an execution.
 ///
-/// The dynamically sized portions immediately following this header are laid
-/// out as keys, boundaries, grouped row ids, and (optionally) child locks. Use
-/// the accessors rather than relying on those offsets outside this module.
+/// Each node starts with the same packed index. `boundaries[i]..boundaries[i + 1]`
+/// selects the rows belonging to `keys[i]`:
+///
+/// ```text
+/// +----------------------------+
+/// | PackedTrieNode header      |
+/// +----------------------------+
+/// | Value keys[K]              |
+/// +----------------------------+
+/// | u32 boundaries[K + 1]      |
+/// +----------------------------+
+/// | RowId rows[R]              |
+/// +----------------------------+
+/// ```
+///
+/// A leaf ends there. A direct node appends one inline child-publication slot
+/// per key:
+///
+/// ```text
+/// | ChildSlot direct[K]        |
+/// +----------------------------+
+/// ```
+///
+/// A dynamically ordered node instead appends a family count and one atomic
+/// pointer per eligible successor. Each pointer lazily publishes a separate
+/// arena allocation containing one `ChildSlot[K]` array:
+///
+/// ```text
+/// | u32 family_count           |       family pointer
+/// +----------------------------+             |
+/// | AtomicPtr families[F]      |-------------+--> ChildSlot family[K]
+/// +----------------------------+
+/// ```
+///
+/// Alignment may insert padding between regions. Use the accessors rather
+/// than relying on these offsets outside this module.
 #[repr(C)]
 #[derive(Debug)]
 pub(crate) struct PackedTrieNode<'exec> {
-    key_len_and_flags: u32,
+    key_len: PackedKeyLen,
     row_len: u32,
     // The trailing child slots contain `OnceLock<&'exec PackedTrieNode<'exec>>`,
     // which is invariant in `'exec` because `OnceLock` permits publication.
@@ -174,6 +239,10 @@ where
     /// Return this cursor's child, invoking `build` only when its slot is
     /// empty. Callers that must copy or refine the cursor subset should put
     /// that work in `build`, so a cache hit remains allocation-free.
+    ///
+    /// The cursor's node must have children. Valid executor plans establish
+    /// that invariant from the requested [`ChildShape`]; calling this on a leaf
+    /// is a plan-shape bug.
     pub(crate) fn child_index_with(
         self,
         arena: &Handle<'exec>,
@@ -207,7 +276,7 @@ struct PackedLayout {
 
 impl PackedLayout {
     fn new(key_len: usize, row_len: usize, child_shape: ChildShape) -> Self {
-        let _ = child_shape.flags();
+        let _ = PackedKeyLen::new(key_len, child_shape);
         // Lifetimes do not affect layout; use one concrete instantiation so
         // callers do not need to manufacture a lifetime solely for arithmetic.
         let (layout, keys_offset) = Layout::new::<PackedTrieNode<'static>>()
@@ -338,7 +407,7 @@ impl<'exec> PackedTrieNode<'exec> {
             .enumerate()
             .filter(|(index, pair)| *index == 0 || pairs[*index - 1].0 != pair.0)
             .count();
-        let key_len_and_flags = Self::encode_key_len(key_len_usize, child_shape);
+        let key_len = PackedKeyLen::new(key_len_usize, child_shape);
         let layout = PackedLayout::new(key_len_usize, pairs.len(), child_shape);
         debug_assert_eq!(layout.keys_offset, Self::keys_offset());
         debug_assert_eq!(
@@ -435,7 +504,7 @@ impl<'exec> PackedTrieNode<'exec> {
             ptr::write(
                 base.cast::<Self>(),
                 Self {
-                    key_len_and_flags,
+                    key_len,
                     row_len,
                     _execution: PhantomData,
                 },
@@ -443,7 +512,7 @@ impl<'exec> PackedTrieNode<'exec> {
 
             // The complete header and every trailing element are initialized
             // before this conversion publishes an immutable arena reference.
-            allocation.assume_init_no_drop::<Self>().into_ref()
+            allocation.assume_init_no_drop::<Self>()
         }
     }
 
@@ -498,44 +567,54 @@ impl<'exec> PackedTrieNode<'exec> {
         let boundaries = self.boundaries();
         let rows = &self.rows()[boundaries[key_index] as usize..boundaries[key_index + 1] as usize];
         debug_assert!(!rows.is_empty());
-        let first = rows[0];
-        let last = rows[rows.len() - 1];
-        if rows
-            .windows(2)
-            .all(|pair| pair[0].index().checked_add(1) == Some(pair[1].index()))
-        {
-            SubsetRef::Dense(OffsetRange::new(first, last.inc()))
-        } else {
-            // SAFETY: the constructor requires `(Value, RowId)` order, so the
-            // rows within each equal-value range are non-decreasing.
-            SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(rows) })
-        }
+        // SAFETY: the constructor requires `(Value, RowId)` order, so the rows
+        // within each equal-value range are non-decreasing.
+        SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(rows) })
     }
 
-    /// Return the direct child slot for `key_index`.
+    /// Return the child-publication storage trailing this node.
     ///
-    /// This accessor exists for fixed-order and tuple-index traversal. Dynamic
-    /// traversal must go through [`Self::child_slot`] so its family array is
-    /// allocated and published safely.
-    pub(crate) fn direct_child_slot(&self, key_index: usize) -> Option<&ChildSlot<'exec>> {
-        assert!(key_index < self.key_len(), "packed trie key out of bounds");
-        match self.child_shape() {
-            ChildShape::Leaf => return None,
-            ChildShape::Direct => {}
-            ChildShape::Dynamic { .. } => {
-                panic!("a dynamic packed trie node has no direct child slots")
-            }
+    /// Direct slots are indexed by key ordinal. Dynamic entries are indexed by
+    /// successor family and point to lazily allocated `ChildSlot[key_len]`
+    /// arrays.
+    fn children(&self) -> PackedChildren<'_, 'exec> {
+        if !self.has_children() {
+            return PackedChildren::Leaf;
         }
-        let children_offset = Self::direct_children_offset_for(self.key_len(), self.row_len());
-        // SAFETY: direct construction initializes exactly `key_len` child
-        // locks at this layout-derived offset.
-        Some(unsafe {
-            &*(self as *const Self)
-                .cast::<u8>()
-                .add(children_offset)
-                .cast::<ChildSlot<'exec>>()
-                .add(key_index)
-        })
+
+        if self.key_len.has_dynamic_children() {
+            let families = self.dynamic_family_count();
+            // SAFETY: dynamic construction initialized exactly `families`
+            // atomic pointers at this layout-derived offset before publishing
+            // the immutable node.
+            PackedChildren::Families(unsafe {
+                std::slice::from_raw_parts(
+                    (self as *const Self)
+                        .cast::<u8>()
+                        .add(Self::dynamic_children_offset_for(
+                            self.key_len(),
+                            self.row_len(),
+                        ))
+                        .cast(),
+                    families,
+                )
+            })
+        } else {
+            // SAFETY: direct construction initialized exactly `key_len` child
+            // locks at this layout-derived offset before publishing the node.
+            PackedChildren::Direct(unsafe {
+                std::slice::from_raw_parts(
+                    (self as *const Self)
+                        .cast::<u8>()
+                        .add(Self::direct_children_offset_for(
+                            self.key_len(),
+                            self.row_len(),
+                        ))
+                        .cast(),
+                    self.key_len(),
+                )
+            })
+        }
     }
 
     /// Get a key's child slot in `family`, lazily publishing the whole dynamic
@@ -548,36 +627,23 @@ impl<'exec> PackedTrieNode<'exec> {
         family: usize,
     ) -> &ChildSlot<'exec> {
         assert!(key_index < self.key_len(), "packed trie key out of bounds");
-        match self.child_shape() {
-            ChildShape::Leaf => panic!("cannot build a child index below a packed trie leaf"),
-            ChildShape::Direct => {
+        let family_entry = match self.children() {
+            PackedChildren::Leaf => {
+                unreachable!("a packed trie leaf cannot publish a child index")
+            }
+            PackedChildren::Direct(slots) => {
                 // Direct nodes have exactly one deterministic successor. The
                 // executor passes its plan-local AccessId uniformly as
                 // `family`; it is intentionally ignored in this shape.
-                return self
-                    .direct_child_slot(key_index)
-                    .expect("direct packed trie node must have child slots");
+                return &slots[key_index];
             }
-            ChildShape::Dynamic { families } => {
+            PackedChildren::Families(families) => {
                 assert!(
-                    family < families,
+                    family < families.len(),
                     "packed trie dynamic child family out of bounds"
                 );
+                &families[family]
             }
-        }
-
-        let family_entry = unsafe {
-            // SAFETY: `child_shape` established that this is a dynamic node,
-            // and construction initialized `families` AtomicPtr entries at
-            // this layout-derived offset. The bounds check above selects one.
-            &*(self as *const Self)
-                .cast::<u8>()
-                .add(Self::dynamic_children_offset_for(
-                    self.key_len(),
-                    self.row_len(),
-                ))
-                .cast::<AtomicPtr<ChildSlot<'exec>>>()
-                .add(family)
         };
         let mut slots = family_entry.load(Ordering::Acquire);
         if slots.is_null() {
@@ -613,7 +679,7 @@ impl<'exec> PackedTrieNode<'exec> {
         let mut allocation = arena.alloc_layout(layout);
         let slots = allocation.as_mut_ptr().cast::<ChildSlot<'exec>>();
         // SAFETY: `slots` is aligned storage for exactly `key_len` ChildSlots.
-        // Each no-drop OnceLock is initialized once before the pointer can be
+        // Each OnceLock is initialized once before the pointer can be
         // published. Publishing the first slot as the raw allocation's header
         // ties the returned reference (and therefore this copied pointer) to
         // the arena lifetime; all trailing slots have the same lifetime.
@@ -621,20 +687,14 @@ impl<'exec> PackedTrieNode<'exec> {
             for key_index in 0..key_len {
                 ptr::write(slots.add(key_index), OnceLock::new());
             }
-            allocation
-                // `OnceLock<T>` has drop glue even when `T` is a reference.
-                // The arena intentionally forgets these reference-only locks,
-                // so publish a transparent ManuallyDrop header while retaining
-                // the ChildSlot pointer used by the initialized trailing array.
-                .assume_init_no_drop::<ManuallyDrop<ChildSlot<'exec>>>()
-                .into_ref() as *const ManuallyDrop<ChildSlot<'exec>>
+            allocation.assume_init_no_drop::<ChildSlot<'exec>>() as *const ChildSlot<'exec>
                 as *mut ChildSlot<'exec>
         }
     }
 
     fn dynamic_family_count(&self) -> usize {
         assert!(
-            self.key_len_and_flags & DYNAMIC_CHILDREN != 0,
+            self.key_len.has_dynamic_children(),
             "only dynamic packed trie nodes store a family count"
         );
         // SAFETY: dynamic construction writes one u32 at this derived offset
@@ -651,15 +711,12 @@ impl<'exec> PackedTrieNode<'exec> {
     }
 
     pub(crate) fn child_shape(&self) -> ChildShape {
-        if !self.has_children() {
-            return ChildShape::Leaf;
-        }
-        if self.key_len_and_flags & DYNAMIC_CHILDREN != 0 {
-            ChildShape::Dynamic {
-                families: self.dynamic_family_count(),
-            }
-        } else {
-            ChildShape::Direct
+        match self.children() {
+            PackedChildren::Leaf => ChildShape::Leaf,
+            PackedChildren::Direct(_) => ChildShape::Direct,
+            PackedChildren::Families(families) => ChildShape::Dynamic {
+                families: families.len(),
+            },
         }
     }
 
@@ -671,23 +728,15 @@ impl<'exec> PackedTrieNode<'exec> {
     }
 
     fn has_children(&self) -> bool {
-        self.key_len_and_flags & HAS_CHILDREN != 0
+        self.key_len.has_children()
     }
 
     fn key_len(&self) -> usize {
-        (self.key_len_and_flags & KEY_LEN_MASK) as usize
+        self.key_len.len()
     }
 
     fn row_len(&self) -> usize {
         self.row_len as usize
-    }
-
-    fn encode_key_len(key_len: usize, child_shape: ChildShape) -> u32 {
-        assert!(
-            key_len <= KEY_LEN_MASK as usize,
-            "a packed trie node cannot contain 2^30 or more keys"
-        );
-        key_len as u32 | child_shape.flags()
     }
 
     #[inline]
@@ -753,6 +802,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        numeric_id::NumericId,
         table_shortcuts::fill_table,
         table_spec::{Constraint, Table, WrappedTableRef},
     };
@@ -771,6 +821,7 @@ mod tests {
 
     #[test]
     fn packed_trie_header_is_exactly_two_u32s() {
+        assert_eq!(size_of::<PackedKeyLen>(), size_of::<u32>());
         assert_eq!(size_of::<PackedTrieNode<'static>>(), 8);
         assert_eq!(align_of::<PackedTrieNode<'static>>(), align_of::<u32>());
         assert_eq!(std::mem::offset_of!(PackedTrieNode<'static>, row_len), 4);
@@ -780,27 +831,30 @@ mod tests {
             "the invariant lifetime marker must not grow the header"
         );
 
-        assert_eq!(
-            PackedTrieNode::encode_key_len(KEY_LEN_MASK as usize, ChildShape::Leaf),
-            KEY_LEN_MASK
+        let leaf = PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize, ChildShape::Leaf);
+        assert_eq!(leaf.len(), PackedKeyLen::LEN_MASK as usize);
+        assert!(!leaf.has_children());
+        assert!(!leaf.has_dynamic_children());
+
+        let direct = PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize, ChildShape::Direct);
+        assert_eq!(direct.len(), PackedKeyLen::LEN_MASK as usize);
+        assert!(direct.has_children());
+        assert!(!direct.has_dynamic_children());
+
+        let dynamic = PackedKeyLen::new(
+            PackedKeyLen::LEN_MASK as usize,
+            ChildShape::Dynamic { families: 2 },
         );
-        assert_eq!(
-            PackedTrieNode::encode_key_len(KEY_LEN_MASK as usize, ChildShape::Direct),
-            HAS_CHILDREN | KEY_LEN_MASK
-        );
-        assert_eq!(
-            PackedTrieNode::encode_key_len(
-                KEY_LEN_MASK as usize,
-                ChildShape::Dynamic { families: 2 }
-            ),
-            u32::MAX,
-        );
+        assert_eq!(dynamic.0, u32::MAX);
+        assert_eq!(dynamic.len(), PackedKeyLen::LEN_MASK as usize);
+        assert!(dynamic.has_children());
+        assert!(dynamic.has_dynamic_children());
     }
 
     #[test]
     #[should_panic(expected = "cannot contain 2^30 or more keys")]
     fn packed_trie_rejects_key_count_that_uses_shape_bit() {
-        PackedTrieNode::encode_key_len(DYNAMIC_CHILDREN as usize, ChildShape::Leaf);
+        PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize + 1, ChildShape::Leaf);
     }
 
     #[test]
@@ -828,14 +882,14 @@ mod tests {
             panic!("noncontiguous range should be sparse")
         };
         assert_eq!(one.inner(), &[row(1), row(3)]);
-        assert!(matches!(
-            node.subset_at(1),
-            SubsetRef::Dense(range) if range == OffsetRange::new(row(2), row(3))
-        ));
-        assert!(matches!(
-            node.subset_at(2),
-            SubsetRef::Dense(range) if range == OffsetRange::new(row(4), row(6))
-        ));
+        let SubsetRef::Sparse(two) = node.subset_at(1) else {
+            panic!("packed trie ranges remain sparse even when contiguous")
+        };
+        assert_eq!(two.inner(), &[row(2)]);
+        let SubsetRef::Sparse(three) = node.subset_at(2) else {
+            panic!("packed trie ranges remain sparse even when contiguous")
+        };
+        assert_eq!(three.inner(), &[row(4), row(5)]);
     }
 
     #[test]
@@ -960,14 +1014,31 @@ mod tests {
         let leaf = PackedTrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf);
         let branch = PackedTrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct);
 
-        assert_eq!(leaf.key_len_and_flags, 2);
-        assert_eq!(branch.key_len_and_flags, HAS_CHILDREN | 2);
+        assert_eq!(leaf.key_len, PackedKeyLen::new(2, ChildShape::Leaf));
+        assert_eq!(branch.key_len, PackedKeyLen::new(2, ChildShape::Direct));
         assert_eq!(leaf.values(), branch.values());
-        assert!(leaf.direct_child_slot(0).is_none());
-        assert!(leaf.direct_child_slot(1).is_none());
-        assert!(branch.direct_child_slot(0).is_some());
-        assert!(branch.direct_child_slot(1).is_some());
+        assert!(matches!(leaf.children(), PackedChildren::Leaf));
+        let PackedChildren::Direct(slots) = branch.children() else {
+            panic!("a direct branch must expose inline child slots")
+        };
+        assert_eq!(slots.len(), 2);
         assert!(leaf.allocation_bytes() < branch.allocation_bytes());
+    }
+
+    #[test]
+    #[should_panic(expected = "a packed trie leaf cannot publish a child index")]
+    fn packed_trie_leaf_rejects_child_publication() {
+        let arena = SharedArena::new();
+        let handle = arena.new_handle();
+        let leaf = PackedTrieNode::build_from_sorted_pairs(
+            &handle,
+            &[(value(1), row(0))],
+            ChildShape::Leaf,
+        );
+        let cursor = PackedCursor::new(leaf, 0);
+        cursor.child_index_with(&handle, 0, ChildShape::Leaf, || {
+            unreachable!("a leaf must reject publication before invoking the builder")
+        });
     }
 
     #[test]
@@ -984,9 +1055,11 @@ mod tests {
         assert_eq!(node.values().as_ptr() as usize % align_of::<Value>(), 0);
         assert_eq!(node.boundaries().as_ptr() as usize % align_of::<u32>(), 0);
         assert_eq!(node.rows().as_ptr() as usize % align_of::<RowId>(), 0);
+        let PackedChildren::Direct(slots) = node.children() else {
+            panic!("a direct node must expose inline child slots")
+        };
         assert_eq!(
-            node.direct_child_slot(0).unwrap() as *const _ as usize
-                % align_of::<OnceLock<&PackedTrieNode<'_>>>(),
+            slots.as_ptr() as usize % align_of::<OnceLock<&PackedTrieNode<'_>>>(),
             0
         );
         assert_eq!(
@@ -1010,7 +1083,10 @@ mod tests {
             &[(value(1), row(0))],
             ChildShape::Direct,
         );
-        let slot = parent.direct_child_slot(0).unwrap();
+        let PackedChildren::Direct(slots) = parent.children() else {
+            panic!("a direct node must expose inline child slots")
+        };
+        let slot = &slots[0];
         let initializations = AtomicUsize::new(0);
 
         std::thread::scope(|scope| {
@@ -1086,8 +1162,8 @@ mod tests {
             );
             assert_eq!(parent.child_shape(), ChildShape::Dynamic { families: 2 });
             assert_eq!(
-                parent.key_len_and_flags,
-                HAS_CHILDREN | DYNAMIC_CHILDREN | 1
+                parent.key_len,
+                PackedKeyLen::new(1, ChildShape::Dynamic { families: 2 })
             );
             let cursor = PackedCursor::new(parent, 0);
 
