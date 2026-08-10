@@ -14,8 +14,8 @@ use crate::{
 };
 
 use super::{
-    MAX_INLINE_SCOPE_HELP_DEPTH, ThreadPoolState, ThreadPoolStatePtr, WorkerContext,
-    is_background_worker_thread,
+    LOCAL_DONATION_INTERVAL, MAX_INLINE_SCOPE_HELP_DEPTH, ThreadPoolState, ThreadPoolStatePtr,
+    WorkerContext, is_background_worker_thread, with_current_worker,
 };
 
 #[test]
@@ -128,7 +128,7 @@ fn nested_scope_help_takes_local_work_before_global_work() {
 }
 
 #[test]
-fn donation_moves_half_of_the_oldest_local_jobs() {
+fn timed_donation_batches_half_of_the_oldest_local_jobs() {
     let (sender, receiver) = super::unbounded();
     let state = ThreadPoolState::new(sender, receiver, 1);
     let worker = WorkerContext::new(ThreadPoolStatePtr::new(&state), 0);
@@ -146,17 +146,18 @@ fn donation_moves_half_of_the_oldest_local_jobs() {
     state
         .instrumentation
         .stalled_workers
-        .store(1, Ordering::Release);
+        .store(3, Ordering::Release);
+    worker
+        .last_donation
+        .set(Instant::now().checked_sub(LOCAL_DONATION_INTERVAL).unwrap());
 
-    worker.donate_half_if_stalled(&state);
+    worker.donate_half_if_due(&state);
     state
         .instrumentation
         .stalled_workers
         .store(0, Ordering::Release);
 
-    for _ in 0..3 {
-        state.try_recv_global().unwrap()();
-    }
+    state.try_recv_global().unwrap()();
     while let Some(job) = worker.pop_local(&state) {
         job();
     }
@@ -164,9 +165,165 @@ fn donation_moves_half_of_the_oldest_local_jobs() {
     assert_eq!(*order.lock().unwrap(), [0, 1, 2, 5, 4, 3]);
     let metrics = state.instrumentation.snapshot();
     assert_eq!(metrics.donated_jobs, 3);
-    assert_eq!(metrics.global_pushes, 3);
-    assert_eq!(metrics.global_pops, 3);
+    assert_eq!(metrics.donation_batches, 1);
+    assert_eq!(metrics.global_pushes, 1);
+    assert_eq!(metrics.global_pops, 1);
     assert_eq!(metrics.local_pops, 3);
+}
+
+#[test]
+fn timed_donation_keeps_a_single_local_job_for_the_owner() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 1);
+    let worker = WorkerContext::new(ThreadPoolStatePtr::new(&state), 0);
+    let completed = Arc::new(AtomicBool::new(false));
+
+    unsafe {
+        let completed = completed.clone();
+        (&mut *worker.local.get()).push_back(Box::new(move || {
+            completed.store(true, Ordering::Release);
+        }));
+    }
+    state
+        .instrumentation
+        .stalled_workers
+        .store(1, Ordering::Release);
+    worker
+        .last_donation
+        .set(Instant::now().checked_sub(LOCAL_DONATION_INTERVAL).unwrap());
+
+    worker.donate_half_if_due(&state);
+    state
+        .instrumentation
+        .stalled_workers
+        .store(0, Ordering::Release);
+
+    worker.pop_local(&state).unwrap()();
+    assert!(completed.load(Ordering::Acquire));
+
+    let metrics = state.instrumentation.snapshot();
+    assert_eq!(metrics.donated_jobs, 0);
+    assert_eq!(metrics.donation_batches, 0);
+    assert_eq!(metrics.global_pushes, 0);
+    assert_eq!(metrics.global_pops, 0);
+    assert_eq!(metrics.local_pops, 1);
+}
+
+#[test]
+fn first_local_push_after_idle_starts_a_fresh_donation_window() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 1);
+    let worker = WorkerContext::new(ThreadPoolStatePtr::new(&state), 0);
+    let stale = Instant::now()
+        .checked_sub(LOCAL_DONATION_INTERVAL + LOCAL_DONATION_INTERVAL)
+        .unwrap();
+    worker.last_donation.set(stale);
+    state
+        .instrumentation
+        .stalled_workers
+        .store(1, Ordering::Relaxed);
+
+    worker.push_local(&state, Box::new(|| {}));
+
+    assert!(worker.last_donation.get() > stale);
+    assert_eq!(worker.local_queue_depth(), 1);
+    assert_eq!(state.instrumentation.snapshot().donated_jobs, 0);
+
+    state
+        .instrumentation
+        .stalled_workers
+        .store(0, Ordering::Relaxed);
+    worker.pop_local(&state).unwrap()();
+}
+
+#[test]
+fn donation_interval_suppresses_repeated_batches() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 3);
+    let worker = WorkerContext::new(ThreadPoolStatePtr::new(&state), 0);
+    worker.push_local(&state, Box::new(|| {}));
+    worker
+        .last_donation
+        .set(Instant::now() + Duration::from_secs(1));
+
+    state
+        .instrumentation
+        .stalled_workers
+        .store(1, Ordering::Relaxed);
+    for _ in 1..6 {
+        worker.push_local(&state, Box::new(|| {}));
+    }
+    assert_eq!(worker.local_queue_depth(), 6);
+    assert_eq!(state.instrumentation.snapshot().donated_jobs, 0);
+
+    worker
+        .last_donation
+        .set(Instant::now().checked_sub(LOCAL_DONATION_INTERVAL).unwrap());
+    worker.donate_half_if_due(&state);
+    assert_eq!(worker.local_queue_depth(), 3);
+    let metrics = state.instrumentation.snapshot();
+    assert_eq!(metrics.donated_jobs, 3);
+    assert_eq!(metrics.donation_batches, 1);
+    assert_eq!(metrics.global_pushes, 1);
+    assert_eq!(metrics.max_local_queue_depth, 6);
+
+    worker.donate_half_if_due(&state);
+    assert_eq!(worker.local_queue_depth(), 3);
+    assert_eq!(state.instrumentation.snapshot().global_pushes, 1);
+
+    state
+        .instrumentation
+        .stalled_workers
+        .store(0, Ordering::Relaxed);
+    while let Ok(job) = state.try_recv_global() {
+        job();
+    }
+    while let Some(job) = worker.pop_local(&state) {
+        job();
+    }
+}
+
+#[test]
+fn scope_stalled_worker_accessors_read_the_atomic_gauge() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 4);
+    let scope = Scope::new(&state);
+
+    assert_eq!(scope.stalled_workers(), 0);
+    assert!(!scope.has_stalled_workers());
+    assert_eq!(scope.local_queue_depth(), 0);
+
+    state
+        .instrumentation
+        .stalled_workers
+        .store(3, Ordering::Release);
+    assert_eq!(scope.stalled_workers(), 3);
+    assert!(scope.has_stalled_workers());
+
+    state
+        .instrumentation
+        .stalled_workers
+        .store(0, Ordering::Release);
+    assert_eq!(scope.stalled_workers(), 0);
+    assert!(!scope.has_stalled_workers());
+}
+
+#[test]
+fn scope_reports_current_workers_local_queue_depth() {
+    let pool = ThreadPool::new(1);
+    let observed_depth = AtomicUsize::new(0);
+
+    pool.scope(|scope| {
+        assert_eq!(scope.local_queue_depth(), 0);
+        scope.spawn_global(|scope| {
+            assert_eq!(scope.local_queue_depth(), 0);
+            scope.spawn_local(|_| {});
+            scope.spawn_local(|_| {});
+            observed_depth.store(scope.local_queue_depth(), Ordering::Relaxed);
+        });
+    });
+
+    assert_eq!(observed_depth.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -181,7 +338,14 @@ fn stalled_worker_signal_causes_public_local_work_to_be_donated() {
 
     pool.scope(|scope| {
         scope.spawn_global(|scope| {
-            for _ in 0..16 {
+            scope.spawn_local(|_| {});
+            with_current_worker(|worker| {
+                worker
+                    .unwrap()
+                    .last_donation
+                    .set(Instant::now().checked_sub(LOCAL_DONATION_INTERVAL).unwrap());
+            });
+            for _ in 1..16 {
                 scope.spawn_local(|_| {});
             }
         });
@@ -194,9 +358,9 @@ fn stalled_worker_signal_causes_public_local_work_to_be_donated() {
         metrics.local_pushes,
         metrics.local_pops + metrics.donated_jobs
     );
-    assert_eq!(metrics.global_pushes, 1 + metrics.donated_jobs);
+    assert_eq!(metrics.global_pushes, 1 + metrics.donation_batches);
     assert_eq!(metrics.global_pushes, metrics.global_pops);
-    assert!(metrics.max_local_queue_depth >= 2);
+    assert!(metrics.max_local_queue_depth >= 1);
 }
 
 #[test]
