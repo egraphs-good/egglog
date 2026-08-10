@@ -33,9 +33,12 @@ use hashbrown::HashTable;
 use crate::{
     ExecutionState, TableChange,
     common::{ShardData, ShardId, Value},
+    hash_index::{ColumnIndex, Index, IndexBase},
     offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
     parallel,
-    parallel_heuristics::{parallelize_rebuild, parallelize_table_op},
+    parallel_heuristics::{
+        parallelize_index_construction, parallelize_rebuild, parallelize_table_op,
+    },
     pool::{Pooled, with_pool_set},
     table_spec::{Generation, MutationBuffer, Offset, Row, TableVersion, ValueRebuilder},
 };
@@ -49,6 +52,15 @@ const PARALLEL_SEQUENCE_BATCH_VALUES: usize = 1 << 16;
 const REBUILD_CHUNK_ROWS: usize = 1 << 11;
 const STALE_OFFSET_BIT: u32 = 1 << 31;
 const OFFSET_MASK: u32 = STALE_OFFSET_BIT - 1;
+
+/// Selects the semantic key values recorded in a [`SequenceTable`]'s
+/// occurrence index.
+///
+/// Variable-length encodings commonly contain headers, counts, or bit masks
+/// alongside actual e-class ids. The extractor receives only the key prefix
+/// and calls `visit` for values that should map back to the containing row.
+/// Repeated visits are harmless: the index records each `(value, row)` once.
+pub type SequenceIndexFn = dyn Fn(&[Value], &mut dyn FnMut(Value)) + Send + Sync;
 
 #[inline]
 fn sequence_key(row: &[Value], n_values: usize) -> &[Value] {
@@ -79,6 +91,18 @@ fn assert_valid_merge_output(output: &[Value], key: &[Value], n_values: usize) {
         key,
         "sequence merge functions must preserve table keys"
     );
+}
+
+fn sequence_subset_partition(subset: SubsetRef<'_>, start: usize, end: usize) -> SubsetRef<'_> {
+    debug_assert!(start <= end);
+    debug_assert!(end <= subset.size());
+    match subset {
+        SubsetRef::Dense(range) => SubsetRef::Dense(OffsetRange::new(
+            RowId::from_usize(range.start.index() + start),
+            RowId::from_usize(range.start.index() + end),
+        )),
+        SubsetRef::Sparse(rows) => SubsetRef::Sparse(rows.subslice(start, end)),
+    }
 }
 
 /// A half-open slice in the packed values vector.
@@ -133,6 +157,94 @@ struct SequenceLocation {
 
 type SequenceEntry = HashedTableEntry<SequenceLocation>;
 
+/// Variable-arity analogue of `SortedWritesTable::rebuild_index`.
+///
+/// Fixed tables describe rebuildable positions with a list of columns. A
+/// sequence encoding instead supplies an extractor, which can skip metadata
+/// and visit any number of semantic values per row. The underlying
+/// [`ColumnIndex`] is shared with fixed tables and therefore maps each value to
+/// a compact [`Subset`] of physical row ids.
+#[derive(Clone)]
+struct SequenceValueIndex {
+    values: Arc<SequenceIndexFn>,
+    rows: Index<ColumnIndex>,
+}
+
+impl SequenceValueIndex {
+    fn new(values: Arc<SequenceIndexFn>) -> Self {
+        Self {
+            values,
+            rows: Index::new(Vec::new(), ColumnIndex::new()),
+        }
+    }
+
+    fn get(&self, value: &Value) -> Option<SubsetRef<'_>> {
+        self.rows.get_subset(value)
+    }
+
+    fn clear_to(&mut self, version: TableVersion) {
+        self.rows.clear_to(version);
+    }
+
+    fn refresh(&mut self, rows: &SequenceRows, n_values: usize, version: TableVersion) {
+        let values = &self.values;
+        self.rows.refresh_with(version, |index, start, full| {
+            let start = start.index();
+            let end = rows.physical_len();
+            if start >= end {
+                return;
+            }
+
+            let scan = SubsetRef::Dense(OffsetRange::new(
+                RowId::from_usize(start),
+                RowId::from_usize(end),
+            ));
+            let workload = scan.size().max(rows.packed_value_span(start, end));
+
+            // Match the fixed rebuild index's low-overhead incremental path:
+            // a small append can be folded directly into already sorted
+            // subsets without allocating and sorting occurrence pairs.
+            if !full && !parallelize_index_construction(workload) {
+                let mut selected = with_pool_set(|pools| pools.get::<Vec<Value>>());
+                scan.offsets(|row_id| {
+                    let Some(row) = rows.get_row(row_id) else {
+                        return;
+                    };
+                    values(sequence_key(row, n_values), &mut |value| {
+                        selected.push(value)
+                    });
+                    index.add_row(&selected, row_id);
+                    selected.clear();
+                });
+                return;
+            }
+
+            let chunk_rows = if parallelize_index_construction(workload) {
+                scan.size()
+                    .div_ceil(parallel::current_num_threads().saturating_mul(2).max(1))
+                    .clamp(1, REBUILD_CHUNK_ROWS)
+            } else {
+                scan.size().max(1)
+            };
+            let starts = (0..scan.size()).step_by(chunk_rows).collect::<Vec<_>>();
+            let chunks = parallel::map(&starts, |_, start| {
+                let end = cmp::min(*start + chunk_rows, scan.size());
+                let partition = sequence_subset_partition(scan, *start, end);
+                let mut pairs = Vec::<(Value, RowId)>::new();
+                partition.offsets(|row_id| {
+                    let Some(row) = rows.get_row(row_id) else {
+                        return;
+                    };
+                    let key = sequence_key(row, n_values);
+                    values(key, &mut |value| pairs.push((value, row_id)));
+                });
+                pairs
+            });
+            index.merge_value_row_chunks(chunks);
+        });
+    }
+}
+
 /// Variable-arity counterpart of the fixed-arity `Rows`/`RowBuffer` store.
 ///
 /// The fixed store derives row boundaries from a constant stride and keeps its
@@ -184,6 +296,25 @@ impl SequenceRows {
 
     fn live_len(&self) -> usize {
         self.physical_len() - self.stale_rows
+    }
+
+    /// Number of packed value slots covered by a dense physical row range.
+    /// Stale values are included, making this an O(1) upper bound for index
+    /// construction work.
+    fn packed_value_span(&self, start: usize, end: usize) -> usize {
+        debug_assert!(start <= end);
+        debug_assert!(end <= self.physical_len());
+        let value_start = if start == 0 {
+            0
+        } else {
+            (self.offsets[start - 1].get() & OFFSET_MASK) as usize
+        };
+        let value_end = if end == 0 {
+            0
+        } else {
+            (self.offsets[end - 1].get() & OFFSET_MASK) as usize
+        };
+        value_end - value_start
     }
 
     fn next_row(&self) -> RowId {
@@ -779,6 +910,7 @@ pub struct SequenceTable {
     pending_state: Arc<SequencePendingState>,
     n_values: usize,
     merge: Option<Arc<MergeFn>>,
+    value_index: Option<SequenceValueIndex>,
 }
 
 impl Default for SequenceTable {
@@ -796,6 +928,7 @@ impl Clone for SequenceTable {
             pending_state: Arc::new(self.pending_state.deep_copy()),
             n_values: self.n_values,
             merge: self.merge.clone(),
+            value_index: self.value_index.clone(),
         }
     }
 }
@@ -816,6 +949,34 @@ impl SequenceTable {
         Self::new_inner(n_values, Some(merge.into()))
     }
 
+    /// Create a value-bearing sequence table with a semantic occurrence index.
+    ///
+    /// The index is maintained by the table's normal publication protocol.
+    /// Appends extend it incrementally; compaction or clear rebuilds it for the
+    /// new row-id generation. The extractor sees the variable-length key and
+    /// selects exactly the values whose rows should be discoverable through
+    /// [`SequenceTable::rows_for_indexed_value`].
+    pub fn new_with_values_and_index(
+        n_values: usize,
+        merge: Box<MergeFn>,
+        index_values: Box<SequenceIndexFn>,
+    ) -> Self {
+        assert!(
+            n_values > 0,
+            "use SequenceTable::new_indexed for a set table"
+        );
+        let mut table = Self::new_inner(n_values, Some(merge.into()));
+        table.value_index = Some(SequenceValueIndex::new(index_values.into()));
+        table
+    }
+
+    /// Create a full-row-keyed sequence set with a semantic occurrence index.
+    pub fn new_indexed(index_values: Box<SequenceIndexFn>) -> Self {
+        let mut table = Self::new_inner(0, None);
+        table.value_index = Some(SequenceValueIndex::new(index_values.into()));
+        table
+    }
+
     fn new_inner(n_values: usize, merge: Option<Arc<MergeFn>>) -> Self {
         let hash = ShardedHashTable::default();
         let shard_data = hash.shard_data();
@@ -826,6 +987,7 @@ impl SequenceTable {
             pending_state: Arc::new(SequencePendingState::new(shard_data)),
             n_values,
             merge,
+            value_index: None,
         }
     }
 
@@ -873,6 +1035,7 @@ impl SequenceTable {
         let removed = self.do_delete(&pending);
         let added = self.do_insert(&pending, exec_state);
         self.maybe_compact();
+        self.refresh_value_index();
         TableChange { removed, added }
     }
 
@@ -962,26 +1125,52 @@ impl SequenceTable {
         self.rebuild_full_rows_impl(rebuild, Some(exec_state))
     }
 
+    /// Rebuild only the live rows named by `subset`.
+    ///
+    /// This is the sequence-table counterpart of an incremental fixed-table
+    /// rebuild driven by `rebuild_index`. Callers typically union one or more
+    /// [`SequenceTable::rows_for_indexed_value`] results into an owned subset before
+    /// taking the mutable table borrow required here.
+    pub fn rebuild_full_rows_subset_with_state(
+        &mut self,
+        subset: SubsetRef<'_>,
+        rebuild: &(impl Fn(&[Value], &mut Vec<Value>) -> bool + Sync),
+        exec_state: &mut ExecutionState,
+    ) -> TableChange {
+        self.rebuild_full_rows_subset_impl(subset, rebuild, Some(exec_state))
+    }
+
     fn rebuild_full_rows_impl(
         &mut self,
         rebuild: &(impl Fn(&[Value], &mut Vec<Value>) -> bool + Sync),
         exec_state: Option<&mut ExecutionState>,
     ) -> TableChange {
-        let physical_len = self.rows.physical_len();
-        if physical_len == 0 {
+        let all = self.all();
+        self.rebuild_full_rows_subset_impl(all.as_ref(), rebuild, exec_state)
+    }
+
+    fn rebuild_full_rows_subset_impl(
+        &mut self,
+        subset: SubsetRef<'_>,
+        rebuild: &(impl Fn(&[Value], &mut Vec<Value>) -> bool + Sync),
+        exec_state: Option<&mut ExecutionState>,
+    ) -> TableChange {
+        let Some((_low, high)) = subset.bounds() else {
             return TableChange {
                 removed: false,
                 added: false,
             };
-        }
+        };
+        assert!(high.index() <= self.rows.physical_len());
+        let scan_size = subset.size();
 
-        let stage_range = |start: usize, end: usize| {
+        let stage_subset = |partition: SubsetRef<'_>| {
             let mut buffer = self.new_sequence_buffer();
             let mut rebuilt = with_pool_set(|pools| pools.get::<Vec<Value>>());
             let mut changed = 0usize;
-            for row_index in start..end {
-                let Some(row) = self.rows.get_row(RowId::from_usize(row_index)) else {
-                    continue;
+            partition.offsets(|row_id| {
+                let Some(row) = self.rows.get_row(row_id) else {
+                    return;
                 };
                 let key = sequence_key(row, self.n_values);
                 if rebuild(row, &mut rebuilt) {
@@ -995,24 +1184,28 @@ impl SequenceTable {
                     changed += 1;
                 }
                 rebuilt.clear();
-            }
+            });
             changed
         };
 
         // Match fixed-arity full rebuilds: avoid parallel dispatch and many
         // small mutation-buffer publications until the scan is large enough
         // to amortize them.
-        let changed = if parallelize_rebuild(physical_len) {
-            let starts = (0..physical_len)
+        let changed = if parallelize_rebuild(scan_size) {
+            let starts = (0..scan_size)
                 .step_by(REBUILD_CHUNK_ROWS)
                 .collect::<Vec<_>>();
             parallel::map(&starts, |_, start| {
-                stage_range(*start, cmp::min(*start + REBUILD_CHUNK_ROWS, physical_len))
+                stage_subset(sequence_subset_partition(
+                    subset,
+                    *start,
+                    cmp::min(*start + REBUILD_CHUNK_ROWS, scan_size),
+                ))
             })
             .into_iter()
             .sum::<usize>()
         } else {
-            stage_range(0, physical_len)
+            stage_subset(subset)
         };
 
         if changed == 0 {
@@ -1037,6 +1230,10 @@ impl SequenceTable {
         self.rows.clear();
         self.hash.clear();
         self.generation = self.generation.inc();
+        let version = self.version();
+        if let Some(index) = &mut self.value_index {
+            index.clear_to(version);
+        }
     }
 
     /// Return the generation-scoped physical row id for an exact key.
@@ -1088,6 +1285,29 @@ impl SequenceTable {
     /// Number of non-key values stored at the end of every row.
     pub fn n_values(&self) -> usize {
         self.n_values
+    }
+
+    /// Return physical rows whose extractor-selected key positions include
+    /// `value`.
+    ///
+    /// Incremental index maintenance intentionally retains row ids made stale
+    /// by deletion, just like fixed-table rebuild indexes. Consumers must read
+    /// rows through [`SequenceTable::row`] or [`SequenceTable::scan`], both of
+    /// which skip stale ids. A compaction changes the major generation and
+    /// rebuilds the index without those tombstones.
+    pub fn rows_for_indexed_value(&self, value: Value) -> Option<SubsetRef<'_>> {
+        self.value_index.as_ref()?.get(&value)
+    }
+
+    /// Return an owned snapshot of
+    /// [`SequenceTable::rows_for_indexed_value`].
+    ///
+    /// The borrowed form cannot be retained across a mutable table operation;
+    /// this form is intended for selecting candidates before an index-driven
+    /// rebuild or another operation that may merge or compact the table.
+    pub fn owned_rows_for_indexed_value(&self, value: Value) -> Option<Subset> {
+        let rows = self.rows_for_indexed_value(value)?;
+        Some(with_pool_set(|pools| rows.to_owned(&pools.get_pool())))
     }
 
     /// Iterate over live rows in a subset.
@@ -1434,6 +1654,14 @@ impl SequenceTable {
             self.parallel_compact();
         } else {
             self.serial_compact();
+        }
+        self.refresh_value_index();
+    }
+
+    fn refresh_value_index(&mut self) {
+        let version = self.version();
+        if let Some(index) = &mut self.value_index {
+            index.refresh(&self.rows, self.n_values, version);
         }
     }
 
@@ -2005,6 +2233,152 @@ mod tests {
         assert!(!change.added);
         assert!(table.lookup(&row(&[1])).is_none());
         assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn value_index_tracks_selected_positions_across_append_delete_and_compaction() {
+        empty_execution_state!(state);
+        let mut table = SequenceTable::new_with_values_and_index(
+            1,
+            max_tail_merge(),
+            Box::new(|key, visit| {
+                let (_, payload) = key
+                    .split_first()
+                    .expect("test encoding always has a metadata header");
+                for value in payload.iter().step_by(2) {
+                    visit(*value);
+                }
+            }),
+        );
+        let first = row(&[99, 1, 2, 1, 10]);
+        table.new_buffer().stage_insert(&first);
+        assert!(table.merge_with_state(&mut state).added);
+
+        assert!(table.rows_for_indexed_value(v(99)).is_none());
+        assert!(table.rows_for_indexed_value(v(2)).is_none());
+        let ones = table.rows_for_indexed_value(v(1)).unwrap();
+        assert_eq!(ones.size(), 1, "repeated values index a row only once");
+        let mut live = Vec::new();
+        table.scan(ones, |row, _| live.push(row));
+        assert_eq!(live.len(), 1);
+
+        table.new_buffer().stage_remove(&first[..first.len() - 1]);
+        assert!(table.merge_with_state(&mut state).removed);
+        let ones = table.rows_for_indexed_value(v(1)).unwrap();
+        assert_eq!(ones.size(), 1, "incremental indexes retain stale row ids");
+        live.clear();
+        table.scan(ones, |row, _| live.push(row));
+        assert!(live.is_empty());
+
+        let second = row(&[99, 1, 4, 7, 20]);
+        table.new_buffer().stage_insert(&second);
+        assert!(table.merge_with_state(&mut state).added);
+        let ones = table.rows_for_indexed_value(v(1)).unwrap();
+        assert_eq!(ones.size(), 2);
+        live.clear();
+        table.scan(ones, |row, _| live.push(row));
+        assert_eq!(live.len(), 1);
+
+        table.compact();
+        let ones = table.rows_for_indexed_value(v(1)).unwrap();
+        assert_eq!(ones.size(), 1);
+        let mut cloned = table.clone();
+        assert_eq!(cloned.rows_for_indexed_value(v(1)).unwrap().size(), 1);
+        cloned.clear();
+        assert!(cloned.rows_for_indexed_value(v(1)).is_none());
+    }
+
+    #[test]
+    fn parallel_compaction_rebuilds_value_index_for_new_row_ids() {
+        const ROWS: usize = 2_048;
+        empty_execution_state!(state);
+        ThreadPool::new(4).install(|| {
+            let mut table = SequenceTable::new_with_values_and_index(
+                1,
+                max_tail_merge(),
+                Box::new(|key, visit| key.iter().copied().for_each(visit)),
+            );
+            for index in 0..ROWS {
+                table.new_buffer().stage_insert(&[
+                    v(index % 8),
+                    v(100_000 + index),
+                    v(200_000 + index),
+                ]);
+            }
+            table.merge_with_state(&mut state);
+            for index in 0..1_000 {
+                table
+                    .new_buffer()
+                    .stage_remove(&[v(index % 8), v(100_000 + index)]);
+            }
+            table.merge_with_state(&mut state);
+            assert!(table.has_stale_rows());
+
+            // Exercise the parallel implementation directly without making
+            // this unit test allocate enough rows to cross the production
+            // compaction heuristic.
+            table.generation = table.generation.inc();
+            table.parallel_compact();
+            table.refresh_value_index();
+
+            let indexed = table.rows_for_indexed_value(v(3)).unwrap();
+            let mut found = 0;
+            table.scan(indexed, |_, key_and_value| {
+                assert_eq!(key_and_value[0], v(3));
+                found += 1;
+            });
+            assert_eq!(found, (1_000..ROWS).filter(|index| index % 8 == 3).count());
+        });
+    }
+
+    #[test]
+    fn indexed_subset_rebuild_touches_only_candidate_rows() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        empty_execution_state!(state);
+        let mut table = SequenceTable::new_with_values_and_index(
+            1,
+            max_tail_merge(),
+            Box::new(|key, visit| key.iter().copied().for_each(visit)),
+        );
+        for complete_row in [row(&[1, 10]), row(&[2, 20]), row(&[3, 30])] {
+            table.new_buffer().stage_insert(&complete_row);
+        }
+        table.merge_with_state(&mut state);
+
+        let mut candidates = Subset::empty();
+        table
+            .rows_for_indexed_value(v(2))
+            .unwrap()
+            .offsets(|row| candidates.add_row_sorted(row));
+        let visits = AtomicUsize::new(0);
+        let change = table.rebuild_full_rows_subset_with_state(
+            candidates.as_ref(),
+            &|row, rebuilt| {
+                visits.fetch_add(1, Ordering::Relaxed);
+                rebuilt.extend_from_slice(row);
+                rebuilt[0] = v(4);
+                true
+            },
+            &mut state,
+        );
+        assert!(change.added && change.removed);
+        assert_eq!(visits.load(Ordering::Relaxed), 1);
+        assert!(table.lookup(&row(&[1])).is_some());
+        assert!(table.lookup(&row(&[2])).is_none());
+        assert!(table.lookup(&row(&[3])).is_some());
+        assert_eq!(table.get_values(&row(&[4])), Some(row(&[20]).as_slice()));
+
+        let mut live_twos = 0;
+        table.scan(table.rows_for_indexed_value(v(2)).unwrap(), |_, _| {
+            live_twos += 1
+        });
+        assert_eq!(live_twos, 0);
+        let mut live_fours = 0;
+        table.scan(table.rows_for_indexed_value(v(4)).unwrap(), |_, _| {
+            live_fours += 1
+        });
+        assert_eq!(live_fours, 1);
     }
 
     #[test]
