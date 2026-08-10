@@ -3,25 +3,22 @@
 //! This module provides [`SharedArena`], a bump-allocation arena that can be
 //! shared by reference across scoped worker threads. Each worker creates a
 //! non-`Send`, non-`Sync` [`Handle`] and performs unsynchronized allocations
-//! into that handle's private local arena. Allocated values are exposed through
-//! [`SharedRef`], an immutable reference-like handle whose lifetime is tied to
-//! the borrowed [`SharedArena`].
+//! into that handle's private local arena. Allocated references remain valid
+//! for the lifetime of the borrowed [`SharedArena`].
 //!
-//! The arena owns all allocated values and runs destructors when the
-//! [`SharedArena`] is dropped. Since the arena itself is `Send`, values must be
-//! `Send` when they are allocated: the arena may be dropped on a different
-//! thread from the one that performed the allocation.
+//! Values allocated with [`Handle::alloc`] are dropped with the arena. Since
+//! the arena itself is `Send`, those values must be `Send`: their destructors
+//! may run on a different thread from the one that allocated them.
 //!
 //! [`Handle::alloc_layout`] is the narrow escape hatch for packed allocations.
 //! It returns an uninitialized, non-`Send` [`RawAllocation`]. The caller writes
-//! a no-drop header and any trailing data, then explicitly publishes the
-//! header as a [`SharedRef`]. Raw allocations never register destructors; this
-//! makes abandoning a partially initialized allocation during unwinding safe,
-//! provided every initialized tail value may also be safely forgotten.
+//! a header and any trailing data, then explicitly publishes a shared reference
+//! to the header. Raw allocations reclaim only their storage; they never run
+//! destructors.
 
 use std::{
-    alloc::Layout, cell::RefCell, marker::PhantomData, mem, ops::Deref, pin::Pin, ptr::NonNull,
-    rc::Rc, sync::Mutex,
+    alloc::Layout, cell::RefCell, marker::PhantomData, mem, pin::Pin, ptr::NonNull, rc::Rc,
+    sync::Mutex,
 };
 
 use bumpalo::Bump;
@@ -33,9 +30,8 @@ use bumpalo::Bump;
 /// that handle. Handles are deliberately not `Send` or `Sync`, so allocation
 /// from a single local arena stays thread-local.
 ///
-/// Values allocated in the arena remain valid until the arena is dropped. For
-/// types with destructors, drops run when the arena is dropped. Drop order is
-/// last-in, first-out within a single handle's local arena; order across
+/// Values returned by [`Handle::alloc`] remain valid until the arena is dropped.
+/// Their destructors run last-in, first-out within one handle; order across
 /// handles is unspecified.
 ///
 /// # Examples
@@ -111,8 +107,8 @@ impl SharedArena {
     ///
     /// Handles are cheap to allocate and are intended to be created inside the
     /// scoped thread that will use them. A handle cannot be sent to another
-    /// thread, but [`SharedRef`] values allocated by the handle can be shared
-    /// when their payload type is `Sync`.
+    /// thread, but references allocated by the handle can be shared when their
+    /// payload type is `Sync`.
     ///
     /// # Examples
     ///
@@ -166,8 +162,8 @@ pub struct Handle<'arena> {
 impl<'arena> Handle<'arena> {
     /// Allocate `value` in the parent [`SharedArena`].
     ///
-    /// The returned [`SharedRef`] remains valid until the arena is dropped.
-    /// `T` must be `Send` because the arena may be moved to and dropped on a
+    /// The returned reference remains valid until the arena is dropped. `T`
+    /// must be `Send` because the arena may be moved to and dropped on a
     /// different thread from the allocating handle.
     ///
     /// # Examples
@@ -181,7 +177,7 @@ impl<'arena> Handle<'arena> {
     ///
     /// assert_eq!(value.as_slice(), &[1, 2, 3]);
     /// ```
-    pub fn alloc<T>(&self, value: T) -> SharedRef<'arena, T>
+    pub fn alloc<T>(&self, value: T) -> &'arena T
     where
         T: Send + 'arena,
     {
@@ -190,10 +186,10 @@ impl<'arena> Handle<'arena> {
         // the `SharedArena` is dropped, and this handle's lifetime prevents the
         // arena from being dropped while the handle is alive.
         let local = unsafe { self.local.as_ref() };
-        SharedRef {
-            ptr: local.alloc(value),
-            _lifetime: PhantomData,
-        }
+        let value = local.alloc(value);
+        // SAFETY: the pinned LocalArena remains owned by the parent arena for
+        // `'arena`, and its bump allocation is never moved or mutably exposed.
+        unsafe { value.as_ref() }
     }
 
     /// Allocate uninitialized storage with exactly `layout` in the parent
@@ -206,9 +202,8 @@ impl<'arena> Handle<'arena> {
     /// of the allocation. Dropping the token simply abandons the storage until
     /// the arena itself is reclaimed.
     ///
-    /// Raw allocations do not register destructors. This is useful for packed
-    /// data whose header and trailing values are safe to forget, but it is not
-    /// a replacement for [`Handle::alloc`] when values own resources.
+    /// Raw allocations never run destructors. Use [`Handle::alloc`] instead
+    /// when values need cleanup.
     ///
     /// The token intentionally does not implement `Send` or `Sync`:
     ///
@@ -247,9 +242,8 @@ impl<'arena> Handle<'arena> {
 /// allocated until the parent arena is dropped, even if the token is abandoned
 /// because initialization panics.
 ///
-/// No destructor is registered for any part of this allocation. The caller of
-/// [`RawAllocation::assume_init_no_drop`] is responsible for ensuring that the
-/// header and all initialized trailing values can safely be forgotten.
+/// No destructor is registered for any part of this allocation; dropping the
+/// arena reclaims only its storage.
 pub struct RawAllocation<'arena> {
     ptr: NonNull<u8>,
     layout: Layout,
@@ -272,15 +266,16 @@ impl<'arena> RawAllocation<'arena> {
         self.ptr.as_ptr()
     }
 
-    /// Publish an initialized, no-drop `T` header at the start of this
-    /// allocation.
+    /// Publish an initialized `T` header without registering its destructor.
     ///
     /// The allocation may be larger than `T`; this is the intended way to
     /// publish a sized header followed by packed trailing arrays. This method
     /// checks, before treating the storage as `T`, that the original layout is
-    /// large enough and sufficiently aligned for `T`, and that
-    /// `mem::needs_drop::<T>()` is false. A failed check panics without
-    /// publishing a reference.
+    /// large enough and sufficiently aligned for `T`. A failed check panics
+    /// without publishing a reference.
+    ///
+    /// `T` may require drop, but no destructor will run. Use [`Handle::alloc`]
+    /// when values need cleanup.
     ///
     /// # Safety
     ///
@@ -289,8 +284,6 @@ impl<'arena> RawAllocation<'arena> {
     /// - a valid `T` has been completely initialized at [`Self::as_mut_ptr`];
     /// - every byte that `T`'s safe interface can read, including trailing
     ///   storage reached through offsets or pointers in `T`, is initialized;
-    /// - omitting destructors for every initialized trailing value is sound,
-    ///   both after publication and if initialization unwinds partway through;
     /// - the `Send` and `Sync` behavior of `T` accurately accounts for any
     ///   trailing values its interface can access; and
     /// - no pointer retained from [`Self::as_mut_ptr`] is used to mutate the
@@ -299,7 +292,7 @@ impl<'arena> RawAllocation<'arena> {
     ///
     /// Raw trailing storage is not described by Rust's type system, so these
     /// invariants cannot be checked by this API.
-    pub unsafe fn assume_init_no_drop<T>(self) -> SharedRef<'arena, T>
+    pub unsafe fn assume_init_no_drop<T>(self) -> &'arena T
     where
         T: Send + 'arena,
     {
@@ -315,73 +308,12 @@ impl<'arena> RawAllocation<'arena> {
             self.layout.align(),
             mem::align_of::<T>()
         );
-        assert!(
-            !mem::needs_drop::<T>(),
-            "raw arena allocation headers must not require drop"
-        );
-
-        SharedRef {
-            ptr: self.ptr.cast(),
-            _lifetime: PhantomData,
-        }
+        // SAFETY: the caller initialized a valid `T`, the checked allocation
+        // can hold it, and the method's remaining invariants prohibit later
+        // mutation. The allocation remains valid for `'arena`.
+        unsafe { self.ptr.cast::<T>().as_ref() }
     }
 }
-
-/// An immutable reference to a value allocated in a [`SharedArena`].
-///
-/// `SharedRef` is copyable and dereferences to `T`. It implements `Send` and
-/// `Sync` when `T: Sync`, matching the sharing behavior of `&T`.
-///
-/// # Examples
-///
-/// ```
-/// use egglog_concurrency::{SharedArena, SharedRef};
-///
-/// let arena = SharedArena::new();
-/// let handle = arena.new_handle();
-/// let value: SharedRef<'_, usize> = handle.alloc(5);
-///
-/// assert_eq!(*value, 5);
-/// assert_eq!(*value, *value.clone());
-/// ```
-pub struct SharedRef<'arena, T> {
-    ptr: NonNull<T>,
-    _lifetime: PhantomData<&'arena T>,
-}
-
-impl<T> Copy for SharedRef<'_, T> {}
-
-impl<T> Clone for SharedRef<'_, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<'arena, T> SharedRef<'arena, T> {
-    /// Convert this copyable handle into a reference valid for the lifetime of
-    /// its parent [`SharedArena`].
-    pub fn into_ref(self) -> &'arena T {
-        // SAFETY: `ptr` denotes a fully initialized value in a bump allocation
-        // owned by the parent arena. The lifetime marker prevents that arena
-        // from being dropped for `'arena`, and publication never exposes a
-        // mutable reference to this value.
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl<T> Deref for SharedRef<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        // SAFETY: `ptr` is created from a valid bump allocation and the
-        // `SharedRef` lifetime is tied to the parent arena. The API never
-        // exposes mutable references to allocated values after allocation.
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-unsafe impl<T: Sync> Send for SharedRef<'_, T> {}
-unsafe impl<T: Sync> Sync for SharedRef<'_, T> {}
 
 struct LocalArena {
     bump: Bump,
