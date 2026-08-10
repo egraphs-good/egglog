@@ -1,0 +1,24 @@
+---
+source: tests/files.rs
+assertion_line: 88
+expression: snapshot_content_across_treatments
+---
+((HasElem 2)
+ (HasMS 1)
+ (HasMap 1)
+ (HasPair 1)
+ (HasSet 1)
+ (HasVec 1)
+ (MSLen 1)
+ (MapGet 1)
+ (MapLen 1)
+ (OutWrap 1)
+ (PFirst 1)
+ (QSame 2)
+ (QVecGet 2)
+ (QVecLen 1)
+ (S 1)
+ (VGet 1)
+ (VLen 1)
+ (WrapVec 1)
+ (Z 1))

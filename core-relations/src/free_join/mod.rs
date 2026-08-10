@@ -13,7 +13,6 @@ use crate::{
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
 use egglog_concurrency::{NotificationList, ResettableOnceLock};
-use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
@@ -25,6 +24,7 @@ use crate::{
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
+    parallel,
     parallel_heuristics::parallelize_db_level_op,
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
@@ -314,8 +314,8 @@ pub struct Database {
 impl Database {
     /// Create an empty Database.
     ///
-    /// Queries are executed using the current rayon thread pool, which defaults to the global
-    /// thread pool.
+    /// Queries use the currently installed egglog thread pool. If no pool is
+    /// installed, queries run single-threaded.
     pub fn new() -> Database {
         Database::default()
     }
@@ -420,7 +420,7 @@ impl Database {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
             let view = self.read_only_view();
-            tables.par_iter_mut().for_each(|(id, info)| {
+            parallel::for_each_mut(&mut tables, |_, (id, info)| {
                 if run(*id, info, &view) {
                     self.notification_list.notify(*id);
                 }
@@ -520,11 +520,15 @@ impl Database {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         let mut to_merge = IndexSet::default();
+        // Tables modified during this `merge_all` call. Only these need their cached indexes reset
+        // at the end so future reads refresh them.
+        let mut touched: IndexSet<TableId> = IndexSet::default();
         loop {
             to_merge.clear();
             let to_merge_vec = self.notification_list.reset();
+            touched.extend(to_merge_vec.iter().copied());
             if to_merge_vec.len() < 4 {
-                ever_changed |= self.merge_simple(to_merge_vec);
+                ever_changed |= self.merge_simple(to_merge_vec, &mut touched);
                 break;
             }
             for table in to_merge_vec {
@@ -556,18 +560,22 @@ impl Database {
                 // Then initialize read dependencies (this two-phase structure is why we have an
                 // Option in the tables_merging map).
                 for table in stratum.intersection(&to_merge).copied() {
-                    tables_merging[table].0 = Some(self.tables.unwrap_val(table));
+                    let val = self.tables.unwrap_val(table);
+                    // Maintain `total_size_estimate` incrementally (subtract now, add
+                    // the post-merge length on drain below) so the reset loop no
+                    // longer re-sums every table.
+                    self.total_size_estimate =
+                        self.total_size_estimate.wrapping_sub(val.table.len());
+                    tables_merging[table].0 = Some(val);
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    tables_merging
-                        .par_iter_mut()
-                        .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                        })
-                        .max()
-                        .unwrap_or(false)
+                    parallel::map_dense_id_map_mut(&mut tables_merging, |_, (info, buffers)| {
+                        let mut es = ExecutionState::new(db, mem::take(buffers));
+                        info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                    })
+                    .into_iter()
+                    .any(|changed| changed)
                 } else {
                     tables_merging
                         .iter_mut()
@@ -579,39 +587,58 @@ impl Database {
                         .unwrap_or(false)
                 };
                 for (id, (table, _)) in tables_merging.drain() {
-                    self.tables.insert(id, table.unwrap());
+                    let val = table.unwrap();
+                    self.total_size_estimate =
+                        self.total_size_estimate.wrapping_add(val.table.len());
+                    self.tables.insert(id, val);
                 }
             }
             ever_changed |= changed;
         }
-        // Reset all indexes to force an update on the next access.
-        let mut size_estimate = 0;
-        for (_, info) in self.tables.iter_mut() {
-            info.column_indexes.update(|_, ti| {
-                Arc::get_mut(ti).unwrap().reset();
-            });
-            info.indexes.update(|_, ti| {
-                Arc::get_mut(ti).unwrap().reset();
-            });
-            size_estimate += info.table.len();
+        // Reset the cached indexes of only the tables modified during this call so
+        // they refresh on next access; unmodified tables keep their still-valid
+        // cached indexes. `touched` must contain *every* table whose version bumped
+        // this call: `ResettableOnceLock::get_or_update` runs the index `refresh`
+        // only after a `reset()`, so a modified-but-unreset table would keep serving
+        // a stale cached index. It does — every merged table comes from
+        // `notification_list.reset()`, which is exactly what `touched` accumulates.
+        // `total_size_estimate` was maintained incrementally at each merge (above and
+        // in `merge_simple`), so we no longer re-sum every table here.
+        for table in touched.iter().copied() {
+            if let Some(info) = self.tables.get_mut(table) {
+                info.column_indexes.update(|_, ti| {
+                    Arc::get_mut(ti).unwrap().reset();
+                });
+                info.indexes.update(|_, ti| {
+                    Arc::get_mut(ti).unwrap().reset();
+                });
+            }
         }
-        self.total_size_estimate = size_estimate;
         ever_changed
     }
 
     /// A "fast path" merge method that is not optimized for parallelism and does not respect read
     /// and write dependencies. This ends up being faster than the full "strata-aware" option in
     /// the body of `merge_all`.
-    fn merge_simple(&mut self, mut to_merge: SmallVec<[TableId; 4]>) -> bool {
+    fn merge_simple(
+        &mut self,
+        mut to_merge: SmallVec<[TableId; 4]>,
+        touched: &mut IndexSet<TableId>,
+    ) -> bool {
         let mut changed = false;
         while !to_merge.is_empty() {
             for table_id in to_merge.iter().copied() {
                 let mut info = self.tables.unwrap_val(table_id);
+                // Maintain `total_size_estimate` incrementally (see `merge_all`'s
+                // reset loop, which no longer re-sums every table).
+                self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
                 let mut es = ExecutionState::new(self.read_only_view(), Default::default());
                 changed |= info.table.merge(&mut es).added || es.changed;
+                self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
                 self.tables.insert(table_id, info);
             }
             to_merge = self.notification_list.reset();
+            touched.extend(to_merge.iter().copied());
         }
         changed
     }
@@ -834,11 +861,8 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Clean up the ambient thread pool.
-        //
-        // Calling mem::forget on the egraph can result in much faster execution times.
+        // Clean up this thread's ambient memory pool.
         with_pool_set(PoolSet::clear);
-        rayon::broadcast(|_| with_pool_set(PoolSet::clear));
     }
 }
 

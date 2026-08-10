@@ -40,6 +40,12 @@ pub struct Matches {
     matches: Vec<Value>,
     chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
+    /// Width of each stored tuple in `matches`. This is `vars.len()` for an
+    /// ordinary rule. A rule whose head references no variables would otherwise
+    /// have zero-width tuples, making its match count unrecoverable; for those we
+    /// collect a single unit marker per match, so the width is 1 while `vars` is
+    /// empty.
+    tuple_width: usize,
     all_chosen: bool,
 }
 
@@ -60,12 +66,15 @@ impl Match<'_> {
 
 impl Matches {
     fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>) -> Self {
-        let total_len = matches.len();
-        let tuple_len = vars.len();
-        assert!(total_len.is_multiple_of(tuple_len));
+        // Variable-free rules collect one unit marker per match (see
+        // `SchedulerRuleInfo::new`), so each stored tuple is one value wide even
+        // though there are no variables.
+        let tuple_width = vars.len().max(1);
+        assert!(matches.len().is_multiple_of(tuple_width));
         Self {
             matches,
             vars,
+            tuple_width,
             chosen: Vec::new(),
             all_chosen: false,
         }
@@ -73,7 +82,7 @@ impl Matches {
 
     /// The number of matches in total.
     pub fn match_size(&self) -> usize {
-        self.matches.len() / self.vars.len()
+        self.matches.len() / self.tuple_width
     }
 
     /// The length of a tuple.
@@ -107,18 +116,30 @@ impl Matches {
         state: &mut ExecutionState<'_>,
         table_action: &TableAction,
     ) -> Vec<Value> {
-        let tuple_len = self.tuple_len();
+        // Width of the stored tuples (1 for variable-free rules, see `new`) versus
+        // the number of variable columns actually written into the `decided` table.
+        // For a variable-free rule the stored unit marker is dropped and only the
+        // trailing unit is inserted, producing the single `(unit)` row that the
+        // action rule fires on.
+        let tuple_width = self.tuple_width;
+        let var_len = self.vars.len();
         let unit = state.base_values().get(());
 
         if self.all_chosen {
-            for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+            for row in self.matches.chunks(tuple_width) {
+                table_action.insert(
+                    state,
+                    row[..var_len].iter().cloned().chain(std::iter::once(unit)),
+                );
             }
             vec![]
         } else {
             for idx in self.chosen.iter() {
-                let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                let row = &self.matches[idx * tuple_width..(idx + 1) * tuple_width];
+                table_action.insert(
+                    state,
+                    row[..var_len].iter().cloned().chain(std::iter::once(unit)),
+                );
             }
 
             // swap remove the chosen matches
@@ -130,14 +151,14 @@ impl Matches {
                 // matches are exhausted.
                 p -= 1;
                 if c != p {
-                    let idx_c = c * tuple_len;
-                    let idx_p = p * tuple_len;
-                    for i in 0..tuple_len {
+                    let idx_c = c * tuple_width;
+                    let idx_p = p * tuple_width;
+                    for i in 0..tuple_width {
                         self.matches.swap(idx_c + i, idx_p + i);
                     }
                 }
             }
-            self.matches.truncate(p * tuple_len);
+            self.matches.truncate(p * tuple_width);
 
             self.matches
         }
@@ -173,8 +194,11 @@ impl EGraph {
             ruleset: &str,
             rulesets: &'a IndexMap<String, Ruleset>,
             ids: &mut Vec<(String, &'a ResolvedCoreRule)>,
-        ) {
-            match &rulesets[ruleset] {
+        ) -> Result<(), Error> {
+            let Some(r) = rulesets.get(ruleset) else {
+                return Err(Error::BackendError(format!("no such ruleset: {ruleset}")));
+            };
+            match r {
                 Ruleset::Rules(rules) => {
                     for (rule_name, (core_rule, _)) in rules.iter() {
                         ids.push((rule_name.clone(), core_rule));
@@ -182,96 +206,112 @@ impl EGraph {
                 }
                 Ruleset::Combined(sub_rulesets) => {
                     for sub_ruleset in sub_rulesets {
-                        collect_rules(sub_ruleset, rulesets, ids);
+                        collect_rules(sub_ruleset, rulesets, ids)?;
                     }
                 }
             }
+            Ok(())
         }
 
         let mut rules = Vec::new();
         let rulesets = std::mem::take(&mut self.rulesets);
-        collect_rules(ruleset, &rulesets, &mut rules);
+        let collected = collect_rules(ruleset, &rulesets, &mut rules);
+        // Restore `rulesets` before propagating any error so the EGraph is not
+        // left with its rulesets taken out.
+        if let Err(e) = collected {
+            self.rulesets = rulesets;
+            return Err(e);
+        }
         let mut schedulers = std::mem::take(&mut self.schedulers);
 
-        // Step 1: build all the query/action rules and worklist if have not already
-        let record = &mut schedulers[scheduler_id];
-        rules.iter().for_each(|(id, rule)| {
-            record
-                .rule_info
-                .entry((*id).to_owned())
-                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
-        });
-
-        // Step 2: run all the queries for one iteration
-        let query_rules = rules
-            .iter()
-            .filter_map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-
-                if rule_info.should_seek {
-                    Some(rule_info.query_rule)
-                } else {
-                    None
+        // `rulesets` and `schedulers` are now taken out of `self`. The body below
+        // has several fallible steps (rule compilation, `run_rules`), so run it in
+        // a closure and restore both fields afterward no matter how it exits.
+        // Otherwise an early error would leave the EGraph with empty rulesets and
+        // schedulers.
+        let result = (|| -> Result<RunReport, Error> {
+            // Step 1: build all the query/action rules and worklist if have not already
+            let record = &mut schedulers[scheduler_id];
+            for (id, rule) in rules.iter() {
+                if !record.rule_info.contains_key(id) {
+                    let info = SchedulerRuleInfo::new(self, rule, id)?;
+                    record.rule_info.insert((*id).to_owned(), info);
                 }
-            })
-            .collect::<Vec<_>>();
-
-        let query_iter_report = self
-            .backend
-            .run_rules(&query_rules)
-            .map_err(|e| Error::BackendError(e.to_string()))?;
-
-        // Step 3: let the scheduler decide which matches need to be kept
-        self.backend.with_execution_state(|state| {
-            for (rule_id, _rule) in rules.iter() {
-                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
-
-                let matches: Vec<Value> =
-                    std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                rule_info.should_seek =
-                    record
-                        .scheduler
-                        .filter_matches(rule_id, ruleset, &mut matches);
-                let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
             }
-        });
-        self.backend.flush_updates();
 
-        // Step 4: run the action rules
-        let action_rules = rules
-            .iter()
-            .map(|(rule_id, _rule)| {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
-                rule_info.action_rule
-            })
-            .collect::<Vec<_>>();
-        let action_iter_report = self
-            .backend
-            .run_rules(&action_rules)
-            .map_err(|e| Error::BackendError(e.to_string()))?;
+            // Step 2: run all the queries for one iteration
+            let query_rules = rules
+                .iter()
+                .filter_map(|(rule_id, _rule)| {
+                    let rule_info = record.rule_info.get(rule_id).unwrap();
 
-        // Step 5: combine the reports
-        let mut query_report = RunReport::singleton(ruleset, query_iter_report);
-        let mut action_report = RunReport::singleton(ruleset, action_iter_report);
+                    if rule_info.should_seek {
+                        Some(rule_info.query_rule)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        // query matches don't count
-        query_report.updated = false;
-        query_report.num_matches_per_rule.clear();
-        // Scheduler state should not count as database progress. Instead it
-        // determines whether a no-op iteration can be treated as fully stopped.
-        action_report.can_stop = !action_report.updated && {
-            let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
-            record.scheduler.can_stop(&rule_ids, ruleset)
-        };
+            let query_iter_report = self
+                .backend
+                .run_rules(&query_rules)
+                .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        query_report.union(action_report);
+            // Step 3: let the scheduler decide which matches need to be kept
+            self.backend.with_execution_state(|state| {
+                for (rule_id, _rule) in rules.iter() {
+                    let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+
+                    let matches: Vec<Value> =
+                        std::mem::take(rule_info.matches.lock().unwrap().as_mut());
+                    let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+                    rule_info.should_seek =
+                        record
+                            .scheduler
+                            .filter_matches(rule_id, ruleset, &mut matches);
+                    let table_action = TableAction::new(&self.backend, rule_info.decided);
+                    *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
+                }
+            });
+            self.backend.flush_updates();
+
+            // Step 4: run the action rules
+            let action_rules = rules
+                .iter()
+                .map(|(rule_id, _rule)| {
+                    let rule_info = record.rule_info.get(rule_id).unwrap();
+                    rule_info.action_rule
+                })
+                .collect::<Vec<_>>();
+            let action_iter_report = self
+                .backend
+                .run_rules(&action_rules)
+                .map_err(|e| Error::BackendError(e.to_string()))?;
+
+            // Step 5: combine the reports
+            let mut query_report = RunReport::singleton(ruleset, query_iter_report);
+            let mut action_report = RunReport::singleton(ruleset, action_iter_report);
+
+            // query matches don't count
+            query_report.updated = false;
+            query_report.num_matches_per_rule.clear();
+            // Scheduler state should not count as database progress. Instead it
+            // determines whether a no-op iteration can be treated as fully stopped.
+            action_report.can_stop = !action_report.updated && {
+                let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+                record.scheduler.can_stop(&rule_ids, ruleset)
+            };
+
+            query_report.union(action_report);
+
+            Ok(query_report)
+        })();
 
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
-        Ok(query_report)
+        result
     }
 }
 
@@ -321,7 +361,11 @@ impl ExternalFunction for CollectMatches {
 }
 
 impl SchedulerRuleInfo {
-    fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
+    fn new(
+        egraph: &mut EGraph,
+        rule: &ResolvedCoreRule,
+        name: &str,
+    ) -> Result<SchedulerRuleInfo, Error> {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
         let unit = egraph.backend.base_values().get(());
@@ -351,11 +395,18 @@ impl SchedulerRuleInfo {
             &egraph.type_info,
             false, // seminaive query: Pure/Write contexts
         );
-        qrule_builder.query(&rule.body, true);
-        let entries = free_vars
+        qrule_builder.query(&rule.body, false)?;
+        let mut entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
+        // A rule whose head references no variables would otherwise collect empty
+        // tuples, leaving the scheduler unable to tell whether the query matched and
+        // so never applying its actions. Collect a single unit marker per match so
+        // the match count is recoverable.
+        if entries.is_empty() {
+            entries.push(unit_entry.clone());
+        }
         let _var = qrule_builder.rb.call_external_func(
             collect_matches,
             &entries,
@@ -380,20 +431,20 @@ impl SchedulerRuleInfo {
             .rb
             .query_table(decided, &entries, None)
             .unwrap();
-        arule_builder.actions(&rule.head).unwrap();
+        arule_builder.actions(&rule.head)?;
         // Remove the entry as it's now done
         entries.pop();
         arule_builder.rb.remove(decided, &entries);
         let arule_id = arule_builder.build();
 
-        SchedulerRuleInfo {
+        Ok(SchedulerRuleInfo {
             free_vars,
             query_rule: qrule_id,
             action_rule: arule_id,
             matches,
             decided,
             should_seek: true,
-        }
+        })
     }
 }
 
@@ -478,6 +529,37 @@ mod test {
         assert_eq!(iter, 12);
     }
 
+    #[test]
+    fn test_scheduler_does_not_apply_fresh_subsumed_matches() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(FirstNScheduler { n: 10 }));
+        let input = r#"
+        (ruleset analysis)
+        (ruleset test)
+        (datatype Math
+          (Add Math Math)
+          (Mul Math Math)
+          (Num i64))
+        (relation Hit (i64))
+        (let expr (Add (Mul (Num 0) (Num 1)) (Num 2)))
+        (rewrite (Mul (Num 0) x) (Num 0) :subsume :ruleset analysis)
+        (rewrite (Add (Num 0) x) x :subsume :ruleset analysis)
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a)) :ruleset test :name "hit-subsumed-affine")
+        (run-schedule (saturate (run analysis)))
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+
+        let report = egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+
+        assert_eq!(egraph.get_size("Hit"), 0);
+        assert!(
+            !report.updated,
+            "subsumed rows should not be collected as fresh scheduler matches"
+        );
+    }
+
     #[derive(Clone, Default)]
     struct DelayStopScheduler {
         can_stop_calls: usize,
@@ -518,5 +600,77 @@ mod test {
         assert_eq!(before, after);
         assert!(!report.updated);
         assert!(!report.can_stop);
+    }
+
+    #[test]
+    fn test_step_rules_with_scheduler_unknown_ruleset() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(DelayStopScheduler::default()));
+        let err = egraph
+            .step_rules_with_scheduler(scheduler_id, "does-not-exist")
+            .unwrap_err();
+        assert!(matches!(err, Error::BackendError(_)));
+    }
+
+    /// A scheduler that only inspects `match_size` and never chooses anything.
+    #[derive(Clone)]
+    struct InspectSizeScheduler;
+
+    impl Scheduler for InspectSizeScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            // Calling `match_size` on a rule with no free variables used to panic
+            // with a divide-by-zero. Just exercise it and stop.
+            let _ = matches.match_size();
+            false
+        }
+    }
+
+    #[test]
+    fn test_match_size_with_no_free_vars() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(InspectSizeScheduler));
+        // The action `(R 1)` references no variables, so the rule has no free vars.
+        let input = r#"
+        (ruleset test)
+        (relation R (i64))
+        (rule ((R x)) ((R 1)) :ruleset test :name "no-vars")
+        (R 0)
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+    }
+
+    /// A scheduler that fires every match.
+    #[derive(Clone)]
+    struct ChooseAllScheduler;
+
+    impl Scheduler for ChooseAllScheduler {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+            matches.choose_all();
+            false
+        }
+    }
+
+    #[test]
+    fn test_no_free_vars_rule_applies_actions() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+        // The action `(S)` references no variables, so the rule has no free vars.
+        // The scheduler must still apply it when the query matches.
+        let input = r#"
+        (ruleset test)
+        (relation R (i64))
+        (relation S ())
+        (rule ((R x)) ((S)) :ruleset test :name "no-vars")
+        (R 0)
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+        assert_eq!(egraph.get_size("S"), 0);
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        assert_eq!(egraph.get_size("S"), 1);
     }
 }

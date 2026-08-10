@@ -1,6 +1,7 @@
 use std::hash::Hasher;
 
 use crate::Context;
+use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
@@ -244,7 +245,7 @@ impl EGraph {
             None => Arc::new(EqSort { name }),
             Some((presort, args)) => {
                 if let Some(mksort) = self.type_info.mksorts.get(presort) {
-                    mksort(&mut self.type_info, name, args)?
+                    mksort(&mut self.type_info, name, args, span.clone())?
                 } else {
                     return Err(TypeError::PresortNotFound(presort.clone(), span));
                 }
@@ -415,6 +416,8 @@ impl EGraph {
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => {
                 // Note this is bad since typechecking should be pure and idempotent
@@ -424,12 +427,51 @@ impl EGraph {
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
                 }
+                // Record this sort's UF / proof tables in proof_state (as
+                // run_command also does) so the container rebuild registration
+                // below can recover them — including this container's own proof
+                // table, which has not run yet.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state
+                        .uf_parent
+                        .insert(name.clone(), uf_ctor.clone());
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state
+                            .uf_function
+                            .insert(name.clone(), uf_index.clone());
+                    }
+                }
+                if let Some(pf) = proof_func {
+                    self.proof_state
+                        .proof_func_parent
+                        .insert(name.clone(), pf.clone());
+                }
+                // The Proof sort records the global proof constructors; restore
+                // them into proof_state so container rebuild can recover them
+                // (the `Proof` datatype name is this sort's own name).
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr.clone();
+                    names.eq_trans_constructor = pc.trans.clone();
+                    names.eq_sym_constructor = pc.sym.clone();
+                    names.container_normalize_constructor = pc.normalize.clone();
+                }
+                // A container sort under the term/proof encoding carries a spec
+                // for its rebuild primitives; register them here so they are
+                // available both during encoding and when the desugared program
+                // is re-parsed.
+                if let Some(spec) = container_rebuild {
+                    register_container_rebuild_from_spec(self, name, spec);
+                }
                 ResolvedNCommand::Sort {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
                     proof_func: proof_func.clone(),
+                    container_rebuild: container_rebuild.clone(),
+                    proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,
                 }
             }
@@ -883,7 +925,7 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self, query_ctx);
+        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self, query_ctx)?;
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
@@ -957,7 +999,7 @@ impl TypeInfo {
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
-        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::Read);
+        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::Read)?;
         Ok(annotated_facts)
     }
 
@@ -1167,6 +1209,8 @@ pub enum TypeError {
     FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("{1}\nPresort {0} not found.")]
     PresortNotFound(String, Span),
+    #[error("{1}\nInvalid arguments to sort constructor `{0}`")]
+    BadPresortArguments(String, Span),
     #[error("{}\nFailed to infer a type for: {}", .0.span(), .0)]
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
@@ -1197,6 +1241,20 @@ pub enum TypeError {
         crate::GLOBAL_NAME_PREFIX
     )]
     GlobalMissingPrefix { name: String, span: Span },
+    #[error(
+        "{span}\nAmbiguous primitive resolution for `{name}` in {ctx:?} context: multiple registered primitives match the same signature."
+    )]
+    AmbiguousPrimitive {
+        name: String,
+        ctx: crate::Context,
+        span: Span,
+    },
+    #[error("{span}\nNo resolution for `{name}` in {ctx:?} context.")]
+    UnresolvedPrimitive {
+        name: String,
+        ctx: crate::Context,
+        span: Span,
+    },
 }
 
 #[cfg(test)]

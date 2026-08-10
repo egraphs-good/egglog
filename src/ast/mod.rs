@@ -20,6 +20,38 @@ use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
 
+/// A container sort's rebuild-primitive names, carried on its `(sort …)` as the
+/// `:internal-container-rebuild` annotation. Everything else needed to register
+/// the primitives is recovered from `proof_state` at register time.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContainerRebuildSpec {
+    /// The value-rebuild primitive.
+    pub internal_rebuild_prim: String,
+    /// The proof-producing rebuild primitive; `None` in term-only mode.
+    pub internal_rebuild_proof_prim: Option<String>,
+}
+
+impl Display for ContainerRebuildSpec {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "(container-rebuild-spec {}", self.internal_rebuild_prim)?;
+        if let Some(proof_prim) = &self.internal_rebuild_proof_prim {
+            write!(f, " {proof_prim}")?;
+        }
+        write!(f, ")")
+    }
+}
+
+/// The program-global proof constructor names, recorded on the `Proof` sort as
+/// the `:internal-proof-names` annotation (the `Proof` datatype name is the
+/// sort's own name).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProofConstructorNames {
+    pub congr: String,
+    pub trans: String,
+    pub sym: String,
+    pub normalize: String,
+}
+
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
@@ -56,12 +88,20 @@ where
         span: Span,
         name: String,
         presort_and_args: Option<(String, Vec<GenericExpr<String, String>>)>,
-        /// The name of the union-find function for this sort.
-        /// Used in term encoding to canonicalize values during extraction.
-        uf: Option<String>,
+        /// The union-find `(constructor, optional function-index)` table names
+        /// for this sort: `UF_<E>` (scanned by extraction's `find_canonical`)
+        /// and the optional `UF_<E>f` index (single-key leader lookup).
+        uf: Option<(String, Option<String>)>,
         /// The name of the proof function for this sort.
         /// Set by proof desugaring to record where proofs are stored for this sort.
         proof_func: Option<String>,
+        /// For container sorts under the term/proof encoding: the spec for the
+        /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
+        /// as the `:internal-container-rebuild` annotation.
+        container_rebuild: Option<ContainerRebuildSpec>,
+        /// The global proof constructor names (see [`ProofConstructorNames`]),
+        /// recorded once on the `Proof` sort as `:internal-proof-names`.
+        proof_constructors: Option<ProofConstructorNames>,
         /// Whether values of this sort can be unioned.
         /// Defaults to true for user-defined sorts.
         /// Set to false for relations and term tables that should not allow union.
@@ -116,6 +156,8 @@ where
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => GenericCommand::Sort {
                 span: span.clone(),
@@ -123,6 +165,8 @@ where
                 presort_and_args: presort_and_args.clone(),
                 uf: uf.clone(),
                 proof_func: proof_func.clone(),
+                container_rebuild: container_rebuild.clone(),
+                proof_constructors: proof_constructors.clone(),
                 unionable: *unionable,
             },
             GenericNCommand::Function(f) => match f.subtype {
@@ -242,6 +286,8 @@ where
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => GenericNCommand::Sort {
                 span,
@@ -249,6 +295,8 @@ where
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             },
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
@@ -552,12 +600,19 @@ where
         span: Span,
         name: String,
         presort_and_args: Option<(String, Vec<Expr>)>,
-        /// The name of the union-find function for this sort.
-        /// Used in term encoding to canonicalize values during extraction.
-        uf: Option<String>,
+        /// The union-find `(constructor, optional function-index)` table names
+        /// for this sort (see [`GenericNCommand::Sort`]).
+        uf: Option<(String, Option<String>)>,
         /// The name of the proof function for this sort.
         /// Set by proof desugaring to record where proofs are stored for this sort.
         proof_func: Option<String>,
+        /// For container sorts under the term/proof encoding: the spec for the
+        /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
+        /// as the `:internal-container-rebuild` annotation.
+        container_rebuild: Option<ContainerRebuildSpec>,
+        /// The global proof constructor names (see [`ProofConstructorNames`]),
+        /// recorded once on the `Proof` sort as `:internal-proof-names`.
+        proof_constructors: Option<ProofConstructorNames>,
         /// Whether values of this sort can be unioned.
         /// Defaults to true for user-defined sorts.
         /// Set to false for relations and term tables that should not allow union.
@@ -956,23 +1011,43 @@ where
                 presort_and_args: None,
                 uf,
                 proof_func,
+                proof_constructors,
                 ..
             } => {
                 write!(f, "(sort {name}")?;
-                if let Some(uf) = uf {
-                    write!(f, " :internal-uf {uf}")?;
+                if let Some((uf_ctor, uf_index)) = uf {
+                    write!(f, " :internal-uf {uf_ctor}")?;
+                    if let Some(uf_index) = uf_index {
+                        write!(f, " {uf_index}")?;
+                    }
                 }
                 if let Some(pf) = proof_func {
                     write!(f, " :internal-proof-func {pf}")?;
+                }
+                if let Some(pc) = proof_constructors {
+                    write!(
+                        f,
+                        " :internal-proof-names {} {} {} {}",
+                        pc.congr, pc.trans, pc.sym, pc.normalize
+                    )?;
                 }
                 write!(f, ")")
             }
             GenericCommand::Sort {
                 name,
                 presort_and_args: Some((name2, args)),
+                proof_func,
+                container_rebuild,
                 ..
             } => {
-                write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
+                write!(f, "(sort {name} ({name2} {})", ListDisplay(args, " "))?;
+                if let Some(pf) = proof_func {
+                    write!(f, " :internal-proof-func {pf}")?;
+                }
+                if let Some(spec) = container_rebuild {
+                    write!(f, " :internal-container-rebuild {spec}")?;
+                }
+                write!(f, ")")
             }
             GenericCommand::Function {
                 span: _,
@@ -1600,13 +1675,17 @@ where
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => GenericCommand::Sort {
                 span,
                 name: fun(name),
                 presort_and_args,
-                uf: uf.map(&mut *fun),
+                uf: uf.map(|(ctor, index)| (fun(ctor), index.map(&mut *fun))),
                 proof_func: proof_func.map(&mut *fun),
+                container_rebuild,
+                proof_constructors,
                 unionable,
             },
             GenericCommand::Datatype {
@@ -1877,6 +1956,8 @@ where
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             } => GenericCommand::Sort {
                 span,
@@ -1884,6 +1965,8 @@ where
                 presort_and_args,
                 uf,
                 proof_func,
+                container_rebuild,
+                proof_constructors,
                 unionable,
             },
             GenericCommand::Datatype {

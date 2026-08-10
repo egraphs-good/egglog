@@ -20,7 +20,7 @@ use crate::{
         mask::{Mask, MaskIter, ValueSource},
     },
     common::Value,
-    hash_index::{ColumnIndex, IndexBase, TupleIndex},
+    hash_index::{IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
     pool::{PoolSet, Pooled, with_pool_set},
     row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
@@ -90,7 +90,7 @@ pub struct TableChange {
 }
 
 /// A constraint on the values within a row.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Constraint {
     Eq { l_col: ColumnId, r_col: ColumnId },
     EqConst { col: ColumnId, val: Value },
@@ -100,7 +100,32 @@ pub enum Constraint {
     GeConst { col: ColumnId, val: Value },
 }
 
+/// Remap individual values (e.g. to their union-find leaders) — the value-level
+/// half of rebuilding, enough to rebuild a single container's contents (see
+/// [`crate::ContainerValue::rebuild_contents`]).
+pub trait ValueRebuilder: Send + Sync {
+    /// Rebuild a single value.
+    fn rebuild_val(&self, val: Value) -> Value;
+    /// Rebuild a slice of values in place, returning true if any values were changed.
+    ///
+    /// Defaults to mapping each value through [`ValueRebuilder::rebuild_val`];
+    /// implementors may override for efficiency.
+    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
+        let mut changed = false;
+        for val in vals.iter_mut() {
+            let new = self.rebuild_val(*val);
+            if new != *val {
+                *val = new;
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
 /// Custom functions used for tables that encode a bulk value-level rebuild of other tables.
+///
+/// Extends [`ValueRebuilder`] with table-level (bulk) operations.
 ///
 /// The initial use-case for this trait is to support optimized implementations of rebuilding,
 /// where `Rebuilder` is implemented as a Union-find.
@@ -108,11 +133,10 @@ pub enum Constraint {
 /// Value-level rebuilds are difficult to implement efficiently using rules as they require
 /// searching for changes to any column for a table: while it is possible to do, implementing this
 /// custom is more efficient in the case of rebuilding.
-pub trait Rebuilder: Send + Sync {
+pub trait Rebuilder: ValueRebuilder {
     /// The column that contains values that should be rebuilt. If this is set, callers can use
     /// this functionality to perform rebuilds incrementally.
     fn hint_col(&self) -> Option<ColumnId>;
-    fn rebuild_val(&self, val: Value) -> Value;
     /// Rebuild a contiguous slice of rows in the table.
     fn rebuild_buf(
         &self,
@@ -130,8 +154,6 @@ pub trait Rebuilder: Send + Sync {
         out: &mut TaggedRowBuffer,
         exec_state: &mut ExecutionState,
     );
-    /// Rebuild a slice of values in place, returning true if any values were changed.
-    fn rebuild_slice(&self, vals: &mut [Value]) -> bool;
 }
 
 /// A row in a table.
@@ -297,6 +319,23 @@ pub trait Table: Any + Send + Sync {
             .fold(subset, |subset, c| self.refine_one(subset, c))
     }
 
+    /// Filter a borrowed `subset` to the rows matching `cs` — and, when
+    /// `check_live` is set, to live rows — returning an owned subset.
+    ///
+    /// Equivalent to `to_owned` + [`Table::refine_live`] + [`Table::refine`];
+    /// implementors may fuse the copy and filter into a single pass.
+    fn refine_ref(&self, subset: SubsetRef, cs: &[Constraint], check_live: bool) -> Subset {
+        let mut owned = subset.to_owned(&with_pool_set(|ps| ps.get_pool()));
+        if check_live {
+            owned = self.refine_live(owned);
+        }
+        if cs.is_empty() {
+            owned
+        } else {
+            self.refine(owned, cs)
+        }
+    }
+
     /// An optional method for quickly generating a subset from a constraint.
     /// The standard use-case here is to apply constraints based on a column
     /// that is known to be sorted.
@@ -404,13 +443,6 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
             out.add_row(row_id, row);
         })
     }
-    fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        let wrapped = WrappedTableRef {
-            inner: table,
-            wrapper: self,
-        };
-        ColumnIndex::build_for_subset(wrapped, subset, col)
-    }
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         let table = table.as_any().downcast_ref::<T>().unwrap();
         let mut res = TupleIndex::new(cols.len());
@@ -449,6 +481,21 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         let col_idx = col.index();
         table.scan_generic(subset, |row_id, row| {
             f(row_id, row[col_idx]);
+        });
+    }
+
+    fn collect_col_pairs(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        out: &mut Vec<(Value, RowId)>,
+    ) {
+        let table = table.as_any().downcast_ref::<T>().unwrap();
+        let col_idx = col.index();
+        out.reserve(subset.size());
+        table.scan_generic(subset, |row_id, row| {
+            out.push((row[col_idx], row_id));
         });
     }
 
@@ -591,12 +638,7 @@ impl WrappedTable {
         self.as_ref().scan_bounded(subset, start, n, out)
     }
 
-    /// Group the contents of the given subset by the given column.
-    pub(crate) fn group_by_col(&self, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        self.as_ref().group_by_col(subset, col)
-    }
-
-    /// A multi-column vairant of [`WrappedTable::group_by_col`].
+    /// Group the contents of the given subset by the given columns.
     pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         self.as_ref().group_by_key(subset, cols)
     }
@@ -681,7 +723,6 @@ pub(crate) trait TableWrapper: Send + Sync {
         n: usize,
         out: &mut TaggedRowBuffer,
     ) -> Option<Offset>;
-    fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex;
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex;
 
     /// Scan each row in `subset`, calling `f(row_id, col_value)` for each.
@@ -693,6 +734,18 @@ pub(crate) trait TableWrapper: Send + Sync {
         subset: SubsetRef,
         col: ColumnId,
         f: &mut dyn FnMut(RowId, Value),
+    );
+
+    /// Append `(col_value, row_id)` for each row in `subset` to `out`.
+    ///
+    /// Equivalent to [`TableWrapper::for_each_col`] pushing into `out`, but the
+    /// scan loop is monomorphized, avoiding a virtual callback per row.
+    fn collect_col_pairs(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        out: &mut Vec<(Value, RowId)>,
     );
 
     #[allow(clippy::too_many_arguments)]
@@ -775,12 +828,7 @@ impl WrappedTableRef<'_> {
         self.wrapper.scan_bounded(self.inner, subset, start, n, out)
     }
 
-    /// Group the contents of the given subset by the given column.
-    pub(crate) fn group_by_col(&self, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        self.wrapper.group_by_col(self.inner, subset, col)
-    }
-
-    /// A multi-column vairant of [`WrappedTable::group_by_col`].
+    /// Group the contents of the given subset by the given columns.
     pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         self.wrapper.group_by_key(self.inner, subset, cols)
     }
@@ -795,6 +843,17 @@ impl WrappedTableRef<'_> {
         f: &mut dyn FnMut(RowId, Value),
     ) {
         self.wrapper.for_each_col(self.inner, subset, col, f);
+    }
+
+    /// Append `(col_value, row_id)` for each row in `subset` to `out`, using a
+    /// monomorphized scan loop (no per-row virtual call).
+    pub(crate) fn collect_col_pairs(
+        &self,
+        subset: SubsetRef,
+        col: ColumnId,
+        out: &mut Vec<(Value, RowId)>,
+    ) {
+        self.wrapper.collect_col_pairs(self.inner, subset, col, out);
     }
 
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of

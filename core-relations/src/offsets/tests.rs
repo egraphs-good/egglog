@@ -73,6 +73,10 @@ fn intersect() {
         Vec::from_iter(0..5),
         Vec::from_iter(0..100), // 20x skew → galloping path
         Vec::from_iter((0..100).filter(|x| x % 7 == 0)),
+        // Both sides Sparse (i.e. non-contiguous) with >4x skew: galloping in
+        // `cur` while compacting it in place.
+        Vec::from_iter((0..6).chain(11..22)),
+        vec![13, 20, 21],
     ];
     let all_elts: Vec<&Vec<usize>> = elts.iter().chain(skewed.iter()).collect();
 
@@ -132,4 +136,32 @@ fn iter_bounded() {
     );
     let expected = Vec::from_iter((2..12).map(|x| RowId::new(x * 2)));
     assert_eq!(got, expected);
+}
+
+#[test]
+fn intersect_sparse_sparse_skewed() {
+    // Regression test for #971. `cur` must be Sparse and >4x longer than
+    // `other` (which must also be Sparse) to reach the "gallop in cur" branch
+    // of `Subset::intersect`.
+    let cur_rows: Vec<usize> = (0..6).chain(11..22).collect();
+    let other_rows: Vec<usize> = vec![13, 20, 21];
+
+    let mut cur = Subset::empty();
+    for row in &cur_rows {
+        cur.add_row_sorted(o(*row));
+    }
+    let mut other = Subset::empty();
+    for row in &other_rows {
+        other.add_row_sorted(o(*row));
+    }
+    assert!(matches!(cur, Subset::Sparse(..)));
+    assert!(matches!(other, Subset::Sparse(..)));
+
+    cur.intersect(
+        other.as_ref(),
+        &with_pool_set(|pool_set| pool_set.get_pool()),
+    );
+    let mut got = Vec::new();
+    cur.offsets(|row| got.push(row.index()));
+    assert_eq!(got, other_rows);
 }

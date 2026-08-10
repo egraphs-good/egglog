@@ -20,6 +20,18 @@ jobs:
           tool: nextest,cargo-insta
       - uses: Swatinem/rust-cache@v2
       - run: make test
+  # Build the library the way downstream crates consume it: no default
+  # features (so `clap`/`clap_derive` are absent). This guards against
+  # relying on another crate to unify a `syn` feature onto ours — the bug
+  # that broke downstream builds when clap_derive moved to syn 3.x.
+  no-default-features:
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p egglog --no-default-features --lib
   coverage:
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest

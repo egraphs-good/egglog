@@ -1,0 +1,105 @@
+; Containers in queries and in rule bodies, exercised under proofs.
+;
+; The file-test harness runs every .egg in proof mode and turns each `check`
+; into a proof obligation, so the checks below are proof-checked automatically.
+; Elements are an eq-sort, so every container here is an eq-container (rebuild
+; applies). Containers are matched, read, and constructed in the body (as side
+; conditions); only validator-backed container primitives are used. A container
+; built in the body is never carried into an action (that is rejected).
+
+(datatype N (Z) (S N))
+
+; ===== containers built in actions, then checked =====
+(sort SetN (Set N))
+(relation HasSet (SetN))
+(HasSet (set-of (Z) (S (Z))))
+; set canonical form is order/duplicate-insensitive
+(check (HasSet (set-of (S (Z)) (Z) (S (Z)))))
+
+(sort PairN (Pair N N))
+(relation HasPair (PairN))
+(HasPair (pair (Z) (S (Z))))
+(check (HasPair (pair (Z) (S (Z)))))
+
+(sort VecN (Vec N))
+(relation HasVec (VecN))
+(HasVec (vec-of (Z) (S (Z))))
+(check (HasVec (vec-of (Z) (S (Z)))))
+
+(sort MapN (Map N N))
+(relation HasMap (MapN))
+(HasMap (map-insert (map-empty) (Z) (S (Z))))
+(check (HasMap (map-insert (map-empty) (Z) (S (Z)))))
+
+(sort MSN (MultiSet N))
+(relation HasMS (MSN))
+(HasMS (multiset-of (Z) (Z) (S (Z))))
+(check (HasMS (multiset-of (Z) (S (Z)) (Z))))
+
+; ===== matched containers read in a query (exercises the reader validators) =====
+(relation VLen (i64))
+(relation VGet (N))
+(rule ((HasVec v) (= n (vec-length v))) ((VLen n)))
+(rule ((HasVec v) (= e (vec-get v 1))) ((VGet e)))
+(run 1)
+(check (VLen 2))
+(check (VGet (S (Z))))
+
+(relation MapLen (i64))
+(relation MapGet (N))
+(rule ((HasMap m) (= n (map-length m))) ((MapLen n)))
+(rule ((HasMap m) (= w (map-get m (Z)))) ((MapGet w)))
+(run 1)
+(check (MapLen 1))
+(check (MapGet (S (Z))))
+
+(relation MSLen (i64))
+(rule ((HasMS m) (= n (multiset-length m))) ((MSLen n)))
+(run 1)
+(check (MSLen 3))
+
+; eq-sort primitive result in a body fact (pair-first returns an element)
+(relation PFirst (N))
+(rule ((HasPair p) (= a (pair-first p))) ((PFirst a)))
+(run 1)
+(check (PFirst (Z)))
+
+; ===== containers constructed in the query (Eval-justified) =====
+; A container built by a primitive in the rule body has no anchored term-proof;
+; `Eval` justifies it from its arguments' existence proofs, re-derived with the
+; typed primitive when the rule fires.
+(relation HasElem (N))
+(HasElem (Z))
+(HasElem (S (Z)))
+
+; build a vec in the body and read its length (a base-sorted result)
+(relation QVecLen (i64))
+(rule ((HasElem a) (= xs (vec-of a a)) (= n (vec-length xs))) ((QVecLen n)))
+(run 1)
+(check (QVecLen 2))
+
+; build a vec in the body and read an element back out (an eq-sort result)
+(relation QVecGet (N))
+(rule ((HasElem a) (HasElem b) (= xs (vec-of a b)) (= e (vec-get xs 1))) ((QVecGet e)))
+(run 1)
+(check (QVecGet (Z)))
+(check (QVecGet (S (Z))))
+
+; join two containers built in the body (neither bound nor used in an action);
+; `set-of` is injective on singletons, so this matches only when a = b
+(relation QSame (N N))
+(rule ((HasElem a) (HasElem b) (= (set-of a) (set-of b))) ((QSame a b)))
+(run 1)
+(check (QSame (Z) (Z)))
+(check (QSame (S (Z)) (S (Z))))
+(fail (check (QSame (Z) (S (Z)))))
+
+; a container built in the body, nested inside a constructor matched against the
+; e-graph: proof normal form lifts the container into its own side condition, so
+; the constructor is matched on the resulting variable
+(datatype WrapV (WrapVec VecN))
+(relation OutWrap (WrapV))
+(WrapVec (vec-of (Z) (Z)))
+(rule ((HasElem a) (= w (WrapVec (vec-of a a)))) ((OutWrap w)))
+(run 1)
+(check (OutWrap (WrapVec (vec-of (Z) (Z)))))

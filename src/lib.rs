@@ -68,9 +68,8 @@ use std::io::{Read as _, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
-pub use termdag::{Term, TermDag, TermId};
+pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
@@ -508,6 +507,14 @@ struct ResolvedNCommandsWithOutput {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Create a new e-graph configured with `num_threads`.
+    ///
+    /// Passing `1` keeps execution serial. Passing `0` uses available
+    /// parallelism.
+    pub fn new(num_threads: usize) -> Self {
+        EGraph::default().with_num_threads(num_threads)
+    }
+
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
@@ -532,6 +539,7 @@ impl EGraph {
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    #[cfg(feature = "bin")]
     pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self
@@ -540,6 +548,7 @@ impl EGraph {
     /// Enable proof generation on this e-graph.
     /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    #[cfg(feature = "bin")]
     pub(crate) fn with_proofs_enabled(mut self) -> Self {
         self = self.with_term_encoding_enabled();
         self.proof_state.proofs_enabled = true;
@@ -552,39 +561,26 @@ impl EGraph {
         self
     }
 
-    /// Set the number of threads used for parallel operations.
+    /// Return a copy of this e-graph configured with `num_threads`.
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.set_num_threads(num_threads);
+        self
+    }
+
+    /// Set the number of threads used by this e-graph.
     ///
-    /// This is a helper that simply configures the global rayon thread pool. It can only be called
-    /// once per process; subsequent calls will be ignored.
-    ///
-    /// # Panics
-    ///
-    /// Panics on wasm if `num_threads > 1`.
-    pub fn set_num_threads(num_threads: usize) {
-        #[cfg(target_family = "wasm")]
-        if num_threads > 1 {
-            panic!("cannot use more than 1 thread on wasm");
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // This will fail silently if the global pool has already been configured.
-            let err = rayon::ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build_global();
-            // print log if successful
-            if matches!(err, Ok(())) {
-                log::info!("Initialize global thread pool with  {num_threads} threads");
-            } else {
-                log::warn!(
-                    "Failed to initialize global thread pool with {num_threads} threads. This may be because the thread pool was already initialized with a different number of threads. Error: {err:?}"
-                );
-            }
+    /// Passing `1` keeps execution serial. Passing `0` uses available
+    /// parallelism.
+    pub fn set_num_threads(&mut self, num_threads: usize) {
+        self.backend.set_num_threads(num_threads);
+        if let Some(original) = &mut self.proof_state.original_typechecking {
+            original.set_num_threads(num_threads);
         }
     }
 
-    /// Return the number of threads in the rayon thread pool.
+    /// Return the number of threads configured for this e-graph.
     pub fn num_threads(&self) -> usize {
-        rayon::current_num_threads()
+        self.backend.num_threads()
     }
 
     /// Return extension-owned state stored on this e-graph.
@@ -781,7 +777,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 if p.name() == "unstable-fn" {
-                    let Some(GenericExpr::Lit(_, Literal::String(name))) = args.first() else {
+                    let Some(GenericExpr::Lit(span, Literal::String(name))) = args.first() else {
                         return Err(Error::BackendError(
                             "expected string literal after `unstable-fn`".into(),
                         ));
@@ -797,6 +793,9 @@ impl EGraph {
                             .read()
                             .unwrap()
                             .default_panic_id(),
+                        // Merge expressions evaluate in the `Write` context.
+                        crate::Context::Write,
+                        span,
                     )?;
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
@@ -881,7 +880,8 @@ impl EGraph {
         &mut self,
         sym: &str,
         n: Option<usize>,
-        file: Option<File>,
+        file: Option<(File, PathBuf)>,
+        span: Span,
         mode: PrintFunctionMode,
     ) -> Result<Option<CommandOutput>, Error> {
         let n = match n {
@@ -904,10 +904,10 @@ impl EGraph {
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
         let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
         match file {
-            Some(mut file) => {
+            Some((mut file, path)) => {
                 log::info!("Writing output to file");
                 file.write_all(output.to_string().as_bytes())
-                    .expect("Error writing to file");
+                    .map_err(|e| Error::IoError(path, e, span.clone()))?;
                 Ok(None)
             }
             None => Ok(Some(output)),
@@ -1173,7 +1173,7 @@ impl EGraph {
             rb.set_no_decomp(no_decomp);
             let mut translator =
                 BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
-            translator.query(query, rule.include_subsumed);
+            translator.query(query, rule.include_subsumed)?;
             translator.actions(actions)?;
             translator.build()
         };
@@ -1183,8 +1183,7 @@ impl EGraph {
                 Ruleset::Rules(rules) => {
                     match rules.entry(rule.name.clone()) {
                         indexmap::map::Entry::Occupied(_) => {
-                            let name = rule.name;
-                            panic!("Rule '{name}' was already present")
+                            return Err(Error::RuleAlreadyExists(rule.name, rule.span));
                         }
                         indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
@@ -1318,11 +1317,23 @@ impl EGraph {
         }
         let resolved_commands = resolved.desugared;
 
-        assert_eq!(resolved_commands.len(), 1);
-        let resolved_command = resolved_commands.into_iter().next().unwrap();
+        if resolved_commands.len() != 1 {
+            return Err(Error::BackendError(
+                "eval_expr expects a single resolved command".to_string(),
+            ));
+        }
+        let Some(resolved_command) = resolved_commands.into_iter().next() else {
+            return Err(Error::BackendError(
+                "eval_expr expects a single resolved command".to_string(),
+            ));
+        };
         let resolved_expr = match resolved_command {
             ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
-            _ => unreachable!(),
+            cmd => {
+                return Err(Error::BackendError(format!(
+                    "eval_expr: unexpected resolved command: {cmd:?}"
+                )));
+            }
         };
         let sort = resolved_expr.output_type();
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
@@ -1419,6 +1430,9 @@ impl EGraph {
                         name,
                         prim,
                         panic_id,
+                        // Top-level action evaluation runs in the `Full` context.
+                        crate::Context::Full,
+                        target_span,
                     )?;
                     let fn_value = self.backend.base_values().get(resolved_function);
                     let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
@@ -1567,7 +1581,7 @@ impl EGraph {
             &self.type_info,
             true, // global query: Read context (may read the DB)
         );
-        translator.query(&query, true);
+        translator.query(&query, true)?;
         translator
             .rb
             .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
@@ -1599,11 +1613,17 @@ impl EGraph {
                 name,
                 uf,
                 proof_func,
+                proof_constructors,
                 ..
             } => {
-                // If the sort has a :internal-uf field, store the mapping for extraction
-                if let Some(uf_name) = uf {
-                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                // Restore the sort's UF tables into proof_state: the constructor
+                // for extraction's `find_canonical`, the index for container
+                // rebuild's leader lookups.
+                if let Some((uf_ctor, uf_index)) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_ctor);
+                    if let Some(uf_index) = uf_index {
+                        self.proof_state.uf_function.insert(name.clone(), uf_index);
+                    }
                 }
                 // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
                 // This annotation is set by proof instrumentation and consumed here.
@@ -1611,6 +1631,16 @@ impl EGraph {
                     self.proof_state
                         .proof_func_parent
                         .insert(name.clone(), proof_func_name);
+                }
+                // The Proof sort's :internal-proof-names records the global proof
+                // constructors; restore them so container rebuild can recover them.
+                if let Some(pc) = proof_constructors {
+                    let names = &mut self.proof_state.proof_names;
+                    names.proof_datatype = name.clone();
+                    names.congr_constructor = pc.congr;
+                    names.eq_trans_constructor = pc.trans;
+                    names.eq_sym_constructor = pc.sym;
+                    names.container_normalize_constructor = pc.normalize;
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -1650,8 +1680,9 @@ impl EGraph {
                         .map_err(|e| Error::IoError(path.clone().into(), e, span.clone()))?;
                     log::info!("Printed overall statistics to json file {path}");
 
-                    serde_json::to_writer(&mut file, &self.overall_run_report)
-                        .expect("error serializing to json");
+                    serde_json::to_writer(&mut file, &self.overall_run_report).map_err(|e| {
+                        Error::BackendError(format!("failed writing statistics: {e}"))
+                    })?;
                 }
             },
             ResolvedNCommand::Check(span, facts) => {
@@ -1694,7 +1725,7 @@ impl EGraph {
                 } else {
                     if n < 0 {
                         return Err(Error::ExtractError(
-                            "Cannot extract negative number of variants".to_string(),
+                            "cannot extract a negative number of variants".to_string(),
                         ));
                     }
                     let extracted = self.extract_variants(
@@ -1739,12 +1770,15 @@ impl EGraph {
             ResolvedNCommand::PrintFunction(span, f, n, file, mode) => {
                 let file = file
                     .map(|file| {
-                        std::fs::File::create(&file)
-                            .map_err(|e| Error::IoError(file.into(), e, span.clone()))
+                        let path: PathBuf = file.into();
+                        match std::fs::File::create(&path) {
+                            Ok(f) => Ok((f, path)),
+                            Err(e) => Err(Error::IoError(path, e, span.clone())),
+                        }
                     })
                     .transpose()?;
                 return self
-                    .print_function(&f, n, file, mode)
+                    .print_function(&f, n, file, span.clone(), mode)
                     .map_err(|e| match e {
                         Error::TypeError(TypeError::UnboundFunction(f, _)) => {
                             Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
@@ -1772,12 +1806,8 @@ impl EGraph {
                     return Err(Error::ExpectFail(span));
                 }
             }
-            ResolvedNCommand::Input {
-                span: _,
-                name,
-                file,
-            } => {
-                self.input_file(&name, file)?;
+            ResolvedNCommand::Input { span, name, file } => {
+                self.input_file(&name, file, span)?;
             }
             ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1813,6 +1843,7 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+
                 for term in terms {
                     writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
@@ -1850,11 +1881,13 @@ impl EGraph {
         Ok(vec![])
     }
 
-    fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
-        let function_type = self
-            .type_info
-            .get_func_type(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
+    fn input_file(&mut self, func_name: &str, file: String, span: Span) -> Result<(), Error> {
+        let function_type = self.type_info.get_func_type(func_name).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(
+                func_name.to_string(),
+                span.clone(),
+            ))
+        })?;
         let func = self.functions.get_mut(func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1865,21 +1898,23 @@ impl EGraph {
         for t in &func.schema.input {
             match t.name() {
                 "i64" | "f64" | "String" => {}
-                s => panic!("Unsupported type {s} for input"),
+                s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
             }
         }
 
         if function_type.subtype != FunctionSubtype::Constructor {
             match func.schema.output.name() {
                 "i64" | "String" | "Unit" => {}
-                s => panic!("Unsupported type {s} for input"),
+                s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
             }
         }
 
         log::info!("Opening file '{filename:?}'...");
-        let mut f = File::open(filename).unwrap();
+        let mut f =
+            File::open(&filename).map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
         let mut contents = String::new();
-        f.read_to_string(&mut contents).unwrap();
+        f.read_to_string(&mut contents)
+            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
         // Can also do a row-major Vec<Value>
         let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
@@ -1984,9 +2019,10 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if let Err(reason) =
-                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
-                {
+                if let Err(reason) = command_supports_proof_encoding(
+                    &command.to_command(),
+                    &original_typechecking.type_info,
+                ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
@@ -2482,6 +2518,7 @@ pub use crate::api::{ApiError, FromValue, FromValues, IntoValue, IntoValues, Raw
 /// `unstable-app` will call later. For primitive targets, this bakes one
 /// dispatch id per runtime context so application can choose the entrypoint
 /// matching the primitive body's current call-site context.
+#[allow(clippy::too_many_arguments)]
 fn resolve_function_container_target_with_context(
     backend: &egglog_bridge::EGraph,
     functions: &IndexMap<String, Function>,
@@ -2489,26 +2526,30 @@ fn resolve_function_container_target_with_context(
     name: &str,
     primitive: &core::SpecializedPrimitive,
     panic_id: ExternalFunctionId,
+    ctx: crate::Context,
+    span: &Span,
 ) -> Result<ResolvedFunction, Error> {
-    let target_function = type_info
+    let Some(target_function) = type_info
         .get_sorts::<FunctionSort>()
         .into_iter()
         .find(|function| function.name() == primitive.output().name())
-        .ok_or_else(|| {
-            Error::BackendError(format!(
-                "`unstable-fn` output sort `{}` is not a function sort",
-                primitive.output().name()
-            ))
-        })?;
+    else {
+        return Err(Error::BackendError(format!(
+            "`unstable-fn` output sort `{}` is not a function sort",
+            primitive.output().name()
+        )));
+    };
 
     let partial_arcsorts: Vec<_> = primitive.input().iter().skip(1).cloned().collect();
     let remaining_inputs = target_function.inputs();
     let output = target_function.output();
 
     let id = if let Some(func) = functions.get(name) {
-        let func_type = type_info
-            .get_func_type(name)
-            .ok_or_else(|| Error::BackendError(format!("No resolution for {name:?}")))?;
+        let func_type = type_info.get_func_type(name).ok_or_else(|| {
+            Error::BackendError(format!(
+                "`unstable-fn` references `{name}`, which has no resolved type"
+            ))
+        })?;
         let expected_inputs = partial_arcsorts
             .iter()
             .chain(remaining_inputs)
@@ -2532,7 +2573,7 @@ fn resolve_function_container_target_with_context(
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(Error::BackendError(format!(
-                "function container lookup for `{name}` expected ({}) -> {}, found ({}) -> {}",
+                "`unstable-fn` reference `{name}` expected ({}) -> {}, found ({}) -> {}",
                 expected_input_names,
                 output.name(),
                 actual_input_names,
@@ -2556,42 +2597,46 @@ fn resolve_function_container_target_with_context(
             .iter()
             .filter(|primitive| primitive.accept(&signature, type_info))
             .collect();
-        let mut context_ids = enum_map::EnumMap::from_fn(|_| None);
-        for runtime_ctx in Context::ALL {
+        let mut ambiguous_ctx = None;
+        let context_ids = enum_map::EnumMap::from_fn(|runtime_ctx| {
             let mut ids = candidates
                 .iter()
                 .filter_map(|primitive| primitive.context_ids[runtime_ctx]);
             // The first `next` finds the candidate for this runtime context;
             // the second detects whether there is more than one such candidate.
             match (ids.next(), ids.next()) {
-                (None, _) => {}
-                (Some(id), None) => context_ids[runtime_ctx] = Some(id),
+                (None, _) => None,
+                (Some(id), None) => Some(id),
                 (Some(_), Some(_)) => {
-                    return Err(Error::BackendError(format!(
-                        "Ambiguous primitive resolution for {name:?} in unstable-fn context {runtime_ctx:?}"
-                    )));
+                    ambiguous_ctx = Some(runtime_ctx);
+                    None
                 }
             }
+        });
+        if let Some(runtime_ctx) = ambiguous_ctx {
+            return Err(TypeError::AmbiguousPrimitive {
+                name: name.to_owned(),
+                ctx: runtime_ctx,
+                span: span.clone(),
+            }
+            .into());
         }
         if !context_ids.iter().any(|(_, id)| id.is_some()) {
-            let (output_sort, input_sorts) = signature
-                .split_last()
-                .expect("primitive signature should include an output sort");
-            let input_names = input_sorts
-                .iter()
-                .map(|sort| sort.name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(Error::BackendError(format!(
-                "no primitive overload matched expected signature for {name:?}: ({}) -> {}; \
-                 context ids: {context_ids:?}",
-                input_names,
-                output_sort.name(),
-            )));
+            return Err(TypeError::UnresolvedPrimitive {
+                name: name.to_owned(),
+                ctx,
+                span: span.clone(),
+            }
+            .into());
         }
         ResolvedFunctionId::Primitive { context_ids }
     } else {
-        return Err(Error::BackendError(format!("No resolution for {name:?}")));
+        return Err(TypeError::UnresolvedPrimitive {
+            name: name.to_owned(),
+            ctx,
+            span: span.clone(),
+        }
+        .into());
     };
 
     Ok(ResolvedFunction {
@@ -2681,7 +2726,7 @@ impl<'a> BackendRule<'a> {
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
         ctx: crate::Context,
-    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+    ) -> Result<(ExternalFunctionId, Vec<QueryEntry>, ColumnTy), Error> {
         // The typechecker has already checked that this primitive is
         // valid in `ctx`; pick the runtime id that stamps the same ctx
         // onto the state wrapper when invoked.
@@ -2690,8 +2735,11 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
-            let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
-                panic!("expected string literal after `unstable-fn`")
+            let core::ResolvedAtomTerm::Literal(ref span, Literal::String(ref name)) = args[0]
+            else {
+                return Err(Error::BackendError(
+                    "expected a string literal as the first argument to `unstable-fn`".to_string(),
+                ));
             };
             // Pre-register a panic id used by `FunctionContainer::apply`
             // when the wrapped function is applied in a context that
@@ -2709,17 +2757,18 @@ impl<'a> BackendRule<'a> {
                 name,
                 prim,
                 panic_id,
-            )
-            .unwrap_or_else(|err| panic!("{err}"));
+                ctx,
+                span,
+            )?;
 
             qe_args[0] = self.rb.egraph().base_value_constant(resolved);
         }
 
-        (
+        Ok((
             resolved_id,
             qe_args,
             prim.output().column_ty(self.rb.egraph()),
-        )
+        ))
     }
 
     fn args<'b>(
@@ -2729,7 +2778,11 @@ impl<'a> BackendRule<'a> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
-    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+    fn query(
+        &mut self,
+        query: &core::Query<ResolvedCall, ResolvedVar>,
+        include_subsumed: bool,
+    ) -> Result<(), Error> {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
@@ -2743,11 +2796,12 @@ impl<'a> BackendRule<'a> {
                 }
                 ResolvedCall::Primitive(p) => {
                     let ctx = self.query_context();
-                    let (p, args, ty) = self.prim(p, &atom.args, ctx);
+                    let (p, args, ty) = self.prim(p, &atom.args, ctx)?;
                     self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
         }
+        Ok(())
     }
 
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
@@ -2768,7 +2822,7 @@ impl<'a> BackendRule<'a> {
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
                             let ctx = self.action_context();
-                            let (p, args, ty) = self.prim(p, args, ctx);
+                            let (p, args, ty) = self.prim(p, args, ctx)?;
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -2884,6 +2938,12 @@ pub enum Error {
     Shadowing(String, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]
     CommandAlreadyExists(String, Span),
+    #[error("{1}\nRule already exists: {0}")]
+    RuleAlreadyExists(String, Span),
+    #[error("{1}\nUnsupported type {0} for input")]
+    UnsupportedInputType(String, Span),
+    #[error("{0}\n{1}")]
+    DesugarError(Span, String),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
     #[error(
@@ -3003,6 +3063,81 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn proof_support_accepts_container_sort_declarations() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XPair (Pair X i64))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(None, "(datatype X (x))\n(sort XFn (UnstableFn (X) X))")
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_rejects_unstable_fn_primitives_without_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype X (x))
+                (sort XFn (UnstableFn (X) X))
+                (function id (X) X :merge old)
+                (let f (unstable-fn "id"))
+                "#,
+            )
+            .unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_accepts_set_primitive_validators() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (function Shared () ISet :merge (set-intersect old new))
+
+                (check (= (set-insert (set-empty) 1) (set-of 1)))
+                (check (= (set-remove (set-of 1 2) 2) (set-of 1)))
+                (check (= (set-length (set-of 1 2)) 2))
+                (check (set-contains (set-of 1 2) 1))
+                (check (set-not-contains (set-of 1 2) 3))
+                (check (= (set-union (set-of 1) (set-of 2)) (set-of 1 2)))
+                (check (= (set-diff (set-of 1 2) (set-of 2)) (set-of 1)))
+                (check (= (set-intersect (set-of 1 2) (set-of 2 3)) (set-of 2)))
+                "#,
+            )
+            .unwrap();
+
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    /// `set-get` indexes the runtime value order, which the proof checker
+    /// cannot reproduce from terms, so it has no validator.
+    #[test]
+    fn proof_support_rejects_set_get() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (sort ISet (Set i64))
+                (check (= (set-get (set-of 1 2) 0) 1))
+                "#,
+            )
+            .unwrap();
+
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
     }
 
     #[test]
@@ -3310,5 +3445,40 @@ mod tests {
             .parse_and_run_program(None, "(ruleset test)\n(run test2 1)")
             .unwrap_err();
         assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "test2"));
+    }
+
+    #[test]
+    fn test_duplicate_rule_name_errors() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "(relation foo (i64))
+                 (rule ((foo x)) ((foo (+ x 1))) :name \"r\")
+                 (rule ((foo x)) ((foo (+ x 2))) :name \"r\")",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::RuleAlreadyExists(..)));
+    }
+
+    #[test]
+    fn test_extract_negative_variants_errors() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "(sort Math)(constructor Num (i64) Math)(let x (Num 5))(extract x -1)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::ExtractError(..)));
+    }
+
+    #[test]
+    fn test_input_missing_file_errors() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "(function edge (i64) i64 :merge old)(input edge \"/no/such/file_xyz\")",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::IoError(..)));
     }
 }

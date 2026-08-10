@@ -71,6 +71,8 @@ pub(crate) fn desugar_command(
                         presort_and_args: None,
                         uf: None,
                         proof_func: None,
+                        container_rebuild: None,
+                        proof_constructors: None,
                         unionable: true,
                     });
                 }
@@ -91,6 +93,8 @@ pub(crate) fn desugar_command(
                     presort_and_args: Some((sort, args)),
                     uf: None,
                     proof_func: None,
+                    container_rebuild: None,
+                    proof_constructors: None,
                     unionable: true,
                 });
             }
@@ -123,10 +127,10 @@ pub(crate) fn desugar_command(
             } else {
                 rewrite.name.clone()
             };
-            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)
+            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)?
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rule_name, rewrite, parser)
+            desugar_birewrite(ruleset, rule_name, rewrite, parser)?
         }
         Command::Include(_span, _file) => {
             unreachable!("Include commands should be expanded before desugaring")
@@ -144,6 +148,8 @@ pub(crate) fn desugar_command(
             presort_and_args,
             uf,
             proof_func,
+            container_rebuild,
+            proof_constructors,
             unionable,
         } => vec![NCommand::Sort {
             span,
@@ -151,6 +157,8 @@ pub(crate) fn desugar_command(
             presort_and_args,
             uf,
             proof_func,
+            container_rebuild,
+            proof_constructors,
             unionable,
         }],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -186,9 +194,20 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
+            if let Command::Include(..) = *cmd {
+                return Err(Error::DesugarError(
+                    span.clone(),
+                    "include is not allowed inside (fail ...)".to_string(),
+                ));
+            }
             let mut desugared = desugar_command(*cmd, parser, proof_testing)?;
 
-            let last = desugared.pop().unwrap();
+            let Some(last) = desugared.pop() else {
+                return Err(Error::DesugarError(
+                    span.clone(),
+                    "the command inside (fail ...) expands to no commands".to_string(),
+                ));
+            };
             desugared.push(NCommand::Fail(span, Box::new(last)));
             return Ok(desugared);
         }
@@ -234,6 +253,8 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             presort_and_args: None,
             uf: None,
             proof_func: None,
+            container_rebuild: None,
+            proof_constructors: None,
             unionable: false,
         },
         NCommand::Function(FunctionDecl::constructor(
@@ -284,6 +305,8 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
         presort_and_args: None,
         uf: None,
         proof_func: None,
+        container_rebuild: None,
+        proof_constructors: None,
         unionable: true,
     }]
     .into_iter()
@@ -309,7 +332,7 @@ fn desugar_rewrite(
     rewrite: Rewrite,
     subsume: bool,
     parser: &mut Parser,
-) -> Vec<NCommand> {
+) -> Result<Vec<NCommand>, Error> {
     let span = rewrite.span.clone();
     let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
@@ -328,14 +351,17 @@ fn desugar_rewrite(
                 ));
             }
             _ => {
-                panic!("Subsumed rewrite must have a function call on the lhs");
+                return Err(Error::DesugarError(
+                    rewrite.lhs.span(),
+                    "subsumed rewrite must have a function call on the lhs".to_string(),
+                ));
             }
         }
     }
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
-    vec![NCommand::NormRule {
+    Ok(vec![NCommand::NormRule {
         rule: Rule {
             span: span.clone(),
             body: [Fact::Eq(
@@ -353,7 +379,7 @@ fn desugar_rewrite(
             no_decomp: false,
             include_subsumed: false,
         },
-    }]
+    }])
 }
 
 fn desugar_birewrite(
@@ -361,7 +387,7 @@ fn desugar_birewrite(
     name: String,
     rewrite: Rewrite,
     parser: &mut Parser,
-) -> Vec<NCommand> {
+) -> Result<Vec<NCommand>, Error> {
     let span = rewrite.span.clone();
     let rewrite_name = if rewrite.name.is_empty() {
         name
@@ -375,13 +401,13 @@ fn desugar_birewrite(
         conditions: rewrite.conditions.clone(),
         name: rewrite_name.clone(),
     };
-    desugar_rewrite(
+    Ok(desugar_rewrite(
         ruleset.clone(),
         format!("{rewrite_name}=>"),
         rewrite,
         false,
         parser,
-    )
+    )?
     .into_iter()
     .chain(desugar_rewrite(
         ruleset,
@@ -389,8 +415,8 @@ fn desugar_birewrite(
         rw2,
         false,
         parser,
-    ))
-    .collect()
+    )?)
+    .collect())
 }
 
 /// Desugar relation by making a new sort and a constructor for it.
@@ -410,6 +436,8 @@ fn desugar_relation(
             presort_and_args: None,
             uf: None,
             proof_func: None,
+            container_rebuild: None,
+            proof_constructors: None,
             unionable: false,
         },
         NCommand::Function(FunctionDecl::constructor(

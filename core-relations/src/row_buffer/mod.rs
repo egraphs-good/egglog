@@ -5,7 +5,6 @@ use std::{cell::Cell, mem, ops::Deref};
 
 use crate::numeric_id::NumericId;
 use egglog_concurrency::{ParallelVecWriter, parallel_writer::write_cell_slice};
-use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 
 use crate::{
@@ -288,20 +287,6 @@ impl RowBuffer {
         self.total_rows = count;
     }
 
-    /// A parallel version of [`RowBuffer::iter`].
-    pub(crate) fn parallel_iter(&self) -> impl ParallelIterator<Item = &[Value]> {
-        use rayon::prelude::*;
-        // SAFETY: This kind of transmutation is safe so long as no one
-        // modifies any of the values behind the `Cell` while this value is
-        // borrowed.
-        //
-        // The only time we modify these values is in safe methods requiring
-        // a mutable reference (`set_stale`, `get_row_mut`), or in the
-        // unsafe `set_stale_shared` method whose safety requirements imply
-        // that no call will overlap with borrowing such a row.
-        unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(&self.data) }.par_chunks(self.n_columns)
-    }
-
     /// Mark a row as stale in the buffer with shared access to it. Returns
     /// whether the row was already stale.
     ///
@@ -322,6 +307,11 @@ impl RowBuffer {
     }
 
     /// Get the row corresponding to the given RowId without bounds checking.
+    ///
+    /// # Safety
+    /// The caller must ensure that `row` is within bounds of the buffer. Note that this method
+    /// does not check whether the row is stale, so it should not be used if stale rows are
+    /// undesired.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         unsafe {
             slice::from_raw_parts(
@@ -399,11 +389,6 @@ impl TaggedRowBuffer {
             inner: RowBuffer::new(n_columns + 1),
         }
     }
-
-    /// A parallel iterator over the contents of the buffer.
-    pub fn par_iter(&self) -> impl ParallelIterator<Item = (RowId, &[Value])> {
-        self.inner.parallel_iter().map(|row| self.unwrap_row(row))
-    }
 }
 
 impl TaggedRowBuffer<SmallValueVec> {
@@ -461,6 +446,38 @@ impl<V: ValueVec> TaggedRowBuffer<V> {
         self.inner.data.extend_from_values(row);
         self.inner.data.push(Cell::new(Value::new(row_id.rep())));
         self.inner.total_rows += 1;
+        res
+    }
+
+    /// Add the given row and RowId to the buffer, then let `patch` edit the
+    /// copied row in place. Equivalent to copying `row` into a scratch
+    /// buffer, editing it, and calling [`TaggedRowBuffer::add_row`], without
+    /// the intermediate copy.
+    #[inline]
+    pub fn add_row_with(
+        &mut self,
+        row_id: RowId,
+        row: &[Value],
+        patch: impl FnOnce(&mut [Value]),
+    ) -> RowId {
+        debug_assert_eq!(
+            row.len(),
+            self.base_arity(),
+            "attempting to add a row with mismatched arity to table"
+        );
+        if self.inner.total_rows == 0 {
+            self.inner.data.refresh();
+        }
+        let res = RowId::from_usize(self.inner.total_rows);
+        self.inner.data.extend_from_values(row);
+        self.inner.data.push(Cell::new(Value::new(row_id.rep())));
+        self.inner.total_rows += 1;
+        let vals = self.inner.data.as_values_mut();
+        let end = vals.len() - 1;
+        let dst = &mut vals[end - row.len()..end];
+        // SAFETY: see the comment in `RowBuffer::non_stale`; this is the same
+        // Cell-to-Value transmute used by `get_row_mut`.
+        patch(unsafe { mem::transmute::<&mut [Cell<Value>], &mut [Value]>(dst) });
         res
     }
 

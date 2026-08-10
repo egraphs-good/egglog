@@ -3,11 +3,14 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize},
+    sync::{
+        Arc, OnceLock, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use crate::{
-    common::{HashMap, IndexMap},
+    common::{HashMap, HashSet, IndexMap},
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
@@ -16,6 +19,7 @@ use crate::{
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
+use egglog_concurrency::Scope;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -28,9 +32,9 @@ use crate::{
         frame_update::{FrameUpdates, UpdateInstr},
         get_index_from_tableinfo,
     },
-    hash_index::{ColumnIndex, IndexBase, TupleIndex},
+    hash_index::{IndexBase, TupleIndex},
     offsets::{Offsets, RowId, SortedOffsetSlice, SortedOffsetVector, Subset},
-    parallel_heuristics::parallelize_db_level_op,
+    parallel_heuristics::{action_batch_size, free_join_fork_depth, parallelize_db_level_op},
     pool::Pooled,
     query::RuleSet,
     row_buffer::TaggedRowBuffer,
@@ -38,7 +42,7 @@ use crate::{
 };
 
 use super::{
-    ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableInfo, Variable,
+    ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableId, TableInfo, Variable,
     get_column_index_from_tableinfo,
     plan::{JoinHeader, JoinStage, Plan},
     with_pool_set,
@@ -152,6 +156,94 @@ impl SparseColumnIndex {
     }
 }
 
+/// Return a `SubsetRef` for `ids[range]`, which must be nonempty and sorted
+/// ascending. A contiguous run is returned as `Dense` to avoid a pool
+/// allocation when the subset is later materialized.
+///
+/// # Safety
+/// `ids[range]` must be sorted in non-decreasing order.
+#[inline]
+unsafe fn dense_or_sparse_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
+    let slice = &ids[range];
+    let first = slice[0];
+    let last = slice[slice.len() - 1];
+    if last.index() - first.index() == slice.len() - 1 {
+        SubsetRef::Dense(OffsetRange::new(first, last.inc()))
+    } else {
+        // SAFETY: caller guarantees `slice` is sorted.
+        SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(slice) })
+    }
+}
+
+/// A heap-allocated, sort-based single-column index for on-the-fly (per-subset)
+/// indexing during joins.
+///
+/// Unlike a hash-based column index, the (value -> rows) groups live in sorted
+/// arrays: `for_each` walks them directly and `get_subset` binary-searches the
+/// keys. Building it therefore skips hash-table construction, which is wasteful
+/// for the high-cardinality columns joined on in an e-graph, where each value
+/// typically maps to only one or two rows.
+pub(crate) struct SortedColumnIndex {
+    /// Distinct column values (ascending) paired with the start offset of their
+    /// rows in `row_ids`. A trailing `(_, row_ids.len())` sentinel delimits the
+    /// final group.
+    keys: Vec<(Value, u32)>,
+    /// Row ids grouped by key; each group is ascending.
+    row_ids: Vec<RowId>,
+}
+
+impl SortedColumnIndex {
+    fn build_for_subset(table: WrappedTableRef, subset: SubsetRef, col: ColumnId) -> Self {
+        let mut pairs: Vec<(Value, RowId)> = Vec::new();
+        // Rows arrive in RowId-ascending order, so a value-stable sort leaves
+        // each value's rows ascending.
+        table.collect_col_pairs(subset, col, &mut pairs);
+        let mut scratch = vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
+        crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut scratch);
+        drop(scratch);
+
+        let mut keys: Vec<(Value, u32)> = Vec::new();
+        let mut row_ids: Vec<RowId> = Vec::with_capacity(pairs.len());
+        for (val, row) in pairs {
+            if keys.last().map(|&(v, _)| v) != Some(val) {
+                keys.push((val, row_ids.len() as u32));
+            }
+            row_ids.push(row);
+        }
+        keys.push((Value::new_const(0), row_ids.len() as u32));
+        SortedColumnIndex { keys, row_ids }
+    }
+
+    fn get_subset(&self, key: Value) -> Option<SubsetRef<'_>> {
+        // The trailing sentinel is never a real match: it is stored as value 0
+        // but the search space excludes it via the `len - 1` bound below.
+        let n = self.len();
+        let i = self.keys[..n]
+            .binary_search_by_key(&key, |&(v, _)| v)
+            .ok()?;
+        let lo = self.keys[i].1 as usize;
+        let hi = self.keys[i + 1].1 as usize;
+        // SAFETY: rows within a single key's range are ascending (see `build_for_subset`).
+        Some(unsafe { dense_or_sparse_ref(&self.row_ids, lo..hi) })
+    }
+
+    fn for_each(&self, mut f: impl FnMut(Value, SubsetRef)) {
+        let n = self.len();
+        for i in 0..n {
+            let (val, lo) = self.keys[i];
+            let hi = self.keys[i + 1].1 as usize;
+            // SAFETY: see `get_subset`.
+            let subset = unsafe { dense_or_sparse_ref(&self.row_ids, lo as usize..hi) };
+            f(val, subset);
+        }
+    }
+
+    fn len(&self) -> usize {
+        // The last entry is the sentinel offset, not a key.
+        self.keys.len().saturating_sub(1)
+    }
+}
+
 enum DynamicIndex {
     Cached {
         /// When Some(range), intersect each subset from the index with this dense range.
@@ -166,7 +258,7 @@ enum DynamicIndex {
         table: HashColumnIndex,
     },
     Dynamic(TupleIndex),
-    DynamicColumn(Arc<ColumnIndex>),
+    DynamicColumn(Arc<SortedColumnIndex>),
     SparseColumn(SparseColumnIndex),
 }
 
@@ -198,13 +290,6 @@ impl<T> PotentiallyStale<T> {
 impl PotentiallyStale<SubsetRef<'_>> {
     fn size(&self) -> usize {
         self.inner.size()
-    }
-
-    fn to_owned(&self, pool: &Pool<SortedOffsetVector>) -> PotentiallyStale<Subset> {
-        PotentiallyStale {
-            inner: self.inner.to_owned(pool),
-            can_be_stale: self.can_be_stale,
-        }
     }
 }
 
@@ -273,7 +358,7 @@ impl Prober {
             }
             DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(PotentiallyStale::not_stale),
             DynamicIndex::DynamicColumn(tab) => {
-                tab.get_subset(&key[0]).map(PotentiallyStale::not_stale)
+                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
             }
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
@@ -325,7 +410,7 @@ impl Prober {
                 tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
             }
             DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
-                f(&[*k], PotentiallyStale::not_stale(v));
+                f(&[k], PotentiallyStale::not_stale(v));
             }),
             DynamicIndex::SparseColumn(tab) => {
                 tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
@@ -350,6 +435,28 @@ impl Database {
             return RuleSetReport::default();
         }
         let match_counter = Arc::new(MatchCounter::new(rule_set.actions.n_ids()));
+        // Trie roots are shared across all plans in this run. Tables are frozen
+        // for the duration, so a given root key always denotes the same subset;
+        // the cache is scoped to (and dropped at the end of) this call. Only
+        // roots used by more than one plan are shared.
+        //
+        // The `mark_shared_roots` pre-pass and the per-atom root-signature work
+        // are a fixed cost paid every call; on small databases (few/cheap index
+        // builds) that cost outweighs the sharing it enables. Gate it on the
+        // database size so small rule-set runs keep the zero-overhead per-plan
+        // path (an empty `shared` set makes `root_node` skip the signature
+        // entirely). The estimate grows over a run, so early/cheap iterations
+        // stay ungated while large ones opt in exactly when sharing pays off.
+        // Enable cross-plan root sharing only when some root is actually reused
+        // across plans. `None` means `root_node` builds fresh per-plan roots with
+        // zero added work — no signature machinery and (crucially on many-core
+        // hosts) no DashMap allocation. The pre-pass is a cheap scan of the plans'
+        // atoms; the shard count is matched to the thread count (see `with_shared`).
+        let trie_cache: Option<Arc<TrieCache>> = {
+            let shared =
+                TrieCache::compute_shared(rule_set.plans.values().map(|(plan, _, _)| plan));
+            (!shared.is_empty()).then(|| Arc::new(TrieCache::with_shared(shared)))
+        };
 
         let search_and_apply_timer = Instant::now();
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
@@ -359,7 +466,7 @@ impl Database {
             let dash_rule_reports: Arc<DashMap<Arc<str>, Vec<RuleReport>>> =
                 Arc::new(DashMap::default());
             let db: &Database = self;
-            rayon::in_place_scope(|scope| {
+            egglog_concurrency::scope(|scope| {
                 for (plan, desc, symbol_map) in rule_set.plans.values() {
                     // TODO: add stats
                     let report_plan = match report_level {
@@ -373,30 +480,22 @@ impl Database {
                     let desc = desc.clone();
                     let exec_state = exec_state.clone();
                     let match_counter = match_counter.clone();
+                    let trie_cache = trie_cache.clone();
                     scope.spawn(move |rule_scope| {
-                        let join_state = JoinState::new(db, exec_state.clone());
+                        let join_state = JoinState::new(db, exec_state.clone(), trie_cache);
                         let mut binding_info = BindingInfo::default();
-                        for (id, info) in plan.atoms().iter() {
-                            let table = join_state.db.get_table(info.table);
-                            binding_info.insert_subset(id, table.all());
-                        }
                         let mut action_buf =
                             ScopedActionBuffer::new(rule_scope, rule_set, match_counter.clone());
                         let search_and_apply_timer = Instant::now();
 
                         'eval: {
-                            for JoinHeader { atom, subset, .. } in plan.header() {
-                                if subset.is_empty() {
-                                    break 'eval;
+                            for (id, info) in plan.atoms().iter() {
+                                let headers: SmallVec<[&JoinHeader; 2]> =
+                                    plan.header().iter().filter(|h| h.atom == id).collect();
+                                match join_state.root_node(info.table, &headers) {
+                                    Some(node) => binding_info.insert_node(id, node),
+                                    None => break 'eval,
                                 }
-                                let mut cur =
-                                    Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
-                                debug_assert!(cur.cached_subsets.get().is_none());
-                                cur.subset.intersect(subset.as_ref(), &join_state.pool);
-                                if cur.subset.is_empty() {
-                                    break 'eval;
-                                }
-                                binding_info.move_back_node(*atom, Arc::new(cur));
                             }
 
                             match plan {
@@ -436,7 +535,7 @@ impl Database {
                                         plan.stages.blocks.iter().enumerate()
                                     {
                                         let mat_id = MatId::from_usize(mat_id);
-                                        rayon::in_place_scope(|stage_scope| {
+                                        egglog_concurrency::scope(|stage_scope| {
                                             let mut materializer = ScopedMaterializer {
                                                 scope: stage_scope,
                                                 specs: specs.clone(),
@@ -499,7 +598,7 @@ impl Database {
                 .collect();
         } else {
             rule_reports = HashMap::default();
-            let join_state = JoinState::new(self, exec_state.clone());
+            let join_state = JoinState::new(self, exec_state.clone(), trie_cache.clone());
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -516,26 +615,15 @@ impl Database {
                 };
                 let mut binding_info = BindingInfo::default();
 
-                for (id, info) in plan.atoms().iter() {
-                    let table = join_state.db.get_table(info.table);
-                    binding_info.insert_subset(id, table.all());
-                }
-
                 let search_and_apply_timer = Instant::now();
                 'eval: {
-                    for JoinHeader { atom, subset, .. } in plan.header() {
-                        if subset.is_empty() {
-                            break 'eval;
+                    for (id, info) in plan.atoms().iter() {
+                        let headers: SmallVec<[&JoinHeader; 2]> =
+                            plan.header().iter().filter(|h| h.atom == id).collect();
+                        match join_state.root_node(info.table, &headers) {
+                            Some(node) => binding_info.insert_node(id, node),
+                            None => break 'eval,
                         }
-                        // Before query execution, Arc<TrieNode> is owned exclusively by the binding info.
-                        // Trie nodes are only shared once we start running the query.
-                        let mut cur = Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
-                        debug_assert!(cur.cached_subsets.get().is_none());
-                        cur.subset.intersect(subset.as_ref(), &join_state.pool);
-                        if cur.subset.is_empty() {
-                            break 'eval;
-                        }
-                        binding_info.move_back_node(*atom, Arc::new(cur));
                     }
                     match plan {
                         Plan::SinglePlan(plan) => {
@@ -641,12 +729,12 @@ struct ActionState {
     bindings: Bindings,
 }
 
-impl Default for ActionState {
-    fn default() -> Self {
+impl ActionState {
+    fn new(batch_size: usize) -> Self {
         Self {
             n_runs: 0,
             len: 0,
-            bindings: Bindings::new(VAR_BATCH_SIZE),
+            bindings: Bindings::new(batch_size),
         }
     }
 }
@@ -657,14 +745,128 @@ struct JoinState<'a> {
     /// Cached thread-local pool for SortedOffsetVector allocations.
     /// Stored here to avoid a per-call `with_pool_set` TLS access in `get_index`.
     pool: Pool<SortedOffsetVector>,
+    /// Cross-plan trie-root cache for the current `run_rule_set`, or `None` when
+    /// sharing is disabled (small run, or nothing reused across plans).
+    trie_cache: Option<Arc<TrieCache>>,
 }
 
 /// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
-type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
+type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<SortedColumnIndex>>>;
 // Each TrieNode is probed with exactly one column in practice, so we store a single
-// (ColumnId, map) pair instead of a per-column IdVec of Mutexes. Boxed to keep
-// TrieNode size small for the many short-lived TrieNodes that never need caching.
-type ChildrenMaps = IdVec<ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>>;
+// (ColumnId, map) pair instead of a per-column IdVec of Mutexes.
+//
+// The child cache (see [`TrieNode::get_cached_trie_node`]): keyed by the bound
+// value, storing the child node and the edge constraints used to build it. The
+// stored constraints guard against distinct scans reaching the same
+// (node, col, value) with different slow constraints; they are almost always
+// empty, in which case the guard is a cheap length check.
+type ChildrenMaps = IdVec<ColumnId, RwLock<HashMap<Value, (Arc<TrieNode>, Box<[Constraint]>)>>>;
+
+/// Canonical signature of a trie root: the table plus its sorted header (fast)
+/// constraints. Distinct signatures get distinct base ids from [`TrieCache`].
+type BaseSig = (TableId, SmallVec<[Constraint; 2]>);
+
+/// Key for a shared trie root: the table plus an interned id for its fast
+/// (header) constraints.
+type RootKey = (TableId, u32);
+
+/// A cache of trie *roots* shared across all plans within a single
+/// `run_rule_set` call. Two plans that constrain the same table with the same
+/// fast constraints share a root; the rest of the trie is then shared implicitly
+/// because a shared root's per-node child caches are shared with it. Sharing lets
+/// each node's cached sub-indexes and children be built once and reused across
+/// plans.
+///
+/// Only roots that more than one plan actually uses are shared (`shared`), so
+/// single-use roots stay per-plan and keep the pool-recycling behavior of the
+/// unshared path — sharing a root that is never reused is pure overhead.
+///
+/// Concurrency: the parallel executor runs plans on multiple threads, so the maps
+/// are concurrent. Tables are frozen during a run, so a given key always denotes
+/// the same subset.
+#[derive(Default)]
+struct TrieCache {
+    roots: DashMap<RootKey, Arc<TrieNode>>,
+    /// Interns base signatures to small ids to keep [`RootKey`] cheap.
+    bases: DashMap<BaseSig, u32>,
+    next_base: AtomicUsize,
+    /// Root signatures used by more than one plan; only these are shared.
+    shared: HashSet<BaseSig>,
+}
+
+impl TrieCache {
+    /// Return the interned base id for a root subset identified by `table` and
+    /// its (fast) header constraints.
+    ///
+    /// Base id 0 is reserved for the (common) unconstrained case, so atoms with
+    /// no fast constraints skip the interning map entirely. `RootKey` already
+    /// carries `table`, so base ids only need to distinguish constraint sets
+    /// within a table.
+    fn base_id(&self, table: TableId, fast: &[Constraint]) -> u32 {
+        if fast.is_empty() {
+            return 0;
+        }
+        let mut sig: SmallVec<[Constraint; 2]> = SmallVec::from_iter(fast.iter().cloned());
+        sig.sort_unstable();
+        match self.bases.entry((table, sig)) {
+            Entry::Occupied(o) => *o.get(),
+            Entry::Vacant(v) => {
+                let id = self.next_base.fetch_add(1, Ordering::Relaxed) as u32 + 1;
+                v.insert(id);
+                id
+            }
+        }
+    }
+
+    /// The canonical root signature (table + sorted fast constraints) for `atom`
+    /// given its headers.
+    fn root_sig(plan: &Plan, atom: AtomId, table: TableId) -> BaseSig {
+        let mut fast: SmallVec<[Constraint; 2]> = SmallVec::new();
+        for h in plan.header().iter().filter(|h| h.atom == atom) {
+            fast.extend(h.constraints.iter().cloned());
+        }
+        fast.sort_unstable();
+        (table, fast)
+    }
+
+    /// Compute the set of root signatures used by more than one plan atom (across
+    /// all plans); only these are worth sharing.
+    fn compute_shared<'a>(plans: impl Iterator<Item = &'a Plan>) -> HashSet<BaseSig> {
+        let mut counts: HashMap<BaseSig, u32> = HashMap::default();
+        for plan in plans {
+            for (atom, info) in plan.atoms().iter() {
+                *counts
+                    .entry(Self::root_sig(plan, atom, info.table))
+                    .or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .filter_map(|(sig, n)| (n > 1).then_some(sig))
+            .collect()
+    }
+
+    /// Build a cache for the given shared root signatures. Only called when
+    /// `shared` is non-empty, so the DashMap allocations always pay off.
+    ///
+    /// Shard the maps to the actual thread count rather than DashMap's default
+    /// (`4 * num_cpus`): on a many-core host the default allocates hundreds of
+    /// shards per `run_rule_set`, which dwarfs the sharing savings on smaller
+    /// runs. Serial runs get a single shard.
+    fn with_shared(shared: HashSet<BaseSig>) -> TrieCache {
+        // DashMap requires at least 2 shards; that is plenty for serial runs and
+        // still far below the default (4 * num_cpus).
+        let shards = crate::parallel::current_num_threads()
+            .next_power_of_two()
+            .max(2);
+        TrieCache {
+            roots: DashMap::with_hasher_and_shard_amount(Default::default(), shards),
+            bases: DashMap::with_hasher_and_shard_amount(Default::default(), shards),
+            next_base: AtomicUsize::new(0),
+            shared,
+        }
+    }
+}
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -680,7 +882,9 @@ pub(crate) struct TrieNode {
     cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
     /// Cached child trie nodes, keyed by value. In practice each TrieNode is
     /// only ever probed with a single column, so we store one (col, map) pair
-    /// instead of an IdVec across all columns.
+    /// instead of an IdVec across all columns. When this node is a shared root
+    /// (or reachable from one), this cache is shared across plans too, so
+    /// children are shared without any global lookup.
     cached_children: OnceLock<Pooled<ChildrenMaps>>,
 }
 
@@ -704,7 +908,7 @@ impl TrieNode {
     fn size(&self) -> usize {
         self.subset.size()
     }
-    fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<ColumnIndex> {
+    fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<SortedColumnIndex> {
         self.cached_subsets.get_or_init(|| {
             // Pre-size the vector so we do not need to borrow it mutably to initialize the index.
             let mut vec: Pooled<ColumnIndexes> = with_pool_set(|ps| ps.get());
@@ -712,16 +916,30 @@ impl TrieNode {
             vec
         })[col]
             .get_or_init(|| {
-                let col_index = info.table.group_by_col(self.subset.as_ref(), col);
-                Arc::new(col_index)
+                Arc::new(SortedColumnIndex::build_for_subset(
+                    info.table.as_ref(),
+                    self.subset.as_ref(),
+                    col,
+                ))
             })
             .clone()
     }
 
+    /// Return the child node reached by additionally constraining `col = value`
+    /// (and applying `edge_cs`). `sub` computes the child subset and is only
+    /// called on a cache miss.
+    ///
+    /// Children are cached on the node itself, keyed by `value`. When this node
+    /// is a shared root (or reachable from one) its child cache is shared across
+    /// plans, so a hit yields cross-plan child sharing with a single-value lookup
+    /// and no global cache access. The stored constraints guard against distinct
+    /// scans reaching the same (node, col, value) with different slow
+    /// constraints; they are almost always empty (a cheap length check).
     fn get_cached_trie_node(
         &self,
         col: ColumnId,
         value: Value,
+        edge_cs: &[Constraint],
         info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
@@ -730,21 +948,25 @@ impl TrieNode {
             vec.resize_with(info.spec.arity(), || RwLock::new(HashMap::default()));
             vec
         })[col];
-        // Optimistic read path: most calls are cache hits, so try shared lock first.
+        // Optimistic read path: most calls are cache hits, so try a shared lock
+        // first. A hit is only valid when the edge constraints match.
         {
             let guard = map.read().unwrap();
-            if let Some(node) = guard.get(&value) {
+            if let Some((node, stored_cs)) = guard.get(&value)
+                && &**stored_cs == edge_cs
+            {
                 return node.clone();
             }
         }
-        // Cache miss: acquire write lock and insert.
+        // Cache miss (or constraint mismatch): acquire the write lock and insert.
         let mut guard = map.write().unwrap();
-        // Double-check in case another thread inserted while we were waiting.
-        if let Some(node) = guard.get(&value) {
+        if let Some((node, stored_cs)) = guard.get(&value)
+            && &**stored_cs == edge_cs
+        {
             return node.clone();
         }
         let new_node = Arc::new(TrieNode::new(sub()));
-        guard.insert(value, new_node.clone());
+        guard.insert(value, (new_node.clone(), Box::from(edge_cs)));
         new_node
     }
 }
@@ -808,12 +1030,86 @@ impl BindingInfo {
 }
 
 impl<'a> JoinState<'a> {
-    fn new(db: &'a Database, exec_state: ExecutionState<'a>) -> Self {
+    fn new(
+        db: &'a Database,
+        exec_state: ExecutionState<'a>,
+        trie_cache: Option<Arc<TrieCache>>,
+    ) -> Self {
         Self {
             db,
             exec_state,
             pool: with_pool_set(|ps| ps.get_pool()),
+            trie_cache,
         }
+    }
+
+    /// Look up (or create) the root trie node for `atom` given all of its
+    /// headers.
+    ///
+    /// An atom may carry more than one header (e.g. seminaive adds a timestamp
+    /// constraint on top of the plan's original fast constraints); the root
+    /// subset is the whole table intersected with every header subset. Returns
+    /// `None` when that subset is empty.
+    ///
+    /// Roots whose signature is used by more than one plan (see
+    /// [`TrieCache::shared`]) are shared through the cache; the rest are built
+    /// fresh per plan so the pool can recycle them.
+    fn root_node(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<Arc<TrieNode>> {
+        // Fast path: when sharing is disabled this run (small database, or no
+        // root reused across plans), skip the root-signature machinery entirely
+        // and build a fresh per-plan root — matching the pre-sharing behavior at
+        // no added cost.
+        let Some(trie_cache) = self.trie_cache.as_ref() else {
+            return Some(Arc::new(TrieNode::new(
+                self.build_root_subset(table_id, headers)?,
+            )));
+        };
+        // The base identity is the union of all fast constraints on this atom.
+        let mut fast: SmallVec<[Constraint; 2]> = SmallVec::new();
+        for h in headers {
+            fast.extend(h.constraints.iter().cloned());
+        }
+        fast.sort_unstable();
+        let sig: BaseSig = (table_id, fast);
+
+        if !trie_cache.shared.contains(&sig) {
+            // Not reused across plans: build a fresh, unshared root.
+            return Some(Arc::new(TrieNode::new(
+                self.build_root_subset(table_id, headers)?,
+            )));
+        }
+
+        let base = trie_cache.base_id(table_id, &sig.1);
+        let key: RootKey = (table_id, base);
+        if let Some(node) = trie_cache.roots.get(&key) {
+            return (!node.subset.is_empty()).then(|| node.clone());
+        }
+        let subset = self.build_root_subset(table_id, headers)?;
+        let node = match trie_cache.roots.entry(key) {
+            Entry::Occupied(o) => o.get().clone(),
+            Entry::Vacant(v) => {
+                let node = Arc::new(TrieNode::new(subset));
+                v.insert(node.clone());
+                node
+            }
+        };
+        (!node.subset.is_empty()).then_some(node)
+    }
+
+    /// The root subset for `table_id`: the whole table intersected with every
+    /// header subset. Returns `None` if the result is empty.
+    fn build_root_subset(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<Subset> {
+        let mut subset = self.db.get_table(table_id).all();
+        for h in headers {
+            if h.subset.is_empty() {
+                return None;
+            }
+            subset.intersect(h.subset.as_ref(), &self.pool);
+            if subset.is_empty() {
+                return None;
+            }
+        }
+        Some(subset)
     }
 
     fn get_index(
@@ -986,7 +1282,7 @@ impl<'a> JoinState<'a> {
                 }
                 // TODO: `supports_parallel_drain`` is a hack because currently
                 // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
-                if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain() {
+                if cur < free_join_fork_depth() && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
                     $updates.drain(|update| match update {
@@ -1036,6 +1332,7 @@ impl<'a> JoinState<'a> {
                 let db = self.db;
                 let exec_state_for_factory = self.exec_state.clone();
                 let exec_state_for_work = self.exec_state.clone();
+                let trie_cache = self.trie_cache.clone();
                 action_buf.recur(
                     BorrowedLocalState {
                         binding_info,
@@ -1065,10 +1362,11 @@ impl<'a> JoinState<'a> {
                                 JoinState {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
-                                    // Each rayon task uses its own thread-local pool.
+                                    // Each scoped task uses its own thread-local pool.
                                     // This makes drain_updates_parallel slightly more expensive
                                     // than drain_updates eevn when both are run in single thread
                                     pool: with_pool_set(|ps| ps.get_pool()),
+                                    trie_cache: trie_cache.clone(),
                                 }
                                 .run_plan(
                                     stages,
@@ -1089,20 +1387,19 @@ impl<'a> JoinState<'a> {
         }
 
         fn refine_subset(
-            sub: PotentiallyStale<Subset>,
+            sub: PotentiallyStale<SubsetRef<'_>>,
             constraints: &[Constraint],
             table: &WrappedTableRef,
             has_stale: bool,
+            pool: &Pool<SortedOffsetVector>,
         ) -> Subset {
-            let sub = if sub.can_be_stale && has_stale {
-                table.refine_live(sub.inner)
+            let need_live = sub.can_be_stale && has_stale;
+            if constraints.is_empty() && !need_live {
+                sub.inner.to_owned(pool)
             } else {
-                sub.inner
-            };
-            if constraints.is_empty() {
-                sub
-            } else {
-                table.refine(sub, constraints)
+                // Fused copy + liveness + constraint filter (single pass for
+                // tables that implement `refine_ref` directly).
+                table.refine_ref(sub.inner, constraints, need_live)
             }
         }
 
@@ -1122,19 +1419,20 @@ impl<'a> JoinState<'a> {
                     prober.for_each(|val, x| {
                         updates.push_binding(*var, val[0]);
                         if x.size() <= 16 {
-                            let sub = refine_subset(x.to_owned(pool), &a.cs, &table, has_stale);
+                            let sub = refine_subset(x, &a.cs, &table, has_stale, pool);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
                             }
                             updates.refine_atom_subset(a.atom, sub);
                         } else {
-                            let node =
-                                prober
-                                    .node
-                                    .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(pool), &a.cs, &table, has_stale)
-                                    });
+                            let node = prober.node.get_cached_trie_node(
+                                a.column,
+                                val[0],
+                                &a.cs,
+                                info,
+                                || refine_subset(x, &a.cs, &table, has_stale, pool),
+                            );
                             if node.subset.is_empty() {
                                 updates.rollback();
                                 return;
@@ -1174,10 +1472,11 @@ impl<'a> JoinState<'a> {
                             updates.push_binding(*var, val[0]);
                             if small_sub.size() <= 16 {
                                 let small_sub = refine_subset(
-                                    small_sub.to_owned(pool),
+                                    small_sub,
                                     &smaller_scan.cs,
                                     &small_table,
                                     small_has_stale,
+                                    pool,
                                 );
                                 if small_sub.is_empty() {
                                     updates.rollback();
@@ -1188,13 +1487,15 @@ impl<'a> JoinState<'a> {
                                 let smaller_node = smaller.node.get_cached_trie_node(
                                     smaller_scan.column,
                                     val[0],
+                                    &smaller_scan.cs,
                                     small_info,
                                     || {
                                         refine_subset(
-                                            small_sub.to_owned(pool),
+                                            small_sub,
                                             &smaller_scan.cs,
                                             &small_table,
                                             small_has_stale,
+                                            pool,
                                         )
                                     },
                                 );
@@ -1206,10 +1507,11 @@ impl<'a> JoinState<'a> {
                             }
                             if large_sub.size() <= 16 {
                                 let large_sub = refine_subset(
-                                    large_sub.to_owned(pool),
+                                    large_sub,
                                     &larger_scan.cs,
                                     &large_table,
                                     large_has_stale,
+                                    pool,
                                 );
                                 if large_sub.is_empty() {
                                     updates.rollback();
@@ -1220,13 +1522,15 @@ impl<'a> JoinState<'a> {
                                 let larger_node = larger.node.get_cached_trie_node(
                                     larger_scan.column,
                                     val[0],
+                                    &larger_scan.cs,
                                     large_info,
                                     || {
                                         refine_subset(
-                                            large_sub.to_owned(pool),
+                                            large_sub,
                                             &larger_scan.cs,
                                             &large_table,
                                             large_has_stale,
+                                            pool,
                                         )
                                     },
                                 );
@@ -1292,10 +1596,11 @@ impl<'a> JoinState<'a> {
                                         self.db.tables[atoms[rest[i].atom].table].table.as_ref();
                                     if sub.size() <= 16 {
                                         let sub = refine_subset(
-                                            sub.to_owned(pool),
+                                            sub,
                                             &rest[i].cs,
                                             &table,
                                             rest_has_stale[i],
+                                            pool,
                                         );
                                         if sub.is_empty() {
                                             updates.rollback();
@@ -1306,13 +1611,15 @@ impl<'a> JoinState<'a> {
                                         let node = probers[i].node.get_cached_trie_node(
                                             scan.column,
                                             key[0],
+                                            &rest[i].cs,
                                             &self.db.tables[atoms[scan.atom].table],
                                             || {
                                                 refine_subset(
-                                                    sub.to_owned(pool),
+                                                    sub,
                                                     &rest[i].cs,
                                                     &table,
                                                     rest_has_stale[i],
+                                                    pool,
                                                 )
                                             },
                                         );
@@ -1330,10 +1637,11 @@ impl<'a> JoinState<'a> {
                             }
                             if sub.size() <= 16 {
                                 let main_sub = refine_subset(
-                                    sub.to_owned(pool),
+                                    sub,
                                     &main_spec.cs,
                                     &main_spec_table,
                                     main_spec_has_stale,
+                                    pool,
                                 );
                                 if main_sub.is_empty() {
                                     updates.rollback();
@@ -1344,14 +1652,15 @@ impl<'a> JoinState<'a> {
                                 let main_node = probers[smallest].node.get_cached_trie_node(
                                     main_spec.column,
                                     key[0],
+                                    &main_spec.cs,
                                     main_spec_info,
                                     || {
-                                        let sub = sub.to_owned(pool);
                                         refine_subset(
                                             sub,
                                             &main_spec.cs,
                                             &main_spec_table,
                                             main_spec_has_stale,
+                                            pool,
                                         )
                                     },
                                 );
@@ -1533,10 +1842,11 @@ impl<'a> JoinState<'a> {
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset,
                                 cs,
                                 &table_info.table.as_ref(),
                                 index_has_stale[prober_idx],
+                                pool,
                             );
                             if subset.is_empty() {
                                 updates.rollback();
@@ -1696,12 +2006,13 @@ impl<'a> JoinState<'a> {
                         }
                         if let Some(subset) = prober.get_subset(&key) {
                             let subset = refine_subset(
-                                subset.to_owned(pool),
+                                subset,
                                 &spec.constraints,
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table
                                     .as_ref(),
                                 probers_has_stale[j],
+                                pool,
                             );
                             if subset.is_empty() {
                                 return false;
@@ -1804,7 +2115,7 @@ impl<'a> JoinState<'a> {
     }
 }
 
-const VAR_BATCH_SIZE: usize = 128;
+const LOCAL_ACTION_BATCH_SIZE: usize = 128;
 
 /// A trait used to abstract over different ways of buffering actions together
 /// before running them.
@@ -1899,7 +2210,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         bindings: &DenseIdMap<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'a>,
     ) {
-        let action_state = self.batches.get_or_default(action);
+        let action_state = self
+            .batches
+            .get_or_insert(action, || ActionState::new(LOCAL_ACTION_BATCH_SIZE));
         action_state.n_runs += 1;
         action_state.len += 1;
         let action_info = &self.rule_set.actions[action];
@@ -1908,7 +2221,7 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         unsafe {
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
-        if action_state.len >= VAR_BATCH_SIZE {
+        if action_state.len >= LOCAL_ACTION_BATCH_SIZE {
             let mut state = to_exec_state();
             let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
             action_state.bindings.clear();
@@ -1940,9 +2253,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
     }
 }
 
-/// An Action buffer that hands off batches to of actions to rayon to execute.
+/// An action buffer that hands off batches of actions to scoped worker tasks.
 struct ScopedActionBuffer<'inner, 'scope> {
-    scope: &'inner rayon::Scope<'scope>,
+    scope: &'inner Scope<'scope>,
     rule_set: &'scope RuleSet,
     match_counter: Arc<MatchCounter>,
     batches: DenseIdMap<ActionId, ActionState>,
@@ -1951,7 +2264,7 @@ struct ScopedActionBuffer<'inner, 'scope> {
 
 impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
     fn new(
-        scope: &'inner rayon::Scope<'scope>,
+        scope: &'inner Scope<'scope>,
         rule_set: &'scope RuleSet,
         match_counter: Arc<MatchCounter>,
     ) -> Self {
@@ -1977,7 +2290,10 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
         self.needs_flush = true;
-        let action_state = self.batches.get_or_default(action);
+        let batch_size = action_batch_size();
+        let action_state = self
+            .batches
+            .get_or_insert(action, || ActionState::new(batch_size));
         action_state.n_runs += 1;
         action_state.len += 1;
         let action_info = &self.rule_set.actions[action];
@@ -1986,10 +2302,9 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         unsafe {
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
-        if action_state.len >= VAR_BATCH_SIZE {
+        if action_state.len >= batch_size {
             let mut state = to_exec_state();
-            let mut bindings =
-                mem::replace(&mut action_state.bindings, Bindings::new(VAR_BATCH_SIZE));
+            let mut bindings = mem::replace(&mut action_state.bindings, Bindings::new(batch_size));
             action_state.len = 0;
             let match_counter = self.match_counter.clone();
             self.scope.spawn(move |_| {
@@ -2171,7 +2486,7 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
 }
 
 struct ScopedMaterializer<'inner, 'scope> {
-    scope: &'inner rayon::Scope<'scope>,
+    scope: &'inner Scope<'scope>,
     specs: Arc<DenseIdMap<MatId, MatSpec>>,
     materializations: Arc<DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>>,
     scratch_key: Vec<Value>,

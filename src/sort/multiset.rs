@@ -9,8 +9,25 @@ pub struct MultiSetContainer {
     pub data: MultiSet<Value>,
 }
 
+/// Canonical multiset term form `(multiset-of e0 e1 ...)`: elements sorted by
+/// [`TermDag::ast_cmp`] with multiplicities kept as repeats, so proof checking
+/// can reproduce it from terms.
+fn normalize_multiset_term(termdag: &mut TermDag, mut children: Vec<TermId>) -> TermId {
+    termdag.sort_terms_by_ast(&mut children);
+    termdag.app("multiset-of".into(), children)
+}
+
+/// The element terms of a multiset's canonical term form `(multiset-of e0 …)`
+/// (multiplicities kept as repeats); `None` for any other term.
+fn multiset_term_children(termdag: &TermDag, term: TermId) -> Option<Vec<TermId>> {
+    match termdag.get(term) {
+        Term::App(head, children) if head == "multiset-of" => Some(children.clone()),
+        _ => None,
+    }
+}
+
 impl ContainerValue for MultiSetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         // If the contents are an eq-sort then we want to rebuild
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
@@ -78,11 +95,12 @@ impl Presort for MultiSetSort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
+        if let [Expr::Var(arg_span, e)] = args {
             let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), arg_span.clone()))?;
 
             let out = Self {
                 name,
@@ -90,7 +108,10 @@ impl Presort for MultiSetSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!()
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().to_owned(),
+                span,
+            ))
         }
     }
 }
@@ -128,10 +149,36 @@ impl ContainerSort for MultiSetSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
-        add_primitive!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
+        // Proof term form of a multiset: `(multiset-of e0 e1 ...)`, matching
+        // `reconstruct_termdag`. (Count merging for proof checking of
+        // collapsing multisets is refined in the MultiSet proof stage.)
+        let multiset_of_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            Some(normalize_multiset_term(termdag, args.to_vec()))
+        };
+        let multiset_length_validator =
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [ms] = args else { return None };
+                let len = multiset_term_children(termdag, *ms)?.len() as i64;
+                Some(termdag.lit(Literal::Int(len)))
+            };
+        let multiset_contains_validator =
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [ms, value] = args else { return None };
+                multiset_term_children(termdag, *ms)?
+                    .contains(value)
+                    .then(|| termdag.lit(Literal::Unit))
+            };
+        let multiset_not_contains_validator =
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                let [ms, value] = args else { return None };
+                let contains = multiset_term_children(termdag, *ms)?.contains(value);
+                (!contains).then(|| termdag.lit(Literal::Unit))
+            };
+
+        add_primitive_with_validator!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
-        } });
+        } }, multiset_of_validator);
 
         add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -?> @MultiSetContainer (arc) {
             i.try_into().ok().map(|i|
@@ -140,15 +187,15 @@ impl ContainerSort for MultiSetSort {
                 data: std::iter::repeat_n(x, i).collect()
             })
         });
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
+        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -?> # (self.element()) { xs.data.pick().copied() });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
         add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
         add_primitive!(eg, "multiset-remove-swapped" = |x: # (self.element()), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs }) });
         add_primitive!(eg, "multiset-subtract" = |mut xs: @MultiSetContainer (arc), other: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
         add_primitive!(eg, "multiset-subtract-swapped" = |other: @MultiSetContainer (arc), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
-        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (arc)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive_with_validator!(eg, "multiset-length"       = |xs: @MultiSetContainer (arc)| -> i64 { xs.data.len() as i64 }, multiset_length_validator);
+        add_primitive_with_validator!(eg, "multiset-contains"     = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, multiset_contains_validator);
+        add_primitive_with_validator!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, multiset_not_contains_validator);
         add_primitive!(eg, "multiset-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "multiset-not-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (!xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "multiset-intersection" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.intersection(ys.data), ..xs } });
@@ -214,7 +261,18 @@ impl ContainerSort for MultiSetSort {
         termdag: &mut TermDag,
         element_terms: Vec<TermId>,
     ) -> TermId {
-        termdag.app("multiset-of".into(), element_terms)
+        // Canonical form (sorted by deterministic AST order, multiplicities
+        // preserved as repeats) so proof checking can reproduce it from terms.
+        normalize_multiset_term(termdag, element_terms)
+    }
+
+    fn rebuild_container_normalizer(&self) -> Option<(String, PrimitiveValidator)> {
+        Some((
+            "multiset-of".to_owned(),
+            Arc::new(|termdag: &mut TermDag, args: &[TermId]| {
+                Some(normalize_multiset_term(termdag, args.to_vec()))
+            }),
+        ))
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
@@ -456,9 +514,9 @@ impl FullPrim for FillIndex {
             .clone();
         let action = match fc.0 {
             ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
-            ResolvedFunctionId::Primitive { .. } => panic!(
-                "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
-            ),
+            // Primitive functions cannot be used with
+            // unstable-multiset-fill-index, since they cannot be set.
+            ResolvedFunctionId::Primitive { .. } => return None,
         };
         let unit_val = state.base_values().get::<()>(());
         let es = state.raw_exec_state();
@@ -470,7 +528,7 @@ impl FullPrim for FillIndex {
             if action.lookup(es, &row).is_some() {
                 break;
             }
-            row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
+            row.push(es.base_values().get::<i64>(c.try_into().ok()?));
             action.insert(es, row.into_iter());
         }
         Some(unit_val)
@@ -521,9 +579,9 @@ impl WritePrim for ClearIndex {
             .clone();
         let action = match fc.0 {
             ResolvedFunctionId::Constructor(a) | ResolvedFunctionId::Function(a) => a,
-            ResolvedFunctionId::Primitive { .. } => panic!(
-                "Primitive functions cannot be used with unstable-multiset-clear-index, since they cannot be deleted"
-            ),
+            // Primitive functions cannot be used with
+            // unstable-multiset-clear-index, since they cannot be deleted.
+            ResolvedFunctionId::Primitive { .. } => return None,
         };
         let unit_val = state.base_values().get::<()>(());
         let es = state.raw_exec_state();
@@ -587,7 +645,7 @@ impl PurePrim for FlatMap {
                     .get_val::<MultiSetContainer>(mapped_ms)
                     .unwrap();
                 for (mv, mc) in mapped_ms.data.iter_counts() {
-                    new_data.insert_multiple_mut(mv, c * mc);
+                    new_data.insert_multiple_mut(mv, c.checked_mul(mc)?);
                 }
             } else {
                 new_data.insert_multiple_mut(v, c);
@@ -706,7 +764,7 @@ impl PurePrim for SumMultisets {
                 .get_val::<MultiSetContainer>(ms_value)
                 .unwrap();
             for (v, c) in ms.data.iter_counts() {
-                data.insert_multiple_mut(v, c * counts);
+                data.insert_multiple_mut(v, c.checked_mul(counts)?);
             }
         }
         let multiset = MultiSetContainer {

@@ -10,6 +10,7 @@ pub(crate) mod dependency_graph;
 pub(crate) mod free_join;
 pub(crate) mod hash_index;
 pub(crate) mod offsets;
+pub(crate) mod parallel;
 pub(crate) mod parallel_heuristics;
 pub(crate) mod pool;
 pub(crate) mod query;
@@ -31,6 +32,8 @@ pub use free_join::{
     make_external_func, plan::PlanStrategy,
 };
 pub use hash_index::TupleIndex;
+#[doc(hidden)]
+pub use hash_index::bench_support;
 pub use offsets::{OffsetRange, RowId, Subset, SubsetRef};
 pub use pool::{Pool, PoolSet, Pooled};
 pub use query::{
@@ -40,7 +43,7 @@ pub use row_buffer::TaggedRowBuffer;
 pub use table::{MergeFn, SortedWritesTable};
 pub use table_spec::{
     ColumnId, Constraint, MutationBuffer, Offset, Rebuilder, Row, Table, TableChange, TableSpec,
-    TableVersion, WrappedTable,
+    TableVersion, ValueRebuilder, WrappedTable,
 };
 pub use uf::DisplacedTable;
 
