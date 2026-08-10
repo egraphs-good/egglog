@@ -347,7 +347,7 @@ fn prepared_plan_indexes_refresh_across_runs_and_clear() {
         .get_table_info(allowed)
         .column_indexes
         .get_or_insert_calls();
-    let first = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    let first = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
     assert_eq!(first.num_matches("prepared-index-lifecycle"), expected);
     assert_eq!(db.get_table(output).len(), expected);
     assert_eq!(
@@ -366,7 +366,7 @@ fn prepared_plan_indexes_refresh_across_runs_and_clear() {
 
     // Reusing the same logical plan must not retain catalog Arcs across the
     // merge at the end of the previous run.
-    let second = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    let second = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
     assert_eq!(second.num_matches("prepared-index-lifecycle"), expected);
     assert_eq!(db.get_table(output).len(), expected);
 
@@ -378,7 +378,7 @@ fn prepared_plan_indexes_refresh_across_runs_and_clear() {
 
     // Clearing bumps the table generation, so every prepared global index must
     // be refreshed before its borrowed reference is exposed to execution.
-    let after_clear = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    let after_clear = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
     assert_eq!(
         after_clear.num_matches("prepared-index-lifecycle"),
         expected
@@ -464,7 +464,7 @@ fn prepared_plan_indexes_preserve_uncacheable_columns() {
         .get_table_info(displaced)
         .column_indexes
         .get_or_insert_calls();
-    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
     assert_eq!(report.num_matches("uncacheable-prepared-index"), 1);
     assert_eq!(
         db.get_table_info(displaced)
@@ -548,7 +548,7 @@ fn gj_top_index_shards_preserve_count_and_materialization_inner() {
         let rules = rsb.build();
 
         pool.reset_scheduler_metrics();
-        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
         let scheduler = pool.scheduler_metrics();
         // The root rule job plus one job for each of the cached index's
         // 2 * worker-count shards.  Merge work may add more global jobs.
@@ -627,7 +627,7 @@ fn gj_small_top_fallback_uses_local_queue() {
         let rules = rsb.build();
 
         pool.reset_scheduler_metrics();
-        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
         let scheduler = pool.scheduler_metrics();
         assert!(
             scheduler.local_pushes > 0,
@@ -753,7 +753,7 @@ fn gj_decomposed_small_top_materialization_uses_local_queue() {
         );
 
         pool.reset_scheduler_metrics();
-        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
         let scheduler = pool.scheduler_metrics();
         assert!(
             scheduler.local_pushes > 0,
