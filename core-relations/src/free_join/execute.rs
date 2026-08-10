@@ -3363,7 +3363,7 @@ fn sort_plan_by_size(
     let mut last_pos = start;
     for i in start..instrs.len() {
         if matches!(
-            &instrs[order.get(i)],
+            &instrs[i],
             // These nodes don't commute
             JoinStage::FusedIntersectMat {
                 mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
@@ -3480,8 +3480,8 @@ fn sort_plan_by_size_inner(
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
 
     // Count how many times each atom has been refined so far.
-    for position in 0..range.start {
-        match &instrs[order.get(position)] {
+    for ins in &instrs[..range.start] {
+        match ins {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
             }),
