@@ -68,9 +68,42 @@ impl ChildShape {
 
 /// One immutable, scalar trie level allocated for the lifetime of an execution.
 ///
-/// The dynamically sized portions immediately following this header are laid
-/// out as keys, boundaries, grouped row ids, and (optionally) child locks. Use
-/// the accessors rather than relying on those offsets outside this module.
+/// Each node starts with the same packed index. `boundaries[i]..boundaries[i + 1]`
+/// selects the rows belonging to `keys[i]`:
+///
+/// ```text
+/// +----------------------------+
+/// | PackedTrieNode header      |
+/// +----------------------------+
+/// | Value keys[K]              |
+/// +----------------------------+
+/// | u32 boundaries[K + 1]      |
+/// +----------------------------+
+/// | RowId rows[R]              |
+/// +----------------------------+
+/// ```
+///
+/// A leaf ends there. A direct node appends one inline child-publication slot
+/// per key:
+///
+/// ```text
+/// | ChildSlot direct[K]        |
+/// +----------------------------+
+/// ```
+///
+/// A dynamically ordered node instead appends a family count and one atomic
+/// pointer per eligible successor. Each pointer lazily publishes a separate
+/// arena allocation containing one `ChildSlot[K]` array:
+///
+/// ```text
+/// | u32 family_count           |       family pointer
+/// +----------------------------+             |
+/// | AtomicPtr families[F]      |-------------+--> ChildSlot family[K]
+/// +----------------------------+
+/// ```
+///
+/// Alignment may insert padding between regions. Use the accessors rather
+/// than relying on these offsets outside this module.
 #[repr(C)]
 #[derive(Debug)]
 pub(crate) struct PackedTrieNode<'exec> {
