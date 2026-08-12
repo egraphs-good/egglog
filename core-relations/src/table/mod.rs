@@ -384,6 +384,9 @@ impl Table for SortedWritesTable {
         }
     }
 
+    /// Stale rows are skipped, constrained or not, so a caller need not filter
+    /// them back out of the rows it receives. `tests/repro-stale-rows.egg`
+    /// guards the constrained path.
     fn scan_generic_bounded(
         &self,
         subset: SubsetRef,

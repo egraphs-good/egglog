@@ -1,10 +1,12 @@
 //! Tests for the e-graph introspection a primitive body can reach:
 //! `Read::enodes_for_eclass`, `Read::constructor_schema` /
-//! `function_schema` / `table_subtype`, and `Core::rebuild_container`.
+//! `function_schema` / `table_subtype`, and `Core::map_container`.
 
+use egglog::ast::Span;
+use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::prelude::*;
-use egglog::sort::{MapContainer, VecContainer};
-use egglog::{ApiError, Core, Error, Read, Value};
+use egglog::sort::{I64Sort, MapContainer, S, StringSort, VecContainer};
+use egglog::{ApiError, Core, Error, Primitive, Read, ReadPrim, ReadState, Value};
 use std::any::TypeId;
 
 const MATH: &str = "
@@ -127,10 +129,11 @@ fn schema_accessors_report_the_declaration() -> Result<(), Error> {
     Ok(())
 }
 
-/// `rebuild_container` remaps a container's contents and interns the result,
-/// leaving the original alone.
+/// `map_container` remaps a container's contents and interns the result,
+/// leaving the original alone, and reports a value that is not a container of
+/// the given type rather than passing it through.
 #[test]
-fn rebuild_container_remaps_contents() -> Result<(), Error> {
+fn map_container_remaps_contents() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -152,7 +155,7 @@ fn rebuild_container_remaps_contents() -> Result<(), Error> {
 
     let rebuilt = egraph.update(|mut state| {
         Ok(
-            state.rebuild_container(TypeId::of::<VecContainer>(), vec, &|value| {
+            state.map_container(TypeId::of::<VecContainer>(), vec, &|value| {
                 if value == one {
                     two
                 } else if value == two {
@@ -163,18 +166,65 @@ fn rebuild_container_remaps_contents() -> Result<(), Error> {
             }),
         )
     })?;
+    let rebuilt = rebuilt.expect("a Vec container");
     assert_eq!(rebuilt, swapped, "the swap should intern to the same vec");
 
     // A remap that changes nothing hands back the original value.
     let unchanged = egraph.update(|mut state| {
-        Ok(state.rebuild_container(TypeId::of::<VecContainer>(), vec, &|value| value))
+        Ok(state.map_container(TypeId::of::<VecContainer>(), vec, &|value| value))
     })?;
-    assert_eq!(unchanged, vec);
+    assert_eq!(unchanged, Some(vec));
 
-    // A value that is not a container of that type is returned untouched.
+    // A value that is not a container of that type is reported, not silently
+    // handed back.
     let not_a_container = egraph.update(|mut state| {
-        Ok(state.rebuild_container(TypeId::of::<MapContainer>(), vec, &|value| value))
+        Ok(state.map_container(TypeId::of::<MapContainer>(), vec, &|value| value))
     })?;
-    assert_eq!(not_a_container, vec);
+    assert_eq!(not_a_container, None);
+    Ok(())
+}
+
+/// A read primitive answering with a constructor's arity, so a program can
+/// observe whether the declarations reached the primitive body.
+#[derive(Clone)]
+struct ConstructorArity;
+impl Primitive for ConstructorArity {
+    fn name(&self) -> &str {
+        "constructor-arity"
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![StringSort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl ReadPrim for ConstructorArity {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let name = state.base_values().unwrap::<S>(args[0]).0;
+        let arity = state.constructor_schema(&name).ok()?.input.len();
+        Some(state.base_values().get::<i64>(i64::try_from(arity).ok()?))
+    }
+}
+
+/// The declarations reach a primitive body during *rule execution*, which takes
+/// a different route to its execution state than a top-level command does
+/// (`run_rules` rather than `with_execution_state`).
+#[test]
+fn a_primitive_can_resolve_a_signature_from_inside_a_rule() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.add_read_primitive(ConstructorArity, None);
+    egraph.parse_and_run_program(None, MATH)?;
+    egraph.parse_and_run_program(
+        None,
+        r#"
+(function arity-of (String) i64 :no-merge)
+(rule () ((set (arity-of "Add") (constructor-arity "Add"))) :naive)
+(run 1)
+(check (= (arity-of "Add") 2))
+"#,
+    )?;
     Ok(())
 }

@@ -572,10 +572,7 @@ impl EGraph {
                         span.clone(),
                     ));
                 }
-                ResolvedNCommand::ProveExists(
-                    span.clone(),
-                    ResolvedCall::Func(Arc::new(func_type.clone())),
-                )
+                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -1144,13 +1141,10 @@ impl TypeInfo {
             .any(|p| p.context_ids.iter().any(|(_, pid)| *pid == Some(id)) && p.validator.is_some())
     }
 
-    pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
-        self.func_types.get(sym).map(Arc::as_ref)
-    }
-
-    /// The signature as a shared handle, for callers that keep it around.
-    pub(crate) fn func_type_arc(&self, sym: &str) -> Option<Arc<FuncType>> {
-        self.func_types.get(sym).cloned()
+    /// The shared signature declared for `sym`, or `None` if no function with
+    /// that name is declared. Clone it to keep it past the borrow.
+    pub fn get_func_type(&self, sym: &str) -> Option<&Arc<FuncType>> {
+        self.func_types.get(sym)
     }
 
     /// Record a signature for a function that did not come through

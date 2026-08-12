@@ -782,53 +782,50 @@ impl EGraph {
         }
     }
 
-    /// The signature for `decl`, recording it if this is the first time the
-    /// e-graph has seen the declaration.
-    ///
-    /// Typechecking records what it resolves, so this returns that. Desugaring
-    /// also generates declarations (the functions global bindings lower to,
-    /// proof tables) without typechecking them; resolving those here is what
-    /// keeps every declared function's signature reachable by name.
-    fn record_signature(&mut self, decl: &ResolvedFunctionDecl) -> Result<Arc<FuncType>, Error> {
-        if let Some(func_type) = self.type_info.func_type_arc(&decl.name) {
-            debug_assert!(
-                func_type.subtype == decl.subtype
-                    && func_type.input.len() == decl.schema.input.len()
-                    && func_type
+    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        // Typechecking records the signatures it resolves, so reuse that.
+        // Desugaring also generates declarations (the functions global bindings
+        // lower to, proof tables) without typechecking them; resolving those
+        // here is what keeps every declared function reachable by name.
+        let func_type = match self.type_info.get_func_type(&decl.name) {
+            Some(func_type) => {
+                debug_assert!(
+                    func_type.subtype == decl.subtype
+                        && func_type.input.len() == decl.schema.input.len()
+                        && func_type
+                            .input
+                            .iter()
+                            .zip(&decl.schema.input)
+                            .all(|(sort, name)| sort.name() == name)
+                        && func_type.output.name() == decl.schema.output,
+                    "recorded signature for {} disagrees with its declaration",
+                    decl.name
+                );
+                func_type.clone()
+            }
+            None => {
+                let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
+                    Some(sort) => Ok(sort.clone()),
+                    None => Err(Error::TypeError(TypeError::UndefinedSort(
+                        name.to_owned(),
+                        decl.span.clone(),
+                    ))),
+                };
+                let func_type = Arc::new(FuncType {
+                    name: decl.name.clone(),
+                    subtype: decl.subtype,
+                    input: decl
+                        .schema
                         .input
                         .iter()
-                        .zip(&decl.schema.input)
-                        .all(|(sort, name)| sort.name() == name)
-                    && func_type.output.name() == decl.schema.output,
-                "recorded signature for {} disagrees with its declaration",
-                decl.name
-            );
-            return Ok(func_type);
-        }
-        let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
-            Some(sort) => Ok(sort.clone()),
-            None => Err(Error::TypeError(TypeError::UndefinedSort(
-                name.to_owned(),
-                decl.span.clone(),
-            ))),
+                        .map(get_sort)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    output: get_sort(&decl.schema.output)?,
+                });
+                self.type_info.declare_func_type(func_type.clone());
+                func_type
+            }
         };
-        let func_type = Arc::new(FuncType {
-            name: decl.name.clone(),
-            subtype: decl.subtype,
-            input: decl
-                .schema
-                .input
-                .iter()
-                .map(get_sort)
-                .collect::<Result<Vec<_>, _>>()?,
-            output: get_sort(&decl.schema.output)?,
-        });
-        self.type_info.declare_func_type(func_type.clone());
-        Ok(func_type)
-    }
-
-    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
-        let func_type = self.record_signature(decl)?;
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
@@ -1240,6 +1237,26 @@ impl EGraph {
         self.functions.iter()
     }
 
+    /// Run `f` against a raw execution state, with this e-graph's declarations
+    /// visible to any primitive it reaches.
+    ///
+    /// Every execution egglog starts goes through here or its `_tracked` twin,
+    /// so no call site has to decide whether a primitive it cannot see might
+    /// want to resolve a signature.
+    fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
+        self.backend.with_execution_state(Some(&self.type_info), f)
+    }
+
+    /// [`EGraph::with_execution_state`], also reporting whether `f` staged a
+    /// mutation.
+    fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> (R, bool) {
+        self.backend
+            .with_execution_state_tracked(Some(&self.type_info), f)
+    }
+
     /// Run a read-only closure against the e-graph. The closure receives
     /// a [`ReadState`], so it can read but not write. Because this
     /// borrows `&self`, the closure and its callbacks may also call other
@@ -1247,10 +1264,7 @@ impl EGraph {
     pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        self.backend
-            .with_execution_state_tracked(Some(&self.type_info), |es| {
-                f(ReadState::wrap(es, &guard, Context::Read))
-            })
+        self.with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
             .0
     }
 
@@ -1977,23 +1991,21 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend
-                .with_execution_state(Some(&self.type_info), |es| {
-                    for row in parsed_contents.iter() {
-                        table_action.insert(es, row.iter().copied());
-                    }
-                    Some(unit_val)
-                });
+            self.with_execution_state(|es| {
+                for row in parsed_contents.iter() {
+                    table_action.insert(es, row.iter().copied());
+                }
+                Some(unit_val)
+            });
         } else {
-            self.backend
-                .with_execution_state(Some(&self.type_info), |es| {
-                    for row in parsed_contents.iter() {
-                        // Constructor semantics: mint a fresh eclass id for
-                        // each missing key.
-                        table_action.lookup_or_insert(es, row);
-                    }
-                    Some(unit_val)
-                });
+            self.with_execution_state(|es| {
+                for row in parsed_contents.iter() {
+                    // Constructor semantics: mint a fresh eclass id for
+                    // each missing key.
+                    table_action.lookup_or_insert(es, row);
+                }
+                Some(unit_val)
+            });
         }
 
         self.backend.flush_updates();
@@ -2287,10 +2299,9 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend
-            .with_execution_state(Some(&self.type_info), |state| {
-                self.backend.container_values().register_val::<T>(x, state)
-            })
+        self.with_execution_state(|state| {
+            self.backend.container_values().register_val::<T>(x, state)
+        })
     }
 
     /// Get the size of a function in the e-graph.
@@ -2400,11 +2411,8 @@ impl EGraph {
     ) -> Result<R, Error> {
         let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
-        let (result, changed) = self
-            .backend
-            .with_execution_state_tracked(Some(&self.type_info), |es| {
-                f(FullState::wrap(es, &guard, Context::Full))
-            });
+        let (result, changed) =
+            self.with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
         drop(guard);
         // A read-only closure stages nothing, so `flush_updates` would only do
         // a no-op merge plus a spurious timestamp bump and rebuild check. Skip

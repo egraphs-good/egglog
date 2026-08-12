@@ -255,6 +255,10 @@ pub trait Table: Any + Send + Sync {
     /// token if more rows remain. Only invoke `f` on rows that match the given
     /// constraints.
     ///
+    /// An implementation must not invoke `f` on a stale row, constrained or
+    /// not, so callers need not filter stale rows back out.
+    /// `tests/repro-stale-rows.egg` guards the constrained path.
+    ///
     /// This method is _not_ object safe, but it is used to define various
     /// "default" implementations of object-safe methods like `scan` and
     /// `pivot`.
@@ -628,6 +632,8 @@ impl WrappedTable {
     /// Starting at the given [`Offset`] into `subset`, scan up to `n` rows and
     /// write them to `out`. Return the next starting offset. If no offset is
     /// returned then the subset has been scanned completely.
+    /// Rows written to `out` are never stale, so callers can take the buffer's
+    /// full contents.
     pub fn scan_bounded(
         &self,
         subset: SubsetRef,
@@ -645,6 +651,8 @@ impl WrappedTable {
 
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of
     /// columns and only appends rows that match the given constraints.
+    /// Rows written to `out` are never stale, so callers can take the buffer's
+    /// full contents.
     pub fn scan_project(
         &self,
         subset: SubsetRef,

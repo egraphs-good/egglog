@@ -194,21 +194,22 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
         cv.register_val(container, es)
     }
 
-    /// Rebuild the contents of a container value through `remap`,
-    /// returning the interned value of the result (or `value` unchanged
-    /// if it is not a registered container of `type_id`, or if nothing
-    /// inside it was remapped). `type_id` comes from
-    /// [`Sort::value_type`](crate::sort::Sort::value_type).
+    /// Map a container value's contents through `remap` and intern the
+    /// result, returning `None` if `value` is not a container of `type_id`.
     ///
-    /// `remap` sees every value the container stores, including ones of
-    /// sorts it does not care about, so it should return its argument
-    /// unchanged for those.
-    fn rebuild_container(
+    /// The container `value` names is not modified: this interns a separate
+    /// value, which is `value` itself when `remap` changed nothing. `type_id`
+    /// comes from [`Sort::value_type`](crate::sort::Sort::value_type).
+    ///
+    /// `remap` sees every value the container stores, including ones of sorts
+    /// it does not care about, so it should return its argument unchanged for
+    /// those.
+    fn map_container(
         &mut self,
         type_id: TypeId,
         value: Value,
         remap: &(dyn Fn(Value) -> Value + Send + Sync),
-    ) -> Value {
+    ) -> Option<Value> {
         // Same borrow shape as `register_container`: the `ContainerValues`
         // reference is tied to the inner ExecutionState's lifetime, not
         // to `&self`, so it survives the `&mut` reborrow.
@@ -357,7 +358,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// use [`Read::eclass_of`] for those.
     fn lookup<K: IntoValues>(&self, name: &str, key: K) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Function, "function")?;
+        check_subtype(name, &action, TableKind::Function)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
@@ -370,7 +371,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// use [`Read::lookup`] for those.
     fn eclass_of<K: IntoValues>(&self, name: &str, inputs: K) -> Result<Option<Value>, Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        check_subtype(name, &action, TableKind::Constructor)?;
         let key_values: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values))
@@ -441,7 +442,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         mut f: impl FnMut(Enode<'_>) -> bool,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        check_subtype(name, &action, TableKind::Constructor)?;
         action.for_each_while(self.es(), |row| {
             let (eclass, children) = row
                 .vals
@@ -467,7 +468,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         mut f: impl FnMut(Enode<'_>),
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        check_subtype(name, &action, TableKind::Constructor)?;
         action.for_each_output_value(self.es(), eclass, |row| {
             let (eclass, children) = row
                 .vals
@@ -504,7 +505,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         mut f: impl FnMut(FunctionEntry<'_>) -> bool,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Function, "function")?;
+        check_subtype(name, &action, TableKind::Function)?;
         action.for_each_while(self.es(), |row| {
             let (output, inputs) = row
                 .vals
@@ -565,7 +566,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         value: V,
     ) -> Result<(), Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Function, "function")?;
+        check_subtype(name, &action, TableKind::Function)?;
         let bv = self.base_values();
         let mut row: ValueRow = key.into_values(bv).collect();
         check_arity(name, &action, row.len())?;
@@ -583,7 +584,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// use [`Write::set`] for those.
     fn add<R: IntoValues>(&mut self, name: &str, inputs: R) -> Result<Value, Error> {
         let action = lookup_action(self.registry(), name)?;
-        check_subtype(name, &action, TableKind::Constructor, "constructor")?;
+        check_subtype(name, &action, TableKind::Constructor)?;
         let key: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key.len())?;
         let value = action
@@ -628,13 +629,6 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 }
 
-fn subtype_label(subtype: FunctionSubtype) -> &'static str {
-    match subtype {
-        FunctionSubtype::Constructor => "constructor",
-        FunctionSubtype::Custom => "function",
-    }
-}
-
 fn func_type_of<'db>(
     type_info: Option<&'db TypeInfo>,
     name: &str,
@@ -655,8 +649,8 @@ fn func_type_of<'db>(
     if func_type.subtype != expected {
         return Err(ApiError::WrongSubtype {
             name: name.to_string(),
-            expected: subtype_label(expected),
-            actual: subtype_label(func_type.subtype),
+            expected: expected.label(),
+            actual: func_type.subtype.label(),
         }
         .into());
     }
@@ -672,23 +666,14 @@ fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, E
     })
 }
 
-fn check_subtype(
-    name: &str,
-    action: &TableAction,
-    expected: TableKind,
-    expected_label: &'static str,
-) -> Result<(), Error> {
+fn check_subtype(name: &str, action: &TableAction, expected: TableKind) -> Result<(), Error> {
     if action.kind() == expected {
         return Ok(());
     }
-    let actual_label = match action.kind() {
-        TableKind::Function => "function",
-        TableKind::Constructor => "constructor",
-    };
     Err(ApiError::WrongSubtype {
         name: name.to_string(),
-        expected: expected_label,
-        actual: actual_label,
+        expected: expected.label(),
+        actual: action.kind().label(),
     }
     .into())
 }

@@ -514,29 +514,29 @@ impl<'a> ExecutionState<'a> {
     ) {
         let table_info = &self.db.table_info[table];
         let constraint = Constraint::EqConst { col, val: value };
-        let (mut subset, _fast, mut slow) = table_info
-            .table
-            .split_fast_slow(std::slice::from_ref(&constraint));
 
-        debug_assert!(slow.iter().all(|c| matches!(c, Constraint::EqConst { .. })));
-
-        if !*table_info
+        // Same order of preference as `Database::process_constraints`, for the
+        // one equality this takes: a sort the table already has, else an index
+        // on the column if it can be cached, else the constraint applied during
+        // the scan.
+        let cacheable = !*table_info
             .spec
             .uncacheable_columns
             .get(col)
-            .unwrap_or(&false)
-        {
+            .unwrap_or(&false);
+        let (subset, slow) = if let Some(subset) = table_info.table.fast_subset(&constraint) {
+            (subset, Vec::new())
+        } else if cacheable {
             let index = get_column_index_from_tableinfo(table_info, col);
-            match index.get().unwrap().get_subset(&value) {
-                Some(s) => {
-                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
-                }
-                None => {
-                    subset = Subset::empty();
-                }
-            }
-            slow.clear();
-        }
+            let subset = match index.get().unwrap().get_subset(&value) {
+                Some(subset) => with_pool_set(|ps| subset.to_owned(&ps.get_pool())),
+                // No rows hold this key.
+                None => Subset::empty(),
+            };
+            (subset, Vec::new())
+        } else {
+            (table_info.table.all(), vec![constraint])
+        };
 
         let imp = &table_info.table;
         let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
@@ -545,7 +545,7 @@ impl<'a> ExecutionState<'a> {
 
         macro_rules! drain_buf {
             ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
+                for (_, row) in $buf.iter() {
                     f(row);
                 }
                 $buf.clear();

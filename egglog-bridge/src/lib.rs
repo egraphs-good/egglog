@@ -523,7 +523,7 @@ impl EGraph {
         // `dyn`-compatibility on `Table` or dynamic dispatch per row.
         macro_rules! drain_buf {
             ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
+                for (_, row) in $buf.iter() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
                     if !f(ScanEntry {
@@ -567,11 +567,11 @@ impl EGraph {
         let mut cur = Offset::new(0);
         let mut out = TaggedRowBuffer::new(table.spec().arity());
         while let Some(next) = table.scan_bounded(all.as_ref(), cur, BATCH_SIZE, &mut out) {
-            out.non_stale().for_each(|(_, row)| f(row));
+            out.iter().for_each(|(_, row)| f(row));
             out.clear();
             cur = next;
         }
-        out.non_stale().for_each(|(_, row)| f(row));
+        out.iter().for_each(|(_, row)| f(row));
     }
 
     /// Register a function in this EGraph.
@@ -1376,6 +1376,16 @@ pub enum TableKind {
     Constructor,
 }
 
+impl TableKind {
+    /// How this kind of table is spelled in a program, and in diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            TableKind::Function => "function",
+            TableKind::Constructor => "constructor",
+        }
+    }
+}
+
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
@@ -1464,7 +1474,7 @@ impl TableAction {
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         macro_rules! drain_buf {
             ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
+                for (_, row) in $buf.iter() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
                     if !f(ScanEntry {

@@ -1301,12 +1301,19 @@ pub enum FunctionSubtype {
     Custom,
 }
 
+impl FunctionSubtype {
+    /// How this subtype is spelled in a program, and in diagnostics about one.
+    pub fn label(self) -> &'static str {
+        match self {
+            FunctionSubtype::Constructor => "constructor",
+            FunctionSubtype::Custom => "function",
+        }
+    }
+}
+
 impl Display for FunctionSubtype {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            FunctionSubtype::Constructor => write!(f, "constructor"),
-            FunctionSubtype::Custom => write!(f, "function"),
-        }
+        write!(f, "{}", self.label())
     }
 }
 

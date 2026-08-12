@@ -140,12 +140,12 @@ impl ResolvedCall {
         types: &[ArcSort],
         typeinfo: &TypeInfo,
     ) -> Option<ResolvedCall> {
-        if let Some(ty) = typeinfo.func_type_arc(head) {
+        if let Some(ty) = typeinfo.get_func_type(head) {
             // As long as input types match, a result is returned.
             let expected = ty.input.iter().map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return Some(ResolvedCall::Func(ty));
+                return Some(ResolvedCall::Func(ty.clone()));
             }
         }
         None
@@ -158,11 +158,11 @@ impl ResolvedCall {
         ctx: crate::Context,
         span: &Span,
     ) -> Result<ResolvedCall, TypeError> {
-        if let Some(ty) = typeinfo.func_type_arc(head) {
+        if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                return Ok(ResolvedCall::Func(ty));
+                return Ok(ResolvedCall::Func(ty.clone()));
             }
         }
 
