@@ -113,7 +113,7 @@ impl Hash for SpecializedPrimitive {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedCall {
-    Func(FuncType),
+    Func(Arc<FuncType>),
     Primitive(SpecializedPrimitive),
 }
 
@@ -129,19 +129,6 @@ impl ResolvedCall {
         match self {
             ResolvedCall::Func(func) => &func.output,
             ResolvedCall::Primitive(prim) => prim.output(),
-        }
-    }
-
-    /// Gives the types for a term's child with the given resolved call.
-    /// For functions this includes the output sort, for constructors it's just the inputs.
-    pub(crate) fn view_types(&self) -> Vec<ArcSort> {
-        match self {
-            ResolvedCall::Func(func) => {
-                let mut types = func.input.clone();
-                types.push(func.output.clone());
-                types
-            }
-            ResolvedCall::Primitive(prim) => prim.input().to_vec(),
         }
     }
 
@@ -209,6 +196,12 @@ impl ResolvedCall {
             ctx,
             span: span.clone(),
         })
+    }
+
+    /// Whether this call is to a `function` table, as opposed to a constructor
+    /// or a primitive.
+    pub(crate) fn is_custom_func(&self) -> bool {
+        matches!(self, ResolvedCall::Func(func) if func.subtype == FunctionSubtype::Custom)
     }
 }
 

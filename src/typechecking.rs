@@ -211,7 +211,7 @@ pub struct TypeInfo {
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
-    func_types: HashMap<String, FuncType>,
+    func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
@@ -784,7 +784,11 @@ impl TypeInfo {
             ));
         }
         let ftype = self.function_to_functype(fdecl)?;
-        if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
+        if self
+            .func_types
+            .insert(fdecl.name.clone(), Arc::new(ftype))
+            .is_some()
+        {
             return Err(TypeError::FunctionAlreadyBound(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
@@ -805,7 +809,6 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
-            resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
             merge: match &fdecl.merge {
                 // Merge expressions run as part of action-side table updates:
                 // writes are allowed, but live DB reads would be untracked by
@@ -1138,13 +1141,21 @@ impl TypeInfo {
             .any(|p| p.context_ids.iter().any(|(_, pid)| *pid == Some(id)) && p.validator.is_some())
     }
 
-    pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
+    /// The shared signature declared for `sym`, or `None` if no function with
+    /// that name is declared. Clone it to keep it past the borrow.
+    pub fn get_func_type(&self, sym: &str) -> Option<&Arc<FuncType>> {
         self.func_types.get(sym)
     }
 
+    /// Record a signature for a function that did not come through
+    /// typechecking — desugaring generates some (global bindings, proof
+    /// tables) directly.
+    pub(crate) fn declare_func_type(&mut self, func_type: Arc<FuncType>) {
+        self.func_types.insert(func_type.name.clone(), func_type);
+    }
+
     pub fn is_constructor(&self, sym: &str) -> bool {
-        self.func_types
-            .get(sym)
+        self.get_func_type(sym)
             .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
     }
 

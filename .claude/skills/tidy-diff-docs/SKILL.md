@@ -45,6 +45,17 @@ Two guardrails:
   need not repeat the shape; if a parameter's meaning is obvious from its name
   and type, do not spell it out again.
 
+## Also fix in the diff
+
+- **Inline full paths for types.** Import the type and use the short name.
+  Write `use crate::util::HashMap;` and then `HashMap<String, Foo>`, not
+  `crate::util::HashMap<String, Foo>` in a field or a signature. A qualified
+  path inline makes the type harder to scan and hides the dependency from the
+  module's import list. Two exemptions: intra-doc links (``[`crate::Foo`]``)
+  need the path to resolve, and a path may disambiguate two same-named types in
+  scope. A qualified one-off *call* such as `std::mem::take(..)` is idiomatic
+  and not worth an import.
+
 ## Keep these
 
 - What the item does and the shape of what it returns.
