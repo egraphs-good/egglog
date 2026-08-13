@@ -360,6 +360,17 @@ fn top_index_shape_is_eligible(
         && nonempty_shards >= workers
 }
 
+/// One physical cached-index shard used to drive the top join level.
+///
+/// `scan_size` is the exact number of leader keys in the shard. Besides
+/// avoiding another lookup during execution, it lets a demand-driven executor
+/// coalesce many top bindings into roughly one recursive job per worker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TopIndexPartition {
+    shard: usize,
+    scan_size: usize,
+}
+
 /// A key ordinal in a root continuation grid.
 ///
 /// Persistent catalog indexes produce an [`IndexPosition`], while round-local
@@ -3067,7 +3078,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         workers: usize,
-    ) -> Option<Vec<usize>>
+    ) -> Option<Vec<TopIndexPartition>>
     where
         'exec: 'rows,
     {
@@ -3125,7 +3136,10 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         let shards = probers[leader].shard_count().and_then(|shard_count| {
             let shards = (0..shard_count)
-                .filter(|shard| probers[leader].shard_len(*shard).unwrap_or(0) != 0)
+                .filter_map(|shard| {
+                    let scan_size = probers[leader].shard_len(shard).unwrap_or(0);
+                    (scan_size != 0).then_some(TopIndexPartition { shard, scan_size })
+                })
                 .collect::<Vec<_>>();
             top_index_shape_is_eligible(
                 workers,
@@ -3151,7 +3165,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         order: &InstrOrder,
         binding_info: &mut BindingInfo<'rows, 'exec>,
-    ) -> Option<Vec<usize>>
+    ) -> Option<Vec<TopIndexPartition>>
     where
         'exec: 'rows,
     {
@@ -3228,7 +3242,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 self.select_top_index_shards(stages, prepared, atoms, &order, binding_info)
         {
             let mut updates = FrameUpdates::with_capacity(0);
-            for shard in shards {
+            for partition in shards {
                 let db = self.db;
                 let exec_state_for_factory = self.exec_state;
                 let exec_state_for_work = self.exec_state;
@@ -3263,7 +3277,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             instr_order,
                             leaf_scans,
                             0,
-                            Some(shard),
+                            Some(partition),
                             all_stages,
                             binding_info,
                             buf,
@@ -3292,11 +3306,10 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     ///
     /// This method takes the plan, mutable data structures for variable binding
     /// and staging actions, and `cur`, the current stage of the plan. A top-level
-    /// coarse partition also passes `index_shard`; `Some` is only supplied with
-    /// a serial action buffer, so no nested parallelism is available in that
-    /// subtree. Recursive calls clear the value so only the first intersection
-    /// is restricted to that physical shard, while the serial buffer continues
-    /// to keep later work inline.
+    /// coarse partition also passes `index_partition`; recursive calls clear it
+    /// so only the first intersection is restricted to that physical shard.
+    /// The associated top-shard buffer policy, rather than the presence of the
+    /// partition itself, determines whether later recursive work may fan out.
     #[allow(clippy::too_many_arguments)]
     fn run_plan<'plan, 'rows, 'scope, A: NumericId + 'scope, BUF: ActionBuffer<'scope, 'exec, A>>(
         &self,
@@ -3307,7 +3320,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         instr_order: &mut InstrOrder,
         leaf_scans: &mut LeafScans,
         cur: usize,
-        index_shard: Option<usize>,
+        index_partition: Option<TopIndexPartition>,
         remaining_stages: Option<u64>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         action_buf: &mut BUF,
@@ -3342,8 +3355,10 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             );
             return;
         }
-        let chunk_size = action_buf.morsel_size(cur, instr_order.len());
-        let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        let mut cur_size = index_partition.map_or_else(
+            || estimate_size(&stages.instrs[instr_order.get(cur)], binding_info),
+            |partition| partition.scan_size,
+        );
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
@@ -3351,6 +3366,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
+        // A rejected intersection candidate consumes a leader key without
+        // producing a frame. Subtracting completed frames therefore maintains
+        // a conservative upper bound, which is sufficient for choosing a
+        // locality-oriented morsel size.
+        let mut remaining_scan_upper_bound = cur_size;
+        let mut chunk_size =
+            action_buf.morsel_size(cur, instr_order.len(), remaining_scan_upper_bound);
 
         let stage_index = instr_order.get(cur);
         let stage = &stages.instrs[stage_index];
@@ -3365,62 +3387,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             remaining & !stage_bit
         });
 
-        // Helper macro (not its own method to appease the borrow checker).
-        macro_rules! drain_updates {
-            ($updates:expr) => {
-                if self.exec_state.should_stop() {
-                    return;
-                }
-                // TODO: `supports_parallel_drain`` is a hack because currently
-                // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
-                if index_shard.is_none()
-                    && cur < free_join_fork_depth()
-                    && action_buf.supports_parallel_drain()
-                {
-                    drain_updates_parallel!($updates)
-                } else {
-                    $updates.drain(|update| match update {
-                        UpdateInstr::PushBinding(var, val) => {
-                            binding_info.bindings.insert(var, val);
-                        }
-                        UpdateInstr::RefineAtom(atom, subset) => {
-                            binding_info.insert_node(atom, subset);
-                        }
-                        UpdateInstr::RefineAtomDense(atom, range) => {
-                            binding_info.insert_subset(atom, Subset::Dense(range));
-                        }
-                        UpdateInstr::EndFrame => {
-                            // Inline leaf-level: if cur+1 is the leaf (no more
-                            // join stages), call push_bindings directly without
-                            // a recursive run_plan call, avoiding function call
-                            // overhead + an extra should_stop() check.
-                            if cur + 1 >= instr_order.len() {
-                                action_buf.push_bindings_factorized(
-                                    action,
-                                    &mut binding_info.bindings,
-                                    &binding_info.binding_sets,
-                                    self.exec_state,
-                                );
-                            } else {
-                                self.run_plan(
-                                    stages,
-                                    prepared,
-                                    atoms,
-                                    action,
-                                    instr_order,
-                                    leaf_scans,
-                                    cur + 1,
-                                    None,
-                                    remaining_after_current,
-                                    binding_info,
-                                    action_buf,
-                                );
-                            }
-                        }
-                    })
-                }
-            };
-        }
         macro_rules! drain_updates_parallel {
             ($updates:expr) => {{
                 if self.exec_state.should_stop() {
@@ -3483,14 +3449,83 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 $updates.clear();
             }};
         }
+        // Helper macros (not their own methods to appease the borrow checker).
+        macro_rules! drain_updates_body {
+            ($updates:expr) => {{
+                if self.exec_state.should_stop() {
+                    return;
+                }
+                // TODO: `supports_parallel_drain` is a hack because currently
+                // `drain_updates_parallel!` is a bit slower because of the additional
+                // `ExecutionState` clone.
+                if cur < free_join_fork_depth()
+                    && action_buf.supports_parallel_drain(cur, index_partition.is_some())
+                {
+                    drain_updates_parallel!($updates)
+                } else {
+                    $updates.drain(|update| match update {
+                        UpdateInstr::PushBinding(var, val) => {
+                            binding_info.bindings.insert(var, val);
+                        }
+                        UpdateInstr::RefineAtom(atom, subset) => {
+                            binding_info.insert_node(atom, subset);
+                        }
+                        UpdateInstr::RefineAtomDense(atom, range) => {
+                            binding_info.insert_subset(atom, Subset::Dense(range));
+                        }
+                        UpdateInstr::EndFrame => {
+                            // Inline leaf-level: if cur+1 is the leaf (no more
+                            // join stages), call push_bindings directly without
+                            // a recursive run_plan call, avoiding function call
+                            // overhead + an extra should_stop() check.
+                            if cur + 1 >= instr_order.len() {
+                                action_buf.push_bindings_factorized(
+                                    action,
+                                    &mut binding_info.bindings,
+                                    &binding_info.binding_sets,
+                                    self.exec_state,
+                                );
+                            } else {
+                                self.run_plan(
+                                    stages,
+                                    prepared,
+                                    atoms,
+                                    action,
+                                    instr_order,
+                                    leaf_scans,
+                                    cur + 1,
+                                    None,
+                                    remaining_after_current,
+                                    binding_info,
+                                    action_buf,
+                                );
+                            }
+                        }
+                    })
+                }
+            }};
+        }
+        macro_rules! drain_updates {
+            ($updates:expr) => {{
+                let completed_frames = $updates.frames();
+                drain_updates_body!($updates);
+                remaining_scan_upper_bound =
+                    remaining_scan_upper_bound.saturating_sub(completed_frames);
+                chunk_size =
+                    action_buf.morsel_size(cur, instr_order.len(), remaining_scan_upper_bound);
+            }};
+            ($updates:expr, false) => {{
+                drain_updates_body!($updates);
+            }};
+        }
 
         // A sharded top-level job enumerates only its assigned physical index
-        // shard.  Every recursive call clears `index_shard`, so this macro is
+        // shard. Every recursive call clears `index_partition`, so this macro is
         // used only by the leading prober of the initial `Intersect` stage.
         macro_rules! for_each_leader {
             ($prober:expr, $callback:expr) => {
-                if let Some(shard) = index_shard {
-                    $prober.for_each_shard(shard, $callback)
+                if let Some(partition) = index_partition {
+                    $prober.for_each_shard(partition.shard, $callback)
                 } else {
                     $prober.for_each($callback)
                 }
@@ -3539,7 +3574,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             drain_updates!(updates);
                         }
                     });
-                    drain_updates!(updates);
+                    drain_updates!(updates, false);
                     binding_info.move_back(a.atom, prober);
                 }
                 [a, b] => {
@@ -3599,7 +3634,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             }
                         }
                     });
-                    drain_updates!(updates);
+                    drain_updates!(updates, false);
 
                     binding_info.move_back(a.atom, a_prober);
                     binding_info.move_back(b.atom, b_prober);
@@ -3662,7 +3697,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 drain_updates!(updates);
                             }
                         });
-                        drain_updates!(updates);
+                        drain_updates!(updates, false);
                     }
                     for (spec, prober) in rest.iter().zip(probers.into_iter()) {
                         binding_info.move_back(spec.atom, prober);
@@ -3705,7 +3740,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     binding_info.binding_sets.push((vars, Arc::new(buf)));
                     let mut updates = FrameUpdates::with_capacity(1);
                     updates.finish_frame();
-                    drain_updates!(updates);
+                    drain_updates!(updates, false);
                     binding_info.binding_sets.pop();
                     binding_info.move_back_node(cover_atom, cover_node);
                 } else {
@@ -3758,7 +3793,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         }
                         break;
                     }
-                    drain_updates!(updates);
+                    drain_updates!(updates, false);
                     // Restore the subsets we swapped out.
                     binding_info.move_back_node(cover_atom, cover_node);
                 }
@@ -3869,7 +3904,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 // deduping (and hence we can do a straight scan: e.g. when the
                 // cover is binding a superset of the primary key for the
                 // table).
-                drain_updates!(updates);
+                drain_updates!(updates, false);
                 // Restore the subsets we swapped out.
                 binding_info.move_back_node(cover_atom, cover_node);
                 for (_, atom, prober) in index_probers {
@@ -3956,7 +3991,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     binding_info.binding_sets.push((vars, Arc::new(buf)));
                     let mut updates = FrameUpdates::with_capacity(1);
                     updates.finish_frame();
-                    drain_updates!(updates);
+                    drain_updates!(updates, false);
                     binding_info.binding_sets.pop();
                 })();
                 if restore_materialization {
@@ -4123,7 +4158,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         }
                     }
 
-                    drain_updates!(updates);
+                    drain_updates!(updates, false);
                     for (spec, prober) in to_intersect.iter().zip(probers) {
                         binding_info.move_back(spec.0.to_index.atom, prober);
                     }
@@ -4138,6 +4173,74 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
 }
 
 const LOCAL_ACTION_BATCH_SIZE: usize = 128;
+const EXPERIMENTAL_TOP_SHARD_MORSEL_SIZE: usize = 4 * 1024;
+const EXPERIMENTAL_COARSE_MIN_MORSEL_SIZE: usize = 256;
+const EXPERIMENTAL_TOP_SHARD_POLICY_ENV: &str = "EGGLOG_EXPERIMENTAL_TOP_SHARD_POLICY";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExperimentalTopShardPolicy {
+    Serial,
+    DemandGlobal,
+    DemandLocal,
+    CoarseGlobal,
+}
+
+impl ExperimentalTopShardPolicy {
+    fn parse(value: Option<&str>) -> Result<Self, ()> {
+        match value {
+            None | Some("serial") => Ok(Self::Serial),
+            Some("demand-global") => Ok(Self::DemandGlobal),
+            Some("demand-local") => Ok(Self::DemandLocal),
+            Some("coarse-global") => Ok(Self::CoarseGlobal),
+            Some(_) => Err(()),
+        }
+    }
+
+    fn split_demand(self, stalled_workers: usize, _local_queue_depth: usize) -> usize {
+        match self {
+            Self::Serial => 0,
+            Self::DemandGlobal | Self::DemandLocal | Self::CoarseGlobal => stalled_workers,
+        }
+    }
+
+    fn permits_parallel_drain(self, level: usize, partitioned_top_scan: bool) -> bool {
+        match self {
+            Self::Serial => false,
+            Self::DemandGlobal | Self::DemandLocal => !partitioned_top_scan,
+            Self::CoarseGlobal => partitioned_top_scan && level == 0,
+        }
+    }
+}
+
+fn coarse_scan_morsel_size(scan_size: usize, workers: usize) -> usize {
+    scan_size
+        .div_ceil(workers.max(1))
+        .max(EXPERIMENTAL_COARSE_MIN_MORSEL_SIZE)
+}
+
+fn cached_coarse_scan_morsel_size(
+    cached: &mut Option<usize>,
+    scan_size: usize,
+    workers: usize,
+) -> usize {
+    *cached.get_or_insert_with(|| coarse_scan_morsel_size(scan_size, workers))
+}
+
+fn experimental_top_shard_policy() -> ExperimentalTopShardPolicy {
+    static POLICY: OnceLock<ExperimentalTopShardPolicy> = OnceLock::new();
+    *POLICY.get_or_init(|| match std::env::var(EXPERIMENTAL_TOP_SHARD_POLICY_ENV) {
+        Ok(value) => ExperimentalTopShardPolicy::parse(Some(&value)).unwrap_or_else(|()| {
+            panic!(
+                "{EXPERIMENTAL_TOP_SHARD_POLICY_ENV} must be one of \
+                 serial, demand-global, demand-local, or coarse-global; got {value:?}"
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => ExperimentalTopShardPolicy::Serial,
+        Err(std::env::VarError::NotUnicode(value)) => {
+            panic!("{EXPERIMENTAL_TOP_SHARD_POLICY_ENV} is not valid UTF-8: {value:?}")
+        }
+    })
+}
 
 /// A trait used to abstract over different ways of buffering actions together
 /// before running them.
@@ -4224,7 +4327,7 @@ where
     ///
     /// As of right now this is just a hard-coded value. We may change it in the
     /// future to fan out more at higher levels though.
-    fn morsel_size(&mut self, _level: usize, _total: usize) -> usize {
+    fn morsel_size(&mut self, _level: usize, _total: usize, _estimated_scan_size: usize) -> usize {
         256
     }
 
@@ -4232,7 +4335,7 @@ where
     ///
     /// When `false`, `drain_updates` will use the serial path even at `cur <= 1`,
     /// avoiding the per-frame `ExecutionState::clone()` overhead.
-    fn supports_parallel_drain(&self) -> bool {
+    fn supports_parallel_drain(&self, _level: usize, _partitioned_top_scan: bool) -> bool {
         true
     }
 
@@ -4325,42 +4428,64 @@ where
         work(inner.borrow_mut(), self)
     }
 
-    fn supports_parallel_drain(&self) -> bool {
+    fn supports_parallel_drain(&self, _level: usize, _partitioned_top_scan: bool) -> bool {
         false
     }
 }
 
-/// Strictly serial action buffer used inside one globally scheduled top-index
-/// shard. It shares the rule-set match counter with sibling shards, but executes
-/// all recursive join and action work inline. It deliberately has no
-/// `needs_flush` flag: its owner unconditionally flushes it once after the shard
-/// callback returns, and recursive calls reuse the same buffer synchronously.
-struct SerialScopedActionBuffer<'scope> {
+/// Action buffer used inside one globally scheduled top-index shard.
+///
+/// `Serial` preserves the production behavior exactly. The fine-grained demand
+/// policies may hand recursive drains to the global or worker-local queue.
+/// `CoarseGlobal` instead groups many top bindings from one cached-index shard
+/// into a bounded global job and runs that job's complete subtree serially.
+/// Action batches remain local to each spawned child and are flushed before
+/// that child exits. The buffer deliberately has no `needs_flush` flag: every
+/// owner unconditionally flushes its local batches before returning.
+struct TopShardActionBuffer<'inner, 'scope> {
+    scope: &'inner Scope<'scope>,
     rule_set: &'scope RuleSet,
     match_counter: Arc<MatchCounter>,
     batches: DenseIdMap<ActionId, ActionState>,
+    policy: ExperimentalTopShardPolicy,
+    // Fixed after the first demand signal so one shard produces a bounded
+    // number of similarly sized jobs instead of a geometric series.
+    coarse_morsel_size: Option<usize>,
 }
 
-impl<'scope> SerialScopedActionBuffer<'scope> {
-    fn new(rule_set: &'scope RuleSet, match_counter: Arc<MatchCounter>) -> Self {
+impl<'inner, 'scope> TopShardActionBuffer<'inner, 'scope> {
+    fn new(
+        scope: &'inner Scope<'scope>,
+        rule_set: &'scope RuleSet,
+        match_counter: Arc<MatchCounter>,
+        policy: ExperimentalTopShardPolicy,
+    ) -> Self {
         Self {
+            scope,
             rule_set,
             match_counter,
             batches: Default::default(),
+            policy,
+            coarse_morsel_size: None,
         }
+    }
+
+    fn split_demand(&self) -> usize {
+        self.policy
+            .split_demand(self.scope.stalled_workers(), self.scope.local_queue_depth())
     }
 }
 
-impl<'scope, 'exec> ActionBuffer<'scope, 'exec, ActionId> for SerialScopedActionBuffer<'scope>
+impl<'scope, 'exec> ActionBuffer<'scope, 'exec, ActionId> for TopShardActionBuffer<'_, 'scope>
 where
     'exec: 'scope,
 {
     type AsLocal<'a>
-        = Self
+        = TopShardActionBuffer<'a, 'scope>
     where
         'scope: 'a;
     type AsGlobalSerial<'a>
-        = Self
+        = TopShardActionBuffer<'a, 'scope>
     where
         'scope: 'a;
 
@@ -4404,13 +4529,56 @@ where
         &mut self,
         mut local: BorrowedLocalState<'local, 'rows, 'exec>,
         subset_clone_plan: SubsetClonePlan<'_>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+        mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'a> FnOnce(
+            BorrowedLocalState<'a, 'scope, 'exec>,
+            &mut TopShardActionBuffer<'a, 'scope>,
+        ) + Send
+        + 'scope,
     ) where
         'rows: 'scope,
     {
+        // `supports_parallel_drain` made the first advisory stalled-state
+        // observation. Recheck immediately before committing to a queue: a
+        // sibling shard may have filled the pool in the meantime.
+        let should_split = self.split_demand() != 0;
         let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
-        work(inner.borrow_mut(), self);
+        if !should_split {
+            let mut inline = TopShardActionBuffer {
+                scope: self.scope,
+                rule_set: self.rule_set,
+                match_counter: self.match_counter.clone(),
+                batches: mem::take(&mut self.batches),
+                policy: self.policy,
+                coarse_morsel_size: self.coarse_morsel_size,
+            };
+            work(inner.borrow_mut(), &mut inline);
+            self.batches = inline.batches;
+            self.coarse_morsel_size = inline.coarse_morsel_size;
+            return;
+        }
+
+        let rule_set = self.rule_set;
+        let match_counter = self.match_counter.clone();
+        let policy = self.policy;
+        let child_policy = match policy {
+            ExperimentalTopShardPolicy::CoarseGlobal => ExperimentalTopShardPolicy::Serial,
+            policy => policy,
+        };
+        let task = move |scope: &Scope<'scope>| {
+            let mut buf = TopShardActionBuffer::new(scope, rule_set, match_counter, child_policy);
+            work(inner.borrow_mut(), &mut buf);
+            buf.flush(&mut to_exec_state());
+        };
+        match policy {
+            ExperimentalTopShardPolicy::Serial => {
+                unreachable!("serial top-shard policy cannot request a demand split")
+            }
+            ExperimentalTopShardPolicy::DemandGlobal | ExperimentalTopShardPolicy::CoarseGlobal => {
+                self.scope.spawn_global(task)
+            }
+            ExperimentalTopShardPolicy::DemandLocal => self.scope.spawn_local(task),
+        }
     }
 
     fn recur_global_serial<'local, 'rows>(
@@ -4418,16 +4586,54 @@ where
         mut local: BorrowedLocalState<'local, 'rows, 'exec>,
         subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+        work: impl for<'a> FnOnce(
+            BorrowedLocalState<'a, 'scope, 'exec>,
+            &mut TopShardActionBuffer<'a, 'scope>,
+        ) + Send
+        + 'scope,
     ) where
         'rows: 'scope,
     {
         let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
-        work(inner.borrow_mut(), self);
+        let mut inline = TopShardActionBuffer {
+            scope: self.scope,
+            rule_set: self.rule_set,
+            match_counter: self.match_counter.clone(),
+            batches: mem::take(&mut self.batches),
+            policy: self.policy,
+            coarse_morsel_size: self.coarse_morsel_size,
+        };
+        work(inner.borrow_mut(), &mut inline);
+        self.batches = inline.batches;
+        self.coarse_morsel_size = inline.coarse_morsel_size;
     }
 
-    fn supports_parallel_drain(&self) -> bool {
-        false
+    fn supports_parallel_drain(&self, level: usize, partitioned_top_scan: bool) -> bool {
+        // This first check avoids state cloning entirely while all workers are
+        // occupied. `recur` performs a second advisory check before spawning.
+        let eligible = self
+            .policy
+            .permits_parallel_drain(level, partitioned_top_scan);
+        eligible && self.split_demand() != 0
+    }
+
+    fn morsel_size(&mut self, level: usize, _total: usize, estimated_scan_size: usize) -> usize {
+        match self.policy {
+            ExperimentalTopShardPolicy::DemandGlobal | ExperimentalTopShardPolicy::DemandLocal
+                if level == 1 =>
+            {
+                EXPERIMENTAL_TOP_SHARD_MORSEL_SIZE
+            }
+            ExperimentalTopShardPolicy::CoarseGlobal if level == 0 && self.split_demand() != 0 => {
+                let workers = crate::parallel::current_num_threads();
+                cached_coarse_scan_morsel_size(
+                    &mut self.coarse_morsel_size,
+                    estimated_scan_size,
+                    workers,
+                )
+            }
+            _ => 256,
+        }
     }
 }
 
@@ -4465,7 +4671,7 @@ where
     where
         'scope: 'a;
     type AsGlobalSerial<'a>
-        = SerialScopedActionBuffer<'scope>
+        = TopShardActionBuffer<'a, 'scope>
     where
         'scope: 'a;
     fn push_bindings(
@@ -4554,7 +4760,7 @@ where
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
         work: impl for<'a> FnOnce(
             BorrowedLocalState<'a, 'scope, 'exec>,
-            &mut SerialScopedActionBuffer<'scope>,
+            &mut TopShardActionBuffer<'a, 'scope>,
         ) + Send
         + 'scope,
     ) where
@@ -4563,8 +4769,9 @@ where
         let rule_set = self.rule_set;
         let match_counter = self.match_counter.clone();
         let mut inner = local.clone_state(subset_clone_plan);
-        self.scope.spawn_global(move |_| {
-            let mut buf = SerialScopedActionBuffer::new(rule_set, match_counter);
+        let policy = experimental_top_shard_policy();
+        self.scope.spawn_global(move |scope| {
+            let mut buf = TopShardActionBuffer::new(scope, rule_set, match_counter, policy);
             work(inner.borrow_mut(), &mut buf);
             // Unlike a nested `ScopedActionBuffer`, this buffer is owned by the
             // one shard job and is always flushed exactly once before it exits.
@@ -4572,7 +4779,7 @@ where
         });
     }
 
-    fn morsel_size(&mut self, _level: usize, _total: usize) -> usize {
+    fn morsel_size(&mut self, _level: usize, _total: usize, _estimated_scan_size: usize) -> usize {
         // Lower morsel size to increase parallelism.
         match _level {
             0 if _total > 2 => 32,
@@ -4729,14 +4936,16 @@ where
         work(inner.borrow_mut(), self)
     }
 
-    fn supports_parallel_drain(&self) -> bool {
+    fn supports_parallel_drain(&self, _level: usize, _partitioned_top_scan: bool) -> bool {
         false
     }
 }
 
-/// Serial recursive view of a scoped materializer.  Sibling top-level shards
+/// Serial recursive view of a scoped materializer. Sibling top-level shards
 /// still share the concurrent output maps, but this buffer never schedules
-/// deeper work itself.
+/// deeper work itself. The experimental demand policy is intentionally limited
+/// to direct action execution; materialization remains an unchanged
+/// serial-per-shard control.
 struct SerialScopedMaterializer {
     specs: Arc<DenseIdMap<MatId, MatSpec>>,
     materializations: Arc<DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>>,
@@ -4828,7 +5037,7 @@ where
         work(inner.borrow_mut(), self);
     }
 
-    fn supports_parallel_drain(&self) -> bool {
+    fn supports_parallel_drain(&self, _level: usize, _partitioned_top_scan: bool) -> bool {
         false
     }
 }
@@ -5324,12 +5533,13 @@ mod top_index_tests {
     };
 
     use super::{
-        AccessId, BindingInfo, CatalogContinuation, ContinuationPosition, Database, InstrOrder,
-        LazyArenaHandle, PreparedIndexKind, PreparedIndexSlot, PreparedIndexState,
-        PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMasks, RootContinuationCache,
-        RootProjection, SmallColumnIndex, SmallColumnSink, TrieNode, for_each_stage_atom,
-        materialization_is_live_in_tail, packed_child_shape_in_tail, scan_atom_tail_use,
-        sort_plan_by_size_inner, top_index_shape_is_eligible,
+        AccessId, BindingInfo, CatalogContinuation, ContinuationPosition, Database,
+        ExperimentalTopShardPolicy, InstrOrder, LazyArenaHandle, PreparedIndexKind,
+        PreparedIndexSlot, PreparedIndexState, PreparedIndexStateId, PreparedJoinIndexes,
+        PreparedTailMasks, RootContinuationCache, RootProjection, SmallColumnIndex,
+        SmallColumnSink, TrieNode, cached_coarse_scan_morsel_size, coarse_scan_morsel_size,
+        for_each_stage_atom, materialization_is_live_in_tail, packed_child_shape_in_tail,
+        scan_atom_tail_use, sort_plan_by_size_inner, top_index_shape_is_eligible,
     };
     use crate::free_join::packed_trie::ChildShape;
 
@@ -5355,6 +5565,87 @@ mod top_index_tests {
         assert!(handle.handle.get().is_none());
         handle.get();
         assert!(handle.handle.get().is_some());
+    }
+
+    #[test]
+    fn parses_experimental_top_shard_policy_without_mutating_process_env() {
+        assert_eq!(
+            ExperimentalTopShardPolicy::parse(None),
+            Ok(ExperimentalTopShardPolicy::Serial)
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::parse(Some("serial")),
+            Ok(ExperimentalTopShardPolicy::Serial)
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::parse(Some("demand-global")),
+            Ok(ExperimentalTopShardPolicy::DemandGlobal)
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::parse(Some("demand-local")),
+            Ok(ExperimentalTopShardPolicy::DemandLocal)
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::parse(Some("coarse-global")),
+            Ok(ExperimentalTopShardPolicy::CoarseGlobal)
+        );
+        assert_eq!(ExperimentalTopShardPolicy::parse(Some("")), Err(()));
+        assert_eq!(ExperimentalTopShardPolicy::parse(Some("demand")), Err(()));
+    }
+
+    #[test]
+    fn experimental_top_shard_policy_splits_only_on_demand() {
+        assert_eq!(ExperimentalTopShardPolicy::Serial.split_demand(3, 0), 0);
+        assert_eq!(
+            ExperimentalTopShardPolicy::DemandGlobal.split_demand(0, 100),
+            0
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::DemandGlobal.split_demand(3, 100),
+            3
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::DemandLocal.split_demand(0, 100),
+            0
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::DemandLocal.split_demand(3, 0),
+            3
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::DemandLocal.split_demand(3, 100),
+            3
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::CoarseGlobal.split_demand(0, 100),
+            0
+        );
+        assert_eq!(
+            ExperimentalTopShardPolicy::CoarseGlobal.split_demand(3, 100),
+            3
+        );
+    }
+
+    #[test]
+    fn coarse_scan_morsels_are_bounded_and_cover_the_scan() {
+        assert_eq!(coarse_scan_morsel_size(0, 0), 256);
+        assert_eq!(coarse_scan_morsel_size(100, 8), 256);
+        assert_eq!(coarse_scan_morsel_size(2048, 8), 256);
+        assert_eq!(coarse_scan_morsel_size(2049, 8), 257);
+        assert_eq!(coarse_scan_morsel_size(4096, 3), 1366);
+
+        let mut cached = None;
+        assert_eq!(cached_coarse_scan_morsel_size(&mut cached, 4096, 3), 1366);
+        assert_eq!(cached_coarse_scan_morsel_size(&mut cached, 512, 3), 1366);
+    }
+
+    #[test]
+    fn coarse_policy_only_partitions_the_cached_top_scan() {
+        assert!(ExperimentalTopShardPolicy::DemandGlobal.permits_parallel_drain(1, false));
+        assert!(!ExperimentalTopShardPolicy::DemandGlobal.permits_parallel_drain(0, true));
+        assert!(ExperimentalTopShardPolicy::CoarseGlobal.permits_parallel_drain(0, true));
+        assert!(!ExperimentalTopShardPolicy::CoarseGlobal.permits_parallel_drain(1, false));
+        assert!(!ExperimentalTopShardPolicy::CoarseGlobal.permits_parallel_drain(1, true));
     }
 
     #[test]
