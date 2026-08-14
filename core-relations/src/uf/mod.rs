@@ -250,7 +250,9 @@ impl Drop for UfBuffer {
         // This avoids creating a fresh row buffer via `mem::take` or `mem::swap` and
         // dropping it immediately.
         let to_insert = unsafe { ManuallyDrop::take(&mut self.to_insert) };
-        buffered_writes.push(to_insert);
+        if to_insert.len() != 0 {
+            buffered_writes.push(to_insert);
+        }
     }
 }
 
