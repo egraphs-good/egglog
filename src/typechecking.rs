@@ -3,7 +3,7 @@ use std::hash::Hasher;
 use crate::Context;
 use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
-    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
+    core::{CoreActionContext, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{
@@ -886,8 +886,6 @@ impl TypeInfo {
             no_decomp,
             include_subsumed,
         } = rule;
-        let mut constraints = vec![];
-
         // Compile with the permissive Read/Full primitive contexts (so the RHS
         // can read the database) when the whole EGraph is non-seminaive, or the
         // rule's own mode requires it (`:naive` / `:unsafe-seminaive`).
@@ -903,26 +901,15 @@ impl TypeInfo {
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
-        constraints.extend(query.get_constraints(self, query_ctx)?);
+        let mut problem = Problem::default();
+        problem.add_query(&query, self, query_ctx)?;
 
         let mut binding = query.get_vars();
         // We lower to core actions with `union_to_set_optimization`
         // later in the pipeline. For typechecking we do not need it.
         let mut ctx = CoreActionContext::new(self, &mut binding, symbol_gen, false);
         let (actions, mapped_action) = head.to_core_actions(&mut ctx)?;
-
-        let mut problem = Problem::default();
-        problem.add_rule(
-            &CoreRule {
-                span: span.clone(),
-                body: query,
-                head: actions,
-            },
-            self,
-            symbol_gen,
-            query_ctx,
-            action_ctx,
-        )?;
+        problem.add_actions(&actions, self, symbol_gen, action_ctx)?;
 
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
