@@ -69,6 +69,20 @@ pub(crate) fn free_join_fork_depth() -> usize {
     cutoffs().free_join_fork_depth
 }
 
+/// Whether a top free-join index has enough work and shard coverage to partition.
+/// Requires multiple workers, enough leader keys per worker, and at least one
+/// nonempty shard per worker.
+pub(crate) fn top_index_shape_is_eligible(
+    workers: usize,
+    leader_keys: usize,
+    nonempty_shards: usize,
+    min_keys_per_worker: usize,
+) -> bool {
+    workers > 1
+        && leader_keys >= min_keys_per_worker.saturating_mul(workers)
+        && nonempty_shards >= workers
+}
+
 /// Number of action bindings to batch before dispatching a scoped worker task.
 pub(crate) fn action_batch_size() -> usize {
     cutoffs().action_batch_size
@@ -115,4 +129,18 @@ fn cutoff(name: &str, default: usize) -> usize {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_index_shape_is_eligible;
+
+    #[test]
+    fn top_index_partitioning_rejects_serial_tiny_and_skewed_shapes() {
+        assert!(!top_index_shape_is_eligible(1, 10_000, 8, 64));
+        assert!(!top_index_shape_is_eligible(4, 255, 8, 64));
+        assert!(!top_index_shape_is_eligible(4, 10_000, 3, 64));
+        assert!(top_index_shape_is_eligible(4, 256, 4, 64));
+        assert!(top_index_shape_is_eligible(4, 40, 4, 10));
+    }
 }
