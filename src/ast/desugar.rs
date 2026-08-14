@@ -9,7 +9,15 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
-    let rule_name = rule_name(&command);
+    let rule_name = match &command {
+        Command::Rewrite(_, rewrite, _) | Command::BiRewrite(_, rewrite)
+            if rewrite.name.is_empty() =>
+        {
+            rule_name(&command)
+        }
+        Command::Rule { rule } if rule.name.is_empty() => rule_name(&command),
+        _ => String::new(),
+    };
     let res = match command {
         Command::Function {
             span,

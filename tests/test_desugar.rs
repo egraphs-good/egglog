@@ -1,4 +1,42 @@
-use egglog::EGraph;
+use egglog::{EGraph, ast::GenericCommand};
+
+#[test]
+fn unnamed_rule_names_are_stable() {
+    let mut egraph = EGraph::default();
+    let commands = egraph
+        .resolve_program(
+            None,
+            r#"
+                (sort Math)
+                (constructor Var (String) Math)
+                (constructor Wrap (Math) Math)
+                (rule ((= x (Var "a"))) ((union x (Var "b"))))
+                (function table (Math) Math :no-merge)
+                (rewrite (Wrap (Var "c")) (Var "c"))
+                (relation edge (Math Math))
+                (birewrite (Wrap (Var "d")) (Var "d"))
+            "#,
+        )
+        .unwrap();
+
+    let rule_names = commands
+        .into_iter()
+        .filter_map(|command| match command {
+            GenericCommand::Rule { rule } => Some(rule.name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rule_names,
+        [
+            "(rule ((= x (Var 'a')))\n      ((union x (Var 'b')))\n         )",
+            "(rewrite (Wrap (Var 'c')) (Var 'c'))",
+            "(birewrite (Wrap (Var 'd')) (Var 'd'))=>",
+            "(birewrite (Wrap (Var 'd')) (Var 'd'))<=",
+        ]
+    );
+}
 
 #[test]
 fn test_desugar_includes() {
