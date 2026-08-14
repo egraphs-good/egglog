@@ -59,13 +59,11 @@ pub(crate) struct Index<TI> {
 /// position. The two components are deliberately private so callers cannot
 /// manufacture positions belonging to another index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)] // Consumed by the packed-executor integration layer.
 pub(crate) struct IndexPosition {
     shard: u32,
     slot: u32,
 }
 
-#[allow(dead_code)] // Consumed by the packed-executor integration layer.
 impl IndexPosition {
     fn new(shard: ShardId, slot: usize) -> Self {
         Self {
@@ -162,15 +160,6 @@ impl<TI: IndexBase> Index<TI> {
         }
     }
 
-    pub(crate) fn for_each(&self, f: impl FnMut(&TI::Key, SubsetRef)) {
-        self.table.for_each(f);
-    }
-
-    /// Call `f` over the elements stored in one physical index shard.
-    pub(crate) fn for_each_shard(&self, shard: usize, f: impl FnMut(&TI::Key, SubsetRef)) {
-        self.table.for_each_shard(shard, f);
-    }
-
     /// Return the number of physical shards in this index.
     pub(crate) fn shard_count(&self) -> usize {
         self.table.shard_count()
@@ -186,7 +175,6 @@ impl<TI: IndexBase> Index<TI> {
     }
 }
 
-#[allow(dead_code)] // Consumed by the packed-executor integration layer.
 impl<TI: PositionedIndexBase> Index<TI> {
     /// Get a key's execution-stable position along with its nonempty subset.
     pub(crate) fn get_subset_positioned<'a>(
@@ -256,10 +244,6 @@ pub(crate) trait IndexBase {
     fn add_row(&mut self, key: &Self::WriteKey, row: RowId);
     /// Merge the contents of the [`TaggedRowBuffer`] into the table.
     fn merge_rows(&mut self, buf: &TaggedRowBuffer);
-    /// Call `f` over the elements of the index.
-    fn for_each(&self, f: impl FnMut(&Self::Key, SubsetRef));
-    /// Call `f` over the elements of one physical index shard.
-    fn for_each_shard(&self, shard: usize, f: impl FnMut(&Self::Key, SubsetRef));
     /// The number of physical shards in the index.
     fn shard_count(&self) -> usize;
     /// The number of distinct keys in one physical shard.
@@ -293,7 +277,6 @@ pub(crate) trait IndexBase {
 /// Implementations may choose different physical slot schemes. Positions only
 /// need to remain stable while the index is frozen; callers must treat them as
 /// opaque tokens belonging to the exact index that returned them.
-#[allow(dead_code)] // Consumed by the packed-executor integration layer.
 pub(crate) trait PositionedIndexBase: IndexBase {
     fn get_subset_positioned<'a>(
         &'a self,
@@ -375,23 +358,6 @@ impl IndexBase for ColumnIndex {
     fn merge_rows(&mut self, buf: &TaggedRowBuffer) {
         for (src_id, key) in buf.iter() {
             self.add_row(key, src_id);
-        }
-    }
-
-    fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        for (subsets, (key, subset)) in self
-            .shards
-            .iter()
-            .flat_map(|(_, shard)| shard.table.iter().map(|entry| (&shard.subsets, entry)))
-        {
-            f(key, subset.as_ref(subsets));
-        }
-    }
-
-    fn for_each_shard(&self, shard: usize, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        let shard = &self.shards[ShardId::from_usize(shard)];
-        for (key, subset) in shard.table.iter() {
-            f(key, subset.as_ref(&shard.subsets));
         }
     }
 
@@ -877,26 +843,6 @@ impl IndexBase for TupleIndex {
             self.add_row(key, src_id);
         }
     }
-
-    fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        for (_, shard) in self.shards.iter() {
-            for entry in shard.table.hash.iter() {
-                // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
-                let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
-                f(key, entry.vals.as_ref(&shard.subsets));
-            }
-        }
-    }
-
-    fn for_each_shard(&self, shard: usize, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        let shard = &self.shards[ShardId::from_usize(shard)];
-        for entry in shard.table.hash.iter() {
-            // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
-            let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
-            f(key, entry.vals.as_ref(&shard.subsets));
-        }
-    }
-
     fn shard_count(&self) -> usize {
         self.shards.len()
     }
