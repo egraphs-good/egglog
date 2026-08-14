@@ -19,7 +19,7 @@
 use std::{cell::RefCell, cmp, mem, sync::Arc};
 
 use dashmap::mapref::{entry::Entry, one::RefMut};
-use egglog_concurrency::{Handle, Scope, SharedArena};
+use egglog_concurrency::{Scope, SharedArena};
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -51,9 +51,13 @@ use super::{
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
-        PreparedIndexSlot, PreparedJoinIndexes, PreparedPlanIndexes, columns_are_cacheable,
+        PreparedIndexRef, PreparedIndexSlot, PreparedJoinIndexes, PreparedPlanIndexes,
+        columns_are_cacheable,
     },
-    probe::{AtomRows, PackedProbe, ProbeIndex, ProbeRequest, Prober, RootProjectionProbe},
+    probe::{
+        AtomRows, LazyArenaHandle, PackedProbe, ProbeIndex, ProbeRequest, Prober,
+        RootProjectionProbe,
+    },
     residual_index::{SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
     with_pool_set,
 };
@@ -123,11 +127,29 @@ impl Database {
                         // logical query. A nested scope ensures no descendant task
                         // can retain an arena reference after this job reclaims it.
                         let arena = SharedArena::new();
-                        let prepared_index = PreparedPlanIndexes::new(db, plan);
                         let search_and_apply_timer = Instant::now();
+                        let join_state = JoinState::new(db, exec_state, trie_cache, &arena);
+                        let mut binding_info = BindingInfo::default();
+                        let mut roots_ready = true;
+                        for (id, info) in plan.atoms().iter() {
+                            let headers: SmallVec<[&JoinHeader; 2]> =
+                                plan.header().iter().filter(|h| h.atom == id).collect();
+                            match join_state.root_node(info.table, &headers) {
+                                Some(node) => binding_info.insert_node(id, node),
+                                None => {
+                                    roots_ready = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Prepared slots are execution-local and can be large.
+                        // Empty roots are common in fixpoint confirmation
+                        // passes, so do not construct the sidecar until the
+                        // query can actually run.
+                        let prepared_index =
+                            roots_ready.then(|| PreparedPlanIndexes::new(db, plan));
                         let search_and_apply_time = egglog_concurrency::scope(|query_scope| {
-                            let join_state = JoinState::new(db, exec_state, trie_cache, &arena);
-                            let mut binding_info = BindingInfo::default();
                             let mut action_buf = ScopedActionBuffer::new(
                                 query_scope,
                                 rule_set,
@@ -135,16 +157,10 @@ impl Database {
                             );
 
                             'eval: {
-                                for (id, info) in plan.atoms().iter() {
-                                    let headers: SmallVec<[&JoinHeader; 2]> =
-                                        plan.header().iter().filter(|h| h.atom == id).collect();
-                                    match join_state.root_node(info.table, &headers) {
-                                        Some(node) => binding_info.insert_node(id, node),
-                                        None => break 'eval,
-                                    }
-                                }
-
-                                match (plan, &prepared_index) {
+                                let Some(prepared_index) = prepared_index.as_ref() else {
+                                    break 'eval;
+                                };
+                                match (plan, prepared_index) {
                                     (
                                         Plan::SinglePlan(plan),
                                         PreparedPlanIndexes::Single(prepared),
@@ -259,9 +275,9 @@ impl Database {
                             search_and_apply_time
                         });
 
-                        // Prepared slots can contain arena addresses, so destroy
-                        // them before reclaiming the arena.
+                        drop(binding_info);
                         drop(prepared_index);
+                        drop(join_state);
                         drop(arena);
 
                         let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
@@ -292,7 +308,6 @@ impl Database {
                 // to prove that every arena reference dies before this query's
                 // arena is reclaimed.
                 let arena = SharedArena::new();
-                let prepared_index = PreparedPlanIndexes::new(self, plan);
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
@@ -314,6 +329,10 @@ impl Database {
                                 None => break 'eval,
                             }
                         }
+                        // See the parallel path above. This also ensures any
+                        // arena addresses in prepared slots are dropped inside
+                        // the arena's lexical lifetime.
+                        let prepared_index = PreparedPlanIndexes::new(self, plan);
                         match (plan, &prepared_index) {
                             (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
                                 join_state.run_join_stages(
@@ -388,7 +407,6 @@ impl Database {
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
-                drop(prepared_index);
                 drop(arena);
 
                 // TODO: unnecessary cloning in many cases
@@ -479,8 +497,8 @@ struct JoinState<'db, 'state, 'exec> {
     trie_cache: Option<Arc<TrieCache>>,
     /// Query-scoped arena shared with any parallel tasks spawned by this plan.
     arena: &'exec SharedArena,
-    /// This worker's allocation handle into `arena`.
-    handle: Handle<'exec>,
+    /// This worker's lazily initialized allocation handle into `arena`.
+    handle: LazyArenaHandle<'exec>,
     /// Reused `(value, row)` workspace for constructing packed trie nodes.
     packed_scratch: RefCell<Vec<(Value, RowId)>>,
 }
@@ -498,7 +516,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             pool: with_pool_set(|ps| ps.get_pool()),
             trie_cache,
             arena,
-            handle: arena.new_handle(),
+            handle: LazyArenaHandle::new(arena),
             packed_scratch: RefCell::new(Vec::new()),
         }
     }
@@ -595,7 +613,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Table scans already omit stale SortedWritesTable rows, so a
             // separate live-subset pass would only scan the same root twice.
             return TrieNode::build_from_subset(
-                &self.handle,
+                self.handle.get(),
                 table,
                 subset,
                 column,
@@ -609,7 +627,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         filtered = table.refine(filtered, constraints);
         TrieNode::build_from_subset(
-            &self.handle,
+            self.handle.get(),
             table,
             filtered.as_ref(),
             column,
@@ -637,7 +655,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         table: WrappedTableRef<'_>,
         constraints: &[Constraint],
         column: ColumnId,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> Option<&'rows RootProjection> {
         self.trie_cache.as_ref()?;
         prepared.get_or_init_root_projection(root, column, constraints, || {
@@ -679,14 +697,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         constraints: &[Constraint],
         column: ColumnId,
         child_shape: ChildShape,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> &'exec TrieNode<'exec>
     where
         'exec: 'rows,
     {
         match rows {
             AtomRows::Root(root) => {
-                let address = *prepared.packed_root.get_or_init(|| {
+                let address = *prepared.state.packed_root.get_or_init(|| {
                     self.build_packed_node(
                         table,
                         root.subset.as_ref(),
@@ -721,8 +739,11 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 assert_eq!(node.child_shape(), child_shape);
                 node
             }
-            AtomRows::Packed(cursor) => {
-                cursor.child_index_with(&self.handle, prepared.access.index(), child_shape, || {
+            AtomRows::Packed(cursor) => cursor.child_index_with(
+                self.handle.get(),
+                prepared.access.index(),
+                child_shape,
+                || {
                     self.build_packed_node(
                         table,
                         cursor.subset(),
@@ -731,8 +752,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         column,
                         child_shape,
                     )
-                })
-            }
+                },
+            ),
             AtomRows::Inline(..) => {
                 unreachable!("inline residuals must use a stack-owned probe")
             }
@@ -813,7 +834,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             if cols.len() == 1 {
                 let index = prepared.column_index(info, cols[0]);
                 if terminal_child_shape != ChildShape::Leaf {
-                    prepared.root_continuations.prepare(
+                    prepared.state.root_continuations.prepare(
                         terminal_child_shape,
                         index.shard_count(),
                         |shard| index.shard_len(shard),
@@ -822,13 +843,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 ProbeIndex::CachedColumn {
                     intersect_outer,
                     table: index,
-                    continuations: &prepared.root_continuations,
+                    continuations: &prepared.state.root_continuations,
                     child_shape: terminal_child_shape,
                 }
             } else {
                 let index = prepared.tuple_index(info, cols.as_slice());
                 if terminal_child_shape != ChildShape::Leaf {
-                    prepared.root_continuations.prepare(
+                    prepared.state.root_continuations.prepare(
                         terminal_child_shape,
                         index.shard_count(),
                         |shard| index.shard_len(shard),
@@ -837,7 +858,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 ProbeIndex::CachedTuple {
                     intersect_outer,
                     table: index,
-                    continuations: &prepared.root_continuations,
+                    continuations: &prepared.state.root_continuations,
                     child_shape: terminal_child_shape,
                 }
             }
@@ -860,6 +881,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             if let Some(first) = projected_root {
                 if first_child_shape != ChildShape::Leaf {
                     prepared
+                        .state
                         .root_continuations
                         .prepare(first_child_shape, 1, |_| first.len());
                 }
@@ -867,7 +889,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     first,
                     columns: cols,
                     table: info.table.as_ref(),
-                    continuations: &prepared.root_continuations,
+                    continuations: &prepared.state.root_continuations,
                     access: prepared.access,
                     handle: &self.handle,
                     scratch: &self.packed_scratch,
@@ -912,7 +934,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     fn top_index_shards<'rows>(
         &self,
         stage: &JoinStage,
-        prepared: &'rows [PreparedIndexSlot],
+        prepared_join: &'rows PreparedJoinIndexes,
+        prepared: &[PreparedIndexSlot],
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         workers: usize,
@@ -958,7 +981,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             let prober = self.get_index(
                 atoms,
                 binding_info,
-                ProbeRequest::column(scan, false, ChildShape::Leaf, prepared),
+                ProbeRequest::column(
+                    scan,
+                    false,
+                    ChildShape::Leaf,
+                    prepared_join.resolve(prepared),
+                ),
             );
             let size = prober.len();
             if size < leader_size {
@@ -1006,6 +1034,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let stage_index = order.get(0);
         self.top_index_shards(
             &stages.instrs[stage_index],
+            prepared,
             prepared.stage(stage_index),
             atoms,
             binding_info,
@@ -1392,7 +1421,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             a,
                             tail.keep_rows,
                             tail.child_shape,
-                            &prepared_indexes[0],
+                            prepared.resolve(&prepared_indexes[0]),
                         ),
                     );
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -1423,7 +1452,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             a,
                             a_tail.keep_rows,
                             a_tail.child_shape,
-                            &prepared_indexes[0],
+                            prepared.resolve(&prepared_indexes[0]),
                         ),
                     );
                     let b_tail = atom_tail_use(
@@ -1441,7 +1470,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             b,
                             b_tail.keep_rows,
                             b_tail.child_shape,
-                            &prepared_indexes[1],
+                            prepared.resolve(&prepared_indexes[1]),
                         ),
                     );
 
@@ -1490,7 +1519,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 scan,
                                 tail.keep_rows,
                                 tail.child_shape,
-                                prepared_slot,
+                                prepared.resolve(prepared_slot),
                             ),
                         );
                         let size = prober.len();
@@ -1666,7 +1695,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     spec,
                                     tail.keep_rows,
                                     tail.child_shape,
-                                    &prepared_indexes[i],
+                                    prepared.resolve(&prepared_indexes[i]),
                                 ),
                             ),
                         )
@@ -1863,7 +1892,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     spec,
                                     tail.keep_rows,
                                     tail.child_shape,
-                                    prepared_slot,
+                                    prepared.resolve(prepared_slot),
                                 ),
                             )
                         })
