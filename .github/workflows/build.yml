@@ -96,7 +96,6 @@ jobs:
           - proof_testing_typecheck
           - eggcc-2mm
           - rust_rule_fib
-          - check_facts_many_matches
           - rust_rule_match_overhead
           - rust_rule_match_with_serialize
           - rust_rule_insert_loop
