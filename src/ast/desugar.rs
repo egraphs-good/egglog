@@ -9,15 +9,7 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
-    let rule_name = match &command {
-        Command::Rewrite(_, rewrite, _) | Command::BiRewrite(_, rewrite)
-            if rewrite.name.is_empty() =>
-        {
-            rule_name(&command)
-        }
-        Command::Rule { rule } if rule.name.is_empty() => rule_name(&command),
-        _ => String::new(),
-    };
+    let rule_name = command_rule_name(&command);
     let res = match command {
         Command::Function {
             span,
@@ -130,24 +122,18 @@ pub(crate) fn desugar_command(
             res
         }
         Command::Rewrite(ruleset, rewrite, subsume) => {
-            let resolved_name = if rewrite.name.is_empty() {
-                rule_name
-            } else {
-                rewrite.name.clone()
-            };
+            let resolved_name = rule_name.expect("rewrite command should have a rule name");
             desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)?
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rule_name, rewrite, parser)?
+            let resolved_name = rule_name.expect("birewrite command should have a rule name");
+            desugar_birewrite(ruleset, resolved_name, rewrite, parser)?
         }
         Command::Include(_span, _file) => {
             unreachable!("Include commands should be expanded before desugaring")
         }
         Command::Rule { mut rule } => {
-            if rule.name.is_empty() {
-                // format rule and use it as the name
-                rule.name = rule_name;
-            }
+            rule.name = rule_name.expect("rule command should have a rule name");
             vec![NCommand::NormRule { rule }]
         }
         Command::Sort {
@@ -392,16 +378,11 @@ fn desugar_rewrite(
 
 fn desugar_birewrite(
     ruleset: String,
-    name: String,
+    rewrite_name: String,
     rewrite: Rewrite,
     parser: &mut Parser,
 ) -> Result<Vec<NCommand>, Error> {
     let span = rewrite.span.clone();
-    let rewrite_name = if rewrite.name.is_empty() {
-        name
-    } else {
-        rewrite.name.clone()
-    };
     let rw2 = Rewrite {
         span,
         lhs: rewrite.rhs.clone(),
@@ -460,6 +441,20 @@ fn desugar_relation(
             false,
         )),
     ]
+}
+
+/// Returns the supplied rule name, or generates one for an unnamed rule-like command.
+fn command_rule_name(command: &Command) -> Option<String> {
+    let supplied_name = match command {
+        Command::Rule { rule } => &rule.name,
+        Command::Rewrite(_, rewrite, _) | Command::BiRewrite(_, rewrite) => &rewrite.name,
+        _ => return None,
+    };
+    Some(if supplied_name.is_empty() {
+        rule_name(command)
+    } else {
+        supplied_name.clone()
+    })
 }
 
 pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> String

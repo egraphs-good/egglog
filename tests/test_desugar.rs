@@ -1,7 +1,7 @@
 use egglog::{EGraph, ast::GenericCommand};
 
 #[test]
-fn unnamed_rule_names_are_stable() {
+fn rule_names_are_stable() {
     let mut egraph = EGraph::default();
     let commands = egraph
         .resolve_program(
@@ -15,6 +15,9 @@ fn unnamed_rule_names_are_stable() {
                 (rewrite (Wrap (Var "c")) (Var "c"))
                 (relation edge (Math Math))
                 (birewrite (Wrap (Var "d")) (Var "d"))
+                (rule ((= x (Var "e"))) ((union x (Var "f"))) :name "named-rule")
+                (rewrite (Wrap (Var "g")) (Var "g") :name "named-rewrite")
+                (birewrite (Wrap (Var "h")) (Var "h") :name "named-birewrite")
             "#,
         )
         .unwrap();
@@ -34,6 +37,10 @@ fn unnamed_rule_names_are_stable() {
             "(rewrite (Wrap (Var 'c')) (Var 'c'))",
             "(birewrite (Wrap (Var 'd')) (Var 'd'))=>",
             "(birewrite (Wrap (Var 'd')) (Var 'd'))<=",
+            "named-rule",
+            "named-rewrite",
+            "named-birewrite=>",
+            "named-birewrite<=",
         ]
     );
 }
