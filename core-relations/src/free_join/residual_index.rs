@@ -214,7 +214,7 @@ impl SmallColumnIndex {
 /// eight rows is cheaper and simpler than constructing a packed trie node.
 struct SmallExactProbe<'ctx> {
     rows: Option<InlineRows>,
-    columns: SmallVec<[ColumnId; 4]>,
+    columns: ColumnIds,
     table: WrappedTableRef<'ctx>,
 }
 
@@ -222,7 +222,7 @@ impl<'ctx> SmallExactProbe<'ctx> {
     fn new(
         table: WrappedTableRef<'ctx>,
         rows: InlineRows,
-        columns: SmallVec<[ColumnId; 4]>,
+        columns: ColumnIds,
         constraints: &[Constraint],
     ) -> Self {
         let rows = if constraints.is_empty() {

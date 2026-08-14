@@ -106,10 +106,15 @@ impl ProcessedConstraints {
     }
 }
 
+/// Ordered column identifiers shared by join planning, probing, and index caches.
+/// The inline capacity is kept consistent across these paths; longer keys spill
+/// to the heap.
+pub(crate) type ColumnIds = SmallVec<[ColumnId; 4]>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SubAtom {
     pub(crate) atom: AtomId,
-    pub(crate) vars: SmallVec<[ColumnId; 2]>,
+    pub(crate) vars: ColumnIds,
 }
 
 impl SubAtom {
@@ -138,7 +143,7 @@ pub struct TableInfo {
     pub(crate) name: Option<Arc<str>>,
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
-    pub(crate) indexes: IndexCatalog<SmallVec<[ColumnId; 4]>, HashIndex>,
+    pub(crate) indexes: IndexCatalog<ColumnIds, HashIndex>,
     pub(crate) column_indexes: IndexCatalog<ColumnId, HashColumnIndex>,
 }
 
