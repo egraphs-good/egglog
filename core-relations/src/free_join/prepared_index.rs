@@ -62,7 +62,12 @@ type RootContinuationSlots = Box<[Box<[OnceLock<usize>]>]>;
 enum RootContinuationStorage {
     /// The atom has one statically possible indexed successor.  This is the
     /// existing compact path: one continuation slot per physical root key.
-    Direct(RootContinuationSlots),
+    /// Defer allocating that grid until a probe actually asks for a child;
+    /// many shallow plans prepare a possible successor but never descend.
+    Direct {
+        shard_lens: Box<[usize]>,
+        slots: OnceLock<RootContinuationSlots>,
+    },
     /// More than one access may follow.  Allocate the dense per-position slots
     /// for a family only when DVO actually selects it.
     Dynamic {
@@ -110,9 +115,10 @@ impl RootContinuationCache {
             let shard_lens = (0..shard_count).map(shard_len).collect::<Box<[_]>>();
             match child_shape {
                 ChildShape::Leaf => unreachable!(),
-                ChildShape::Direct => {
-                    RootContinuationStorage::Direct(Self::allocate_slots(&shard_lens))
-                }
+                ChildShape::Direct => RootContinuationStorage::Direct {
+                    shard_lens,
+                    slots: OnceLock::new(),
+                },
                 ChildShape::Dynamic { families } => RootContinuationStorage::Dynamic {
                     shard_lens,
                     families: std::iter::repeat_with(OnceLock::new)
@@ -123,7 +129,7 @@ impl RootContinuationCache {
         });
         debug_assert!(
             match (child_shape, storage) {
-                (ChildShape::Direct, RootContinuationStorage::Direct(_)) => true,
+                (ChildShape::Direct, RootContinuationStorage::Direct { .. }) => true,
                 (
                     ChildShape::Dynamic { families: expected },
                     RootContinuationStorage::Dynamic { families, .. },
@@ -140,7 +146,7 @@ impl RootContinuationCache {
             .get()
             .expect("root continuations must be prepared before probing");
         #[cfg(debug_assertions)]
-        if matches!(storage, RootContinuationStorage::Direct(_)) {
+        if matches!(storage, RootContinuationStorage::Direct { .. }) {
             let expected = self.direct_access.get_or_init(|| access);
             debug_assert_eq!(
                 *expected, access,
@@ -148,7 +154,9 @@ impl RootContinuationCache {
             );
         }
         match storage {
-            RootContinuationStorage::Direct(slots) => slots,
+            RootContinuationStorage::Direct { shard_lens, slots } => {
+                slots.get_or_init(|| Self::allocate_slots(shard_lens))
+            }
             RootContinuationStorage::Dynamic {
                 shard_lens,
                 families,
@@ -162,45 +170,114 @@ impl RootContinuationCache {
     }
 }
 
-/// A table-index slot retained for one logical query execution.
+/// The persistent-index strategy available to one logical join access.
 ///
-/// The slot lazily acquires its Arc through the existing fully-refreshing
-/// catalog helper on first cached use. Keeping that Arc in an execution-scoped
-/// sidecar removes catalog lookups and refcount traffic from recursive join
-/// execution without constructing indexes for plan accesses that choose a
-/// residual-local strategy at runtime. Initialized slots are dropped before
-/// the database resets its indexes during `merge_all`.
+/// This is part of the compact descriptor stored with a prepared stage. The
+/// corresponding [`PreparedIndexState`] owns the large, lazily initialized
+/// cache objects used during execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PreparedIndexKind {
-    Tuple(OnceLock<HashIndex>),
-    Column(OnceLock<HashColumnIndex>),
+    /// A persistent catalog index over two or more columns.
+    Tuple,
+    /// A persistent catalog index over one column.
+    Column,
     /// The table specification forbids a global cache for at least one key
     /// column, so execution must use its existing dynamic-index path.
     Uncacheable,
 }
 
-struct PreparedIndexSlot {
-    kind: PreparedIndexKind,
-    access: AccessId,
+define_id!(
+    PreparedIndexStateId,
+    u32,
+    "a dense index into a join block's execution-local prepared-index states"
+);
+
+/// Lazily acquired persistent catalog index for one prepared access.
+///
+/// Keeping the table-owned index handle in execution-local state avoids
+/// repeated catalog lookups and reference-count traffic in recursive join
+/// execution. `Uncacheable` records that this access must use a round-local
+/// packed index instead. All initialized handles are dropped before
+/// `merge_all` resets the database's indexes.
+enum PreparedIndexCache {
+    Tuple(OnceLock<HashIndex>),
+    Column(OnceLock<HashColumnIndex>),
+    Uncacheable,
+}
+
+/// Execution-local mutable state for one prepared index access. Keeping these
+/// large cache objects out of the stage `SmallVec`s leaves their inline entries
+/// as compact, copyable descriptors.
+struct PreparedIndexState {
+    /// Persistent tuple/column index handle, acquired only if execution chooses
+    /// the catalog path for this access.
+    cache: PreparedIndexCache,
+    /// Per-root-key publication slots for packed indexes that continue this
+    /// access on another column of the same atom.
     root_continuations: RootContinuationCache,
-    /// Handle to a shared, final-form root index for this logical access.
-    /// Keeping the Arc in the prepared sidecar lets probers borrow its arrays
-    /// for the whole query without cloning an Arc into every output frame.
+    /// Shared scalar projection selected for this logical access. Once set, the
+    /// retained `Arc` keeps its immutable key and row arrays alive for the
+    /// entire query, so output frames can borrow them without cloning the Arc.
     projected_root: OnceLock<RootProjectionSlot>,
     /// Erased arena address of the packed root for this logical scan.
     /// This remains the fallback for roots that are not shared across plans.
     packed_root: OnceLock<usize>,
 }
 
-impl PreparedIndexSlot {
-    fn new(kind: PreparedIndexKind, access: AccessId) -> Self {
+impl PreparedIndexState {
+    fn new(kind: PreparedIndexKind) -> Self {
+        let cache = match kind {
+            PreparedIndexKind::Tuple => PreparedIndexCache::Tuple(OnceLock::new()),
+            PreparedIndexKind::Column => PreparedIndexCache::Column(OnceLock::new()),
+            PreparedIndexKind::Uncacheable => PreparedIndexCache::Uncacheable,
+        };
         Self {
-            kind,
-            access,
+            cache,
             root_continuations: RootContinuationCache::default(),
             projected_root: OnceLock::new(),
             packed_root: OnceLock::new(),
         }
     }
+}
+
+/// Compact descriptor for one indexed access in a prepared logical stage.
+///
+/// Stage descriptors are copied frequently while the executor walks or
+/// reorders the plan, so they contain only ids and an index strategy. The
+/// associated locks, cached indexes, and continuation grids live separately in
+/// the [`PreparedIndexState`] array and are reached through `state`.
+#[derive(Clone, Copy, Debug)]
+struct PreparedIndexSlot {
+    /// Whether this access can use a tuple catalog, a column catalog, or no
+    /// persistent catalog at all.
+    kind: PreparedIndexKind,
+    /// Dense identity of this access among accesses to the same atom. Packed
+    /// dynamic children use it to distinguish possible successor families.
+    access: AccessId,
+    /// Position of this access's mutable cache state in `PreparedJoinIndexes`.
+    state: PreparedIndexStateId,
+}
+
+impl PreparedIndexSlot {
+    fn new(kind: PreparedIndexKind, access: AccessId, state: PreparedIndexStateId) -> Self {
+        Self {
+            kind,
+            access,
+            state,
+        }
+    }
+}
+
+/// Borrowed execution view obtained by resolving a compact
+/// [`PreparedIndexSlot`] against its separately stored mutable state.
+#[derive(Clone, Copy)]
+struct PreparedIndexRef<'a> {
+    /// Persistent-index strategy copied from the stage descriptor.
+    kind: PreparedIndexKind,
+    /// Per-atom successor-family identity copied from the stage descriptor.
+    access: AccessId,
+    /// Locks and cache handles retained for this access's query execution.
+    state: &'a PreparedIndexState,
 }
 
 fn columns_are_cacheable(info: &TableInfo, cols: &[ColumnId]) -> bool {
@@ -344,18 +421,39 @@ impl PreparedTailMasks {
 
 /// Index handles for one immutable [`JoinStages`] value, positionally aligned
 /// with `JoinStages::instrs` and with each stage's scans.
-struct PreparedJoinIndexes {
-    stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
-    access_counts: DenseIdMap<AtomId, usize>,
-    tail_masks: Option<PreparedTailMasks>,
+enum PreparedJoinIndexes {
+    /// A block made entirely of cover scans cannot build a packed node or use
+    /// an index. Avoid constructing any index sidecar for these blocks; unary
+    /// rules hit this path especially often.
+    NoIndexes,
+    Indexed {
+        stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
+        states: Box<[PreparedIndexState]>,
+        access_counts: DenseIdMap<AtomId, usize>,
+        tail_masks: Option<PreparedTailMasks>,
+    },
 }
 
 impl PreparedJoinIndexes {
     fn new(db: &Database, atoms: &Arc<DenseIdMap<AtomId, Atom>>, stages: &JoinStages) -> Self {
+        let index_count = stages
+            .instrs
+            .iter()
+            .map(|stage| match stage {
+                JoinStage::Intersect { scans, .. } => scans.len(),
+                JoinStage::FusedIntersect { to_intersect, .. }
+                | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len(),
+            })
+            .sum::<usize>();
+        if index_count == 0 {
+            return Self::NoIndexes;
+        }
+
         fn make_slot(
             db: &Database,
             atoms: &DenseIdMap<AtomId, Atom>,
             access_counts: &mut DenseIdMap<AtomId, usize>,
+            states: &mut Vec<PreparedIndexState>,
             atom: AtomId,
             cols: &[ColumnId],
         ) -> PreparedIndexSlot {
@@ -366,15 +464,18 @@ impl PreparedJoinIndexes {
             let kind = if !columns_are_cacheable(info, cols) {
                 PreparedIndexKind::Uncacheable
             } else if cols.len() == 1 {
-                PreparedIndexKind::Column(OnceLock::new())
+                PreparedIndexKind::Column
             } else {
-                PreparedIndexKind::Tuple(OnceLock::new())
+                PreparedIndexKind::Tuple
             };
-            PreparedIndexSlot::new(kind, access)
+            let state = PreparedIndexStateId::from_usize(states.len());
+            states.push(PreparedIndexState::new(kind));
+            PreparedIndexSlot::new(kind, access, state)
         }
 
         let mut access_counts = DenseIdMap::with_capacity(atoms.n_ids());
         let mut prepared_stages = Vec::with_capacity(stages.instrs.len());
+        let mut states = Vec::with_capacity(index_count);
         for stage in stages.instrs.iter() {
             let mut handles = SmallVec::new();
             match stage {
@@ -384,6 +485,7 @@ impl PreparedJoinIndexes {
                             db,
                             atoms,
                             &mut access_counts,
+                            &mut states,
                             scan.atom,
                             std::slice::from_ref(&scan.column),
                         )
@@ -396,6 +498,7 @@ impl PreparedJoinIndexes {
                             db,
                             atoms,
                             &mut access_counts,
+                            &mut states,
                             scan.to_index.atom,
                             scan.to_index.vars.as_slice(),
                         )
@@ -405,23 +508,50 @@ impl PreparedJoinIndexes {
             prepared_stages.push(handles);
         }
         let tail_masks = PreparedTailMasks::new(&stages.instrs, &prepared_stages, atoms.n_ids());
-        Self {
+        Self::Indexed {
             stages: prepared_stages.into_boxed_slice(),
+            states: states.into_boxed_slice(),
             access_counts,
             tail_masks,
         }
     }
 
     fn stage(&self, index: usize) -> &[PreparedIndexSlot] {
-        &self.stages[index]
+        match self {
+            Self::NoIndexes => &[],
+            Self::Indexed { stages, .. } => &stages[index],
+        }
     }
 
     fn access_count(&self, atom: AtomId) -> usize {
-        self.access_counts.get(atom).copied().unwrap_or_default()
+        match self {
+            Self::NoIndexes => 0,
+            Self::Indexed { access_counts, .. } => {
+                access_counts.get(atom).copied().unwrap_or_default()
+            }
+        }
+    }
+
+    fn resolve<'a>(&'a self, slot: &PreparedIndexSlot) -> PreparedIndexRef<'a> {
+        let Self::Indexed { states, .. } = self else {
+            unreachable!("an index slot cannot belong to a block without indexes")
+        };
+        PreparedIndexRef {
+            kind: slot.kind,
+            access: slot.access,
+            state: &states[slot.state.index()],
+        }
     }
 
     fn all_stage_mask(&self) -> Option<u64> {
-        self.tail_masks.as_ref().map(|masks| masks.all_stages)
+        self.tail_masks().map(|masks| masks.all_stages)
+    }
+
+    fn tail_masks(&self) -> Option<&PreparedTailMasks> {
+        match self {
+            Self::NoIndexes => None,
+            Self::Indexed { tail_masks, .. } => tail_masks.as_ref(),
+        }
     }
 }
 

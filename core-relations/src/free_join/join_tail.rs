@@ -139,7 +139,7 @@ fn atom_tail_use(
     instr_order: &InstrOrder,
     resume_pos: usize,
 ) -> AtomTailUse {
-    let Some((masks, remaining_stages)) = prepared.tail_masks.as_ref().zip(remaining_stages) else {
+    let Some((masks, remaining_stages)) = prepared.tail_masks().zip(remaining_stages) else {
         return scan_atom_tail_use(atom, stages, prepared, instr_order, resume_pos);
     };
     let result = masks.atom_tail_use(atom, remaining_stages, prepared.access_count(atom));
