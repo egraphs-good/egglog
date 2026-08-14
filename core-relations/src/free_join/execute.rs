@@ -7,6 +7,14 @@
 //! arena-allocated packed trie. It returns the matching rows in a representation
 //! that later stages can refine without copying them. This separation keeps the
 //! stage executor independent of the storage strategy selected for each access.
+//!
+//! The join-tail layer in `join_tail.rs` manages the state needed after
+//! execution enters the recursive portion of a plan. Its helpers determine
+//! which atom rows and materializations remain live, reorder the remaining
+//! stages with dynamic variable ordering (DVO), identify results that can stay
+//! factorized until action execution, and clone only the live state when work
+//! moves to another task. Index selection and probing remain in the probe
+//! layer; the join-tail layer decides their order and lifetime.
 
 use std::{
     cmp, iter, mem,
