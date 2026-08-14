@@ -908,7 +908,6 @@ pub struct GenericCoreRule<HeadQ, HeadA, Leaf> {
     pub head: GenericCoreActions<HeadA, Leaf>,
 }
 
-pub(crate) type CoreRule = GenericCoreRule<StringOrEq, String, String>;
 pub(crate) type ResolvedCoreRule = GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>;
 
 impl<Head1, Head2, Leaf> GenericCoreRule<Head1, Head2, Leaf>
