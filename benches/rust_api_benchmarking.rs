@@ -16,6 +16,37 @@ struct RustRuleBenchInput {
     ruleset: String,
 }
 
+struct CheckFactsBenchInput {
+    egraph: egglog::EGraph,
+    check: Vec<egglog::ast::Command>,
+}
+
+fn check_facts_many_matches_setup() -> CheckFactsBenchInput {
+    use std::fmt::Write;
+
+    let mut program = String::from("(relation Candidate (i64))\n");
+    for i in 0..500_000 {
+        writeln!(&mut program, "(Candidate {i})").unwrap();
+    }
+
+    let mut egraph = egglog::EGraph::new(1);
+    egraph.parse_and_run_program(None, &program).unwrap();
+    let check = egraph.parse_program(None, "(check (Candidate x))").unwrap();
+    CheckFactsBenchInput { egraph, check }
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1)]
+fn check_facts_many_matches(bencher: divan::Bencher) {
+    bencher
+        .with_inputs(check_facts_many_matches_setup)
+        .bench_local_refs(|input| {
+            input
+                .egraph
+                .run_program(std::mem::take(&mut input.check))
+                .unwrap();
+        });
+}
+
 // Match-only rust_rule bench setup, to isolate the overhead of matching a rust rule
 // without doing any actual work in the rule body.
 fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {

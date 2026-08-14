@@ -1592,8 +1592,9 @@ impl EGraph {
         let ext_sc_ref = ext_sc.clone();
         let ext_id = self
             .backend
-            .register_external_func(Box::new(make_external_func(move |_, _| {
+            .register_external_func(Box::new(make_external_func(move |exec_state, _| {
                 *ext_sc_ref.lock().unwrap() = Some(());
+                exec_state.trigger_early_stop();
                 Some(Value::new_const(0))
             })));
 

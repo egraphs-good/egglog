@@ -123,6 +123,62 @@ fn primitive_error_in_run_schedule_returns_error() {
 }
 
 #[test]
+fn check_facts_succeeds_on_a_match() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            "(relation Candidate (i64)) (Candidate 7) (check (Candidate x))",
+        )
+        .unwrap();
+}
+
+#[test]
+fn check_facts_returns_check_error_without_a_match() {
+    let mut egraph = EGraph::default();
+    let err = egraph
+        .parse_and_run_program(None, "(relation Candidate (i64)) (check (Candidate x))")
+        .unwrap_err();
+
+    match err {
+        Error::CheckError(facts, _) => assert_eq!(facts.len(), 1),
+        other => panic!("expected CheckError, got {other:?}"),
+    }
+}
+
+fn egraph_with_many_check_facts_matches(num_threads: usize) -> EGraph {
+    use std::fmt::Write;
+
+    let mut program = String::from("(relation Candidate (i64))\n");
+    for i in 0..20_000 {
+        writeln!(&mut program, "(Candidate {i})").unwrap();
+    }
+
+    let mut egraph = EGraph::new(num_threads);
+    egraph.parse_and_run_program(None, &program).unwrap();
+    egraph
+}
+
+#[test]
+fn check_facts_succeeds_with_many_existential_matches() {
+    let mut egraph = egraph_with_many_check_facts_matches(1);
+    egraph
+        .parse_and_run_program(None, "(check (Candidate x))")
+        .unwrap();
+}
+
+#[test]
+fn check_facts_stops_safely_in_parallel_mode() {
+    let mut egraph = egraph_with_many_check_facts_matches(32);
+    egraph
+        .parse_and_run_program(None, "(check (Candidate x))")
+        .unwrap();
+    egraph
+        .parse_and_run_program(None, "(check (Candidate 19999))")
+        .unwrap();
+}
+
+#[test]
 fn prove_exists_reports_query_mismatch() {
     let _ = env_logger::builder().is_test(true).try_init();
 
