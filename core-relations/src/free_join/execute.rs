@@ -1,4 +1,12 @@
 //! Core free join execution.
+//!
+//! The probe layer in `probe.rs` adapts every physical representation of an
+//! atom's current rows to the two operations needed by join execution: look up
+//! one key, or enumerate all keys. A probe may read a persistent table index, a
+//! projection shared for the current ruleset run, a tiny residual index, or an
+//! arena-allocated packed trie. It returns the matching rows in a representation
+//! that later stages can refine without copying them. This separation keeps the
+//! stage executor independent of the storage strategy selected for each access.
 
 use std::{
     cmp, iter, mem,
