@@ -602,11 +602,15 @@ impl Database {
         self.validate_dependencies(&read_deps, "read");
         self.validate_dependencies(&write_deps, "write");
 
+        let base_values = self.base_values.clone();
         let participant = self.allocate_storage_id();
         let container = crate::ContainerValueId::from_table_id(participant);
-        let registered = self
-            .container_values
-            .register_sequence_type::<C>(container, id_counter, merge_fn);
+        let registered = self.container_values.register_sequence_type::<C>(
+            container,
+            id_counter,
+            merge_fn,
+            base_values,
+        );
         assert_eq!(registered, container);
         self.deps
             .add_participant(participant, read_deps, write_deps);

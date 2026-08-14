@@ -428,6 +428,120 @@ fn nested_set_rebuild_term_only() {
         .unwrap();
 }
 
+/// A sequence-backed `UnstableFn` canonicalizes its rebuildable partial args.
+/// `UnstableFn` deliberately has no proof validator, so this runs in ordinary
+/// mode rather than term/proof encoding.
+#[test]
+fn unstable_fn_rebuild() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor Apply (Math Math) Math)
+            (sort MathFn (UnstableFn (Math) Math))
+            (constructor Holds (MathFn) Math)
+            (Holds (unstable-fn "Apply" (A)))
+            (Holds (unstable-fn "Apply" (B)))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (unstable-fn "Apply" (A)))
+                      (Holds (unstable-fn "Apply" (B)))))
+            "#,
+        )
+        .unwrap();
+}
+
+/// Container-valued partial arguments participate in the function sequence's
+/// rebuild mask, so an inner Vec identity change canonicalizes the outer
+/// function key without decoding its descriptor.
+#[test]
+fn unstable_fn_container_partial_rebuild() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor C () Math)
+            (sort MathVec (Vec Math))
+            (constructor ApplyVec (MathVec Math) Math)
+            (sort MathFn (UnstableFn (Math) Math))
+            (constructor Holds (MathFn) Math)
+            (let $fa (unstable-fn "ApplyVec" (vec-of (A))))
+            (let $fb (unstable-fn "ApplyVec" (vec-of (B))))
+            (Holds $fa)
+            (Holds $fb)
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds $fa) (Holds $fb)))
+            (let $result (unstable-app $fa (C)))
+            (let $expected (ApplyVec (vec-of (A)) (C)))
+            (run 1)
+            (check (= $result $expected))
+            "#,
+        )
+        .unwrap();
+}
+
+/// Rebuilding a captured Eq argument propagates through an outer Vec even when
+/// the function's remaining input is a base sort. Function-sort rebuildability
+/// cannot be inferred from its remaining inputs.
+#[test]
+fn nested_unstable_fn_dirty_propagates_to_outer_vec() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor Capture (Math i64) Math)
+            (sort IntFn (UnstableFn (i64) Math))
+            (sort IntFnVec (Vec IntFn))
+            (constructor Holds (IntFnVec) Math)
+            (Holds (vec-of (unstable-fn "Capture" (A))))
+            (Holds (vec-of (unstable-fn "Capture" (B))))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (vec-of (unstable-fn "Capture" (A))))
+                      (Holds (vec-of (unstable-fn "Capture" (B))))))
+            "#,
+        )
+        .unwrap();
+}
+
+/// A stable function identity remains readable after its sequence key is
+/// rebuilt and the identity-to-row reverse map moves to the replacement row.
+#[test]
+fn unstable_fn_application_survives_rebuild_and_reverse_refresh() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (constructor C () Math)
+            (constructor Apply (Math Math) Math)
+            (sort MathFn (UnstableFn (Math) Math))
+            (let $f (unstable-fn "Apply" (B)))
+            (union (A) (B))
+            (run 1)
+            (let $result (unstable-app $f (C)))
+            (check (= $result (Apply (A) (C))))
+            "#,
+        )
+        .unwrap();
+}
+
 /// Compact MultiSet count lanes are metadata, not child IDs. Nested rebuild
 /// propagation must follow only the semantic values in each encoded entry.
 #[test]
