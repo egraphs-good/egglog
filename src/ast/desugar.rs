@@ -9,7 +9,6 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
-    let rule_name = rule_name(&command);
     let res = match command {
         Command::Function {
             span,
@@ -121,25 +120,19 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            let resolved_name = if rewrite.name.is_empty() {
-                rule_name
-            } else {
-                rewrite.name.clone()
-            };
-            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)?
+        Command::Rewrite(ruleset, mut rewrite, subsume) => {
+            let name = RuleLikeCommand::Rewrite(&ruleset, &mut rewrite, subsume).resolve_name();
+            vec![desugar_rewrite(ruleset, name, rewrite, subsume, parser)?]
         }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rule_name, rewrite, parser)?
+        Command::BiRewrite(ruleset, mut rewrite) => {
+            let name = RuleLikeCommand::BiRewrite(&ruleset, &mut rewrite).resolve_name();
+            desugar_birewrite(ruleset, name, rewrite, parser)?
         }
         Command::Include(_span, _file) => {
             unreachable!("Include commands should be expanded before desugaring")
         }
         Command::Rule { mut rule } => {
-            if rule.name.is_empty() {
-                // format rule and use it as the name
-                rule.name = rule_name;
-            }
+            rule.name = RuleLikeCommand::Rule(&mut rule).resolve_name();
             vec![NCommand::NormRule { rule }]
         }
         Command::Sort {
@@ -224,6 +217,35 @@ pub(crate) fn desugar_command(
     };
 
     Ok(res)
+}
+
+enum RuleLikeCommand<'a> {
+    Rule(&'a mut Rule),
+    Rewrite(&'a str, &'a mut Rewrite, bool),
+    BiRewrite(&'a str, &'a mut Rewrite),
+}
+
+impl RuleLikeCommand<'_> {
+    fn resolve_name(mut self) -> String {
+        let supplied_name = match &mut self {
+            Self::Rule(rule) => std::mem::take(&mut rule.name),
+            Self::Rewrite(_, rw, _) | Self::BiRewrite(_, rw) => std::mem::take(&mut rw.name),
+        };
+        if !supplied_name.is_empty() {
+            return supplied_name;
+        }
+        self.to_string().replace('\"', "'")
+    }
+}
+
+impl std::fmt::Display for RuleLikeCommand<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rule(rule) => std::fmt::Display::fmt(&**rule, f),
+            Self::Rewrite(ruleset, rw, subsume) => rw.fmt_with_ruleset(f, ruleset, false, *subsume),
+            Self::BiRewrite(ruleset, rw) => rw.fmt_with_ruleset(f, ruleset, true, false),
+        }
+    }
 }
 
 /// Desugars a `prove` command into egglog commands.
@@ -332,16 +354,19 @@ fn desugar_rewrite(
     rewrite: Rewrite,
     subsume: bool,
     parser: &mut Parser,
-) -> Result<Vec<NCommand>, Error> {
-    let span = rewrite.span.clone();
+) -> Result<NCommand, Error> {
+    let span = rewrite.span;
+    let lhs = rewrite.lhs;
+    let rhs = rewrite.rhs;
+    let conditions = rewrite.conditions;
     let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
         Expr::Var(span.clone(), var.clone()),
-        rewrite.rhs.clone(),
+        rhs,
     ));
     if subsume {
-        match &rewrite.lhs {
+        match &lhs {
             Expr::Call(_, f, args) => {
                 head.0.push(Action::Change(
                     span.clone(),
@@ -352,7 +377,7 @@ fn desugar_rewrite(
             }
             _ => {
                 return Err(Error::DesugarError(
-                    rewrite.lhs.span(),
+                    lhs.span(),
                     "subsumed rewrite must have a function call on the lhs".to_string(),
                 ));
             }
@@ -361,17 +386,13 @@ fn desugar_rewrite(
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
-    Ok(vec![NCommand::NormRule {
+    Ok(NCommand::NormRule {
         rule: Rule {
             span: span.clone(),
-            body: [Fact::Eq(
-                span.clone(),
-                Expr::Var(span, var),
-                rewrite.lhs.clone(),
-            )]
-            .into_iter()
-            .chain(rewrite.conditions.clone())
-            .collect(),
+            body: [Fact::Eq(span.clone(), Expr::Var(span, var), lhs)]
+                .into_iter()
+                .chain(conditions)
+                .collect(),
             head,
             ruleset,
             name,
@@ -379,44 +400,26 @@ fn desugar_rewrite(
             no_decomp: false,
             include_subsumed: false,
         },
-    }])
+    })
 }
 
 fn desugar_birewrite(
     ruleset: String,
-    name: String,
+    rewrite_name: String,
     rewrite: Rewrite,
     parser: &mut Parser,
 ) -> Result<Vec<NCommand>, Error> {
-    let span = rewrite.span.clone();
-    let rewrite_name = if rewrite.name.is_empty() {
-        name
-    } else {
-        rewrite.name.clone()
-    };
-    let rw2 = Rewrite {
-        span,
-        lhs: rewrite.rhs.clone(),
-        rhs: rewrite.lhs.clone(),
-        conditions: rewrite.conditions.clone(),
-        name: rewrite_name.clone(),
-    };
-    Ok(desugar_rewrite(
+    let mut reverse = rewrite.clone();
+    std::mem::swap(&mut reverse.lhs, &mut reverse.rhs);
+    let forward = desugar_rewrite(
         ruleset.clone(),
         format!("{rewrite_name}=>"),
         rewrite,
         false,
         parser,
-    )?
-    .into_iter()
-    .chain(desugar_rewrite(
-        ruleset,
-        format!("{rewrite_name}<="),
-        rw2,
-        false,
-        parser,
-    )?)
-    .collect())
+    )?;
+    let backward = desugar_rewrite(ruleset, format!("{rewrite_name}<="), reverse, false, parser)?;
+    Ok(vec![forward, backward])
 }
 
 /// Desugar relation by making a new sort and a constructor for it.
