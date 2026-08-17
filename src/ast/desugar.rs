@@ -9,7 +9,6 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
-    let rule_name = command_rule_name(&command);
     let res = match command {
         Command::Function {
             span,
@@ -121,19 +120,19 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            let resolved_name = rule_name.expect("rewrite command should have a rule name");
-            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)?
+        Command::Rewrite(ruleset, mut rewrite, subsume) => {
+            let name = RuleLikeCommand::Rewrite(&ruleset, &mut rewrite, subsume).resolve_name();
+            desugar_rewrite(ruleset, name, rewrite, subsume, parser)?
         }
-        Command::BiRewrite(ruleset, rewrite) => {
-            let resolved_name = rule_name.expect("birewrite command should have a rule name");
-            desugar_birewrite(ruleset, resolved_name, rewrite, parser)?
+        Command::BiRewrite(ruleset, mut rewrite) => {
+            let name = RuleLikeCommand::BiRewrite(&ruleset, &mut rewrite).resolve_name();
+            desugar_birewrite(ruleset, name, rewrite, parser)?
         }
         Command::Include(_span, _file) => {
             unreachable!("Include commands should be expanded before desugaring")
         }
         Command::Rule { mut rule } => {
-            rule.name = rule_name.expect("rule command should have a rule name");
+            rule.name = RuleLikeCommand::Rule(&mut rule).resolve_name();
             vec![NCommand::NormRule { rule }]
         }
         Command::Sort {
@@ -218,6 +217,35 @@ pub(crate) fn desugar_command(
     };
 
     Ok(res)
+}
+
+enum RuleLikeCommand<'a> {
+    Rule(&'a mut Rule),
+    Rewrite(&'a str, &'a mut Rewrite, bool),
+    BiRewrite(&'a str, &'a mut Rewrite),
+}
+
+impl RuleLikeCommand<'_> {
+    fn resolve_name(mut self) -> String {
+        let supplied_name = match &mut self {
+            Self::Rule(rule) => std::mem::take(&mut rule.name),
+            Self::Rewrite(_, rw, _) | Self::BiRewrite(_, rw) => std::mem::take(&mut rw.name),
+        };
+        if !supplied_name.is_empty() {
+            return supplied_name;
+        }
+        self.to_string().replace('\"', "'")
+    }
+}
+
+impl std::fmt::Display for RuleLikeCommand<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rule(rule) => std::fmt::Display::fmt(&**rule, f),
+            Self::Rewrite(ruleset, rw, subsume) => rw.fmt_with_ruleset(f, ruleset, false, *subsume),
+            Self::BiRewrite(ruleset, rw) => rw.fmt_with_ruleset(f, ruleset, true, false),
+        }
+    }
 }
 
 /// Desugars a `prove` command into egglog commands.
@@ -388,7 +416,7 @@ fn desugar_birewrite(
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
-        name: rewrite_name.clone(),
+        name: String::new(),
     };
     Ok(desugar_rewrite(
         ruleset.clone(),
@@ -441,20 +469,6 @@ fn desugar_relation(
             false,
         )),
     ]
-}
-
-/// Returns the supplied rule name, or generates one for an unnamed rule-like command.
-fn command_rule_name(command: &Command) -> Option<String> {
-    let supplied_name = match command {
-        Command::Rule { rule } => &rule.name,
-        Command::Rewrite(_, rewrite, _) | Command::BiRewrite(_, rewrite) => &rewrite.name,
-        _ => return None,
-    };
-    Some(if supplied_name.is_empty() {
-        rule_name(command)
-    } else {
-        supplied_name.clone()
-    })
 }
 
 pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> String

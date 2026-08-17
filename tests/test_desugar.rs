@@ -1,48 +1,44 @@
-use egglog::{EGraph, ast::GenericCommand};
+use egglog::EGraph;
 
 #[test]
 fn rule_names_are_stable() {
-    let mut egraph = EGraph::default();
-    let commands = egraph
+    let rule_names = EGraph::default()
         .resolve_program(
             None,
             r#"
-                (sort Math)
-                (constructor Var (String) Math)
-                (constructor Wrap (Math) Math)
-                (rule ((= x (Var "a"))) ((union x (Var "b"))))
-                (function table (Math) Math :no-merge)
-                (rewrite (Wrap (Var "c")) (Var "c"))
-                (relation edge (Math Math))
-                (birewrite (Wrap (Var "d")) (Var "d"))
+                (datatype Math (Var String) (Wrap Math))
+                (ruleset generated-names)
+                (rule ((= x (Var "a"))) ((union x (Var "b")))
+                    :ruleset generated-names :unsafe-seminaive :no-decomp
+                    :internal-include-subsumed)
+                (rewrite (Wrap (Var "c")) (Var "c") :subsume
+                    :when ((= (Var "c") (Var "c"))) :ruleset generated-names)
+                (birewrite (Wrap (Var "d")) (Var "d")
+                    :when ((= (Var "d") (Var "d"))) :ruleset generated-names)
                 (rule ((= x (Var "e"))) ((union x (Var "f"))) :name "named-rule")
                 (rewrite (Wrap (Var "g")) (Var "g") :name "named-rewrite")
                 (birewrite (Wrap (Var "h")) (Var "h") :name "named-birewrite")
             "#,
         )
-        .unwrap();
-
-    let rule_names = commands
+        .unwrap()
         .into_iter()
         .filter_map(|command| match command {
-            GenericCommand::Rule { rule } => Some(rule.name),
+            egglog::ast::GenericCommand::Rule { rule } => Some(rule.name),
             _ => None,
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        rule_names,
-        [
-            "(rule ((= x (Var 'a')))\n      ((union x (Var 'b')))\n         )",
-            "(rewrite (Wrap (Var 'c')) (Var 'c'))",
-            "(birewrite (Wrap (Var 'd')) (Var 'd'))=>",
-            "(birewrite (Wrap (Var 'd')) (Var 'd'))<=",
-            "named-rule",
-            "named-rewrite",
-            "named-birewrite=>",
-            "named-birewrite<=",
-        ]
-    );
+    let expected = [
+        "(rule ((= x (Var 'a')))\n      ((union x (Var 'b')))\n        :ruleset generated-names  :unsafe-seminaive :no-decomp :internal-include-subsumed)",
+        "(rewrite (Wrap (Var 'c')) (Var 'c') :subsume :when ((= (Var 'c') (Var 'c'))) :ruleset generated-names)",
+        "(birewrite (Wrap (Var 'd')) (Var 'd') :when ((= (Var 'd') (Var 'd'))) :ruleset generated-names)=>",
+        "(birewrite (Wrap (Var 'd')) (Var 'd') :when ((= (Var 'd') (Var 'd'))) :ruleset generated-names)<=",
+        "named-rule",
+        "named-rewrite",
+        "named-birewrite=>",
+        "named-birewrite<=",
+    ];
+    assert_eq!(rule_names, expected);
 }
 
 #[test]
