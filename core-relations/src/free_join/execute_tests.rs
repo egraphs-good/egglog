@@ -6,28 +6,54 @@ use std::{
     },
 };
 
+use egglog_concurrency::SharedArena;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
     common::{IndexMap, Value},
     free_join::{
         AtomId, SubAtom, Variable,
-        plan::{JoinStage, MatId, MatScanMode, ScanSpec, SingleScanSpec},
+        plan::{JoinStage, JoinStages, MatId, MatScanMode, ScanSpec, SingleScanSpec},
     },
-    numeric_id::NumericId,
+    numeric_id::{DenseIdMap, NumericId},
     offsets::Subset,
     row_buffer::RowBuffer,
     table_spec::ColumnId,
 };
 
 use super::{
-    AccessId, BindingInfo, CatalogContinuation, ContinuationPosition, InlineRows, InstrOrder,
-    PreparedIndexKind, PreparedIndexSlot, PreparedJoinIndexes, PreparedTailMasks,
-    RootContinuationCache, RootProjection, SMALL_RESIDUAL, SmallColumnIndex, SmallColumnSink,
-    TrieNode, for_each_stage_atom, materialization_is_live_in_tail, packed_child_shape_in_tail,
+    AccessId, BindingInfo, CatalogContinuation, ContinuationPosition, Database, InlineRows,
+    InstrOrder, LazyArenaHandle, PreparedIndexKind, PreparedIndexSlot, PreparedIndexState,
+    PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMasks, RootContinuationCache,
+    RootProjection, SMALL_RESIDUAL, SmallColumnIndex, SmallColumnSink, TrieNode,
+    for_each_stage_atom, materialization_is_live_in_tail, packed_child_shape_in_tail,
     scan_atom_tail_use, sort_plan_by_size_inner, top_index_shape_is_eligible,
 };
 use crate::free_join::packed_trie::ChildShape;
+
+#[test]
+fn cover_only_stages_skip_prepared_index_state() {
+    let stages = JoinStages {
+        instrs: Arc::new(vec![JoinStage::Intersect {
+            var: Variable::from_usize(0),
+            scans: SmallVec::new(),
+        }]),
+    };
+    let atoms = Arc::new(DenseIdMap::new());
+    assert!(matches!(
+        PreparedJoinIndexes::new(&Database::new(), &atoms, &stages),
+        PreparedJoinIndexes::NoIndexes
+    ));
+}
+
+#[test]
+fn arena_handle_is_created_only_on_first_packed_allocation() {
+    let arena = SharedArena::new();
+    let handle = LazyArenaHandle::new(&arena);
+    assert!(handle.handle.get().is_none());
+    handle.get();
+    assert!(handle.handle.get().is_some());
+}
 
 #[test]
 fn continuation_positions_remain_compact() {
@@ -325,6 +351,7 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
 
 fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
     let mut access_counts = crate::numeric_id::DenseIdMap::new();
+    let mut states = Vec::new();
     let prepared_stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]> = stages
         .iter()
         .map(|stage| {
@@ -344,14 +371,18 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
                     let next = access_counts.get_or_default(atom);
                     let access = AccessId::from_usize(*next);
                     *next += 1;
-                    PreparedIndexSlot::new(PreparedIndexKind::Uncacheable, access)
+                    let kind = PreparedIndexKind::Uncacheable;
+                    let state = PreparedIndexStateId::from_usize(states.len());
+                    states.push(PreparedIndexState::new(kind));
+                    PreparedIndexSlot::new(kind, access, state)
                 })
                 .collect()
         })
         .collect();
     let tail_masks = PreparedTailMasks::new(stages, &prepared_stages, access_counts.n_ids());
-    PreparedJoinIndexes {
+    PreparedJoinIndexes::Indexed {
         stages: prepared_stages,
+        states: states.into_boxed_slice(),
         access_counts,
         tail_masks,
     }
@@ -392,7 +423,7 @@ fn prepared_tail_masks_match_scanner_for_every_permutation_and_suffix() {
         intersect_stage(2, 0),
     ];
     let prepared = prepared_for(&stages);
-    let masks = prepared.tail_masks.as_ref().unwrap();
+    let masks = prepared.tail_masks().unwrap();
     let mut orders = Vec::new();
     permutations(&mut [0, 1, 2, 3], 0, &mut orders);
     for order in orders {
@@ -419,15 +450,12 @@ fn prepared_tail_masks_use_u64_boundary_and_fallback_after_it() {
         .map(|column| intersect_stage(0, column))
         .collect::<Vec<_>>();
     let prepared_64 = prepared_for(&stages_64);
-    assert_eq!(
-        prepared_64.tail_masks.as_ref().unwrap().all_stages,
-        u64::MAX
-    );
+    assert_eq!(prepared_64.tail_masks().unwrap().all_stages, u64::MAX);
 
     let stages_65 = (0..65)
         .map(|column| intersect_stage(0, column))
         .collect::<Vec<_>>();
-    assert!(prepared_for(&stages_65).tail_masks.is_none());
+    assert!(prepared_for(&stages_65).tail_masks().is_none());
 }
 
 #[test]
