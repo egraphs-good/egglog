@@ -17,10 +17,11 @@
 //! layer; the join-tail layer decides their order and lifetime.
 
 use std::{
-    cmp, iter, mem,
+    cell::RefCell,
+    cmp, mem,
     ops::Range,
     sync::{
-        Arc, OnceLock, RwLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -30,31 +31,30 @@ use crate::{
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
-    row_buffer::{RowBuffer, SmallValueVec},
+    row_buffer::{RowBuffer, RowSink, SmallValueVec},
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
-use egglog_concurrency::Scope;
+use egglog_concurrency::{Handle, Scope, SharedArena};
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
-    action::{Bindings, ExecutionState},
+    action::{Bindings, ExecutionState, ExecutionStateSeed},
     common::{DashMap, Value},
     free_join::{
         frame_update::{FrameUpdates, UpdateInstr},
         get_index_from_tableinfo,
     },
-    hash_index::{ColumnIndex, Index, IndexBase, TupleIndex},
+    hash_index::{ColumnIndex, Index, IndexPosition, TupleIndex},
     offsets::{Offsets, RowId, SortedOffsetSlice, SortedOffsetVector, Subset},
     parallel_heuristics::{
         MIN_TOP_INDEX_KEYS_PER_WORKER, action_batch_size, free_join_fork_depth,
         parallelize_db_level_op,
     },
-    pool::Pooled,
     query::RuleSet,
     row_buffer::TaggedRowBuffer,
     table_spec::{ColumnId, Offset, WrappedTableRef},
@@ -63,588 +63,16 @@ use crate::{
 use super::{
     ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableId, TableInfo, Variable,
     get_column_index_from_tableinfo,
-    plan::{JoinHeader, JoinStage, Plan},
+    packed_trie::{ChildShape, PackedCursor, PackedTrieNode},
+    plan::{JoinHeader, JoinStage, Plan, ScanSpec, SingleScanSpec},
     with_pool_set,
 };
 
-const SMALL_RESIDUAL: usize = 8;
-
-fn top_index_shape_is_eligible(
-    workers: usize,
-    leader_keys: usize,
-    nonempty_shards: usize,
-    min_keys_per_worker: usize,
-) -> bool {
-    workers > 1
-        && leader_keys >= min_keys_per_worker.saturating_mul(workers)
-        && nonempty_shards >= workers
-}
-
-struct SparseColumnIndex {
-    n_keys: usize,
-    n_subsets: usize,
-    keys: [Value; SMALL_RESIDUAL],
-    offsets: [usize; SMALL_RESIDUAL],
-    subset_ids: [RowId; SMALL_RESIDUAL],
-}
-
-/// Return a SubsetRef for the given range of rows in a SparseColumnIndex.
-/// Single-row ranges become Dense to skip pool allocation in to_owned.
-///
-/// # Safety
-/// `ids[range]` must be sorted in non-decreasing order. The wider `ids` slice
-/// need not be sorted as a whole; only the indicated sub-range. This is the
-/// invariant of `SortedOffsetSlice::new_unchecked`.
-#[inline]
-unsafe fn sparse_subset_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
-    if range.len() == 1 {
-        let row = ids[range.start];
-        SubsetRef::Dense(OffsetRange::new(row, row.inc()))
-    } else {
-        // SAFETY: caller guarantees `ids[range]` is sorted.
-        SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(&ids[range]) })
-    }
-}
-
-impl SparseColumnIndex {
-    fn keys(&self) -> &[Value] {
-        &self.keys[..self.n_keys]
-    }
-
-    fn get_offset_for(&self, i: usize) -> Range<usize> {
-        let lo = self.offsets[i];
-        let hi = if i + 1 < self.n_keys {
-            self.offsets[i + 1]
-        } else {
-            self.n_subsets
-        };
-        lo..hi
-    }
-
-    fn new(table: WrappedTableRef<'_>, subset: SubsetRef<'_>, col: ColumnId) -> Self {
-        let mut rows = [(Value::new_const(0), RowId::new_const(0)); SMALL_RESIDUAL];
-        let mut pos = 0;
-        table.for_each_col(subset, col, &mut |row_id, val| {
-            rows[pos] = (val, row_id);
-            pos += 1;
-        });
-        let n_subsets = pos;
-
-        rows[..pos].sort_unstable();
-
-        let mut n_keys = 0;
-        let mut keys = [Value::new_const(0); SMALL_RESIDUAL];
-        let mut offsets = [0; SMALL_RESIDUAL];
-        let mut subset_ids = [RowId::new_const(0); SMALL_RESIDUAL];
-        offsets[0] = 0;
-
-        for (i, &(key, row_id)) in rows[..n_subsets].iter().enumerate() {
-            let is_new_key = n_keys == 0 || keys[n_keys - 1] != key;
-            if is_new_key {
-                offsets[n_keys] = i;
-                keys[n_keys] = key;
-                n_keys += 1;
-            }
-            subset_ids[i] = row_id;
-        }
-
-        SparseColumnIndex {
-            n_keys,
-            n_subsets,
-            keys,
-            offsets,
-            subset_ids,
-        }
-    }
-
-    fn get_subset(&self, key: Value) -> Option<SubsetRef<'_>> {
-        if self.n_keys == 0 {
-            return None;
-        }
-        let found = self.keys().binary_search(&key).ok()?;
-        let range = self.get_offset_for(found);
-        // SAFETY: `subset_ids` was populated from rows sorted by (Value, RowId),
-        // so RowIds within any single per-key range (as returned by
-        // `get_offset_for`) are in non-decreasing order.
-        Some(unsafe { sparse_subset_ref(&self.subset_ids, range) })
-    }
-
-    fn for_each(&self, mut f: impl FnMut(&[Value], SubsetRef)) {
-        if self.n_keys == 0 {
-            return;
-        }
-        for i in 0..self.n_keys {
-            let range = self.get_offset_for(i);
-            // SAFETY: see `get_subset` — each per-key range of `subset_ids` is sorted.
-            let subset = unsafe { sparse_subset_ref(&self.subset_ids, range) };
-            f(&self.keys[i..i + 1], subset);
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.n_keys
-    }
-}
-
-/// Return a `SubsetRef` for `ids[range]`, which must be nonempty and sorted
-/// ascending. A contiguous run is returned as `Dense` to avoid a pool
-/// allocation when the subset is later materialized.
-///
-/// # Safety
-/// `ids[range]` must be sorted in non-decreasing order.
-#[inline]
-unsafe fn dense_or_sparse_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
-    let slice = &ids[range];
-    let first = slice[0];
-    let last = slice[slice.len() - 1];
-    if last.index() - first.index() == slice.len() - 1 {
-        SubsetRef::Dense(OffsetRange::new(first, last.inc()))
-    } else {
-        // SAFETY: caller guarantees `slice` is sorted.
-        SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(slice) })
-    }
-}
-
-/// A heap-allocated, sort-based single-column index for on-the-fly (per-subset)
-/// indexing during joins.
-///
-/// Unlike a hash-based column index, the (value -> rows) groups live in sorted
-/// arrays: `for_each` walks them directly and `get_subset` binary-searches the
-/// keys. Building it therefore skips hash-table construction, which is wasteful
-/// for the high-cardinality columns joined on in an e-graph, where each value
-/// typically maps to only one or two rows.
-pub(crate) struct SortedColumnIndex {
-    /// Distinct column values (ascending) paired with the start offset of their
-    /// rows in `row_ids`. A trailing `(_, row_ids.len())` sentinel delimits the
-    /// final group.
-    keys: Vec<(Value, u32)>,
-    /// Row ids grouped by key; each group is ascending.
-    row_ids: Vec<RowId>,
-}
-
-impl SortedColumnIndex {
-    fn build_for_subset(table: WrappedTableRef, subset: SubsetRef, col: ColumnId) -> Self {
-        let mut pairs: Vec<(Value, RowId)> = Vec::new();
-        // Rows arrive in RowId-ascending order, so a value-stable sort leaves
-        // each value's rows ascending.
-        table.collect_col_pairs(subset, col, &mut pairs);
-        let mut scratch = vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
-        crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut scratch);
-        drop(scratch);
-
-        let mut keys: Vec<(Value, u32)> = Vec::new();
-        let mut row_ids: Vec<RowId> = Vec::with_capacity(pairs.len());
-        for (val, row) in pairs {
-            if keys.last().map(|&(v, _)| v) != Some(val) {
-                keys.push((val, row_ids.len() as u32));
-            }
-            row_ids.push(row);
-        }
-        keys.push((Value::new_const(0), row_ids.len() as u32));
-        SortedColumnIndex { keys, row_ids }
-    }
-
-    fn get_subset(&self, key: Value) -> Option<SubsetRef<'_>> {
-        // The trailing sentinel is never a real match: it is stored as value 0
-        // but the search space excludes it via the `len - 1` bound below.
-        let n = self.len();
-        let i = self.keys[..n]
-            .binary_search_by_key(&key, |&(v, _)| v)
-            .ok()?;
-        let lo = self.keys[i].1 as usize;
-        let hi = self.keys[i + 1].1 as usize;
-        // SAFETY: rows within a single key's range are ascending (see `build_for_subset`).
-        Some(unsafe { dense_or_sparse_ref(&self.row_ids, lo..hi) })
-    }
-
-    fn for_each(&self, mut f: impl FnMut(Value, SubsetRef)) {
-        let n = self.len();
-        for i in 0..n {
-            let (val, lo) = self.keys[i];
-            let hi = self.keys[i + 1].1 as usize;
-            // SAFETY: see `get_subset`.
-            let subset = unsafe { dense_or_sparse_ref(&self.row_ids, lo as usize..hi) };
-            f(val, subset);
-        }
-    }
-
-    fn len(&self) -> usize {
-        // The last entry is the sentinel offset, not a key.
-        self.keys.len().saturating_sub(1)
-    }
-}
-
-/// A table-index slot retained for one `run_rule_set` call.
-///
-/// The slot lazily acquires its Arc through the existing fully-refreshing
-/// catalog helper on first cached use. Keeping that Arc in an execution-scoped
-/// sidecar removes catalog lookups and refcount traffic from recursive join
-/// execution without constructing indexes for plan accesses that choose a
-/// residual-local strategy at runtime. Initialized slots are dropped before
-/// the database resets its indexes during `merge_all`.
-enum PreparedIndexSlot {
-    Tuple(OnceLock<HashIndex>),
-    Column(OnceLock<HashColumnIndex>),
-    /// The table specification forbids a global cache for at least one key
-    /// column, so execution must use its existing dynamic-index path.
-    Uncacheable,
-}
-
-fn columns_are_cacheable(info: &TableInfo, cols: &[ColumnId]) -> bool {
-    cols.iter().all(|col| {
-        !info
-            .spec
-            .uncacheable_columns
-            .get(*col)
-            .copied()
-            .unwrap_or(false)
-    })
-}
-
-/// Index handles for one immutable [`JoinStages`] value, positionally aligned
-/// with `JoinStages::instrs` and with each stage's scans.
-struct PreparedJoinIndexes {
-    stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
-}
-
-impl PreparedJoinIndexes {
-    fn new(db: &Database, atoms: &Arc<DenseIdMap<AtomId, Atom>>, stages: &JoinStages) -> Self {
-        let stages = stages
-            .instrs
-            .iter()
-            .map(|stage| {
-                let mut handles = SmallVec::new();
-                match stage {
-                    JoinStage::Intersect { scans, .. } => {
-                        handles.extend(scans.iter().map(|scan| {
-                            let info = &db.tables[atoms[scan.atom].table];
-                            if !columns_are_cacheable(info, &[scan.column]) {
-                                PreparedIndexSlot::Uncacheable
-                            } else {
-                                PreparedIndexSlot::Column(OnceLock::new())
-                            }
-                        }));
-                    }
-                    JoinStage::FusedIntersect { to_intersect, .. }
-                    | JoinStage::FusedIntersectMat { to_intersect, .. } => {
-                        handles.extend(to_intersect.iter().map(|(scan, _)| {
-                            let cols = scan.to_index.vars.as_slice();
-                            let info = &db.tables[atoms[scan.to_index.atom].table];
-                            if !columns_are_cacheable(info, cols) {
-                                PreparedIndexSlot::Uncacheable
-                            } else if cols.len() == 1 {
-                                PreparedIndexSlot::Column(OnceLock::new())
-                            } else {
-                                PreparedIndexSlot::Tuple(OnceLock::new())
-                            }
-                        }));
-                    }
-                }
-                handles
-            })
-            .collect();
-        Self { stages }
-    }
-
-    fn stage(&self, index: usize) -> &[PreparedIndexSlot] {
-        &self.stages[index]
-    }
-}
-
-/// Execution-scoped index sidecar mirroring the shape of a logical [`Plan`].
-enum PreparedPlanIndexes {
-    Single(PreparedJoinIndexes),
-    Decomposed {
-        blocks: Vec<PreparedJoinIndexes>,
-        result: PreparedJoinIndexes,
-    },
-}
-
-impl PreparedPlanIndexes {
-    fn new(db: &Database, plan: &Plan) -> Self {
-        match plan {
-            Plan::SinglePlan(plan) => {
-                Self::Single(PreparedJoinIndexes::new(db, &plan.atoms, &plan.stages))
-            }
-            Plan::DecomposedPlan(plan) => Self::Decomposed {
-                blocks: plan
-                    .stages
-                    .blocks
-                    .iter()
-                    .map(|(stages, _)| PreparedJoinIndexes::new(db, &plan.atoms, stages))
-                    .collect(),
-                result: PreparedJoinIndexes::new(db, &plan.atoms, &plan.result_block),
-            },
-        }
-    }
-}
-
-enum DynamicIndex<'plan> {
-    Cached {
-        /// When Some(range), intersect each subset from the index with this dense range.
-        /// The range is the Dense outer subset known at Prober construction time.
-        intersect_outer: Option<OffsetRange>,
-        table: &'plan Index<TupleIndex>,
-    },
-    CachedColumn {
-        /// When Some(range), intersect each subset from the index with this dense range.
-        /// The range is the Dense outer subset known at Prober construction time.
-        intersect_outer: Option<OffsetRange>,
-        table: &'plan Index<ColumnIndex>,
-    },
-    Dynamic(TupleIndex),
-    DynamicColumn(Arc<SortedColumnIndex>),
-    SparseColumn(SparseColumnIndex),
-}
-
-/// This struct is used to mark subsets that can contain non-stale entries.
-/// Whether a subset can be stale depends on the type of index it came from.
-/// Indices that come from a table may contain stale entries, while
-/// those that are built on the fly will not.
-struct PotentiallyStale<T> {
-    inner: T,
-    can_be_stale: bool,
-}
-
-impl<T> PotentiallyStale<T> {
-    fn maybe_stale(inner: T) -> Self {
-        Self {
-            inner,
-            can_be_stale: true,
-        }
-    }
-
-    fn not_stale(inner: T) -> Self {
-        Self {
-            inner,
-            can_be_stale: false,
-        }
-    }
-}
-
-impl PotentiallyStale<SubsetRef<'_>> {
-    fn size(&self) -> usize {
-        self.inner.size()
-    }
-}
-
-/// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
-/// borrowed `SubsetRef`, or `None` if the intersection is empty.
-///
-/// This function never allocates — it borrows into
-/// the source data via `subslice`. Use this in `for_each` paths where the result
-/// may be discarded (e.g., empty after refinement), to avoid pool allocations.
-#[inline]
-fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<SubsetRef<'a>> {
-    match v {
-        SubsetRef::Dense(r) => {
-            let resl = cmp::max(r.start, range.start);
-            let resr = cmp::min(r.end, range.end);
-            if resl >= resr {
-                None
-            } else {
-                Some(SubsetRef::Dense(OffsetRange::new(resl, resr)))
-            }
-        }
-        SubsetRef::Sparse(s) => {
-            let l = s.binary_search_by_id(range.start);
-            let r = s.binary_search_by_id(range.end);
-            if l >= r {
-                None
-            } else {
-                Some(SubsetRef::Sparse(s.subslice(l, r)))
-            }
-        }
-    }
-}
-
-struct Prober<'plan> {
-    node: Arc<TrieNode>,
-    ix: DynamicIndex<'plan>,
-}
-
-impl Prober<'_> {
-    fn get_subset<'a>(&'a self, key: &'a [Value]) -> Option<PotentiallyStale<SubsetRef<'a>>> {
-        match &self.ix {
-            DynamicIndex::Cached {
-                intersect_outer,
-                table,
-            } => {
-                let subset_ref = table.get_subset(key)?;
-                let subset = if let Some(range) = intersect_outer {
-                    intersect_with_dense_ref(subset_ref, *range)?
-                } else {
-                    subset_ref
-                };
-                Some(PotentiallyStale::maybe_stale(subset))
-            }
-            DynamicIndex::CachedColumn {
-                intersect_outer,
-                table,
-            } => {
-                debug_assert_eq!(key.len(), 1);
-                let subset_ref = table.get_subset(&key[0])?;
-                let subset = if let Some(range) = intersect_outer {
-                    intersect_with_dense_ref(subset_ref, *range)?
-                } else {
-                    subset_ref
-                };
-                Some(PotentiallyStale::maybe_stale(subset))
-            }
-            DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(PotentiallyStale::not_stale),
-            DynamicIndex::DynamicColumn(tab) => {
-                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
-            }
-            DynamicIndex::SparseColumn(tab) => {
-                debug_assert_eq!(key.len(), 1);
-                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
-            }
-        }
-    }
-    fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
-        match &self.ix {
-            DynamicIndex::Cached {
-                intersect_outer: Some(range),
-                table,
-            } => {
-                let range = *range;
-                table.for_each(|k, v| {
-                    if let Some(res) = intersect_with_dense_ref(v, range) {
-                        f(k, PotentiallyStale::maybe_stale(res))
-                    }
-                });
-            }
-            DynamicIndex::Cached {
-                intersect_outer: None,
-                table,
-            } => table.for_each(|k, v| f(k, PotentiallyStale::maybe_stale(v))),
-            DynamicIndex::CachedColumn {
-                intersect_outer: Some(range),
-                table,
-            } => {
-                let range = *range;
-                table.for_each(|k, v| {
-                    if let Some(res) = intersect_with_dense_ref(v, range) {
-                        f(&[*k], PotentiallyStale::maybe_stale(res))
-                    }
-                });
-            }
-            DynamicIndex::CachedColumn {
-                intersect_outer: None,
-                table,
-            } => {
-                table.for_each(|k, v| f(&[*k], PotentiallyStale::maybe_stale(v)));
-            }
-            DynamicIndex::Dynamic(tab) => {
-                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
-            }
-            DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
-                f(&[k], PotentiallyStale::not_stale(v));
-            }),
-            DynamicIndex::SparseColumn(tab) => {
-                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
-            }
-        }
-    }
-
-    /// Enumerate one physical shard of a cached table index.
-    ///
-    /// Dynamic indexes are deliberately excluded: their storage is private to
-    /// this prober and has no coarse, pre-existing partition worth scheduling.
-    fn for_each_shard(
-        &self,
-        shard: usize,
-        mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>),
-    ) {
-        match &self.ix {
-            DynamicIndex::Cached {
-                intersect_outer,
-                table,
-            } => {
-                let intersect_outer = *intersect_outer;
-                table.for_each_shard(shard, |key, subset| {
-                    let subset = if let Some(range) = intersect_outer {
-                        let Some(subset) = intersect_with_dense_ref(subset, range) else {
-                            return;
-                        };
-                        subset
-                    } else {
-                        subset
-                    };
-                    f(key, PotentiallyStale::maybe_stale(subset));
-                });
-            }
-            DynamicIndex::CachedColumn {
-                intersect_outer,
-                table,
-            } => {
-                let intersect_outer = *intersect_outer;
-                table.for_each_shard(shard, |key, subset| {
-                    let subset = if let Some(range) = intersect_outer {
-                        let Some(subset) = intersect_with_dense_ref(subset, range) else {
-                            return;
-                        };
-                        subset
-                    } else {
-                        subset
-                    };
-                    f(&[*key], PotentiallyStale::maybe_stale(subset));
-                });
-            }
-            DynamicIndex::Dynamic(_)
-            | DynamicIndex::DynamicColumn(_)
-            | DynamicIndex::SparseColumn(_) => {
-                unreachable!("only cached indexes expose physical shards")
-            }
-        }
-    }
-
-    /// Return the number of coarse physical partitions when this prober is
-    /// backed by a cached hash index.
-    fn shard_count(&self) -> Option<usize> {
-        match &self.ix {
-            DynamicIndex::Cached { table, .. } => Some(table.shard_count()),
-            DynamicIndex::CachedColumn { table, .. } => Some(table.shard_count()),
-            DynamicIndex::Dynamic(_)
-            | DynamicIndex::DynamicColumn(_)
-            | DynamicIndex::SparseColumn(_) => None,
-        }
-    }
-
-    fn shard_len(&self, shard: usize) -> Option<usize> {
-        match &self.ix {
-            DynamicIndex::Cached {
-                intersect_outer: None,
-                table,
-            } => Some(table.shard_len(shard)),
-            DynamicIndex::CachedColumn {
-                intersect_outer: None,
-                table,
-            } => Some(table.shard_len(shard)),
-            DynamicIndex::Cached {
-                intersect_outer: Some(_),
-                ..
-            }
-            | DynamicIndex::CachedColumn {
-                intersect_outer: Some(_),
-                ..
-            }
-            | DynamicIndex::Dynamic(_)
-            | DynamicIndex::DynamicColumn(_)
-            | DynamicIndex::SparseColumn(_) => None,
-        }
-    }
-
-    fn len(&self) -> usize {
-        match &self.ix {
-            DynamicIndex::Cached { table, .. } => table.len(),
-            DynamicIndex::CachedColumn { table, .. } => table.len(),
-            DynamicIndex::Dynamic(tab) => tab.len(),
-            DynamicIndex::DynamicColumn(tab) => tab.len(),
-            DynamicIndex::SparseColumn(tab) => tab.len(),
-        }
-    }
-}
+include!("residual_index.rs");
+include!("prepared_index.rs");
+include!("probe.rs");
+include!("packed_cache.rs");
+include!("join_tail.rs");
 
 impl Database {
     pub fn run_rule_set(&mut self, rule_set: &RuleSet, report_level: ReportLevel) -> RuleSetReport {
@@ -676,15 +104,6 @@ impl Database {
         };
 
         let search_and_apply_timer = Instant::now();
-        // Prepare one lazy slot for every table-index access named by the
-        // immutable plans before any worker starts. A slot acquires and refreshes
-        // its Arc through the regular catalog helper on first cached use. The
-        // sidecars are dropped before `merge_all` resets catalog entries.
-        let prepared_indexes = rule_set
-            .plans
-            .values()
-            .map(|(plan, _, _)| PreparedPlanIndexes::new(self, plan))
-            .collect::<Vec<_>>();
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
         let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
         let exec_state = ExecutionState::new(self.read_only_view(), Default::default());
@@ -693,10 +112,7 @@ impl Database {
                 Arc::new(DashMap::default());
             let db: &Database = self;
             egglog_concurrency::scope(|scope| {
-                for ((plan, desc, symbol_map), prepared_index) in
-                    rule_set.plans.values().zip(&prepared_indexes)
-                {
-                    // TODO: add stats
+                for (plan, desc, symbol_map) in rule_set.plans.values() {
                     let report_plan = match report_level {
                         ReportLevel::TimeOnly => None,
                         ReportLevel::WithPlan | ReportLevel::StageInfo => {
@@ -706,120 +122,155 @@ impl Database {
 
                     let dash_rule_reports = dash_rule_reports.clone();
                     let desc = desc.clone();
-                    let exec_state = exec_state.clone();
+                    let exec_state = exec_state.seed();
                     let match_counter = match_counter.clone();
                     let trie_cache = trie_cache.clone();
-                    scope.spawn(move |rule_scope| {
-                        let join_state = JoinState::new(db, exec_state.clone(), trie_cache);
-                        let mut binding_info = BindingInfo::default();
-                        let mut action_buf =
-                            ScopedActionBuffer::new(rule_scope, rule_set, match_counter.clone());
+                    scope.spawn(move |_| {
+                        // The arena and every prepared slot belong to exactly one
+                        // logical query. A nested scope ensures no descendant task
+                        // can retain an arena reference after this job reclaims it.
+                        let arena = SharedArena::new();
+                        let prepared_index = PreparedPlanIndexes::new(db, plan);
                         let search_and_apply_timer = Instant::now();
+                        let search_and_apply_time = egglog_concurrency::scope(|query_scope| {
+                            let join_state = JoinState::new(db, exec_state, trie_cache, &arena);
+                            let mut binding_info = BindingInfo::default();
+                            let mut action_buf = ScopedActionBuffer::new(
+                                query_scope,
+                                rule_set,
+                                match_counter.clone(),
+                            );
 
-                        'eval: {
-                            for (id, info) in plan.atoms().iter() {
-                                let headers: SmallVec<[&JoinHeader; 2]> =
-                                    plan.header().iter().filter(|h| h.atom == id).collect();
-                                match join_state.root_node(info.table, &headers) {
-                                    Some(node) => binding_info.insert_node(id, node),
-                                    None => break 'eval,
+                            'eval: {
+                                for (id, info) in plan.atoms().iter() {
+                                    let headers: SmallVec<[&JoinHeader; 2]> =
+                                        plan.header().iter().filter(|h| h.atom == id).collect();
+                                    match join_state.root_node(info.table, &headers) {
+                                        Some(node) => binding_info.insert_node(id, node),
+                                        None => break 'eval,
+                                    }
                                 }
-                            }
 
-                            match (plan, prepared_index) {
-                                (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
-                                    join_state.run_join_stages(
-                                        &plan.stages,
-                                        prepared,
-                                        &plan.atoms,
-                                        plan.actions,
-                                        &mut binding_info,
-                                        &mut action_buf,
-                                    );
-                                }
-                                (
-                                    Plan::DecomposedPlan(plan),
-                                    PreparedPlanIndexes::Decomposed {
-                                        blocks: prepared_blocks,
-                                        result: prepared_result,
-                                    },
-                                ) => {
-                                    let mut materializations: DenseIdMap<
-                                        MatId,
-                                        Arc<DashMap<Vec<Value>, RowBuffer>>,
-                                    > = DenseIdMap::with_capacity(plan.stages.blocks.len());
-                                    for i in 0..plan.stages.blocks.len() {
-                                        materializations.insert(
-                                            MatId::from_usize(i),
-                                            Arc::new(Default::default()),
+                                match (plan, &prepared_index) {
+                                    (
+                                        Plan::SinglePlan(plan),
+                                        PreparedPlanIndexes::Single(prepared),
+                                    ) => {
+                                        join_state.run_join_stages(
+                                            &plan.stages,
+                                            prepared,
+                                            &plan.atoms,
+                                            plan.actions,
+                                            &mut binding_info,
+                                            &mut action_buf,
                                         );
                                     }
-                                    let specs: Arc<DenseIdMap<MatId, MatSpec>> = Arc::new(
-                                        plan.stages
+                                    (
+                                        Plan::DecomposedPlan(plan),
+                                        PreparedPlanIndexes::Decomposed {
+                                            blocks: prepared_blocks,
+                                            result: prepared_result,
+                                        },
+                                    ) => {
+                                        let mut materializations: DenseIdMap<
+                                            MatId,
+                                            Arc<DashMap<Vec<Value>, RowBuffer>>,
+                                        > = DenseIdMap::with_capacity(plan.stages.blocks.len());
+                                        for i in 0..plan.stages.blocks.len() {
+                                            materializations.insert(
+                                                MatId::from_usize(i),
+                                                Arc::new(Default::default()),
+                                            );
+                                        }
+                                        let specs: Arc<DenseIdMap<MatId, MatSpec>> = Arc::new(
+                                            plan.stages
+                                                .blocks
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(i, block)| {
+                                                    (MatId::from_usize(i), block.1.clone())
+                                                })
+                                                .collect(),
+                                        );
+                                        let mut materializations = Arc::new(materializations);
+
+                                        for (mat_id, (stage_block, prepared_block)) in plan
+                                            .stages
                                             .blocks
                                             .iter()
+                                            .zip(prepared_blocks)
                                             .enumerate()
-                                            .map(|(i, block)| {
-                                                (MatId::from_usize(i), block.1.clone())
-                                            })
-                                            .collect(),
-                                    );
-                                    let mut materializations = Arc::new(materializations);
-
-                                    for (mat_id, (stage_block, prepared_block)) in
-                                        plan.stages.blocks.iter().zip(prepared_blocks).enumerate()
-                                    {
-                                        let mat_id = MatId::from_usize(mat_id);
-                                        egglog_concurrency::scope(|stage_scope| {
-                                            let mut materializer = ScopedMaterializer {
-                                                scope: stage_scope,
-                                                specs: specs.clone(),
-                                                materializations: materializations.clone(),
-                                                scratch_key: Default::default(),
-                                                scratch_val: Default::default(),
-                                            };
-                                            join_state.run_join_stages(
-                                                &stage_block.0,
-                                                prepared_block,
-                                                &plan.atoms,
-                                                mat_id,
-                                                &mut binding_info,
-                                                &mut materializer,
-                                            );
-                                        });
-                                        if materializations[mat_id].is_empty() {
-                                            break 'eval;
+                                        {
+                                            let mat_id = MatId::from_usize(mat_id);
+                                            // Keep task-local join state alive until the stage has
+                                            // quiesced. Besides making destruction deterministic,
+                                            // this prevents many workers from concurrently decrementing
+                                            // the same plan-state Arc counters as their tasks finish.
+                                            let retired_states = RetiredLocalStates::default();
+                                            egglog_concurrency::scope(|stage_scope| {
+                                                let mut materializer = ScopedMaterializer {
+                                                    scope: stage_scope,
+                                                    retired_states: &retired_states,
+                                                    specs: specs.clone(),
+                                                    materializations: materializations.clone(),
+                                                    scratch_key: Default::default(),
+                                                    scratch_val: Default::default(),
+                                                };
+                                                join_state.run_join_stages(
+                                                    &stage_block.0,
+                                                    prepared_block,
+                                                    &plan.atoms,
+                                                    mat_id,
+                                                    &mut binding_info,
+                                                    &mut materializer,
+                                                );
+                                            });
+                                            if materializations[mat_id].is_empty() {
+                                                break 'eval;
+                                            }
+                                            assert_eq!(Arc::strong_count(&materializations), 1);
+                                            let mut materializations_dearc =
+                                                Arc::unwrap_or_clone(materializations);
+                                            let materialization = mem::take(
+                                                Arc::get_mut(&mut materializations_dearc[mat_id])
+                                                    .unwrap(),
+                                            )
+                                            .into_iter()
+                                            .collect::<IndexMap<_, _>>();
+                                            binding_info
+                                                .materializations
+                                                .insert(mat_id, Arc::new(materialization));
+                                            materializations = Arc::new(materializations_dearc);
                                         }
-                                        assert_eq!(Arc::strong_count(&materializations), 1);
-                                        let mut materializations_dearc =
-                                            Arc::unwrap_or_clone(materializations);
-                                        let materialization = mem::take(
-                                            Arc::get_mut(&mut materializations_dearc[mat_id])
-                                                .unwrap(),
-                                        )
-                                        .into_iter()
-                                        .collect::<IndexMap<_, _>>();
-                                        binding_info
-                                            .materializations
-                                            .insert(mat_id, Arc::new(materialization));
-                                        materializations = Arc::new(materializations_dearc);
+                                        join_state.run_join_stages(
+                                            &plan.result_block,
+                                            prepared_result,
+                                            &plan.atoms,
+                                            plan.actions,
+                                            &mut binding_info,
+                                            &mut action_buf,
+                                        );
                                     }
-                                    join_state.run_join_stages(
-                                        &plan.result_block,
-                                        prepared_result,
-                                        &plan.atoms,
-                                        plan.actions,
-                                        &mut binding_info,
-                                        &mut action_buf,
-                                    );
+                                    _ => {
+                                        unreachable!("prepared plan shape must match logical plan")
+                                    }
                                 }
-                                _ => unreachable!("prepared plan shape must match logical plan"),
                             }
-                        }
-                        let search_and_apply_time = search_and_apply_timer.elapsed();
-                        if action_buf.needs_flush {
-                            action_buf.flush(&mut exec_state.clone());
-                        }
+                            // Preserve the historical per-rule timing boundary: the
+                            // ruleset-wide timer includes this final flush, but the
+                            // individual rule report does not.
+                            let search_and_apply_time = search_and_apply_timer.elapsed();
+                            if action_buf.needs_flush {
+                                action_buf.flush(&mut exec_state.to_execution_state());
+                            }
+                            search_and_apply_time
+                        });
+
+                        // Prepared slots can contain arena addresses, so destroy
+                        // them before reclaiming the arena.
+                        drop(prepared_index);
+                        drop(arena);
+
                         let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
                             dash_rule_reports.entry(desc).or_default();
                         rule_report.value_mut().push(RuleReport {
@@ -836,7 +287,6 @@ impl Database {
                 .collect();
         } else {
             rule_reports = HashMap::default();
-            let join_state = JoinState::new(self, exec_state.clone(), trie_cache.clone());
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -844,96 +294,109 @@ impl Database {
                 match_counter: match_counter.as_ref(),
                 batches: Default::default(),
             };
-            for ((plan, desc, symbol_map), prepared_index) in
-                rule_set.plans.values().zip(&prepared_indexes)
-            {
+            for (plan, desc, symbol_map) in rule_set.plans.values() {
+                // Serial recursive work is inline, so a lexical block is enough
+                // to prove that every arena reference dies before this query's
+                // arena is reclaimed.
+                let arena = SharedArena::new();
+                let prepared_index = PreparedPlanIndexes::new(self, plan);
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
                         Some(plan.to_report(symbol_map))
                     }
                 };
-                let mut binding_info = BindingInfo::default();
 
                 let search_and_apply_timer = Instant::now();
-                'eval: {
-                    for (id, info) in plan.atoms().iter() {
-                        let headers: SmallVec<[&JoinHeader; 2]> =
-                            plan.header().iter().filter(|h| h.atom == id).collect();
-                        match join_state.root_node(info.table, &headers) {
-                            Some(node) => binding_info.insert_node(id, node),
-                            None => break 'eval,
-                        }
-                    }
-                    match (plan, prepared_index) {
-                        (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
-                            join_state.run_join_stages(
-                                &plan.stages,
-                                prepared,
-                                &plan.atoms,
-                                plan.actions,
-                                &mut binding_info,
-                                &mut action_buf,
-                            );
-                        }
-                        (
-                            Plan::DecomposedPlan(plan),
-                            PreparedPlanIndexes::Decomposed {
-                                blocks: prepared_blocks,
-                                result: prepared_result,
-                            },
-                        ) => {
-                            let mut materializations =
-                                DenseIdMap::with_capacity(plan.stages.blocks.len());
-                            for i in 0..plan.stages.blocks.len() {
-                                materializations.insert(MatId::from_usize(i), Default::default());
+                {
+                    let join_state =
+                        JoinState::new(self, exec_state.seed(), trie_cache.clone(), &arena);
+                    let mut binding_info = BindingInfo::default();
+                    'eval: {
+                        for (id, info) in plan.atoms().iter() {
+                            let headers: SmallVec<[&JoinHeader; 2]> =
+                                plan.header().iter().filter(|h| h.atom == id).collect();
+                            match join_state.root_node(info.table, &headers) {
+                                Some(node) => binding_info.insert_node(id, node),
+                                None => break 'eval,
                             }
-                            let mut materializer = InPlaceMaterializer {
-                                specs: &plan
-                                    .stages
-                                    .blocks
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
-                                    .collect(),
-                                materializations,
-                                scratch_key: Default::default(),
-                                scratch_val: Default::default(),
-                            };
-
-                            for (mat_id, (stage_block, prepared_block)) in
-                                plan.stages.blocks.iter().zip(prepared_blocks).enumerate()
-                            {
-                                let mat_id = MatId::from_usize(mat_id);
+                        }
+                        match (plan, &prepared_index) {
+                            (Plan::SinglePlan(plan), PreparedPlanIndexes::Single(prepared)) => {
                                 join_state.run_join_stages(
-                                    &stage_block.0,
-                                    prepared_block,
+                                    &plan.stages,
+                                    prepared,
                                     &plan.atoms,
-                                    mat_id,
+                                    plan.actions,
                                     &mut binding_info,
-                                    &mut materializer,
-                                );
-                                if materializer.materializations[mat_id].is_empty() {
-                                    break 'eval;
-                                }
-                                binding_info.materializations.insert(
-                                    mat_id,
-                                    Arc::new(materializer.materializations.take(mat_id).unwrap()),
+                                    &mut action_buf,
                                 );
                             }
-                            join_state.run_join_stages(
-                                &plan.result_block,
-                                prepared_result,
-                                &plan.atoms,
-                                plan.actions,
-                                &mut binding_info,
-                                &mut action_buf,
-                            );
+                            (
+                                Plan::DecomposedPlan(plan),
+                                PreparedPlanIndexes::Decomposed {
+                                    blocks: prepared_blocks,
+                                    result: prepared_result,
+                                },
+                            ) => {
+                                let mut materializations =
+                                    DenseIdMap::with_capacity(plan.stages.blocks.len());
+                                for i in 0..plan.stages.blocks.len() {
+                                    materializations
+                                        .insert(MatId::from_usize(i), Default::default());
+                                }
+                                let mut materializer = InPlaceMaterializer {
+                                    specs: &plan
+                                        .stages
+                                        .blocks
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
+                                        .collect(),
+                                    materializations,
+                                    scratch_key: Default::default(),
+                                    scratch_val: Default::default(),
+                                };
+
+                                for (mat_id, (stage_block, prepared_block)) in
+                                    plan.stages.blocks.iter().zip(prepared_blocks).enumerate()
+                                {
+                                    let mat_id = MatId::from_usize(mat_id);
+                                    join_state.run_join_stages(
+                                        &stage_block.0,
+                                        prepared_block,
+                                        &plan.atoms,
+                                        mat_id,
+                                        &mut binding_info,
+                                        &mut materializer,
+                                    );
+                                    if materializer.materializations[mat_id].is_empty() {
+                                        break 'eval;
+                                    }
+                                    binding_info.materializations.insert(
+                                        mat_id,
+                                        Arc::new(
+                                            materializer.materializations.take(mat_id).unwrap(),
+                                        ),
+                                    );
+                                }
+                                join_state.run_join_stages(
+                                    &plan.result_block,
+                                    prepared_result,
+                                    &plan.atoms,
+                                    plan.actions,
+                                    &mut binding_info,
+                                    &mut action_buf,
+                                );
+                            }
+                            _ => unreachable!("prepared plan shape must match logical plan"),
                         }
-                        _ => unreachable!("prepared plan shape must match logical plan"),
                     }
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
+
+                drop(prepared_index);
+                drop(arena);
 
                 // TODO: unnecessary cloning in many cases
                 let rule_report = rule_reports.entry(desc.clone()).or_default();
@@ -960,10 +423,12 @@ impl Database {
             // caused by individual queries.
             reports[i].num_matches = match_counter.read_matches(plan.actions());
         }
-        // `merge_all` requires each catalog Arc to be uniquely owned so it can
-        // reset the corresponding ResettableOnceLock. No scoped worker can
-        // survive to this point.
-        drop(prepared_indexes);
+        // No query can use the cross-plan roots after the execution scopes
+        // above have joined. Release their cached projections before merging
+        // table updates so the two allocation peaks do not overlap.
+        drop(trie_cache);
+        // Every query-local prepared sidecar and arena has been dropped, and
+        // the parallel ruleset scope has joined, before catalog indexes reset.
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
         let merge_timer = Instant::now();
@@ -995,318 +460,53 @@ impl ActionState {
     }
 }
 
-struct JoinState<'a> {
-    db: &'a Database,
-    exec_state: ExecutionState<'a>,
+/// Worker-local context for executing one logical join plan.
+///
+/// A `JoinState` combines the frozen database view and early-stop state needed
+/// by the query with the allocation and caching resources used while traversing
+/// that query's trie indexes. Recursive calls to [`JoinState::run_plan`] reuse
+/// the same state. Parallel tasks construct their own `JoinState`, sharing the
+/// database, cross-plan root cache, and query arena while retaining independent
+/// arena handles and scratch storage.
+///
+/// The current variable bindings and atom row subsets are deliberately not
+/// stored here: they describe one recursive branch and live in `BindingInfo`.
+/// Likewise, the logical stages and their current physical order are explicit
+/// arguments to `run_plan`.
+struct JoinState<'db, 'state, 'exec> {
+    /// Database owning the frozen tables queried by this plan.
+    db: &'db Database,
+    /// Copyable query-side database view and shared early-stop flag.
+    exec_state: ExecutionStateSeed<'db, 'state>,
     /// Cached thread-local pool for SortedOffsetVector allocations.
     /// Stored here to avoid a per-call `with_pool_set` TLS access in `get_index`.
     pool: Pool<SortedOffsetVector>,
     /// Cross-plan trie-root cache for the current `run_rule_set`, or `None` when
     /// sharing is disabled (small run, or nothing reused across plans).
     trie_cache: Option<Arc<TrieCache>>,
+    /// Query-scoped arena shared with any parallel tasks spawned by this plan.
+    arena: &'exec SharedArena,
+    /// This worker's allocation handle into `arena`.
+    handle: Handle<'exec>,
+    /// Reused `(value, row)` workspace for constructing packed trie nodes.
+    packed_scratch: RefCell<Vec<(Value, RowId)>>,
 }
 
-/// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
-type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<SortedColumnIndex>>>;
-// The child cache (see [`TrieNode::get_cached_trie_node`]): keyed by the bound
-// value, storing the child node and the edge constraints used to build it. The
-// stored constraints guard against distinct scans reaching the same
-// (node, col, value) with different slow constraints; they are almost always
-// empty, in which case the guard is a cheap length check.
-type ChildEntry = (Arc<TrieNode>, Box<[Constraint]>);
-pub(crate) type ChildLock = RwLock<HashMap<Value, ChildEntry>>;
-type ChildrenMaps = IdVec<ColumnId, OnceLock<ChildLock>>;
-
-fn get_or_insert_child(
-    map: &ChildLock,
-    value: Value,
-    edge_cs: &[Constraint],
-    sub: impl FnOnce() -> Subset,
-) -> Arc<TrieNode> {
-    // Optimistic read path: most calls are cache hits, so try a shared lock
-    // first. A hit is only valid when the edge constraints match.
-    {
-        let guard = map.read().unwrap();
-        if let Some((node, stored_cs)) = guard.get(&value)
-            && &**stored_cs == edge_cs
-        {
-            return node.clone();
-        }
-    }
-    // Cache miss (or constraint mismatch): acquire the write lock and insert.
-    let mut guard = map.write().unwrap();
-    if let Some((node, stored_cs)) = guard.get(&value)
-        && &**stored_cs == edge_cs
-    {
-        return node.clone();
-    }
-    let new_node = Arc::new(TrieNode::new(sub()));
-    guard.insert(value, (new_node.clone(), Box::from(edge_cs)));
-    new_node
-}
-
-/// Canonical signature of a trie root: the table plus its sorted header (fast)
-/// constraints. Distinct signatures get distinct base ids from [`TrieCache`].
-type BaseSig = (TableId, SmallVec<[Constraint; 2]>);
-
-/// Key for a shared trie root: the table plus an interned id for its fast
-/// (header) constraints.
-type RootKey = (TableId, u32);
-
-/// A cache of trie *roots* shared across all plans within a single
-/// `run_rule_set` call. Two plans that constrain the same table with the same
-/// fast constraints share a root; the rest of the trie is then shared implicitly
-/// because a shared root's per-node child caches are shared with it. Sharing lets
-/// each node's cached sub-indexes and children be built once and reused across
-/// plans.
-///
-/// Only roots that more than one plan actually uses are shared (`shared`), so
-/// single-use roots stay per-plan and keep the pool-recycling behavior of the
-/// unshared path — sharing a root that is never reused is pure overhead.
-///
-/// Concurrency: the parallel executor runs plans on multiple threads, so the maps
-/// are concurrent. Tables are frozen during a run, so a given key always denotes
-/// the same subset.
-#[derive(Default)]
-struct TrieCache {
-    roots: DashMap<RootKey, Arc<TrieNode>>,
-    /// Interns base signatures to small ids to keep [`RootKey`] cheap.
-    bases: DashMap<BaseSig, u32>,
-    next_base: AtomicUsize,
-    /// Root signatures used by more than one plan; only these are shared.
-    shared: HashSet<BaseSig>,
-}
-
-impl TrieCache {
-    /// Return the interned base id for a root subset identified by `table` and
-    /// its (fast) header constraints.
-    ///
-    /// Base id 0 is reserved for the (common) unconstrained case, so atoms with
-    /// no fast constraints skip the interning map entirely. `RootKey` already
-    /// carries `table`, so base ids only need to distinguish constraint sets
-    /// within a table.
-    fn base_id(&self, table: TableId, fast: &[Constraint]) -> u32 {
-        if fast.is_empty() {
-            return 0;
-        }
-        let mut sig: SmallVec<[Constraint; 2]> = SmallVec::from_iter(fast.iter().cloned());
-        sig.sort_unstable();
-        match self.bases.entry((table, sig)) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(v) => {
-                let id = self.next_base.fetch_add(1, Ordering::Relaxed) as u32 + 1;
-                v.insert(id);
-                id
-            }
-        }
-    }
-
-    /// The canonical root signature (table + sorted fast constraints) for `atom`
-    /// given its headers.
-    fn root_sig(plan: &Plan, atom: AtomId, table: TableId) -> BaseSig {
-        let mut fast: SmallVec<[Constraint; 2]> = SmallVec::new();
-        for h in plan.header().iter().filter(|h| h.atom == atom) {
-            fast.extend(h.constraints.iter().cloned());
-        }
-        fast.sort_unstable();
-        (table, fast)
-    }
-
-    /// Compute the set of root signatures used by more than one plan atom (across
-    /// all plans); only these are worth sharing.
-    fn compute_shared<'a>(plans: impl Iterator<Item = &'a Plan>) -> HashSet<BaseSig> {
-        let mut counts: HashMap<BaseSig, u32> = HashMap::default();
-        for plan in plans {
-            for (atom, info) in plan.atoms().iter() {
-                *counts
-                    .entry(Self::root_sig(plan, atom, info.table))
-                    .or_default() += 1;
-            }
-        }
-        counts
-            .into_iter()
-            .filter_map(|(sig, n)| (n > 1).then_some(sig))
-            .collect()
-    }
-
-    /// Build a cache for the given shared root signatures. Only called when
-    /// `shared` is non-empty, so the DashMap allocations always pay off.
-    ///
-    /// Shard the maps to the actual thread count rather than DashMap's default
-    /// (`4 * num_cpus`): on a many-core host the default allocates hundreds of
-    /// shards per `run_rule_set`, which dwarfs the sharing savings on smaller
-    /// runs. Serial runs get a single shard.
-    fn with_shared(shared: HashSet<BaseSig>) -> TrieCache {
-        // DashMap requires at least 2 shards; that is plenty for serial runs and
-        // still far below the default (4 * num_cpus).
-        let shards = crate::parallel::current_num_threads()
-            .next_power_of_two()
-            .max(2);
-        TrieCache {
-            roots: DashMap::with_hasher_and_shard_amount(Default::default(), shards),
-            bases: DashMap::with_hasher_and_shard_amount(Default::default(), shards),
-            next_base: AtomicUsize::new(0),
-            shared,
-        }
-    }
-}
-
-/// Information about the current subset of an atom's relation that is being considered, along with
-/// lazily-initialized, cached indexes on that subset.
-///
-/// This is the standard trie-node used in lazy implementations of GJ as in the original egglog
-/// implementation and the FJ paper. It currently does not handle non-column indexes, but that
-/// should be a fairly straightforward extension if we start generating plans that need those.
-/// (Right now, most plans iterating over more than one column just do a scan anyway).
-pub(crate) struct TrieNode {
-    /// The actual subset of the corresponding atom.
-    subset: Subset,
-    /// Any cached indexes on this subset.
-    cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
-    /// Cached child trie nodes, keyed first by column and then by value. Each
-    /// column's lock is allocated lazily. When this node is a shared root (or
-    /// reachable from one), this cache is shared across plans too, so children
-    /// are shared without any global lookup.
-    cached_children: OnceLock<Pooled<ChildrenMaps>>,
-}
-
-impl std::fmt::Debug for TrieNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrieNode")
-            .field("subset", &self.subset)
-            .finish()
-    }
-}
-
-impl TrieNode {
-    fn new(subset: Subset) -> Self {
-        Self {
-            subset,
-            cached_subsets: Default::default(),
-            cached_children: Default::default(),
-        }
-    }
-
-    fn size(&self) -> usize {
-        self.subset.size()
-    }
-    fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<SortedColumnIndex> {
-        self.cached_subsets.get_or_init(|| {
-            // Pre-size the vector so we do not need to borrow it mutably to initialize the index.
-            let mut vec: Pooled<ColumnIndexes> = with_pool_set(|ps| ps.get());
-            vec.resize_with(info.spec.arity(), OnceLock::new);
-            vec
-        })[col]
-            .get_or_init(|| {
-                Arc::new(SortedColumnIndex::build_for_subset(
-                    info.table.as_ref(),
-                    self.subset.as_ref(),
-                    col,
-                ))
-            })
-            .clone()
-    }
-
-    fn child_map(&self, col: ColumnId, arity: usize) -> &ChildLock {
-        self.cached_children.get_or_init(|| {
-            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
-            vec.resize_with(arity, OnceLock::new);
-            vec
-        })[col]
-            .get_or_init(|| RwLock::new(HashMap::default()))
-    }
-
-    /// Return the child node reached by additionally constraining `col = value`
-    /// (and applying `edge_cs`). `sub` computes the child subset and is only
-    /// called on a cache miss.
-    ///
-    /// Children are cached on the node itself, keyed by `value`. When this node
-    /// is a shared root (or reachable from one) its child cache is shared across
-    /// plans, so a hit yields cross-plan child sharing with a single-value lookup
-    /// and no global cache access. The stored constraints guard against distinct
-    /// scans reaching the same (node, col, value) with different slow
-    /// constraints; they are almost always empty (a cheap length check).
-    fn get_cached_trie_node(
-        &self,
-        col: ColumnId,
-        value: Value,
-        edge_cs: &[Constraint],
-        info: &TableInfo,
-        sub: impl FnOnce() -> Subset,
-    ) -> Arc<TrieNode> {
-        get_or_insert_child(self.child_map(col, info.spec.arity()), value, edge_cs, sub)
-    }
-}
-
-impl FrameUpdates {
-    /// Refine `atom` to `subset`, using the dense fast path to avoid an
-    /// `Arc<TrieNode>` allocation when the subset is already a contiguous range.
-    fn refine_atom_subset(&mut self, atom: AtomId, subset: Subset) {
-        match subset {
-            Subset::Dense(range) => self.refine_atom_dense(atom, range),
-            sub => self.refine_atom(atom, Arc::new(TrieNode::new(sub))),
-        }
-    }
-}
-
-type BindingSet = Vec<(SmallVec<[Variable; 4]>, Arc<TaggedRowBuffer<SmallValueVec>>)>;
-
-#[derive(Default, Clone)]
-struct BindingInfo {
-    bindings: DenseIdMap<Variable, Value>,
-    binding_sets: BindingSet,
-    subsets: DenseIdMap<AtomId, Arc<TrieNode>>,
-    materializations: DenseIdMap<MatId, Arc<IndexMap<Vec<Value>, RowBuffer>>>,
-}
-
-impl BindingInfo {
-    /// Initializes the atom-related metadata in the [`BindingInfo`].    
-    fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        if let Some(slot) = self.subsets.get_mut(atom)
-            && let Some(node) = Arc::get_mut(slot)
-        {
-            node.cached_subsets.take();
-            node.cached_children.take();
-            node.subset = subset;
-            return;
-        }
-        self.subsets.insert(atom, Arc::new(TrieNode::new(subset)));
-    }
-
-    fn insert_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
-        self.subsets.insert(atom, node);
-    }
-
-    /// Probers returned from [`JoinState::get_index`] will move atom-related state out of the
-    /// [`BindingInfo`]. Once the caller is done using a prober, this method moves it back.
-    fn move_back(&mut self, atom: AtomId, prober: Prober<'_>) {
-        self.subsets.insert(atom, prober.node);
-    }
-
-    fn move_back_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
-        self.subsets.insert(atom, node);
-    }
-
-    fn has_empty_subset(&self, atom: AtomId) -> bool {
-        self.subsets[atom].subset.is_empty()
-    }
-
-    fn unwrap_val(&mut self, atom: AtomId) -> Arc<TrieNode> {
-        self.subsets.unwrap_val(atom)
-    }
-}
-
-impl<'a> JoinState<'a> {
+impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     fn new(
         db: &'a Database,
-        exec_state: ExecutionState<'a>,
+        exec_state: ExecutionStateSeed<'a, 'state>,
         trie_cache: Option<Arc<TrieCache>>,
+        arena: &'exec SharedArena,
     ) -> Self {
         Self {
             db,
             exec_state,
             pool: with_pool_set(|ps| ps.get_pool()),
             trie_cache,
+            arena,
+            handle: arena.new_handle(),
+            packed_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -1337,7 +537,7 @@ impl<'a> JoinState<'a> {
             fast.extend(h.constraints.iter().cloned());
         }
         fast.sort_unstable();
-        let sig: BaseSig = (table_id, fast);
+        let sig: RootSignature = (table_id, fast);
 
         if !trie_cache.shared.contains(&sig) {
             // Not reused across plans: build a fresh, unshared root.
@@ -1346,8 +546,8 @@ impl<'a> JoinState<'a> {
             )));
         }
 
-        let base = trie_cache.base_id(table_id, &sig.1);
-        let key: RootKey = (table_id, base);
+        let header = trie_cache.header_id(&sig.1);
+        let key: RootKey = (table_id, header);
         if let Some(node) = trie_cache.roots.get(&key) {
             return (!node.subset.is_empty()).then(|| node.clone());
         }
@@ -1355,7 +555,7 @@ impl<'a> JoinState<'a> {
         let node = match trie_cache.roots.entry(key) {
             Entry::Occupied(o) => o.get().clone(),
             Entry::Vacant(v) => {
-                let node = Arc::new(TrieNode::new(subset));
+                let node = Arc::new(TrieNode::new_shared(subset));
                 v.insert(node.clone());
                 node
             }
@@ -1379,89 +579,346 @@ impl<'a> JoinState<'a> {
         Some(subset)
     }
 
-    fn get_index<'plan>(
+    /// Build a packed index for one column of `subset` after applying the slow
+    /// `constraints`.
+    ///
+    /// `subset_may_contain_stale_rows` describes the source subset, not the
+    /// resulting node. Physical root and dense ranges can contain tombstoned
+    /// row ids, whereas catalog indexes and packed child subsets already
+    /// contain only live rows. When constraints require materializing a
+    /// filtered subset, potentially stale inputs are refined to live rows
+    /// first. With no constraints, the table scan used by
+    /// `PackedTrieNode::build_from_subset` already skips stale rows.
+    fn build_packed_node(
         &self,
+        table: WrappedTableRef<'_>,
+        subset: SubsetRef<'_>,
+        subset_may_contain_stale_rows: bool,
+        constraints: &[Constraint],
+        column: ColumnId,
+        child_shape: ChildShape,
+    ) -> &'exec PackedTrieNode<'exec> {
+        if constraints.is_empty() {
+            // Table scans already omit stale SortedWritesTable rows, so a
+            // separate live-subset pass would only scan the same root twice.
+            return PackedTrieNode::build_from_subset(
+                &self.handle,
+                table,
+                subset,
+                column,
+                child_shape,
+                &mut self.packed_scratch.borrow_mut(),
+            );
+        }
+        let mut filtered = subset.to_owned(&self.pool);
+        if subset_may_contain_stale_rows && table.has_stale_rows() {
+            filtered = table.refine_live(filtered);
+        }
+        filtered = table.refine(filtered, constraints);
+        PackedTrieNode::build_from_subset(
+            &self.handle,
+            table,
+            filtered.as_ref(),
+            column,
+            child_shape,
+            &mut self.packed_scratch.borrow_mut(),
+        )
+    }
+
+    /// Acquire a scalar index shared by plans that project the same root subset.
+    ///
+    /// A root projection groups the root's rows by `column` after applying
+    /// `constraints`. `RootProjection` stores that grouping as immutable sorted
+    /// keys plus the `RowId`s for each key. Shared trie roots own a map from
+    /// `(column, constraints)` to `Arc<OnceLock<RootProjection>>`, so concurrent
+    /// plans build a particular projection at most once.
+    ///
+    /// `prepared` is query-local state for this particular logical index use.
+    /// It retains one clone of the shared `Arc`, keeping the projection alive
+    /// and letting recursive output frames borrow it for `'rows` without doing
+    /// another cache lookup or `Arc` clone. Returns `None` when root sharing is
+    /// disabled or this root has no shared projection map.
+    fn projected_root_index<'rows>(
+        &self,
+        root: &TrieNode,
+        table: WrappedTableRef<'_>,
+        constraints: &[Constraint],
+        column: ColumnId,
+        prepared: &'rows PreparedIndexSlot,
+    ) -> Option<&'rows RootProjection> {
+        self.trie_cache.as_ref()?;
+        let slot = if let Some(slot) = prepared.projected_root.get() {
+            slot
+        } else {
+            let candidate = root.projection_slot(column, constraints)?;
+            prepared.projected_root.get_or_init(|| candidate)
+        };
+        let projection = slot.get_or_init(|| {
+            let filtered = if constraints.is_empty() {
+                None
+            } else {
+                let mut filtered = root.subset.as_ref().to_owned(&self.pool);
+                if table.has_stale_rows() {
+                    filtered = table.refine_live(filtered);
+                }
+                Some(table.refine(filtered, constraints))
+            };
+            let subset = filtered
+                .as_ref()
+                .map_or_else(|| root.subset.as_ref(), Subset::as_ref);
+            let mut pairs = Vec::with_capacity(subset.size());
+            table.for_each_col(subset, column, &mut |row_id, value| {
+                pairs.push((value, row_id));
+            });
+            debug_assert!(
+                pairs.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+                "root projection must preserve RowId order before sorting"
+            );
+            if pairs.len() < 64 {
+                pairs.sort_unstable();
+            } else {
+                let mut sort_scratch =
+                    vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
+                crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut sort_scratch);
+            }
+            RootProjection::from_sorted_pairs(pairs)
+        });
+        Some(projection)
+    }
+
+    fn packed_index_for_rows<'rows>(
+        &self,
+        rows: &AtomRows<'rows, 'exec>,
+        table: WrappedTableRef<'_>,
+        constraints: &[Constraint],
+        column: ColumnId,
+        child_shape: ChildShape,
+        prepared: &'rows PreparedIndexSlot,
+    ) -> &'exec PackedTrieNode<'exec>
+    where
+        'exec: 'rows,
+    {
+        match rows {
+            AtomRows::Root(root) => {
+                let address = *prepared.packed_root.get_or_init(|| {
+                    self.build_packed_node(
+                        table,
+                        root.subset.as_ref(),
+                        true,
+                        constraints,
+                        column,
+                        child_shape,
+                    ) as *const PackedTrieNode<'exec> as usize
+                });
+                // SAFETY: the slot is plan-execution scoped and can only be
+                // initialized with a node from this plan's SharedArena.
+                let node = unsafe { &*(address as *const PackedTrieNode<'exec>) };
+                assert_eq!(node.child_shape(), child_shape);
+                node
+            }
+            AtomRows::Catalog {
+                subset,
+                continuation,
+            } => {
+                let continuation = continuation
+                    .expect("catalog rows needed a continuation slot for a later atom probe");
+                let slot = continuation
+                    .cache
+                    .slot(continuation.position, prepared.access);
+                let address = *slot.get_or_init(|| {
+                    self.build_packed_node(table, *subset, false, constraints, column, child_shape)
+                        as *const PackedTrieNode<'exec> as usize
+                });
+                // SAFETY: root continuation slots are allocated in and only
+                // publish nodes from the same execution arena.
+                let node = unsafe { &*(address as *const PackedTrieNode<'exec>) };
+                assert_eq!(node.child_shape(), child_shape);
+                node
+            }
+            AtomRows::Packed(cursor) => {
+                cursor.child_index_with(&self.handle, prepared.access.index(), child_shape, || {
+                    self.build_packed_node(
+                        table,
+                        cursor.subset(),
+                        false,
+                        constraints,
+                        column,
+                        child_shape,
+                    )
+                })
+            }
+            AtomRows::Inline(..) => {
+                unreachable!("inline residuals must use a stack-owned probe")
+            }
+            AtomRows::Dense(range) => self.build_packed_node(
+                table,
+                SubsetRef::Dense(*range),
+                true,
+                constraints,
+                column,
+                child_shape,
+            ),
+        }
+    }
+
+    fn get_index<'ctx, 'rows>(
+        &'ctx self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
-        atom: AtomId,
-        binding_info: &mut BindingInfo,
-        cols: impl Iterator<Item = ColumnId>,
-        prepared: &'plan PreparedIndexSlot,
-    ) -> Prober<'plan> {
-        let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
-        let trie_node = binding_info.subsets.unwrap_val(atom);
-        let subset = &trie_node.subset;
+        binding_info: &mut BindingInfo<'rows, 'exec>,
+        request: ProbeRequest<'_, 'rows>,
+    ) -> Prober<'ctx, 'rows, 'exec>
+    where
+        'exec: 'rows,
+    {
+        let ProbeRequest {
+            atom,
+            columns: cols,
+            constraints,
+            keep_rows,
+            terminal_child_shape,
+            prepared,
+        } = request;
+        assert!(
+            !cols.is_empty(),
+            "a join index must project at least one column"
+        );
+        let source = binding_info.subsets.unwrap_val(atom);
 
         let table_id = atoms[atom].table;
         let info = &self.db.tables[table_id];
-        let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
-            DynamicIndex::SparseColumn(SparseColumnIndex::new(
+        let all_cacheable = columns_are_cacheable(info, &cols);
+        let whole_table = info.table.all();
+        let root_range = match &source {
+            AtomRows::Root(root) => match &root.subset {
+                Subset::Dense(range) => Some(*range),
+                Subset::Sparse(_) => None,
+            },
+            _ => None,
+        };
+        let can_use_catalog = root_range.is_some()
+            && all_cacheable
+            && constraints.is_empty()
+            && !info.table.has_stale_rows()
+            && whole_table.size() / 2 < source.size();
+
+        let ix = if cols.len() == 1 && source.size() <= SMALL_RESIDUAL {
+            ProbeIndex::SmallColumn(SmallColumnIndex::new(
                 info.table.as_ref(),
-                subset.as_ref(),
+                source.subset(),
+                constraints,
                 cols[0],
             ))
-        } else {
-            let all_cacheable = columns_are_cacheable(info, &cols);
-            let whole_table = info.table.all();
-            if let Subset::Dense(range) = subset
-                && all_cacheable
-                && whole_table.size() / 2 < subset.size()
-            {
-                // Skip intersecting with the subset if we are just looking at the
-                // whole table.
-                let needs_intersect =
-                    !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
-                // When intersecting, store the Dense range directly so we can do a
-                // combined copy+filter without a runtime match on subset type later.
-                let intersect_outer = if needs_intersect { Some(*range) } else { None };
-                // heuristic: if the subset we are scanning is somewhat
-                // large _or_ it is most of the table, or we already have a cached
-                // index for it, then return it.
-                if cols.len() != 1 {
-                    let PreparedIndexSlot::Tuple(index) = prepared else {
-                        unreachable!("multi-column scan must have a prepared tuple index")
-                    };
-                    let index =
-                        index.get_or_init(|| get_index_from_tableinfo(info, cols.as_slice()));
-                    DynamicIndex::Cached {
-                        intersect_outer,
-                        table: index
-                            .get()
-                            .expect("prepared tuple index must already be refreshed"),
-                    }
-                } else {
-                    let PreparedIndexSlot::Column(index) = prepared else {
-                        unreachable!("single-column scan must have a prepared column index")
-                    };
-                    let index =
-                        index.get_or_init(|| get_column_index_from_tableinfo(info, cols[0]));
-                    DynamicIndex::CachedColumn {
-                        intersect_outer,
-                        table: index
-                            .get()
-                            .expect("prepared column index must already be refreshed"),
-                    }
+        } else if let AtomRows::Inline(rows) = &source {
+            ProbeIndex::SmallExact(SmallExactProbe::new(
+                info.table.as_ref(),
+                *rows,
+                cols,
+                constraints,
+            ))
+        } else if can_use_catalog {
+            let range = root_range.expect("catalog eligibility requires a dense root");
+            let needs_intersect =
+                !(whole_table.is_dense() && source.subset().bounds() == whole_table.bounds());
+            let intersect_outer = needs_intersect.then_some(range);
+            if cols.len() == 1 {
+                let PreparedIndexKind::Column(index) = &prepared.kind else {
+                    unreachable!("single-column scan must have a prepared column index")
+                };
+                let index = index
+                    .get_or_init(|| get_column_index_from_tableinfo(info, cols[0]))
+                    .get()
+                    .expect("prepared column index must already be refreshed");
+                if terminal_child_shape != ChildShape::Leaf {
+                    prepared.root_continuations.prepare(
+                        terminal_child_shape,
+                        index.shard_count(),
+                        |shard| index.shard_len(shard),
+                    );
                 }
-            } else if cols.len() != 1 {
-                // NB: we should have a caching strategy for non-column indexes.
-                DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
+                ProbeIndex::CachedColumn {
+                    intersect_outer,
+                    table: index,
+                    continuations: &prepared.root_continuations,
+                    child_shape: terminal_child_shape,
+                }
             } else {
-                DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
+                let PreparedIndexKind::Tuple(index) = &prepared.kind else {
+                    unreachable!("multi-column scan must have a prepared tuple index")
+                };
+                let index = index
+                    .get_or_init(|| get_index_from_tableinfo(info, cols.as_slice()))
+                    .get()
+                    .expect("prepared tuple index must already be refreshed");
+                if terminal_child_shape != ChildShape::Leaf {
+                    prepared.root_continuations.prepare(
+                        terminal_child_shape,
+                        index.shard_count(),
+                        |shard| index.shard_len(shard),
+                    );
+                }
+                ProbeIndex::CachedTuple {
+                    intersect_outer,
+                    table: index,
+                    continuations: &prepared.root_continuations,
+                    child_shape: terminal_child_shape,
+                }
+            }
+        } else {
+            let first_child_shape = if cols.len() > 1 {
+                ChildShape::Direct
+            } else {
+                terminal_child_shape
+            };
+            let projected_root = match &source {
+                AtomRows::Root(root) => self.projected_root_index(
+                    root,
+                    info.table.as_ref(),
+                    constraints,
+                    cols[0],
+                    prepared,
+                ),
+                _ => None,
+            };
+            if let Some(first) = projected_root {
+                if first_child_shape != ChildShape::Leaf {
+                    prepared
+                        .root_continuations
+                        .prepare(first_child_shape, 1, |_| first.len());
+                }
+                ProbeIndex::ProjectedRoot(RootProjectionProbe {
+                    first,
+                    columns: cols,
+                    table: info.table.as_ref(),
+                    continuations: &prepared.root_continuations,
+                    access: prepared.access,
+                    handle: &self.handle,
+                    scratch: &self.packed_scratch,
+                    terminal_child_shape,
+                })
+            } else {
+                let first = self.packed_index_for_rows(
+                    &source,
+                    info.table.as_ref(),
+                    constraints,
+                    cols[0],
+                    first_child_shape,
+                    prepared,
+                );
+                ProbeIndex::Packed(PackedProbe {
+                    first,
+                    columns: cols,
+                    table: info.table.as_ref(),
+                    handle: &self.handle,
+                    scratch: &self.packed_scratch,
+                    terminal_child_shape,
+                })
             }
         };
         Prober {
-            node: trie_node,
-            ix: dyn_index,
+            source,
+            ix,
+            keep_rows,
         }
-    }
-    fn get_column_index<'plan>(
-        &self,
-        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
-        binding_info: &mut BindingInfo,
-        atom: AtomId,
-        col: ColumnId,
-        prepared: &'plan PreparedIndexSlot,
-    ) -> Prober<'plan> {
-        self.get_index(atoms, atom, binding_info, iter::once(col), prepared)
     }
 
     /// Describe an eligible cached index that could drive a top-level
@@ -1474,14 +931,17 @@ impl<'a> JoinState<'a> {
     /// building a dynamic nonleader index during discovery and then rebuilding
     /// it in every shard job. Tiny or badly skewed leaders stay on the existing
     /// path as well.
-    fn top_index_shards(
+    fn top_index_shards<'rows>(
         &self,
         stage: &JoinStage,
-        prepared: &[PreparedIndexSlot],
+        prepared: &'rows [PreparedIndexSlot],
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
-        binding_info: &mut BindingInfo,
+        binding_info: &mut BindingInfo<'rows, 'exec>,
         workers: usize,
-    ) -> Option<Vec<usize>> {
+    ) -> Option<Vec<usize>>
+    where
+        'exec: 'rows,
+    {
         let JoinStage::Intersect { scans, .. } = stage else {
             return None;
         };
@@ -1493,19 +953,22 @@ impl<'a> JoinState<'a> {
         // Mirror the cached/unfiltered branch in `get_index` without actually
         // constructing any dynamic fallback indexes.
         for scan in scans {
-            let node = &binding_info.subsets[scan.atom];
+            let rows = &binding_info.subsets[scan.atom];
             let info = &self.db.tables[atoms[scan.atom].table];
-            if node.subset.size() <= SMALL_RESIDUAL || !columns_are_cacheable(info, &[scan.column])
+            if !rows.is_root()
+                || !scan.cs.is_empty()
+                || info.table.has_stale_rows()
+                || !columns_are_cacheable(info, &[scan.column])
             {
                 return None;
             }
-            let Subset::Dense(subset) = &node.subset else {
+            let SubsetRef::Dense(subset) = rows.subset() else {
                 return None;
             };
             let Subset::Dense(whole_table) = info.table.all() else {
                 return None;
             };
-            if subset != &whole_table {
+            if subset != whole_table {
                 return None;
             }
         }
@@ -1514,8 +977,11 @@ impl<'a> JoinState<'a> {
         let mut leader_size = usize::MAX;
         let mut probers = Vec::with_capacity(scans.len());
         for (i, (scan, prepared)) in scans.iter().zip(prepared).enumerate() {
-            let prober =
-                self.get_column_index(atoms, binding_info, scan.atom, scan.column, prepared);
+            let prober = self.get_index(
+                atoms,
+                binding_info,
+                ProbeRequest::column(scan, false, ChildShape::Leaf, prepared),
+            );
             let size = prober.len();
             if size < leader_size {
                 leader = i;
@@ -1544,14 +1010,17 @@ impl<'a> JoinState<'a> {
     /// Return a coarse partition for the variable already sorted to the top of
     /// the join. Later variables are deliberately not promoted: benchmarking
     /// found that probing and reordering them was not broadly beneficial.
-    fn select_top_index_shards(
+    fn select_top_index_shards<'rows>(
         &self,
         stages: &JoinStages,
-        prepared: &PreparedJoinIndexes,
+        prepared: &'rows PreparedJoinIndexes,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         order: &InstrOrder,
-        binding_info: &mut BindingInfo,
-    ) -> Option<Vec<usize>> {
+        binding_info: &mut BindingInfo<'rows, 'exec>,
+    ) -> Option<Vec<usize>>
+    where
+        'exec: 'rows,
+    {
         if order.len() == 0 {
             return None;
         }
@@ -1574,29 +1043,41 @@ impl<'a> JoinState<'a> {
     /// without mutating the plan itself: `run_plan` simply executes
     /// `plan.stages.instrs[instr_order[i]]` at stage `i`.
     ///
-    /// This is also a stepping stone towards supporting fully dynamic variable ordering.
-    fn run_join_stages<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
+    /// This provides execution-local dynamic variable ordering while leaving
+    /// the cached plan immutable.
+    fn run_join_stages<
+        'plan,
+        'rows,
+        'scope,
+        A: NumericId + 'scope,
+        BUF: ActionBuffer<'scope, 'exec, A>,
+    >(
         &self,
-        stages: &'buf JoinStages,
-        prepared: &'buf PreparedJoinIndexes,
-        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        stages: &'plan JoinStages,
+        prepared: &'rows PreparedJoinIndexes,
+        atoms: &'plan Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
-        binding_info: &mut BindingInfo,
+        binding_info: &mut BindingInfo<'rows, 'exec>,
         action_buf: &mut BUF,
     ) where
-        'a: 'buf,
+        'a: 'scope,
+        'state: 'scope,
+        'exec: 'rows,
+        'rows: 'scope,
+        'plan: 'scope,
     {
         if log::log_enabled!(log::Level::Trace) {
             log::trace!("Starting running query stages:\n{stages:#?}");
         }
         for (_, node) in binding_info.subsets.iter() {
-            if node.subset.is_empty() {
+            if node.is_empty() {
                 return;
             }
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
         sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
+        let all_stages = prepared.all_stage_mask();
 
         // A cached top index is already partitioned by hash. Schedule one
         // coarse global job per nonempty shard and run each shard's subtree
@@ -1614,9 +1095,10 @@ impl<'a> JoinState<'a> {
             let mut updates = FrameUpdates::with_capacity(0);
             for shard in shards {
                 let db = self.db;
-                let exec_state_for_factory = self.exec_state.clone();
-                let exec_state_for_work = self.exec_state.clone();
+                let exec_state_for_factory = self.exec_state;
+                let exec_state_for_work = self.exec_state;
                 let trie_cache = self.trie_cache.clone();
+                let arena = self.arena;
                 action_buf.recur_global_serial(
                     BorrowedLocalState {
                         binding_info,
@@ -1624,7 +1106,11 @@ impl<'a> JoinState<'a> {
                         leaf_scans: &mut leaf_scans,
                         updates: &mut updates,
                     },
-                    move || exec_state_for_factory.clone(),
+                    SubsetClonePlan {
+                        stages: &stages.instrs,
+                        resume_pos: 0,
+                    },
+                    move || exec_state_for_factory.to_execution_state(),
                     move |BorrowedLocalState {
                               binding_info,
                               instr_order,
@@ -1632,13 +1118,9 @@ impl<'a> JoinState<'a> {
                               ..
                           },
                           buf| {
-                        JoinState {
-                            db,
-                            exec_state: exec_state_for_work,
-                            pool: with_pool_set(|ps| ps.get_pool()),
-                            trie_cache,
-                        }
-                        .run_plan(
+                        let join_state: JoinState<'a, 'state, 'exec> =
+                            JoinState::new(db, exec_state_for_work, trie_cache, arena);
+                        join_state.run_plan(
                             stages,
                             prepared,
                             atoms,
@@ -1647,6 +1129,7 @@ impl<'a> JoinState<'a> {
                             leaf_scans,
                             0,
                             Some(shard),
+                            all_stages,
                             binding_info,
                             buf,
                         );
@@ -1664,38 +1147,77 @@ impl<'a> JoinState<'a> {
             &mut leaf_scans,
             0,
             None,
+            all_stages,
             binding_info,
             action_buf,
         );
     }
 
-    /// The core method for executing a free join plan.
+    /// Recursively execute the remaining stages of a free-join plan.
     ///
-    /// This method takes the plan, mutable data structures for variable binding
-    /// and staging actions, and `cur`, the current stage of the plan. A top-level
-    /// coarse partition also passes `index_shard`; `Some` is only supplied with
-    /// a serial action buffer, so no nested parallelism is available in that
-    /// subtree. Recursive calls clear the value so only the first intersection
-    /// is restricted to that physical shard, while the serial buffer continues
-    /// to keep later work inline.
+    /// The `JoinState` supplies the frozen database view, query arena, caches,
+    /// and early-stop flag. The parameters describe the plan and the current
+    /// recursive branch:
+    ///
+    /// - `stages` is the immutable logical join program being executed.
+    /// - `prepared` contains execution-local cache slots and liveness metadata
+    ///   aligned with the logical stages.
+    /// - `atoms` maps the atom ids referenced by the stages to their tables and
+    ///   column metadata.
+    /// - `action` identifies the rule action to run for each complete binding.
+    /// - `instr_order` maps each physical execution position to a logical stage;
+    ///   dynamic ordering may reorder its unexecuted suffix.
+    /// - `leaf_scans` is aligned with physical execution positions and records
+    ///   which stages may produce factorized leaf bindings. It is updated when
+    ///   `instr_order` changes.
+    /// - `cur` is the physical position to execute next. Reaching the end sends
+    ///   the completed binding to `action_buf`.
+    /// - `index_shard` optionally restricts the first intersection in a
+    ///   top-level coarse partition to one physical index shard. Recursive calls
+    ///   clear it. It is only present with a serial action buffer, which keeps
+    ///   the partition's later work inline rather than introducing nested
+    ///   parallelism.
+    /// - `remaining_stages` is a bit set of logical stages in the unexecuted
+    ///   suffix. It enables constant-time child-shape and value-liveness checks;
+    ///   plans with more than 64 stages use `None` and scan the suffix instead.
+    /// - `binding_info` owns the partial scalar and factorized bindings, current
+    ///   row subsets for each atom, and branch-local materializations.
+    /// - `action_buf` receives complete bindings and controls whether recursive
+    ///   work is run inline or divided into parallel morsels.
     #[allow(clippy::too_many_arguments)]
-    fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
+    fn run_plan<'plan, 'rows, 'scope, A: NumericId + 'scope, BUF: ActionBuffer<'scope, 'exec, A>>(
         &self,
-        stages: &'buf JoinStages,
-        prepared: &'buf PreparedJoinIndexes,
-        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        stages: &'plan JoinStages,
+        prepared: &'rows PreparedJoinIndexes,
+        atoms: &'plan Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
         instr_order: &mut InstrOrder,
         leaf_scans: &mut LeafScans,
         cur: usize,
         index_shard: Option<usize>,
-        binding_info: &mut BindingInfo,
+        remaining_stages: Option<u64>,
+        binding_info: &mut BindingInfo<'rows, 'exec>,
         action_buf: &mut BUF,
     ) where
-        'a: 'buf,
+        'a: 'scope,
+        'state: 'scope,
+        'exec: 'rows,
+        'rows: 'scope,
+        'plan: 'scope,
     {
         if self.exec_state.should_stop() {
             return;
+        }
+
+        #[cfg(debug_assertions)]
+        if let Some(remaining_stages) = remaining_stages {
+            let suffix = (cur..instr_order.len()).fold(0u64, |mask, position| {
+                mask | (1u64 << instr_order.get(position))
+            });
+            debug_assert_eq!(
+                remaining_stages, suffix,
+                "the remaining-stage mask must describe the current physical suffix"
+            );
         }
 
         if cur >= instr_order.len() {
@@ -1703,18 +1225,32 @@ impl<'a> JoinState<'a> {
                 action,
                 &mut binding_info.bindings,
                 &binding_info.binding_sets,
-                &self.exec_state,
+                self.exec_state,
             );
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
         let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
-            // If we have a reasonable number of tuples to process, adjust the variable order every
-            // 3 rounds, but always make sure to readjust on the second roung.
+            // Re-evaluate the remaining suffix after observing the residuals
+            // produced by earlier stages. Packed child families make the
+            // resulting atom-local successor choice safe to cache again.
             sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
+
+        let stage_index = instr_order.get(cur);
+        let stage = &stages.instrs[stage_index];
+        let prepared_indexes = prepared.stage(stage_index);
+        let remaining_after_current = remaining_stages.map(|remaining| {
+            let stage_bit = 1u64 << stage_index;
+            debug_assert_ne!(
+                remaining & stage_bit,
+                0,
+                "the current stage must still be present in the remaining-stage mask"
+            );
+            remaining & !stage_bit
+        });
 
         // Helper macro (not its own method to appease the borrow checker).
         macro_rules! drain_updates {
@@ -1750,7 +1286,7 @@ impl<'a> JoinState<'a> {
                                     action,
                                     &mut binding_info.bindings,
                                     &binding_info.binding_sets,
-                                    &self.exec_state,
+                                    self.exec_state,
                                 );
                             } else {
                                 self.run_plan(
@@ -1762,6 +1298,7 @@ impl<'a> JoinState<'a> {
                                     leaf_scans,
                                     cur + 1,
                                     None,
+                                    remaining_after_current,
                                     binding_info,
                                     action_buf,
                                 );
@@ -1777,9 +1314,10 @@ impl<'a> JoinState<'a> {
                     return;
                 }
                 let db = self.db;
-                let exec_state_for_factory = self.exec_state.clone();
-                let exec_state_for_work = self.exec_state.clone();
+                let exec_state_for_factory = self.exec_state;
+                let exec_state_for_work = self.exec_state;
                 let trie_cache = self.trie_cache.clone();
+                let arena = self.arena;
                 action_buf.recur(
                     BorrowedLocalState {
                         binding_info,
@@ -1787,7 +1325,11 @@ impl<'a> JoinState<'a> {
                         leaf_scans,
                         updates: &mut $updates,
                     },
-                    move || exec_state_for_factory.clone(),
+                    SubsetClonePlan {
+                        stages: &stages.instrs,
+                        resume_pos: cur + 1,
+                    },
+                    move || exec_state_for_factory.to_execution_state(),
                     move |BorrowedLocalState {
                               binding_info,
                               instr_order,
@@ -1795,6 +1337,8 @@ impl<'a> JoinState<'a> {
                               updates,
                           },
                           buf| {
+                        let join_state: JoinState<'a, 'state, 'exec> =
+                            JoinState::new(db, exec_state_for_work, trie_cache, arena);
                         updates.drain(|update| match update {
                             UpdateInstr::PushBinding(var, val) => {
                                 binding_info.bindings.insert(var, val);
@@ -1806,16 +1350,7 @@ impl<'a> JoinState<'a> {
                                 binding_info.insert_subset(atom, Subset::Dense(range));
                             }
                             UpdateInstr::EndFrame => {
-                                JoinState {
-                                    db,
-                                    exec_state: exec_state_for_work.clone(),
-                                    // Each scoped task uses its own thread-local pool.
-                                    // This makes drain_updates_parallel slightly more expensive
-                                    // than drain_updates eevn when both are run in single thread
-                                    pool: with_pool_set(|ps| ps.get_pool()),
-                                    trie_cache: trie_cache.clone(),
-                                }
-                                .run_plan(
+                                join_state.run_plan(
                                     stages,
                                     prepared,
                                     atoms,
@@ -1824,6 +1359,7 @@ impl<'a> JoinState<'a> {
                                     leaf_scans,
                                     cur + 1,
                                     None,
+                                    remaining_after_current,
                                     binding_info,
                                     buf,
                                 );
@@ -1833,23 +1369,6 @@ impl<'a> JoinState<'a> {
                 );
                 $updates.clear();
             }};
-        }
-
-        fn refine_subset(
-            sub: PotentiallyStale<SubsetRef<'_>>,
-            constraints: &[Constraint],
-            table: &WrappedTableRef,
-            has_stale: bool,
-            pool: &Pool<SortedOffsetVector>,
-        ) -> Subset {
-            let need_live = sub.can_be_stale && has_stale;
-            if constraints.is_empty() && !need_live {
-                sub.inner.to_owned(pool)
-            } else {
-                // Fused copy + liveness + constraint filter (single pass for
-                // tables that implement `refine_ref` directly).
-                table.refine_ref(sub.inner, constraints, need_live)
-            }
         }
 
         // A sharded top-level job enumerates only its assigned physical index
@@ -1865,10 +1384,6 @@ impl<'a> JoinState<'a> {
             };
         }
 
-        let pool = &self.pool;
-        let stage_index = instr_order.get(cur);
-        let stage = &stages.instrs[stage_index];
-        let prepared_indexes = prepared.stage(stage_index);
         debug_assert_eq!(
             prepared_indexes.len(),
             match stage {
@@ -1884,40 +1399,28 @@ impl<'a> JoinState<'a> {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
-                    let prober = self.get_column_index(
+                    let tail = atom_tail_use(
+                        a.atom,
+                        &stages.instrs,
+                        prepared,
+                        remaining_after_current,
+                        instr_order,
+                        cur + 1,
+                    );
+                    let prober = self.get_index(
                         atoms,
                         binding_info,
-                        a.atom,
-                        a.column,
-                        &prepared_indexes[0],
+                        ProbeRequest::column(
+                            a,
+                            tail.keep_rows,
+                            tail.child_shape,
+                            &prepared_indexes[0],
+                        ),
                     );
-                    let info = &self.db.tables[atoms[a.atom].table];
-                    let table = info.table.as_ref();
-                    let has_stale = table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     for_each_leader!(prober, |val, x| {
                         updates.push_binding(*var, val[0]);
-                        if x.size() <= 16 {
-                            let sub = refine_subset(x, &a.cs, &table, has_stale, pool);
-                            if sub.is_empty() {
-                                updates.rollback();
-                                return;
-                            }
-                            updates.refine_atom_subset(a.atom, sub);
-                        } else {
-                            let node = prober.node.get_cached_trie_node(
-                                a.column,
-                                val[0],
-                                &a.cs,
-                                info,
-                                || refine_subset(x, &a.cs, &table, has_stale, pool),
-                            );
-                            if node.subset.is_empty() {
-                                updates.rollback();
-                                return;
-                            }
-                            updates.refine_atom(a.atom, node);
-                        }
+                        x.refine(a.atom, &mut updates);
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
                             drain_updates!(updates);
@@ -1927,19 +1430,41 @@ impl<'a> JoinState<'a> {
                     binding_info.move_back(a.atom, prober);
                 }
                 [a, b] => {
-                    let a_prober = self.get_column_index(
-                        atoms,
-                        binding_info,
+                    let a_tail = atom_tail_use(
                         a.atom,
-                        a.column,
-                        &prepared_indexes[0],
+                        &stages.instrs,
+                        prepared,
+                        remaining_after_current,
+                        instr_order,
+                        cur + 1,
                     );
-                    let b_prober = self.get_column_index(
+                    let a_prober = self.get_index(
                         atoms,
                         binding_info,
+                        ProbeRequest::column(
+                            a,
+                            a_tail.keep_rows,
+                            a_tail.child_shape,
+                            &prepared_indexes[0],
+                        ),
+                    );
+                    let b_tail = atom_tail_use(
                         b.atom,
-                        b.column,
-                        &prepared_indexes[1],
+                        &stages.instrs,
+                        prepared,
+                        remaining_after_current,
+                        instr_order,
+                        cur + 1,
+                    );
+                    let b_prober = self.get_index(
+                        atoms,
+                        binding_info,
+                        ProbeRequest::column(
+                            b,
+                            b_tail.keep_rows,
+                            b_tail.child_shape,
+                            &prepared_indexes[1],
+                        ),
                     );
 
                     let ((smaller, smaller_scan), (larger, larger_scan)) =
@@ -1949,88 +1474,12 @@ impl<'a> JoinState<'a> {
                             ((&b_prober, b), (&a_prober, a))
                         };
 
-                    let smaller_atom = smaller_scan.atom;
-                    let larger_atom = larger_scan.atom;
-                    let large_info = &self.db.tables[atoms[larger_atom].table];
-                    let large_table = large_info.table.as_ref();
-                    let large_has_stale = large_table.has_stale_rows();
-                    let small_info = &self.db.tables[atoms[smaller_atom].table];
-                    let small_table = small_info.table.as_ref();
-                    let small_has_stale = small_table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     for_each_leader!(smaller, |val, small_sub| {
                         if let Some(large_sub) = larger.get_subset(val) {
                             updates.push_binding(*var, val[0]);
-                            if small_sub.size() <= 16 {
-                                let small_sub = refine_subset(
-                                    small_sub,
-                                    &smaller_scan.cs,
-                                    &small_table,
-                                    small_has_stale,
-                                    pool,
-                                );
-                                if small_sub.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom_subset(smaller_atom, small_sub);
-                            } else {
-                                let smaller_node = smaller.node.get_cached_trie_node(
-                                    smaller_scan.column,
-                                    val[0],
-                                    &smaller_scan.cs,
-                                    small_info,
-                                    || {
-                                        refine_subset(
-                                            small_sub,
-                                            &smaller_scan.cs,
-                                            &small_table,
-                                            small_has_stale,
-                                            pool,
-                                        )
-                                    },
-                                );
-                                if smaller_node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom(smaller_atom, smaller_node);
-                            }
-                            if large_sub.size() <= 16 {
-                                let large_sub = refine_subset(
-                                    large_sub,
-                                    &larger_scan.cs,
-                                    &large_table,
-                                    large_has_stale,
-                                    pool,
-                                );
-                                if large_sub.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom_subset(larger_atom, large_sub);
-                            } else {
-                                let larger_node = larger.node.get_cached_trie_node(
-                                    larger_scan.column,
-                                    val[0],
-                                    &larger_scan.cs,
-                                    large_info,
-                                    || {
-                                        refine_subset(
-                                            large_sub,
-                                            &larger_scan.cs,
-                                            &large_table,
-                                            large_has_stale,
-                                            pool,
-                                        )
-                                    },
-                                );
-                                if larger_node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom(larger_atom, larger_node);
-                            }
+                            small_sub.refine(smaller_scan.atom, &mut updates);
+                            large_sub.refine(larger_scan.atom, &mut updates);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
@@ -2046,13 +1495,25 @@ impl<'a> JoinState<'a> {
                     let mut smallest = 0;
                     let mut smallest_size = usize::MAX;
                     let mut probers = Vec::with_capacity(rest.len());
-                    for (i, (scan, prepared)) in rest.iter().zip(prepared_indexes).enumerate() {
-                        let prober = self.get_column_index(
+                    for (i, (scan, prepared_slot)) in rest.iter().zip(prepared_indexes).enumerate()
+                    {
+                        let tail = atom_tail_use(
+                            scan.atom,
+                            &stages.instrs,
+                            prepared,
+                            remaining_after_current,
+                            instr_order,
+                            cur + 1,
+                        );
+                        let prober = self.get_index(
                             atoms,
                             binding_info,
-                            scan.atom,
-                            scan.column,
-                            prepared,
+                            ProbeRequest::column(
+                                scan,
+                                tail.keep_rows,
+                                tail.child_shape,
+                                prepared_slot,
+                            ),
                         );
                         let size = prober.len();
                         if size < smallest_size {
@@ -2063,19 +1524,6 @@ impl<'a> JoinState<'a> {
                     }
 
                     let main_spec = &rest[smallest];
-                    let main_spec_info = &self.db.tables[atoms[main_spec.atom].table];
-                    let main_spec_table = main_spec_info.table.as_ref();
-                    let main_spec_has_stale = main_spec_table.has_stale_rows();
-                    // Pre-compute has_stale for each scan to avoid vtable calls in the hot loop.
-                    let rest_has_stale: SmallVec<[bool; 3]> = rest
-                        .iter()
-                        .map(|scan| {
-                            self.db.tables[atoms[scan.atom].table]
-                                .table
-                                .as_ref()
-                                .has_stale_rows()
-                        })
-                        .collect();
 
                     if smallest_size != 0 {
                         // Smallest leads the scan
@@ -2088,84 +1536,14 @@ impl<'a> JoinState<'a> {
                                     continue;
                                 }
                                 if let Some(sub) = probers[i].get_subset(key) {
-                                    let table =
-                                        self.db.tables[atoms[rest[i].atom].table].table.as_ref();
-                                    if sub.size() <= 16 {
-                                        let sub = refine_subset(
-                                            sub,
-                                            &rest[i].cs,
-                                            &table,
-                                            rest_has_stale[i],
-                                            pool,
-                                        );
-                                        if sub.is_empty() {
-                                            updates.rollback();
-                                            return;
-                                        }
-                                        updates.refine_atom_subset(scan.atom, sub);
-                                    } else {
-                                        let node = probers[i].node.get_cached_trie_node(
-                                            scan.column,
-                                            key[0],
-                                            &rest[i].cs,
-                                            &self.db.tables[atoms[scan.atom].table],
-                                            || {
-                                                refine_subset(
-                                                    sub,
-                                                    &rest[i].cs,
-                                                    &table,
-                                                    rest_has_stale[i],
-                                                    pool,
-                                                )
-                                            },
-                                        );
-                                        if node.subset.is_empty() {
-                                            updates.rollback();
-                                            return;
-                                        }
-                                        updates.refine_atom(scan.atom, node);
-                                    }
+                                    sub.refine(scan.atom, &mut updates);
                                 } else {
                                     updates.rollback();
                                     // Empty intersection.
                                     return;
                                 }
                             }
-                            if sub.size() <= 16 {
-                                let main_sub = refine_subset(
-                                    sub,
-                                    &main_spec.cs,
-                                    &main_spec_table,
-                                    main_spec_has_stale,
-                                    pool,
-                                );
-                                if main_sub.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom_subset(main_spec.atom, main_sub);
-                            } else {
-                                let main_node = probers[smallest].node.get_cached_trie_node(
-                                    main_spec.column,
-                                    key[0],
-                                    &main_spec.cs,
-                                    main_spec_info,
-                                    || {
-                                        refine_subset(
-                                            sub,
-                                            &main_spec.cs,
-                                            &main_spec_table,
-                                            main_spec_has_stale,
-                                            pool,
-                                        )
-                                    },
-                                );
-                                if main_node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom(main_spec.atom, main_node);
-                            }
+                            sub.refine(main_spec.atom, &mut updates);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
@@ -2191,7 +1569,7 @@ impl<'a> JoinState<'a> {
                 if is_leaf_scan {
                     let table = self.db.tables[atoms[cover_atom].table].table.as_ref();
                     let cover_node = binding_info.unwrap_val(cover_atom);
-                    let cover_subset = cover_node.subset.as_ref();
+                    let cover_subset = cover_node.subset();
 
                     let proj =
                         SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
@@ -2218,10 +1596,19 @@ impl<'a> JoinState<'a> {
                     binding_info.binding_sets.pop();
                     binding_info.move_back_node(cover_atom, cover_node);
                 } else {
+                    let keep_cover = atom_tail_use(
+                        cover_atom,
+                        &stages.instrs,
+                        prepared,
+                        remaining_after_current,
+                        instr_order,
+                        cur + 1,
+                    )
+                    .keep_rows;
                     let proj =
                         SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
                     let cover_node = binding_info.unwrap_val(cover_atom);
-                    let cover_subset = cover_node.subset.as_ref();
+                    let cover_subset = cover_node.subset();
                     let mut offset = Offset::new(0);
                     let mut buffer = TaggedRowBuffer::new(bind.len());
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -2237,7 +1624,12 @@ impl<'a> JoinState<'a> {
                             &mut buffer,
                         );
                         for (row, key) in buffer.iter() {
-                            updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
+                            if keep_cover {
+                                updates.refine_atom_dense(
+                                    cover_atom,
+                                    OffsetRange::new(row, row.inc()),
+                                );
+                            }
                             // bind the values
                             for (i, (_, var)) in bind.iter().enumerate() {
                                 updates.push_binding(*var, key[i]);
@@ -2264,6 +1656,15 @@ impl<'a> JoinState<'a> {
                 to_intersect,
             } => {
                 let cover_atom = cover.to_index.atom;
+                let keep_cover = atom_tail_use(
+                    cover_atom,
+                    &stages.instrs,
+                    prepared,
+                    remaining_after_current,
+                    instr_order,
+                    cur + 1,
+                )
+                .keep_rows;
                 if binding_info.has_empty_subset(cover_atom) {
                     return;
                 }
@@ -2271,32 +1672,33 @@ impl<'a> JoinState<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, (spec, _))| {
+                        let tail = atom_tail_use(
+                            spec.to_index.atom,
+                            &stages.instrs,
+                            prepared,
+                            remaining_after_current,
+                            instr_order,
+                            cur + 1,
+                        );
                         (
                             i,
                             spec.to_index.atom,
                             self.get_index(
                                 atoms,
-                                spec.to_index.atom,
                                 binding_info,
-                                spec.to_index.vars.iter().copied(),
-                                &prepared_indexes[i],
+                                ProbeRequest::tuple(
+                                    spec,
+                                    tail.keep_rows,
+                                    tail.child_shape,
+                                    &prepared_indexes[i],
+                                ),
                             ),
                         )
                     })
-                    .collect::<SmallVec<[(usize, AtomId, Prober<'_>); 4]>>();
-                // Pre-compute has_stale per prober to avoid vtable calls in the hot loop.
-                let index_has_stale: SmallVec<[bool; 4]> = index_probers
-                    .iter()
-                    .map(|(_, atom, _)| {
-                        self.db.tables[atoms[*atom].table]
-                            .table
-                            .as_ref()
-                            .has_stale_rows()
-                    })
-                    .collect();
+                    .collect::<SmallVec<[(usize, AtomId, Prober<'_, 'rows, 'exec>); 4]>>();
                 let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
                 let cover_node = binding_info.unwrap_val(cover_atom);
-                let cover_subset = cover_node.subset.as_ref();
+                let cover_subset = cover_node.subset();
                 let mut cur = Offset::new(0);
                 let mut buffer = TaggedRowBuffer::new(bind.len());
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
@@ -2312,13 +1714,15 @@ impl<'a> JoinState<'a> {
                         &mut buffer,
                     );
                     'mid: for (row, key) in buffer.iter() {
-                        updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
+                        if keep_cover {
+                            updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
+                        }
                         // bind the values
                         for (i, (_, var)) in bind.iter().enumerate() {
                             updates.push_binding(*var, key[i]);
                         }
                         // now probe each remaining indexes
-                        for (prober_idx, (i, atom, prober)) in index_probers.iter().enumerate() {
+                        for (i, atom, prober) in &index_probers {
                             // create a key: to_intersect indexes into the key from the cover
                             let index_cols = &to_intersect[*i].1;
                             // Fast path for the common single-column case: avoid SmallVec collect.
@@ -2335,22 +1739,7 @@ impl<'a> JoinState<'a> {
                                 // There are no possible values for this subset
                                 continue 'mid;
                             };
-                            // apply any constraints needed in this scan.
-                            let table_info = &self.db.tables[atoms[*atom].table];
-                            let cs = &to_intersect[*i].0.constraints;
-                            let subset = refine_subset(
-                                subset,
-                                cs,
-                                &table_info.table.as_ref(),
-                                index_has_stale[prober_idx],
-                                pool,
-                            );
-                            if subset.is_empty() {
-                                updates.rollback();
-                                // There are no possible values for this subset
-                                continue 'mid;
-                            }
-                            updates.refine_atom_subset(*atom, subset);
+                            subset.refine(*atom, &mut updates);
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
@@ -2388,66 +1777,79 @@ impl<'a> JoinState<'a> {
             {
                 // Leaf-scan factorization for FusedIntersectMat: flatten the materialization into
                 // one `TaggedRowBuffer`, push it onto `binding_sets`, and recurse to the leaf once.
-                let cover_mat = binding_info.materializations[*cover].clone();
-                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
-                let mut buf = TaggedRowBuffer::new_inline(bind.len());
-                let mut row_scratch: SmallVec<[Value; 8]> = SmallVec::new();
-                match mode {
-                    MatScanMode::Full => {
-                        for group in cover_mat.iter() {
-                            let group_key = group.0;
-                            let group_key_len = group_key.len();
-                            for non_keys in group.1.iter() {
+                let keep_for_tail =
+                    materialization_is_live_in_tail(&stages.instrs, instr_order, cur + 1, *cover);
+                let restore_materialization = !keep_for_tail;
+                let cover_mat = if keep_for_tail {
+                    Arc::clone(&binding_info.materializations[*cover])
+                } else {
+                    binding_info.materializations.unwrap_val(*cover)
+                };
+                (|| {
+                    let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
+                    let mut buf = TaggedRowBuffer::new_inline(bind.len());
+                    let mut row_scratch: SmallVec<[Value; 8]> = SmallVec::new();
+                    match mode {
+                        MatScanMode::Full => {
+                            for group in cover_mat.iter() {
+                                let group_key = group.0;
+                                let group_key_len = group_key.len();
+                                for non_keys in group.1.iter() {
+                                    row_scratch.clear();
+                                    for (col, _) in bind.iter() {
+                                        let val = if col.index() < group_key_len {
+                                            group_key[col.index()]
+                                        } else {
+                                            non_keys[col.index() - group_key_len]
+                                        };
+                                        row_scratch.push(val);
+                                    }
+                                    buf.add_row(RowId::new(0), &row_scratch);
+                                }
+                            }
+                        }
+                        MatScanMode::KeyOnly => {
+                            for group in cover_mat.iter() {
+                                let group_key = group.0;
                                 row_scratch.clear();
                                 for (col, _) in bind.iter() {
-                                    let val = if col.index() < group_key_len {
-                                        group_key[col.index()]
-                                    } else {
-                                        non_keys[col.index() - group_key_len]
-                                    };
-                                    row_scratch.push(val);
+                                    debug_assert!(col.index() < group_key.len());
+                                    row_scratch.push(group_key[col.index()]);
                                 }
                                 buf.add_row(RowId::new(0), &row_scratch);
                             }
                         }
-                    }
-                    MatScanMode::KeyOnly => {
-                        for group in cover_mat.iter() {
-                            let group_key = group.0;
-                            row_scratch.clear();
-                            for (col, _) in bind.iter() {
-                                debug_assert!(col.index() < group_key.len());
-                                row_scratch.push(group_key[col.index()]);
-                            }
-                            buf.add_row(RowId::new(0), &row_scratch);
-                        }
-                    }
-                    MatScanMode::Value(index_vars) => {
-                        let keys: Vec<Value> = index_vars
-                            .iter()
-                            .map(|var| binding_info.bindings[*var])
-                            .collect();
-                        if let Some(group) = cover_mat.get(&keys) {
-                            for vals in group.iter() {
-                                debug_assert!(vals.len() == bind.len());
-                                row_scratch.clear();
-                                for (col, _) in bind.iter() {
-                                    row_scratch.push(vals[col.index()]);
+                        MatScanMode::Value(index_vars) => {
+                            let keys: Vec<Value> = index_vars
+                                .iter()
+                                .map(|var| binding_info.bindings[*var])
+                                .collect();
+                            if let Some(group) = cover_mat.get(&keys) {
+                                for vals in group.iter() {
+                                    debug_assert!(vals.len() == bind.len());
+                                    row_scratch.clear();
+                                    for (col, _) in bind.iter() {
+                                        row_scratch.push(vals[col.index()]);
+                                    }
+                                    buf.add_row(RowId::new(0), &row_scratch);
                                 }
-                                buf.add_row(RowId::new(0), &row_scratch);
                             }
                         }
+                        MatScanMode::Lookup(_) => unreachable!("guarded above"),
                     }
-                    MatScanMode::Lookup(_) => unreachable!("guarded above"),
+                    if buf.is_empty() {
+                        return;
+                    }
+                    binding_info.binding_sets.push((vars, Arc::new(buf)));
+                    let mut updates = FrameUpdates::with_capacity(1);
+                    updates.finish_frame();
+                    drain_updates!(updates);
+                    binding_info.binding_sets.pop();
+                })();
+                if restore_materialization {
+                    let previous = binding_info.materializations.insert(*cover, cover_mat);
+                    debug_assert!(previous.is_none());
                 }
-                if buf.is_empty() {
-                    return;
-                }
-                binding_info.binding_sets.push((vars, Arc::new(buf)));
-                let mut updates = FrameUpdates::with_capacity(1);
-                updates.finish_frame();
-                drain_updates!(updates);
-                binding_info.binding_sets.pop();
             }
             JoinStage::FusedIntersectMat {
                 cover,
@@ -2455,159 +1857,167 @@ impl<'a> JoinState<'a> {
                 bind,
                 to_intersect,
             } => {
-                let cover_mat = binding_info.materializations[*cover].clone();
-                let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                let probers = to_intersect
-                    .iter()
-                    .zip(prepared_indexes)
-                    .map(|((spec, _), prepared)| {
-                        self.get_index(
-                            atoms,
-                            spec.to_index.atom,
-                            binding_info,
-                            spec.to_index.vars.iter().copied(),
-                            prepared,
-                        )
-                    })
-                    .collect::<SmallVec<[Prober<'_>; 4]>>();
-                // Pre-compute has_stale per prober to avoid vtable calls in the hot loop.
-                let probers_has_stale: SmallVec<[bool; 4]> = to_intersect
-                    .iter()
-                    .map(|(spec, _)| {
-                        self.db.tables[atoms[spec.to_index.atom].table]
-                            .table
-                            .as_ref()
-                            .has_stale_rows()
-                    })
-                    .collect();
-
-                let mut key = Vec::with_capacity(4);
-                let mut prune_probers = |updates: &mut FrameUpdates,
-                                         mat_key: Option<&[Value]>,
-                                         mat_non_key: Option<&[Value]>|
-                 -> bool {
-                    for (j, ((spec, cols), prober)) in
-                        to_intersect.iter().zip(probers.iter()).enumerate()
-                    {
-                        key.clear();
-                        for col in cols.iter() {
-                            let val = match mat_key {
-                                Some(mat_key) => {
-                                    if col.index() < mat_key.len() {
-                                        mat_key[col.index()]
-                                    } else {
-                                        mat_non_key.unwrap()[col.index() - mat_key.len()]
-                                    }
-                                }
-                                None => mat_non_key.unwrap()[col.index()],
-                            };
-                            key.push(val);
-                        }
-                        if let Some(subset) = prober.get_subset(&key) {
-                            let subset = refine_subset(
-                                subset,
-                                &spec.constraints,
-                                &self.db.tables[atoms[spec.to_index.atom].table]
-                                    .table
-                                    .as_ref(),
-                                probers_has_stale[j],
-                                pool,
+                let keep_for_tail =
+                    materialization_is_live_in_tail(&stages.instrs, instr_order, cur + 1, *cover);
+                let restore_materialization = !keep_for_tail;
+                let cover_mat = if keep_for_tail {
+                    Arc::clone(&binding_info.materializations[*cover])
+                } else {
+                    binding_info.materializations.unwrap_val(*cover)
+                };
+                (|| {
+                    let mut updates: FrameUpdates<'rows, 'exec> =
+                        FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    let probers: SmallVec<[Prober<'_, 'rows, 'exec>; 4]> = to_intersect
+                        .iter()
+                        .zip(prepared_indexes)
+                        .map(|((spec, _), prepared_slot)| {
+                            let tail = atom_tail_use(
+                                spec.to_index.atom,
+                                &stages.instrs,
+                                prepared,
+                                remaining_after_current,
+                                instr_order,
+                                cur + 1,
                             );
-                            if subset.is_empty() {
+                            self.get_index(
+                                atoms,
+                                binding_info,
+                                ProbeRequest::tuple(
+                                    spec,
+                                    tail.keep_rows,
+                                    tail.child_shape,
+                                    prepared_slot,
+                                ),
+                            )
+                        })
+                        .collect();
+                    debug_assert!(to_intersect.iter().enumerate().all(|(i, (spec, _))| {
+                        to_intersect[..i]
+                            .iter()
+                            .all(|(prior, _)| prior.to_index.atom != spec.to_index.atom)
+                    }));
+                    let mut key = Vec::with_capacity(4);
+                    let mut prune_probers = |updates: &mut FrameUpdates<'rows, 'exec>,
+                                             mat_key: Option<&[Value]>,
+                                             mat_non_key: Option<&[Value]>|
+                     -> bool {
+                        for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
+                            key.clear();
+                            for col in cols.iter() {
+                                let val = match mat_key {
+                                    Some(mat_key) => {
+                                        if col.index() < mat_key.len() {
+                                            mat_key[col.index()]
+                                        } else {
+                                            mat_non_key.unwrap()[col.index() - mat_key.len()]
+                                        }
+                                    }
+                                    None => mat_non_key.unwrap()[col.index()],
+                                };
+                                key.push(val);
+                            }
+                            if let Some(subset) = prober.get_subset(&key) {
+                                subset.refine(spec.to_index.atom, updates);
+                            } else {
                                 return false;
                             }
-                            updates.refine_atom_subset(spec.to_index.atom, subset);
-                        } else {
-                            return false;
                         }
-                    }
-                    true
-                };
+                        true
+                    };
 
-                match mode {
-                    MatScanMode::Full | MatScanMode::KeyOnly => {
-                        // enumerate keys
-                        for group in cover_mat.iter() {
-                            let group_key = group.0;
-                            let group_val = group.1;
-                            let group_key_len = group_key.len();
-                            if mode == &MatScanMode::Full {
-                                // enumerate non-keys
-                                for non_keys in group_val.iter() {
-                                    for (col, var) in bind.iter() {
-                                        if col.index() < group_key_len {
-                                            updates.push_binding(*var, group_key[col.index()]);
+                    match mode {
+                        MatScanMode::Full | MatScanMode::KeyOnly => {
+                            // enumerate keys
+                            for group in cover_mat.iter() {
+                                let group_key = group.0;
+                                let group_val = group.1;
+                                let group_key_len = group_key.len();
+                                if mode == &MatScanMode::Full {
+                                    // enumerate non-keys
+                                    for non_keys in group_val.iter() {
+                                        for (col, var) in bind.iter() {
+                                            if col.index() < group_key_len {
+                                                updates.push_binding(*var, group_key[col.index()]);
+                                            }
+                                        }
+
+                                        // TODO: optimization that guaratees all keys come before non-keys
+                                        for (col, var) in bind.iter() {
+                                            if col.index() >= group_key_len {
+                                                updates.push_binding(
+                                                    *var,
+                                                    non_keys[col.index() - group_key_len],
+                                                );
+                                            }
+                                        }
+                                        if prune_probers(
+                                            &mut updates,
+                                            Some(group_key),
+                                            Some(non_keys),
+                                        ) {
+                                            updates.finish_frame();
+                                        } else {
+                                            updates.rollback();
                                         }
                                     }
-
-                                    // TODO: optimization that guaratees all keys come before non-keys
+                                } else if mode == &MatScanMode::KeyOnly {
                                     for (col, var) in bind.iter() {
-                                        if col.index() >= group_key_len {
-                                            updates.push_binding(
-                                                *var,
-                                                non_keys[col.index() - group_key_len],
-                                            );
-                                        }
+                                        debug_assert!(col.index() < group_key_len);
+                                        updates.push_binding(*var, group_key[col.index()]);
                                     }
-                                    if prune_probers(&mut updates, Some(group_key), Some(non_keys))
-                                    {
+                                    if prune_probers(&mut updates, Some(group_key), None) {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
                                     }
                                 }
-                            } else if mode == &MatScanMode::KeyOnly {
-                                for (col, var) in bind.iter() {
-                                    debug_assert!(col.index() < group_key_len);
-                                    updates.push_binding(*var, group_key[col.index()]);
-                                }
-                                if prune_probers(&mut updates, Some(group_key), None) {
-                                    updates.finish_frame();
+                            }
+                        }
+                        MatScanMode::Value(index_vars) | MatScanMode::Lookup(index_vars) => {
+                            let keys = index_vars
+                                .iter()
+                                .map(|var| binding_info.bindings[*var])
+                                .collect::<Vec<Value>>();
+                            // lookup keys
+                            if let Some(group) = cover_mat.get(&keys) {
+                                if matches!(mode, MatScanMode::Lookup(_)) {
+                                    debug_assert_eq!(to_intersect.len(), 0);
+                                    debug_assert_eq!(bind.len(), 0);
+                                    if group.len() > 0 {
+                                        updates.finish_frame();
+                                    }
+                                    drain_updates!(updates);
                                 } else {
-                                    updates.rollback();
-                                }
-                            }
-                        }
-                    }
-                    MatScanMode::Value(index_vars) | MatScanMode::Lookup(index_vars) => {
-                        let keys = index_vars
-                            .iter()
-                            .map(|var| binding_info.bindings[*var])
-                            .collect::<Vec<Value>>();
-                        // lookup keys
-                        if let Some(group) = cover_mat.get(&keys) {
-                            if matches!(mode, MatScanMode::Lookup(_)) {
-                                debug_assert_eq!(to_intersect.len(), 0);
-                                debug_assert_eq!(bind.len(), 0);
-                                if group.len() > 0 {
-                                    updates.finish_frame();
-                                }
-                                drain_updates!(updates);
-                            } else {
-                                // enumerate non-keys
-                                // for vals in group.value().iter() {
-                                for vals in group.iter() {
-                                    debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
-                                    for (col, var) in bind.iter() {
-                                        updates.push_binding(*var, vals[col.index()]);
-                                    }
-                                    if prune_probers(&mut updates, None, Some(vals)) {
-                                        updates.finish_frame();
-                                    } else {
-                                        updates.rollback();
-                                    }
-                                    if updates.frames() >= chunk_size {
-                                        drain_updates!(updates);
+                                    // enumerate non-keys
+                                    // for vals in group.value().iter() {
+                                    for vals in group.iter() {
+                                        debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
+                                        for (col, var) in bind.iter() {
+                                            updates.push_binding(*var, vals[col.index()]);
+                                        }
+                                        if prune_probers(&mut updates, None, Some(vals)) {
+                                            updates.finish_frame();
+                                        } else {
+                                            updates.rollback();
+                                        }
+                                        if updates.frames() >= chunk_size {
+                                            drain_updates!(updates);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                drain_updates!(updates);
-                for (spec, prober) in to_intersect.iter().zip(probers) {
-                    binding_info.move_back(spec.0.to_index.atom, prober);
+                    drain_updates!(updates);
+                    for (spec, prober) in to_intersect.iter().zip(probers) {
+                        binding_info.move_back(spec.0.to_index.atom, prober);
+                    }
+                })();
+                if restore_materialization {
+                    let previous = binding_info.materializations.insert(*cover, cover_mat);
+                    debug_assert!(previous.is_none());
                 }
             }
         }
@@ -2622,13 +2032,16 @@ const LOCAL_ACTION_BATCH_SIZE: usize = 128;
 /// This trait exists as a fairly ad-hoc wrapper over its two implementations.
 /// It allows us to avoid duplicating the (somewhat monstrous) `run_plan` method
 /// for serial and parallel modes.
-trait ActionBuffer<'state, A: NumericId>: Send {
-    type AsLocal<'a>: ActionBuffer<'state, A>
+trait ActionBuffer<'scope, 'exec, A: NumericId>: Send
+where
+    'exec: 'scope,
+{
+    type AsLocal<'a>: ActionBuffer<'scope, 'exec, A>
     where
-        'state: 'a;
-    type AsGlobalSerial<'a>: ActionBuffer<'state, A>
+        'scope: 'a;
+    type AsGlobalSerial<'a>: ActionBuffer<'scope, 'exec, A>
     where
-        'state: 'a;
+        'scope: 'a;
 
     /// Expand the binding sets to individual bindings and
     /// call push_bindings
@@ -2637,7 +2050,7 @@ trait ActionBuffer<'state, A: NumericId>: Send {
         action: A,
         bindings: &mut DenseIdMap<Variable, Value>,
         binding_sets: &BindingSet,
-        exec_state: &ExecutionState<'state>,
+        exec_state: ExecutionStateSeed<'scope, '_>,
     ) {
         expand_binding_sets(self, action, bindings, binding_sets, 0, exec_state);
     }
@@ -2653,7 +2066,7 @@ trait ActionBuffer<'state, A: NumericId>: Send {
         &mut self,
         action: A,
         bindings: &DenseIdMap<Variable, Value>,
-        to_exec_state: impl FnMut() -> ExecutionState<'state>,
+        to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     );
 
     /// Execute any remaining actions associated with this buffer.
@@ -2667,23 +2080,31 @@ trait ActionBuffer<'state, A: NumericId>: Send {
     /// should assume that `local` _is_ modified synchronously.
     // NB: Earlier versions of this method had BorrowedLocalState be a generic instead, but this
     // ran into difficulties when we needed to pass multiple mutable references.
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
-        to_exec_state: impl FnMut() -> ExecutionState<'state> + Send + 'state,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self::AsLocal<'a>) + Send + 'state,
-    );
+        local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
+        to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self::AsLocal<'a>)
+        + Send
+        + 'scope,
+    ) where
+        'rows: 'scope;
 
     /// Run one coarse partition as a global pool job, using a buffer whose
     /// recursive work and action execution are both serial.  Implementations
     /// that return `false` from [`Self::supports_global_partition`] execute the
     /// callback inline; the scoped implementations enqueue exactly one job.
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
-        to_exec_state: impl FnMut() -> ExecutionState<'state> + Send + 'state,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self::AsGlobalSerial<'a>) + Send + 'state,
-    );
+        local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
+        to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self::AsGlobalSerial<'a>)
+        + Send
+        + 'scope,
+    ) where
+        'rows: 'scope;
 
     /// The unit at which you should batch updates passed to calls to `recur`,
     /// potentially depending on the current level of recursion.
@@ -2716,21 +2137,25 @@ struct InPlaceActionBuffer<'a> {
     batches: DenseIdMap<ActionId, ActionState>,
 }
 
-impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> {
+impl<'scope, 'exec, 'outer: 'scope> ActionBuffer<'scope, 'exec, ActionId>
+    for InPlaceActionBuffer<'outer>
+where
+    'exec: 'scope,
+{
     type AsLocal<'b>
         = Self
     where
-        'a: 'b;
+        'scope: 'b;
     type AsGlobalSerial<'b>
         = Self
     where
-        'a: 'b;
+        'scope: 'b;
 
     fn push_bindings(
         &mut self,
         action: ActionId,
         bindings: &DenseIdMap<Variable, Value>,
-        mut to_exec_state: impl FnMut() -> ExecutionState<'a>,
+        mut to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
         let action_state = self
             .batches
@@ -2761,22 +2186,30 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         );
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
-        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
-    ) {
-        work(local, self)
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self)
     }
 
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
-        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
-    ) {
-        work(local, self)
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self)
     }
 
     fn supports_parallel_drain(&self) -> bool {
@@ -2805,7 +2238,10 @@ impl<'scope> SerialScopedActionBuffer<'scope> {
     }
 }
 
-impl<'scope> ActionBuffer<'scope, ActionId> for SerialScopedActionBuffer<'scope> {
+impl<'scope, 'exec> ActionBuffer<'scope, 'exec, ActionId> for SerialScopedActionBuffer<'scope>
+where
+    'exec: 'scope,
+{
     type AsLocal<'a>
         = Self
     where
@@ -2851,22 +2287,30 @@ impl<'scope> ActionBuffer<'scope, ActionId> for SerialScopedActionBuffer<'scope>
         );
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self) + Send + 'scope,
-    ) {
-        work(local, self);
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self);
     }
 
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self) + Send + 'scope,
-    ) {
-        work(local, self);
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self);
     }
 
     fn supports_parallel_drain(&self) -> bool {
@@ -2899,7 +2343,10 @@ impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
     }
 }
 
-impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
+impl<'scope, 'exec> ActionBuffer<'scope, 'exec, ActionId> for ScopedActionBuffer<'_, 'scope>
+where
+    'exec: 'scope,
+{
     type AsLocal<'a>
         = ScopedActionBuffer<'a, 'scope>
     where
@@ -2948,17 +2395,22 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         );
         self.needs_flush = false;
     }
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        mut local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut ScopedActionBuffer<'a, 'scope>)
-        + Send
+        work: impl for<'a> FnOnce(
+            BorrowedLocalState<'a, 'scope, 'exec>,
+            &mut ScopedActionBuffer<'a, 'scope>,
+        ) + Send
         + 'scope,
-    ) {
+    ) where
+        'rows: 'scope,
+    {
         let rule_set = self.rule_set;
         let match_counter = self.match_counter.clone();
-        let mut inner = local.clone_state();
+        let mut inner = local.clone_state(subset_clone_plan);
         // Keep recursive join work on the current worker when possible. If
         // coarse top-index partitioning was unavailable, stalled workers cause
         // the private deque to donate older siblings to the global queue.
@@ -2982,17 +2434,22 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         });
     }
 
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        mut local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut SerialScopedActionBuffer<'scope>)
-        + Send
+        work: impl for<'a> FnOnce(
+            BorrowedLocalState<'a, 'scope, 'exec>,
+            &mut SerialScopedActionBuffer<'scope>,
+        ) + Send
         + 'scope,
-    ) {
+    ) where
+        'rows: 'scope,
+    {
         let rule_set = self.rule_set;
         let match_counter = self.match_counter.clone();
-        let mut inner = local.clone_state();
+        let mut inner = local.clone_state(subset_clone_plan);
         self.scope.spawn_global(move |_| {
             let mut buf = SerialScopedActionBuffer::new(rule_set, match_counter);
             work(inner.borrow_mut(), &mut buf);
@@ -3015,19 +2472,21 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
     }
 }
 
-fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Sized>(
+fn expand_binding_sets<'scope, 'exec, A: NumericId, BUF: ActionBuffer<'scope, 'exec, A> + ?Sized>(
     action_buf: &mut BUF,
     action: A,
     bindings: &mut DenseIdMap<Variable, Value>,
     binding_sets: &BindingSet,
     idx: usize,
-    exec_state: &ExecutionState<'state>,
-) {
+    exec_state: ExecutionStateSeed<'scope, '_>,
+) where
+    'exec: 'scope,
+{
     if exec_state.should_stop() {
         return;
     }
     if idx >= binding_sets.len() {
-        action_buf.push_bindings(action, bindings, || exec_state.clone());
+        action_buf.push_bindings(action, bindings, || exec_state.to_execution_state());
         return;
     }
     if idx + 1 == binding_sets.len() {
@@ -3039,7 +2498,7 @@ fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Siz
             for (var, val) in vars.iter().zip(row.iter()) {
                 bindings.insert(*var, *val);
             }
-            action_buf.push_bindings(action, bindings, || exec_state.clone());
+            action_buf.push_bindings(action, bindings, || exec_state.to_execution_state());
         }
         return;
     }
@@ -3082,21 +2541,25 @@ struct InPlaceMaterializer<'a> {
     scratch_val: Vec<Value>,
 }
 
-impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
+impl<'scope, 'exec, 'outer: 'scope> ActionBuffer<'scope, 'exec, MatId>
+    for InPlaceMaterializer<'outer>
+where
+    'exec: 'scope,
+{
     type AsLocal<'b>
         = Self
     where
-        'a: 'b;
+        'scope: 'b;
     type AsGlobalSerial<'b>
         = Self
     where
-        'a: 'b;
+        'scope: 'b;
 
     fn push_bindings(
         &mut self,
         mat_id: MatId,
         bindings: &DenseIdMap<Variable, Value>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'a>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
         let mat = self
             .materializations
@@ -3127,22 +2590,30 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         // No-op for in-place materializer.
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
-        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
-    ) {
-        work(local, self)
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self)
     }
 
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
-        _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
-        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
-    ) {
-        work(local, self)
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self)
     }
 
     fn supports_parallel_drain(&self) -> bool {
@@ -3174,7 +2645,10 @@ impl SerialScopedMaterializer {
     }
 }
 
-impl<'scope> ActionBuffer<'scope, MatId> for SerialScopedMaterializer {
+impl<'scope, 'exec> ActionBuffer<'scope, 'exec, MatId> for SerialScopedMaterializer
+where
+    'exec: 'scope,
+{
     type AsLocal<'a>
         = Self
     where
@@ -3215,22 +2689,30 @@ impl<'scope> ActionBuffer<'scope, MatId> for SerialScopedMaterializer {
 
     fn flush(&mut self, _exec_state: &mut ExecutionState) {}
 
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self) + Send + 'scope,
-    ) {
-        work(local, self);
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self);
     }
 
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self) + Send + 'scope,
-    ) {
-        work(local, self);
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+    ) where
+        'rows: 'scope,
+    {
+        let mut inner: LocalState<'scope, 'exec> = local.clone_state(subset_clone_plan);
+        work(inner.borrow_mut(), self);
     }
 
     fn supports_parallel_drain(&self) -> bool {
@@ -3238,16 +2720,20 @@ impl<'scope> ActionBuffer<'scope, MatId> for SerialScopedMaterializer {
     }
 }
 
-struct ScopedMaterializer<'inner, 'scope> {
+struct ScopedMaterializer<'inner, 'scope, 'exec> {
     scope: &'inner Scope<'scope>,
+    retired_states: &'scope RetiredLocalStates<'scope, 'exec>,
     specs: Arc<DenseIdMap<MatId, MatSpec>>,
     materializations: Arc<DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>>,
     scratch_key: Vec<Value>,
     scratch_val: Vec<Value>,
 }
-impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
+impl<'scope, 'exec> ActionBuffer<'scope, 'exec, MatId> for ScopedMaterializer<'_, 'scope, 'exec>
+where
+    'exec: 'scope,
+{
     type AsLocal<'a>
-        = ScopedMaterializer<'a, 'scope>
+        = ScopedMaterializer<'a, 'scope, 'exec>
     where
         'scope: 'a;
     type AsGlobalSerial<'a>
@@ -3291,44 +2777,59 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
         // No-op for scoped materializer since we always write to the materialization in-place.
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'rows>(
         &mut self,
-        mut local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut ScopedMaterializer<'a, 'scope>)
-        + Send
+        work: impl for<'a> FnOnce(
+            BorrowedLocalState<'a, 'scope, 'exec>,
+            &mut ScopedMaterializer<'a, 'scope, 'exec>,
+        ) + Send
         + 'scope,
-    ) {
+    ) where
+        'rows: 'scope,
+    {
         let scope = self.scope;
+        let retired_states = self.retired_states;
         let specs = self.specs.clone();
         let materializations = self.materializations.clone();
-        let mut inner = local.clone_state();
+        let mut inner = local.clone_state(subset_clone_plan);
         // Match the action path: preserve locality by default and rely on
         // private-deque donation when other workers need fallback work.
         scope.spawn_local(move |scope| {
-            let mut buf: ScopedMaterializer<'_, 'scope> = ScopedMaterializer {
+            let mut buf: ScopedMaterializer<'_, 'scope, 'exec> = ScopedMaterializer {
                 scope,
+                retired_states,
                 specs,
                 materializations: materializations.clone(),
                 scratch_key: Vec::new(),
                 scratch_val: Vec::new(),
             };
             work(inner.borrow_mut(), &mut buf);
+            retired_states.retire(inner);
         });
     }
 
-    fn recur_global_serial<'local>(
+    fn recur_global_serial<'local, 'rows>(
         &mut self,
-        mut local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+        subset_clone_plan: SubsetClonePlan<'_>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut SerialScopedMaterializer) + Send + 'scope,
-    ) {
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut SerialScopedMaterializer)
+        + Send
+        + 'scope,
+    ) where
+        'rows: 'scope,
+    {
         let specs = self.specs.clone();
         let materializations = self.materializations.clone();
-        let mut inner = local.clone_state();
+        let retired_states = self.retired_states;
+        let mut inner = local.clone_state(subset_clone_plan);
         self.scope.spawn_global(move |_| {
             let mut buf = SerialScopedMaterializer::new(specs, materializations);
             work(inner.borrow_mut(), &mut buf);
+            retired_states.retire(inner);
         });
     }
 
@@ -3337,385 +2838,6 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
     }
 }
 
-struct MatchCounter {
-    matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
-}
-
-impl MatchCounter {
-    fn new(n_ids: usize) -> Self {
-        let mut matches = IdVec::with_capacity(n_ids);
-        matches.resize_with(n_ids, || CachePadded::new(AtomicUsize::new(0)));
-        Self { matches }
-    }
-
-    fn inc_matches(&self, action: ActionId, by: usize) {
-        self.matches[action].fetch_add(by, std::sync::atomic::Ordering::Relaxed);
-    }
-    fn read_matches(&self, action: ActionId) -> usize {
-        self.matches[action].load(std::sync::atomic::Ordering::Acquire)
-    }
-}
-
-fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
-    match join_stage {
-        JoinStage::Intersect { scans, .. } => scans
-            .iter()
-            .map(|scan| binding_info.subsets[scan.atom].size())
-            .min()
-            .unwrap_or(0),
-        JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
-        JoinStage::FusedIntersectMat { cover, .. } => binding_info.materializations[*cover].len(), // TODO: len() might be expensive.
-    }
-}
-
-fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
-    match join_stage {
-        JoinStage::Intersect { scans, .. } => scans.len() as i32,
-        JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
-        JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32,
-    }
-}
-
-fn sort_plan_by_size(
-    order: &mut InstrOrder,
-    leaf_scans: &mut LeafScans,
-    start: usize,
-    instrs: &[JoinStage],
-    binding_info: &mut BindingInfo,
-) {
-    let mut last_pos = start;
-    for i in start..instrs.len() {
-        if matches!(
-            &instrs[i],
-            // These nodes don't commute
-            JoinStage::FusedIntersectMat {
-                mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
-                ..
-            }
-        ) {
-            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
-            last_pos = i + 1;
-        }
-    }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
-    recompute_leaf_scans(order, leaf_scans, instrs, start);
-}
-
-/// Recompute `leaf_scans[i]` for every position `i` in `[start, order.len())` against the
-/// current order. A position is a leaf scan iff its stage is either a `FusedIntersect` or a
-/// `FusedIntersectMat { mode: Full | KeyOnly | Value }`, both with empty `to_intersect`, AND no
-/// later stage either (a) for `FusedIntersect`, references the same cover atom, or (b) reads
-/// any of the bound variables as a scalar via `FusedIntersectMat { mode: Value | Lookup }`.
-/// `FusedIntersectMat::Lookup` itself binds nothing, so it is never marked a leaf scan.
-fn recompute_leaf_scans(
-    order: &InstrOrder,
-    leaf_scans: &mut LeafScans,
-    instrs: &[JoinStage],
-    start: usize,
-) {
-    for i in start..order.len() {
-        let stage_idx = order.get(i);
-        let (cover_atom, bind_vars) = match &instrs[stage_idx] {
-            JoinStage::FusedIntersect {
-                cover,
-                bind,
-                to_intersect,
-            } if to_intersect.is_empty() => {
-                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
-                (Some(cover.to_index.atom), vars)
-            }
-            JoinStage::FusedIntersectMat {
-                mode,
-                bind,
-                to_intersect,
-                ..
-            } if to_intersect.is_empty()
-                && matches!(
-                    mode,
-                    MatScanMode::Full | MatScanMode::KeyOnly | MatScanMode::Value(_)
-                ) =>
-            {
-                let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
-                (None, vars)
-            }
-            _ => {
-                leaf_scans[i] = false;
-                continue;
-            }
-        };
-        let mut blocked = false;
-        for j in (i + 1)..order.len() {
-            match &instrs[order.get(j)] {
-                JoinStage::Intersect { scans, .. } => {
-                    if let Some(ca) = cover_atom
-                        && scans.iter().any(|scan| scan.atom == ca)
-                    {
-                        blocked = true;
-                        break;
-                    }
-                }
-                JoinStage::FusedIntersect {
-                    cover,
-                    to_intersect,
-                    ..
-                } => {
-                    if let Some(ca) = cover_atom
-                        && (cover.to_index.atom == ca
-                            || to_intersect.iter().any(|(s, _)| s.to_index.atom == ca))
-                    {
-                        blocked = true;
-                        break;
-                    }
-                }
-                JoinStage::FusedIntersectMat {
-                    mode, to_intersect, ..
-                } => {
-                    if let Some(ca) = cover_atom
-                        && to_intersect.iter().any(|(s, _)| s.to_index.atom == ca)
-                    {
-                        blocked = true;
-                        break;
-                    }
-                    if let MatScanMode::Value(vars) | MatScanMode::Lookup(vars) = mode
-                        && vars.iter().any(|v| bind_vars.contains(v))
-                    {
-                        blocked = true;
-                        break;
-                    }
-                }
-            }
-        }
-        leaf_scans[i] = !blocked;
-    }
-}
-
-fn sort_plan_by_size_inner(
-    order: &mut InstrOrder,
-    range: Range<usize>,
-    instrs: &[JoinStage],
-    binding_info: &mut BindingInfo,
-) {
-    // Nothing to sort if there's 0 or 1 element.
-    if range.len() <= 1 {
-        return;
-    }
-    // How many times an atom has been intersected/joined
-    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
-
-    // Count how many times each atom has been refined so far.
-    for ins in &instrs[..range.start] {
-        match ins {
-            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *times_refined.get_or_default(scan.atom) += 1;
-            }),
-            JoinStage::FusedIntersect {
-                cover,
-                to_intersect,
-                ..
-            } => {
-                *times_refined.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-            JoinStage::FusedIntersectMat { to_intersect, .. } => {
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-        }
-    }
-
-    // We prioritize variables by
-    //
-    //   (1) how many times an atom with this variable has been refined,
-    //   (2) then by the cardinality of the variable to be enumerated (smaller → earlier)
-    //   (3) then by how many relations join on this variable (more → earlier)
-    //
-    // Estimate size is second so that stages with very small cardinality (e.g. FunDep
-    // consequents with exactly 1 value) are run before multi-relation stages that happen
-    // to have a larger current estimate.
-    let key_fn = |join_stage: &JoinStage,
-                  binding_info: &BindingInfo,
-                  times_refined: &DenseIdMap<AtomId, i64>| {
-        let refine = match join_stage {
-            JoinStage::Intersect { scans, .. } => scans
-                .iter()
-                .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
-                .max()
-                .unwrap(),
-            JoinStage::FusedIntersect { cover, .. } => times_refined
-                .get(cover.to_index.atom)
-                .copied()
-                .unwrap_or_default(),
-            JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
-        };
-        (
-            -refine,
-            estimate_size(join_stage, binding_info),
-            -num_intersected_rels(join_stage),
-        )
-    };
-
-    for i in range.clone() {
-        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
-        for j in (i + 1)..range.end {
-            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
-            if key_j < key_i {
-                order.data.swap(i, j);
-                key_i = key_j;
-            }
-        }
-        // Update the counts after a new instruction is selected.
-        match &instrs[order.get(i)] {
-            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *times_refined.get_or_default(scan.atom) += 1;
-            }),
-            JoinStage::FusedIntersect {
-                cover,
-                to_intersect,
-                ..
-            } => {
-                *times_refined.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
-
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-            JoinStage::FusedIntersectMat { to_intersect, .. } => {
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct InstrOrder {
-    data: SmallVec<[u16; 8]>,
-}
-
-impl InstrOrder {
-    fn new() -> Self {
-        InstrOrder {
-            data: SmallVec::new(),
-        }
-    }
-
-    fn from_iter(range: impl Iterator<Item = usize>) -> InstrOrder {
-        let mut res = InstrOrder::new();
-        res.data
-            .extend(range.map(|x| u16::try_from(x).expect("too many instructions")));
-        res
-    }
-
-    fn get(&self, idx: usize) -> usize {
-        self.data[idx] as usize
-    }
-    fn len(&self) -> usize {
-        self.data.len()
-    }
-}
-
-/// Per-position leaf-scan flags. `leaf_scans[i] == true` means the stage currently scheduled at
-/// position `i` (i.e. `instrs[instr_order.get(i)]`) can take the factorized-binding fast path.
-/// Recomputed by [`sort_plan_by_size`] whenever the order changes.
-type LeafScans = SmallVec<[bool; 8]>;
-
-struct BorrowedLocalState<'a> {
-    instr_order: &'a mut InstrOrder,
-    leaf_scans: &'a mut LeafScans,
-    binding_info: &'a mut BindingInfo,
-    updates: &'a mut FrameUpdates,
-}
-
-impl BorrowedLocalState<'_> {
-    fn clone_state(&mut self) -> LocalState {
-        LocalState {
-            instr_order: self.instr_order.clone(),
-            leaf_scans: self.leaf_scans.clone(),
-            binding_info: self.binding_info.clone(),
-            updates: std::mem::take(self.updates),
-        }
-    }
-}
-
-struct LocalState {
-    instr_order: InstrOrder,
-    leaf_scans: LeafScans,
-    binding_info: BindingInfo,
-    updates: FrameUpdates,
-}
-
-impl LocalState {
-    fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a> {
-        BorrowedLocalState {
-            instr_order: &mut self.instr_order,
-            leaf_scans: &mut self.leaf_scans,
-            binding_info: &mut self.binding_info,
-            updates: &mut self.updates,
-        }
-    }
-}
-
 #[cfg(test)]
-mod top_index_tests {
-    use std::{
-        sync::{
-            Arc, Barrier,
-            atomic::{AtomicUsize, Ordering},
-        },
-        thread,
-    };
-
-    use crate::{common::Value, numeric_id::NumericId, offsets::Subset};
-
-    use super::{ChildLock, get_or_insert_child, top_index_shape_is_eligible};
-
-    #[test]
-    fn top_index_partitioning_rejects_serial_tiny_and_skewed_shapes() {
-        assert!(!top_index_shape_is_eligible(1, 10_000, 8, 64));
-        assert!(!top_index_shape_is_eligible(4, 255, 8, 64));
-        assert!(!top_index_shape_is_eligible(4, 10_000, 3, 64));
-        assert!(top_index_shape_is_eligible(4, 256, 4, 64));
-        assert!(top_index_shape_is_eligible(4, 40, 4, 10));
-    }
-
-    #[test]
-    fn child_cache_returns_one_arc_for_racing_same_key() {
-        const THREADS: usize = 16;
-        let map = Arc::new(ChildLock::default());
-        let barrier = Arc::new(Barrier::new(THREADS));
-        let constructed = Arc::new(AtomicUsize::new(0));
-        let value = Value::from_usize(17);
-
-        let handles = (0..THREADS)
-            .map(|_| {
-                let map = map.clone();
-                let barrier = barrier.clone();
-                let constructed = constructed.clone();
-                thread::spawn(move || {
-                    barrier.wait();
-                    get_or_insert_child(&map, value, &[], || {
-                        constructed.fetch_add(1, Ordering::Relaxed);
-                        Subset::empty()
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        let nodes = handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect::<Vec<_>>();
-
-        assert_eq!(constructed.load(Ordering::Relaxed), 1);
-        assert!(nodes[1..].iter().all(|node| Arc::ptr_eq(&nodes[0], node)));
-    }
-}
+#[path = "execute_tests.rs"]
+mod top_index_tests;
