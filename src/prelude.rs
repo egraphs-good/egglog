@@ -4,23 +4,59 @@
 //! use egglog::prelude::*;
 //! ```
 //!
-//! Most workflows are best expressed as an egglog program parsed and
-//! run via [`crate::EGraph::parse_and_run_program`]: declare your
-//! sorts, functions, and rules once in egglog text, then call into
-//! the database from Rust around it.
+//! # Writing egglog inline
+//!
+//! The quasiquote macros let you write egglog directly in Rust rather than as
+//! a string, with Rust values spliced in; a parse error points back at your
+//! Rust source rather than into a string literal. [`egglog!`] takes a whole
+//! program; [`expr!`], [`query!`], [`command!`], [`rule!`], and [`action!`] each
+//! take a single form. `?x`, `:field`, `...`, and any sorts or macros you've
+//! registered all work exactly as they do in egglog text.
+//!
+//! Each parsing macro has three forms — parse it, or, against an e-graph,
+//! `resolve_*!` it (typecheck, no run) or `run_*!` it (run):
+//!
+//! |         | parse       | `resolve_…!(egraph, …)` | `run_…!(egraph, …)`        |
+//! |---------|-------------|-------------------------|----------------------------|
+//! | expr    | [`expr!`]    | [`resolve_expr!`]    | [`run_expr!`] → `(sort, value)`  |
+//! | query   | [`query!`]   | [`resolve_query!`]   | [`run_query!`] → matches         |
+//! | actions | [`action!`] / [`actions!`] | [`resolve_action!`] | [`run_action!`] → outputs |
+//! | command | [`command!`] | [`resolve_command!`] | [`run_command!`] → outputs      |
+//! | program | [`egglog!`]  | [`resolve_egglog!`]  | [`run_egglog!`] → outputs        |
+//! | rule    | [`rule!`]    | [`resolve_rule!`]    | [`run_rule!`] → outputs          |
+//!
+//! Splice Rust values in with `#`:
+//!
+//! - `#x` / `#(expr)` — one value: a `&str`/`String` (becomes an atom), an
+//!   `i64`, a built [`Expr`], or a [`sexp!`] fragment.
+//! - `#..xs` — spread each item of an iterator into the enclosing list.
+//! - `:#field` — a runtime keyword: the value becomes `:<value>`.
+//!
+//! [`sexp!`] builds a fragment to splice into a macro later.
 //!
 //! ```
 //! use egglog::prelude::*;
-//! let mut eg = EGraph::default();
-//! eg.parse_and_run_program(
-//!     None,
-//!     "(datatype Math (Num i64) (Add Math Math))
-//!      (Add (Num 1) (Num 2))",
+//! let mut egraph = EGraph::default();
+//! run_egglog!(
+//!     &mut egraph,
+//!     (datatype Math (Num i64) (Add Math Math))
+//!     (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
 //! )?;
+//!
+//! let n = 2;
+//! assert_eq!(expr!((Num #n))?.to_string(), "(Num 2)");
 //! # Ok::<(), egglog::Error>(())
 //! ```
 //!
-//! Three cases need a Rust escape from the language:
+//! These macros build and check egglog at run time, against a live e-graph. For
+//! a program fully known at compile time, the `egglog-checked` crate validates
+//! it while your crate builds (a type error becomes a build error): its
+//! `egglog_checked!` / `run_egglog_checked!` return a checked `Vec<Command>` or
+//! a populated e-graph, and `egglog_header!` declares a reusable schema.
+//!
+//! For a whole program kept in a file or a large string, use
+//! [`crate::EGraph::parse_and_run_program`]. The rest of this module is Rust
+//! escape hatches for when the language isn't enough:
 //!
 //! 1. **Driving the e-graph database directly** — building rows,
 //!    looking them up, iterating tables, running ad-hoc queries from
@@ -117,7 +153,8 @@
 //!
 //! ## Rules
 //!
-//! - [`rule`] — add a rule whose RHS is egglog code.
+//! - [`run_rule!`] / [`run_egglog!`] — add a rule whose RHS is egglog code
+//!   (write it inline; `run_egglog!` also takes `:ruleset`).
 //! - [`rust_rule`] — add a rule whose RHS is a Rust closure
 //!   `Fn(WriteState, &[Value]) -> Option<()>`. Seminaive-safe.
 //! - [`rust_rule_full`] — same but the closure receives a
@@ -161,7 +198,11 @@ pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, Strin
 pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{Core, FullState, PureState, Read, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
-pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+pub use egglog::{
+    action, actions, command, egglog, expr, query, resolve_action, resolve_actions,
+    resolve_command, resolve_egglog, resolve_expr, resolve_query, resolve_rule, rule, run_action,
+    run_actions, run_command, run_egglog, run_expr, run_query, run_rule, sexp, sexps, sort, vars,
+};
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -332,138 +373,6 @@ macro_rules! vars {
     };
 }
 
-#[macro_export]
-macro_rules! expr {
-    ((unquote $unquoted:expr)) => { $unquoted };
-    (($func:tt $($arg:tt)*)) => { exprs::call(stringify!($func), vec![$(expr!($arg)),*]) };
-    ($value:literal) => { exprs::int($value) };
-    ($quoted:tt) => { exprs::var(stringify!($quoted)) };
-}
-
-#[macro_export]
-macro_rules! fact {
-    ((= $($arg:tt)*)) => { Fact::Eq(span!(), $(expr!($arg)),*) };
-    ($a:tt) => { Fact::Fact(expr!($a)) };
-}
-
-#[macro_export]
-macro_rules! facts {
-    ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
-}
-
-#[macro_export]
-macro_rules! action {
-    ((let $name:ident $value:tt)) => {
-        Action::Let(span!(), String::from(stringify!($name)), expr!($value))
-    };
-    ((set ($f:ident $($x:tt)*) $value:tt)) => {
-        Action::Set(span!(), String::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
-    };
-    ((delete ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Delete, String::from(stringify!($f)), vec![$(expr!($x)),*])
-    };
-    ((subsume ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Subsume, String::from(stringify!($f)), vec![$(expr!($x)),*])
-    };
-    ((union $x:tt $y:tt)) => {
-        Action::Union(span!(), expr!($x), expr!($y))
-    };
-    ((panic $message:literal)) => {
-        Action::Panic(span!(), $message.to_owned())
-    };
-    ($x:tt) => {
-        Action::Expr(span!(), expr!($x))
-    };
-}
-
-#[macro_export]
-macro_rules! actions {
-    ($($tree:tt)*) => { GenericActions(vec![$(action!($tree)),*]) };
-}
-
-/// Add a rule to the e-graph whose right-hand side is made up of actions.
-/// ```
-/// use egglog::prelude::*;
-///
-/// let mut egraph = EGraph::default();
-/// egraph.parse_and_run_program(
-///     None,
-///     "
-/// (function fib (i64) i64 :no-merge)
-/// (set (fib 0) 0)
-/// (set (fib 1) 1)
-/// (rule (
-///     (= f0 (fib x))
-///     (= f1 (fib (+ x 1)))
-/// ) (
-///     (set (fib (+ x 2)) (+ f0 f1))
-/// ))
-/// (run 10)
-///     ",
-/// )?;
-///
-/// let big_number = 20;
-///
-/// // check that `(fib 20)` is not in the e-graph
-/// let results = egraph.query(
-///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
-/// )?;
-///
-/// assert!(results.is_empty());
-///
-/// let ruleset = "custom_ruleset";
-/// add_ruleset(&mut egraph, ruleset)?;
-///
-/// // add the rule from `build_test_database` to the egraph
-/// rule(
-///     &mut egraph,
-///     ruleset,
-///     facts![
-///         (= f0 (fib x))
-///         (= f1 (fib (+ x 1)))
-///     ],
-///     actions![
-///         (set (fib (+ x 2)) (+ f0 f1))
-///     ],
-/// )?;
-///
-/// // run that rule 10 times
-/// for _ in 0..10 {
-///     run_ruleset(&mut egraph, ruleset)?;
-/// }
-///
-/// // check that `(fib 20)` is now in the e-graph
-/// let results = egraph.query(
-///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
-/// )?;
-///
-/// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
-/// assert_eq!(f, [6765]);
-///
-/// # Ok::<(), egglog::Error>(())
-/// ```
-pub fn rule(
-    egraph: &mut EGraph,
-    ruleset: &str,
-    facts: Facts<String, String>,
-    actions: Actions,
-) -> Result<Vec<CommandOutput>, Error> {
-    let rule = Rule {
-        span: span!(),
-        head: actions,
-        body: facts.0,
-        name: "".into(),
-        ruleset: ruleset.into(),
-        eval_mode: RuleEvalMode::Seminaive,
-        no_decomp: false,
-        include_subsumed: false,
-    };
-
-    egraph.run_program(vec![Command::Rule { rule }])
-}
-
 #[derive(Clone)]
 struct RustRuleRhs<F>
 where
@@ -542,7 +451,7 @@ where
 /// // check that `(fib 20)` is not in the e-graph
 /// let results = egraph.query(
 ///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+///     query!((= (fib #big_number) f))?,
 /// )?;
 ///
 /// assert!(results.is_empty());
@@ -556,10 +465,10 @@ where
 ///     "fib_rule",
 ///     ruleset,
 ///     vars![x: i64, f0: i64, f1: i64],
-///     facts![
+///     query!(
 ///         (= f0 (fib x))
 ///         (= f1 (fib (+ x 1)))
-///     ],
+///     )?,
 ///     move |mut ctx, values| {
 ///         let [x, f0, f1] = values else { unreachable!() };
 ///         let x = ctx.value_to_base::<i64>(*x);
@@ -582,7 +491,7 @@ where
 /// // check that `(fib 20)` is now in the e-graph
 /// let results = egraph.query(
 ///     vars![f: i64],
-///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+///     query!((= (fib #big_number) f))?,
 /// )?;
 ///
 /// let f: Vec<i64> = results.iter().map(|m| egraph.value_to_base::<i64>(m["f"])).collect();
@@ -748,90 +657,6 @@ pub fn rust_rule_full(
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
-}
-
-/// Declare a new sort.
-pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Sort {
-        span: span!(),
-        name: name.to_owned(),
-        presort_and_args: None,
-        uf: None,
-        proof_func: None,
-        container_rebuild: None,
-        proof_constructors: None,
-        unionable: true,
-    }])
-}
-
-/// Declare a new function table.
-pub fn add_function(
-    egraph: &mut EGraph,
-    name: &str,
-    schema: Schema,
-    merge: Option<GenericExpr<String, String>>,
-) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Function {
-        span: span!(),
-        name: name.to_owned(),
-        schema,
-        merge,
-        hidden: false,
-        let_binding: false,
-        term_constructor: None,
-        unextractable: false,
-    }])
-}
-
-/// Declare a new constructor table.
-pub fn add_constructor(
-    egraph: &mut EGraph,
-    name: &str,
-    schema: Schema,
-    cost: Option<DefaultCost>,
-    unextractable: bool,
-) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Constructor {
-        span: span!(),
-        name: name.to_owned(),
-        schema,
-        cost,
-        unextractable,
-        hidden: false,
-        let_binding: false,
-        term_constructor: None,
-    }])
-}
-
-/// Declare a new relation table.
-pub fn add_relation(
-    egraph: &mut EGraph,
-    name: &str,
-    inputs: Vec<String>,
-) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Relation {
-        span: span!(),
-        name: name.to_owned(),
-        inputs,
-    }])
-}
-
-/// Adds sorts and constructor tables to the database.
-#[macro_export]
-macro_rules! datatype {
-    ($egraph:expr, (datatype $sort:ident $(($name:ident $($args:ident)* $(:cost $cost:expr)?))*)) => {
-        add_sort($egraph, stringify!($sort))?;
-        $(add_constructor(
-            $egraph,
-            stringify!($name),
-            Schema {
-                input: vec![$(stringify!($args).to_owned()),*],
-                output: stringify!($sort).to_owned(),
-            },
-            [$($cost)*].first().copied(),
-            false,
-        )?;)*
-    };
 }
 
 /// A "default" implementation of [`Sort`] for simple types
@@ -1000,20 +825,15 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
 }
 
 /// Add a [`BaseSort`] to the e-graph
-pub fn add_base_sort(
-    egraph: &mut EGraph,
-    base_sort: impl BaseSort,
-    span: Span,
-) -> Result<(), TypeError> {
-    egraph.add_sort(BaseSortImpl(base_sort), span)
+pub fn add_base_sort(egraph: &mut EGraph, base_sort: impl BaseSort) -> Result<(), TypeError> {
+    egraph.add_sort(BaseSortImpl(base_sort), span!())
 }
 
 pub fn add_container_sort(
     egraph: &mut EGraph,
     container_sort: impl ContainerSort,
-    span: Span,
 ) -> Result<(), TypeError> {
-    egraph.add_sort(ContainerSortImpl(container_sort), span)
+    egraph.add_sort(ContainerSortImpl(container_sort), span!())
 }
 
 #[cfg(test)]
@@ -1046,10 +866,10 @@ mod tests {
 
         let results = egraph.query(
             vars![x: i64, y: i64],
-            facts![
+            query!(
                 (= (fib x) y)
                 (= y 13)
-            ],
+            )?,
         )?;
 
         assert_eq!(results.len(), 1);
@@ -1066,10 +886,7 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], query!((= (fib #big_number) f))?)?;
 
         assert!(results.is_empty());
 
@@ -1077,16 +894,12 @@ mod tests {
         add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
-        rule(
+        run_egglog!(
             &mut egraph,
-            ruleset,
-            facts![
-                (= f0 (fib x))
-                (= f1 (fib (+ x 1)))
-            ],
-            actions![
-                (set (fib (+ x 2)) (+ f0 f1))
-            ],
+            (rule
+                ((= f0 (fib x)) (= f1 (fib (+ x 1))))
+                ((set (fib (+ x 2)) (+ f0 f1)))
+                :ruleset #ruleset)
         )?;
 
         // run that rule 10 times
@@ -1095,10 +908,7 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], query!((= (fib #big_number) f))?)?;
 
         assert_eq!(results.len(), 1);
         assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
@@ -1110,29 +920,26 @@ mod tests {
     fn rust_api_macros() -> Result<(), Error> {
         let mut egraph = build_test_database()?;
 
-        datatype!(&mut egraph, (datatype Expr (One) (Two Expr Expr :cost 10)));
+        run_egglog!(&mut egraph, (datatype Expr (One) (Two Expr Expr :cost 10)))?;
 
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
 
-        rule(
+        run_egglog!(
             &mut egraph,
-            ruleset,
-            facts![
-                (fib 5)
-                (fib x)
-                (= f1 (fib (+ x 1)))
-                (= 3 (unquote exprs::int(1 + 2)))
-            ],
-            actions![
-                (let y (+ x 2))
-                (set (fib (+ x 2)) (+ f1 f1))
-                (delete (fib 0))
-                (subsume (Two (One) (One)))
-                (union (One) (Two (One) (One)))
-                (panic "message")
-                (+ 6 87)
-            ],
+            (rule
+                ((fib 5)
+                 (fib x)
+                 (= f1 (fib (+ x 1)))
+                 (= 3 #(1 + 2)))
+                ((let y (+ x 2))
+                 (set (fib (+ x 2)) (+ f1 f1))
+                 (delete (fib 0))
+                 (subsume (Two (One) (One)))
+                 (union (One) (Two (One) (One)))
+                 (panic "message")
+                 (+ 6 87))
+                :ruleset #ruleset)
         )?;
 
         Ok(())
@@ -1145,10 +952,7 @@ mod tests {
         let big_number = 20;
 
         // check that `(fib 20)` is not in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], query!((= (fib #big_number) f))?)?;
 
         assert!(results.is_empty());
 
@@ -1161,10 +965,10 @@ mod tests {
             "demo_rule",
             ruleset,
             vars![x: i64, f0: i64, f1: i64],
-            facts![
+            query!(
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
-            ],
+            )?,
             move |mut ctx, values| {
                 let [x, f0, f1] = values else { unreachable!() };
                 let x = ctx.value_to_base::<i64>(*x);
@@ -1183,14 +987,134 @@ mod tests {
         }
 
         // check that `(fib 20)` is now in the e-graph
-        let results = egraph.query(
-            vars![f: i64],
-            facts![(= (fib (unquote exprs::int(big_number))) f)],
-        )?;
+        let results = egraph.query(vars![f: i64], query!((= (fib #big_number) f))?)?;
 
         assert_eq!(results.len(), 1);
         assert_eq!(egraph.value_to_base::<i64>(results[0]["f"]), 6765);
 
+        Ok(())
+    }
+
+    // The `egglog!` triple: `egglog!` parses (no e-graph), `resolve_egglog!`
+    // typechecks against the e-graph without running, `run_egglog!` runs.
+    #[test]
+    fn rust_api_egglog_triple() -> Result<(), Error> {
+        let mut egraph = EGraph::default();
+
+        // parse-only: no e-graph, unresolved commands.
+        let parsed = egglog!((datatype Math (Num i64) (Add Math Math)))?;
+        assert_eq!(parsed.len(), 1);
+
+        // run: register the datatype + a constant-fold rule.
+        run_egglog!(
+            &mut egraph,
+            (datatype Math (Num i64) (Add Math Math))
+            (rule ((= e (Add (Num a) (Num b)))) ((union e (Num (+ a b)))))
+        )?;
+
+        // resolve: typecheck a command against the e-graph, without running it.
+        let resolved =
+            resolve_egglog!(&mut egraph, (rule ((= e (Add a b))) ((union e (Add b a)))))?;
+        assert_eq!(resolved.len(), 1);
+
+        // run for real: the fold rule fires and `start` becomes `(Num 3)`.
+        run_egglog!(
+            &mut egraph,
+            (let start (Add (Num 1) (Num 2)))
+            (run 1)
+            (check (= start (Num 3)))
+        )?;
+
+        Ok(())
+    }
+
+    // `command!` and `rule!` share the command pipeline; check their
+    // resolve/run variants build and typecheck.
+    #[test]
+    fn rust_api_command_and_rule_variants() -> Result<(), Error> {
+        let mut egraph = EGraph::default();
+        run_egglog!(&mut egraph, (datatype Math (Num i64) (Add Math Math)))?;
+
+        // command! family: one command.
+        let c = resolve_command!(&mut egraph, (rule ((= e (Add a b))) ((union e (Add b a)))))?;
+        assert_eq!(c.len(), 1);
+        run_command!(&mut egraph, (rule ((= e (Add a b))) ((union e (Add b a)))))?;
+
+        // rule! family: `(<facts>) (<actions>)`, wrapped into `(rule …)`.
+        let r = resolve_rule!(&mut egraph, ((= e (Num a))) ((union e (Num a))))?;
+        assert_eq!(r.len(), 1);
+        run_rule!(&mut egraph, ((= e (Add (Num 1) (Num 2)))) ((union e (Num 3))))?;
+
+        Ok(())
+    }
+
+    // The `expr!` triple: parse (no e-graph), resolve against the e-graph
+    // (typecheck, no eval), run (eval to `(sort, value)`).
+    #[test]
+    fn rust_api_expr_variants() -> Result<(), Error> {
+        let mut egraph = EGraph::default();
+        run_egglog!(&mut egraph, (datatype Math (Num i64) (Add Math Math)))?;
+
+        // parse-only.
+        assert_eq!(
+            expr!((Add (Num 1) (Num 2)))?.to_string(),
+            "(Add (Num 1) (Num 2))"
+        );
+
+        // resolve against the e-graph (typecheck), no eval.
+        let _resolved = resolve_expr!(&mut egraph, (Add (Num 1) (Num 2)))?;
+
+        // run: evaluate to `(sort, value)`.
+        let (_sort, _val) = run_expr!(&mut egraph, (Add (Num 1) (Num 2)))?;
+
+        Ok(())
+    }
+
+    // The `query!` triple: parse to `Facts`, resolve to `ResolvedFact`s, and
+    // run — `run_query!` returns matches, deriving the query variables (and
+    // sorts) from the facts.
+    #[test]
+    fn rust_api_query_variants() -> Result<(), Error> {
+        let mut egraph = EGraph::default();
+        run_egglog!(
+            &mut egraph,
+            (function fib (i64) i64 :no-merge)
+            (set (fib 1) 1)
+            (set (fib 2) 1)
+        )?;
+
+        // parse-only: a `Facts` value (no e-graph).
+        let _facts = query!((= (fib x) y))?;
+
+        // resolve against the e-graph -> ResolvedFacts.
+        let resolved = resolve_query!(&mut egraph, (= (fib x) y))?;
+        assert!(!resolved.is_empty());
+
+        // run: matches, auto-deriving the vars `x`/`y` from the facts.
+        let matches = run_query!(&mut egraph, (= (fib x) y) (= y 1))?;
+        assert_eq!(matches.len(), 2); // (fib 1)=1 and (fib 2)=1
+        for m in &matches {
+            assert_eq!(egraph.value_to_base::<i64>(m["y"]), 1);
+        }
+
+        Ok(())
+    }
+
+    // `action!`/`actions!` egraph variants run the action(s) as top-level
+    // action commands.
+    #[test]
+    fn rust_api_action_variants() -> Result<(), Error> {
+        let mut egraph = EGraph::default();
+        run_egglog!(&mut egraph, (function g (i64) i64 :no-merge))?;
+
+        let _r = resolve_action!(&mut egraph, (set (g 1) 10))?;
+        run_action!(&mut egraph, (set (g 1) 10))?;
+        run_actions!(&mut egraph, (set (g 2) 20) (set (g 3) 30))?;
+
+        assert_eq!(
+            egraph.eval_expr(&exprs::call("g", vec![exprs::int(2)]))?.1,
+            { egraph.base_to_value::<i64>(20) }
+        );
         Ok(())
     }
 }

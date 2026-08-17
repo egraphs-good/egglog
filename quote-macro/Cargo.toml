@@ -1,0 +1,19 @@
+[package]
+name = "egglog-quote"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+quote = { workspace = true }
+# Shared token → egglog-atom rendering (also used by `egglog-checked`), so both
+# crates reconstruct atoms identically. Not `egglog` itself, so no cycle.
+egglog-ast = { workspace = true, features = ["tokens"] }

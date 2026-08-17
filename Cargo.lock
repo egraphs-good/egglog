@@ -471,6 +471,7 @@ dependencies = [
  "egglog-bridge",
  "egglog-core-relations",
  "egglog-numeric-id",
+ "egglog-quote",
  "egglog-reports",
  "egraph-serialize",
  "enum-map",
@@ -507,6 +508,7 @@ name = "egglog-ast"
 version = "2.0.0"
 dependencies = [
  "ordered-float",
+ "proc-macro2",
 ]
 
 [[package]]
@@ -532,6 +534,16 @@ dependencies = [
  "smallvec",
  "thiserror",
  "web-time",
+]
+
+[[package]]
+name = "egglog-checked"
+version = "2.0.0"
+dependencies = [
+ "egglog",
+ "egglog-ast",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
@@ -581,6 +593,15 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
+
+[[package]]
+name = "egglog-quote"
+version = "2.0.0"
+dependencies = [
+ "egglog-ast",
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "egglog-reports"

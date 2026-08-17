@@ -36,12 +36,17 @@ use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_add_primitive::add_primitive_with_validator;
-use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
+use egglog_ast::generic_ast::{Change, GenericExpr, GenericFact, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
+pub use egglog_quote::{
+    action, actions, command, egglog, expr, query, resolve_action, resolve_actions,
+    resolve_command, resolve_egglog, resolve_expr, resolve_query, resolve_rule, rule, run_action,
+    run_actions, run_command, run_egglog, run_expr, run_query, run_rule, sexp, sexps,
+};
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
@@ -401,13 +406,13 @@ impl Default for EGraph {
             proof_state,
             proof_check_program: vec![],
         };
-        add_base_sort(&mut eg, UnitSort, span!()).unwrap();
-        add_base_sort(&mut eg, StringSort, span!()).unwrap();
-        add_base_sort(&mut eg, BoolSort, span!()).unwrap();
-        add_base_sort(&mut eg, I64Sort, span!()).unwrap();
-        add_base_sort(&mut eg, F64Sort, span!()).unwrap();
-        add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
-        add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
+        add_base_sort(&mut eg, UnitSort).unwrap();
+        add_base_sort(&mut eg, StringSort).unwrap();
+        add_base_sort(&mut eg, BoolSort).unwrap();
+        add_base_sort(&mut eg, I64Sort).unwrap();
+        add_base_sort(&mut eg, F64Sort).unwrap();
+        add_base_sort(&mut eg, BigIntSort).unwrap();
+        add_base_sort(&mut eg, BigRatSort).unwrap();
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
@@ -1362,6 +1367,67 @@ impl EGraph {
         Ok((sort, value))
     }
 
+    /// Resolve (typecheck) query facts against this e-graph, returning
+    /// [`ResolvedFact`]s. Backs `resolve_query!`.
+    pub fn resolve_facts(&mut self, facts: &[ast::Fact]) -> Result<Vec<ast::ResolvedFact>, Error> {
+        // `typecheck_facts` borrows the type env immutably; give it its own
+        // fresh-name generator (a clone) so there's no aliasing with `self`.
+        let mut symbol_gen = self.parser.symbol_gen.clone();
+        Ok(self.type_info.typecheck_facts(&mut symbol_gen, facts)?)
+    }
+
+    /// Run a query given only its facts: resolve them to discover the query
+    /// variables (with their sorts), then return one match per binding as a
+    /// `var name -> Value` map. Backs `run_query!` — the ergonomic form of
+    /// [`EGraph::query`] that needs no explicit `vars`.
+    pub fn query_all(
+        &mut self,
+        facts: ast::Facts<String, String>,
+    ) -> Result<Vec<HashMap<String, Value>>, Error> {
+        let resolved = self.resolve_facts(&facts.0)?;
+        // Collect every variable in the resolved body (with its sort), in
+        // first-seen order.
+        fn walk(e: &ast::ResolvedExpr, out: &mut IndexMap<String, ArcSort>) {
+            match e {
+                GenericExpr::Var(_, v) => {
+                    out.entry(v.name.clone()).or_insert_with(|| v.sort.clone());
+                }
+                GenericExpr::Call(_, _, args) => args.iter().for_each(|a| walk(a, out)),
+                GenericExpr::Lit(..) => {}
+            }
+        }
+        let mut vars: IndexMap<String, ArcSort> = IndexMap::default();
+        for fact in &resolved {
+            match fact {
+                GenericFact::Eq(_, a, b) => {
+                    walk(a, &mut vars);
+                    walk(b, &mut vars);
+                }
+                GenericFact::Fact(e) => walk(e, &mut vars),
+            }
+        }
+        let var_refs: Vec<(&str, ArcSort)> =
+            vars.iter().map(|(n, s)| (n.as_str(), s.clone())).collect();
+        self.query(&var_refs, facts)
+    }
+
+    /// Resolve (typecheck) an expression against this e-graph **without
+    /// evaluating** it, returning the [`ResolvedExpr`]. Free names are treated
+    /// as global references (as in [`EGraph::eval_expr`]). Backs `resolve_expr!`.
+    pub fn resolve_expr(&mut self, expr: &Expr) -> Result<ResolvedExpr, Error> {
+        let span = expr.span();
+        let command = Command::Action(Action::Expr(span, expr.clone()));
+        let resolved = self.resolve_command(command)?;
+        let resolved_commands = resolved.desugared;
+        assert_eq!(resolved_commands.len(), 1);
+        match resolved_commands.into_iter().next().unwrap() {
+            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => {
+                Ok(resolved_expr)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// Typecheck an expression under explicit local bindings, an expected
     /// output sort, and a primitive call context.
     ///
@@ -2183,6 +2249,22 @@ impl EGraph {
         Ok(res.outputs)
     }
 
+    /// Resolve (typecheck + desugar) already-parsed [`Command`]s into
+    /// [`ResolvedCommand`]s **without executing** them — the `Vec<Command>`
+    /// twin of [`EGraph::resolve_program`], backing the `resolve_*!`
+    /// quasiquotes.
+    ///
+    /// Resolving a declaration still registers it in the type environment (so
+    /// later commands typecheck against it), but no rules or actions run. To
+    /// execute, use [`EGraph::run_program`] on the unresolved commands.
+    pub fn resolve_commands(
+        &mut self,
+        program: Vec<Command>,
+    ) -> Result<Vec<ResolvedCommand>, Error> {
+        let res = self.process_program_internal(program, false)?;
+        Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
+    }
+
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
     /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
     /// Also removes globals from the program by replacing with new constructors.
@@ -2426,7 +2508,7 @@ impl EGraph {
     }
 
     /// Run a pattern query: bind the variables in `vars` against
-    /// `facts` and return one [`HashMap`] per match, keyed by variable
+    /// `facts` and return one `HashMap` per match, keyed by variable
     /// name. Values stay raw — convert via [`EGraph::value_to_base`].
     ///
     /// With zero vars, returns at most one empty map (so `.len()` is 1
@@ -2944,6 +3026,30 @@ pub enum Error {
         api: &'static str,
         reason: &'static str,
     },
+}
+
+impl Error {
+    /// The primary source span this error is anchored to, if one is available.
+    /// Errors with no natural location (backend, extraction, I/O-format)
+    /// return `None`.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Error::ParseError(e) => Some(e.0.clone()),
+            Error::TypeError(e) => e.span(),
+            Error::TypeErrors(errors) => errors.iter().find_map(TypeError::span),
+            Error::CheckError(_, span)
+            | Error::NoSuchRuleset(_, span)
+            | Error::CombinedRulesetError(_, span)
+            | Error::Pop(span)
+            | Error::ExpectFail(span)
+            | Error::SubsumeMergeError(_, span)
+            | Error::CommandAlreadyExists(_, span)
+            | Error::Shadowing(_, span, _) => Some(span.clone()),
+            Error::IoError(_, _, span) => Some(span.clone()),
+            Error::ProofError { span, .. } => Some(span.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
