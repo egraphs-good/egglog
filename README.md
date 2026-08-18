@@ -57,7 +57,7 @@ One can also use `egglog` as a Rust library by adding the following to your `Car
 
 ```
 [dependencies]
-egglog = "2.0.0"
+egglog = "3.0.0"
 ```
 
 See also the [Python binding](https://github.com/egraphs-good/egglog-python) for using `egglog` in Python.
@@ -102,9 +102,10 @@ egglog single-threaded; the codspeed benchmarks only evaluate single-threaded
 performance. However, please take care not to pessimize parallel performance
 where possible (e.g. by adding coarse-grained locks).
 
-We use rayon's global thread pool for parallelism, and the number of threads used
-is set to `1` by default when egglog's CLI is run. If you use egglog as a library,
-you can control the level of parallelism by setting rayon's `num_threads`.
+Each `EGraph` has its own scoped thread pool. The CLI uses one thread by default;
+pass `-j 0` to use the available parallelism or `-j N` to select a fixed number
+of threads. Library users can configure an e-graph with `EGraph::new`,
+`with_num_threads`, or `set_num_threads`.
 
 ## Benchmarks
 

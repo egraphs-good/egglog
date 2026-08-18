@@ -459,7 +459,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "egglog"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "chrono",
  "clap",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-add-primitive"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "quote",
  "syn 2.0.106",
@@ -504,14 +504,14 @@ dependencies = [
 
 [[package]]
 name = "egglog-ast"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "ordered-float",
 ]
 
 [[package]]
 name = "egglog-bridge"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-concurrency"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "arc-swap",
  "bumpalo",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-core-relations"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -580,11 +580,11 @@ dependencies = [
 
 [[package]]
 name = "egglog-numeric-id"
-version = "2.0.0"
+version = "3.0.0"
 
 [[package]]
 name = "egglog-reports"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "clap",
  "hashbrown 0.16.0",
@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-union-find"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "codspeed-divan-compat",
  "crossbeam",
