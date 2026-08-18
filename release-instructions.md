@@ -33,7 +33,9 @@ Make these edits:
 3. In `CHANGELOG.md`, rename the current `Unreleased` section to the new
    version and release date, add a new empty `Unreleased` section, update its
    comparison link, and add a link for the new version. Do not rewrite links
-   for old releases.
+   for old releases. Check every entry against the git history, put it under
+   the release that first contained the change, and include the relevant PR
+   number or numbers.
 4. Search for any remaining references to the old version and decide whether
    each should change:
 
@@ -60,7 +62,9 @@ cargo publish --dry-run --workspace --exclude egglog-wasm-example
 ```
 
 This catches packaging errors across the workspace before any upload is made.
-Then push the branch, open a PR, and merge it after CI passes.
+Then push the branch and open a PR. Let the normal review process finish: wait
+for CI and human approval, and do not have the agent that prepared the PR merge
+it. A maintainer should merge it after review.
 
 ## 2. Tag the egglog release
 
@@ -86,9 +90,30 @@ git show --stat "v$EGGLOG_RELEASE"
 Authenticate once with `cargo login` if this machine does not already have a
 crates.io token.
 
-The workspace crates must be published in dependency order. Run each dry-run
-and publish pair separately, from the repository root, and do not proceed to
-the next pair unless both commands succeed:
+The workspace crates must be published in dependency order. The crate list can
+change, so regenerate this report for every release (it requires `jq`):
+
+```sh
+cargo metadata --format-version 1 |
+  jq -r '
+    . as $m
+    | $m.packages[]
+    | select(.id as $id | $m.workspace_members | index($id))
+    | select(.publish != [])
+    | [.name, ([.dependencies[]
+        | select(.path != null and .kind != "dev")
+        | .name] | unique | join(", "))]
+    | @tsv
+  ' | sort
+```
+
+The first column lists every publishable workspace crate; the second lists its
+non-development workspace dependencies. Compare the report with the command
+block below: every crate must appear exactly once, and every dependency must be
+published before the crate that depends on it. Update the block whenever a
+crate or dependency is added. Then run each dry-run and publish pair
+separately, from the repository root, and do not proceed to the next pair
+unless both commands succeed:
 
 ```sh
 cargo publish --dry-run -p egglog-numeric-id
@@ -132,8 +157,11 @@ the upload succeeded before running it again:
 cargo info "egglog-numeric-id@$EGGLOG_RELEASE"
 ```
 
-Substitute the crate that was just uploaded. After the final publish, verify
-the main package:
+Substitute the crate that was just uploaded. Publishing many crates can also
+trigger crates.io rate limiting. If that happens, do not retry in a tight loop:
+wait for the cooldown, verify whether the current upload succeeded with
+`cargo info`, and resume with that crate's dry run. After the final publish,
+verify the main package:
 
 ```sh
 cargo info "egglog@$EGGLOG_RELEASE"
@@ -153,12 +181,19 @@ git switch -c "release-v$EXPERIMENTAL_RELEASE"
 Update its `Cargo.toml` as follows:
 
 1. Set `package.version` to `$EXPERIMENTAL_RELEASE`.
-2. Update the `egglog`, `egglog-ast`, and `egglog-reports` dependencies to the
-   new egglog release. For crates.io, each dependency must have a `version`
-   whose value is `$EGGLOG_RELEASE`. It may also retain a `git` and `rev` for
-   repository development; if so, point `rev` at the tagged egglog release
-   commit. Cargo uses the Git source locally and the versioned registry source
-   in the published package.
+2. Search every `Cargo.toml` for `egglog` and update every dependency package
+   whose name starts with `egglog`, including renamed, development, build, and
+   target-specific dependencies:
+
+   ```sh
+   rg -n 'egglog' --glob Cargo.toml
+   ```
+
+   For crates.io, each dependency must have a `version` whose value is
+   `$EGGLOG_RELEASE`. It may also retain a `git` and `rev` for repository
+   development; if so, point `rev` at the tagged egglog release commit. Cargo
+   uses the Git source locally and the versioned registry source in the
+   published package.
 3. Update version examples or release notes in that repository as needed.
 
 Update its lockfile and test it:
@@ -170,8 +205,10 @@ git diff --check
 git status --short
 ```
 
-Commit these changes, open and merge an egglog-experimental release PR, then
-tag the merged commit and publish it:
+Commit these changes and open an egglog-experimental release PR. Wait for CI
+and human approval, and do not have the agent that prepared the PR merge it. A
+maintainer should merge it after review. Then tag the merged commit and publish
+it:
 
 ```sh
 git switch main
@@ -185,5 +222,5 @@ cargo publish
 cargo info "egglog-experimental@$EXPERIMENTAL_RELEASE"
 ```
 
-Finally, create the corresponding GitHub releases from the two pushed tags if
-the repositories do not automate that step.
+The tags and crates.io uploads complete the release. These repositories
+currently use tags only; do not create GitHub Release objects.

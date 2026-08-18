@@ -6,43 +6,43 @@
 
 ### Breaking changes
 
-- **Relations are now constructors.** A `relation` is desugared to a non-unionable constructor instead of a function returning unit `()`.
-- **Custom primitives use capability-specific traits (#772).** Implement `PurePrim`, `ReadPrim`, `WritePrim`, or `FullPrim` and register it with the corresponding `add_*_primitive` method. `rust_rule` callbacks now take `&mut WriteState` instead of `RustRuleContext`; use `rust_rule_full` when a callback also needs read access. Higher-order primitives dispatch through `state.apply_function`.
-- **Thread configuration is now per e-graph.** The global Rayon pool is replaced by a scoped `egglog-concurrency` pool. `EGraph::set_num_threads` now takes `&mut self`; `EGraph::new`, `with_num_threads`, and `set_num_threads` configure one e-graph without affecting others.
-- **The function schema API has changed.** `Function::schema()` is replaced by `Function::func_type()`, `ResolvedSchema` is replaced by `FuncType`, and `GenericFunctionDecl::resolved_schema` is removed.
-- **Backend execution APIs now take an `ExternalContext`.** `Database::run_rule_set`, `with_execution_state`, `with_execution_state_tracked`, and the corresponding bridge APIs require the context; pass `None` when no external data is needed.
-- **`EGraph::print_function` has a new signature.** It now takes an `Option<(File, PathBuf)>` output sink and a `Span`, allowing write failures to return `Error::IoError`.
+- **Relations are now constructors.** A `relation` is desugared to a non-unionable constructor instead of a function returning unit `()` (#770).
+- **Custom primitives use capability-specific traits.** Implement `PurePrim`, `ReadPrim`, `WritePrim`, or `FullPrim` and register it with the corresponding `add_*_primitive` method. `rust_rule` callbacks now take `&mut WriteState` instead of `RustRuleContext`; use `rust_rule_full` when a callback also needs read access. Higher-order primitives dispatch through `state.apply_function` (#856).
+- **Thread configuration is now per e-graph.** The global Rayon pool is replaced by a scoped `egglog-concurrency` pool. `EGraph::set_num_threads` now takes `&mut self`; `EGraph::new`, `with_num_threads`, and `set_num_threads` configure one e-graph without affecting others (#910).
+- **The function schema API has changed.** `Function::schema()` is replaced by `Function::func_type()`, `ResolvedSchema` is replaced by `FuncType`, and `GenericFunctionDecl::resolved_schema` is removed (#986).
+- **Backend execution APIs now take an `ExternalContext`.** `Database::run_rule_set`, `with_execution_state`, `with_execution_state_tracked`, and the corresponding bridge APIs require the context; pass `None` when no external data is needed (#986).
+- **`EGraph::print_function` has a new signature.** It now takes an `Option<(File, PathBuf)>` output sink and a `Span`, allowing write failures to return `Error::IoError` (#920).
 
 ### New features and improvements
 
-- **Add name-indexed e-graph access for primitives and `rust_rule` callbacks (#745, #751).** The `Read` and `Write` APIs now support table lookup and mutation, table and constructor scans, schema queries, table-size queries, and indexed e-class traversal by name. `EGraph::read`, `EGraph::update`, and top-level scan methods expose the same capabilities outside callbacks. Invalid names, types, and arities return `Error::ApiError`. These APIs support out-of-tree extensions such as `unstable-subst` in `egglog-experimental`.
-- **Add container support to the term/proof encoding.** Programs can read and construct `Vec`, `Set`, `Map`, `MultiSet`, and `Pair` values in rule bodies (`set-get` remains unsupported). Body-created containers are proof side conditions and cannot be carried into actions. Container extraction is now deterministic, and maps extract in flat `(map-of k0 v0 …)` form.
-- **Add `:naive` and `:unsafe-seminaive` rule options.** Both permit database reads on a rule's right-hand side. `:naive` matches the full database each iteration; `:unsafe-seminaive` keeps delta matching but can be evaluation-order dependent and is rejected by the term/proof encoding. The options are mutually exclusive.
-- Add typed `EGraph` extension state that clones with the e-graph and is restored by `push` and `pop`.
-- Add typechecking and evaluation APIs for body-defined primitives: `EGraph::typecheck_expr_with_bindings_and_output`, `Core::eval_resolved_expr`, and `Core::apply_primitive`. `unstable-fn` containers can now target primitive overloads.
-- Add `f64` `exp`, `log`, and `sqrt` primitives, plus `BigRat`-to-`i64` conversion for integral values.
-- Add `RunReport::can_stop` so scheduler progress can be distinguished from database updates.
-- Report full source paths in spans and error messages.
+- **Add name-indexed e-graph access for primitives and `rust_rule` callbacks.** The `Read` and `Write` APIs now support table lookup and mutation, table and constructor scans, schema queries, table-size queries, and indexed e-class traversal by name. `EGraph::read`, `EGraph::update`, and top-level scan methods expose the same capabilities outside callbacks. Invalid names, types, and arities return `Error::ApiError`. These APIs support out-of-tree extensions such as `unstable-subst` in `egglog-experimental` (#892, #895, #901, #986).
+- **Add container support to the term/proof encoding.** Programs can read and construct `Vec`, `Set`, `Map`, `MultiSet`, and `Pair` values in rule bodies (`set-get` remains unsupported). Body-created containers are proof side conditions and cannot be carried into actions. Container extraction is now deterministic, and maps extract in flat `(map-of k0 v0 …)` form (#927).
+- **Add `:naive` and `:unsafe-seminaive` rule options.** Both permit database reads on a rule's right-hand side. `:naive` matches the full database each iteration; `:unsafe-seminaive` keeps delta matching but can be evaluation-order dependent and is rejected by the term/proof encoding. The options are mutually exclusive (#912).
+- Add typed `EGraph` extension state that clones with the e-graph and is restored by `push` and `pop` (#884).
+- Add typechecking and evaluation APIs for body-defined primitives: `EGraph::typecheck_expr_with_bindings_and_output`, `Core::eval_resolved_expr`, and `Core::apply_primitive`. `unstable-fn` containers can now target primitive overloads (#881, #889).
+- Add `f64` `exp`, `log`, and `sqrt` primitives, plus `BigRat`-to-`i64` conversion for integral values (#890, #891).
+- Add `RunReport::can_stop` so scheduler progress can be distinguished from database updates (#882).
+- Report full source paths in spans and error messages (#886).
 
 ### Performance
 
-- Speed up query evaluation with sorted-array subset indexes and by sharing trie roots across compatible query plans. Measured improvements include about 33% on `gemma` from sorted indexes and about 15% on `whisper`, 12% on `gemma`, and 8% on `qwen3_moe` from trie sharing.
+- Speed up query evaluation with sorted-array subset indexes and by sharing trie roots across compatible query plans. Measured improvements include about 33% on `gemma` from sorted indexes and about 15% on `whisper`, 12% on `gemma`, and 8% on `qwen3_moe` from trie sharing (#948, #949).
 
 ### Bug fixes
 
-- Fix a crash where constrained bounded scans could return stale, deleted rows to primitives.
-- Replace many reachable panics with recoverable errors, including malformed declarations and commands, invalid primitive calls, unavailable proof operations, missing files, duplicate rule names, and unknown rulesets. Out-of-range partial primitives now return no result, variable-free scheduled rules execute correctly, and scheduler state is restored after errors.
-- Fix seminaive matching after nested containers are rebuilt in place.
-- Fix custom scheduler queries offering subsumed rows as fresh matches.
+- Fix a crash where constrained bounded scans could return stale, deleted rows to primitives (#964).
+- Replace many reachable panics with recoverable errors, including malformed declarations and commands, invalid primitive calls, unavailable proof operations, missing files, duplicate rule names, and unknown rulesets. Out-of-range partial primitives now return no result, variable-free scheduled rules execute correctly, and scheduler state is restored after errors (#876, #908, #920).
+- Fix seminaive matching after nested containers are rebuilt in place (#888).
+- Fix custom scheduler queries offering subsumed rows as fresh matches (#885).
 - Fix multi-column secondary indexes returning rows out of order or recording duplicates during rebuilds (#914).
-- Fix builds of egglog as a library with default features disabled.
-- Improve printed syntax: nullary calls render as `(foo)`, and string literals escape `"` and `\` so they round-trip through the parser.
+- Fix builds of egglog as a library with default features disabled (#961).
+- Improve printed syntax: nullary calls render as `(foo)`, and string literals escape `"` and `\` so they round-trip through the parser (#887, #920).
 
 ## [2.0.0] - 2026-02-11
 
 Bigger changes
 
-- **Breaking:** extraction APIs now return `TermId` values paired with a `TermDag` instead of returning owned `Term` values. This affects `EGraph::extract_value`, `Extractor::extract_best`, `EGraph::function_to_dag`, and the extraction variants of `CommandOutput`.
+- **Breaking:** extraction APIs now return `TermId` values paired with a `TermDag` instead of returning owned `Term` values. This affects `EGraph::extract_value`, `Extractor::extract_best`, `EGraph::function_to_dag`, and the extraction variants of `CommandOutput` (#789).
 - Index catalog optimized for small set of indices (#719)
 - Warn when globals lack the $ prefix; require globals to use the `$` prefix; missing prefixes now log a warning by default and can be upgraded to errors with `--strict-mode` or `EGraph::set_strict_mode`. (#722)
 - Rename global vars in tests (#792, #800)
