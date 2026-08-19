@@ -200,8 +200,9 @@ Update its `Cargo.toml` as follows:
 3. In `CHANGELOG.md`, move the user-facing changes from `Unreleased` into a
    section for `$EXPERIMENTAL_RELEASE` and the release date, add a new empty
    `Unreleased` section, and update the comparison links.
-4. Update the README dependency example and concise feature documentation to
-   match the release.
+4. Update the README dependency example.
+5. Review the crate, module, and public-item rustdoc so it accurately describes
+   the released features and APIs.
 
 Update its lockfile and test it:
 
@@ -210,7 +211,7 @@ cargo update
 cargo test --release
 cargo fmt --check
 cargo clippy --tests -- -D warnings
-cargo doc --no-deps --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 git diff --check
 git status --short
 ```
