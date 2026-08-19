@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, TreeAdditiveCostModel};
+use extract::{AdditiveCostModel, DefaultCost};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -1739,7 +1739,7 @@ impl EGraph {
 
                 return if n == 0 {
                     let extracted =
-                        self.extract_best(vec![(sort, x)], TreeAdditiveCostModel::default())?;
+                        self.extract_best(vec![(sort, x)], AdditiveCostModel::default())?;
                     let mut terms = extracted.terms;
                     let extracted_root = terms
                         .pop()
@@ -1764,7 +1764,7 @@ impl EGraph {
                     let extracted = self.extract_variants(
                         vec![(sort, x)],
                         n as usize,
-                        TreeAdditiveCostModel::default(),
+                        AdditiveCostModel::default(),
                     )?;
                     let terms: Vec<TermId> = extracted
                         .variants
@@ -1853,7 +1853,7 @@ impl EGraph {
                         Ok((expr.output_type(), value))
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
-                let extracted = self.extract_best(roots, TreeAdditiveCostModel::default())?;
+                let extracted = self.extract_best(roots, AdditiveCostModel::default())?;
                 let termdag = extracted.termdag;
                 let terms = extracted
                     .terms

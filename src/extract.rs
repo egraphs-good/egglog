@@ -1,25 +1,93 @@
+//! Cost models used by extraction.
+//!
+//! [`Cost`] is the minimum requirement for extraction: costs can be cloned and
+//! ordered. A [`TotalCostModel`] computes complete enode and container costs
+//! directly and therefore needs no algebraic operation on its cost type.
+//!
+//! [`CombinableCost`] adds an identity and a lawful combination operation.
+//! [`MarginalCostModel`] describes intrinsic enode and container costs, while
+//! [`FoldCostModel`] uses that operation to fold those marginals together with
+//! selected child costs. Every `FoldCostModel` is therefore also a
+//! `TotalCostModel`. Experimental DAG extraction consumes a
+//! `MarginalCostModel` directly so it can charge each shared dependency once.
+
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
 use std::collections::VecDeque;
-use std::fmt::Debug;
 
-/// Shared primitive value cost hook for extraction cost models.
+/// A value that can be used to rank extraction candidates.
+pub trait Cost: Clone + Ord {}
+
+impl<T: Clone + Ord> Cost for T {}
+
+/// An extraction cost with an identity and a combination operation.
+///
+/// Implementations must make `identity` a two-sided identity and `combine`
+/// associative, commutative, deterministic, non-panicking, and monotone with
+/// respect to [`Cost`]'s ordering. Rust cannot enforce these laws.
+pub trait CombinableCost: Cost {
+    /// The identity cost, usually zero.
+    fn identity() -> Self;
+
+    /// Combines two costs without overflowing or panicking.
+    fn combine(self, other: &Self) -> Self;
+}
+
+macro_rules! combinable_unsigned_cost {
+    ($($cost:ty),* $(,)?) => {$(
+        impl CombinableCost for $cost {
+            fn identity() -> Self {
+                0
+            }
+
+            fn combine(self, other: &Self) -> Self {
+                self.saturating_add(*other)
+            }
+        }
+    )*};
+}
+
+combinable_unsigned_cost!(u8, u16, u32, u64, u128, usize);
+
+macro_rules! combinable_exact_cost {
+    ($($cost:ty),* $(,)?) => {$(
+        impl CombinableCost for $cost {
+            fn identity() -> Self {
+                use num::Zero;
+                Self::zero()
+            }
+
+            fn combine(self, other: &Self) -> Self {
+                self + other
+            }
+        }
+    )*};
+}
+
+combinable_exact_cost!(num::BigInt, num::BigRational);
+
+/// Computes the cost of primitive values, which have no selected children.
 pub trait BaseCostModel<C: Cost> {
-    /// Compute the cost of a (non-container) primitive value.
-    ///
-    /// Base values have no children, so there is no total-vs-marginal distinction.
+    /// Computes the cost of a non-container primitive value.
     fn base_value_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C;
 }
 
-/// An interface for tree extraction cost models.
-///
-/// Cost models should usually make a term no cheaper than its subterms; that
-/// rules out cycles in common extraction workloads. More specialized models may
-/// assign lower costs to larger terms, but then the model is responsible for
-/// avoiding negative-cost cycles and cyclic extracted terms.
-pub trait TreeCostModel<C: Cost>: BaseCostModel<C> {
-    /// The total cost of an e-node with its selected children.
+/// Computes intrinsic costs that exclude selected child and element costs.
+pub trait MarginalCostModel<C: CombinableCost>: BaseCostModel<C> {
+    /// Computes the marginal cost of an enode, excluding its children.
+    fn marginal_enode_cost(&self, egraph: &EGraph, func: &Function, enode: &Enode<'_>) -> C;
+
+    /// Computes the marginal cost of a container, excluding its elements.
+    fn marginal_container_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C {
+        let _ = (egraph, sort, value);
+        C::identity()
+    }
+}
+
+/// Computes complete costs for enodes and containers with selected children.
+pub trait TotalCostModel<C: Cost>: BaseCostModel<C> {
+    /// Computes the total cost of an enode with its selected children.
     fn total_enode_cost(
         &self,
         egraph: &EGraph,
@@ -28,9 +96,71 @@ pub trait TreeCostModel<C: Cost>: BaseCostModel<C> {
         child_costs: &[C],
     ) -> C;
 
-    /// The total cost of a container value with its selected elements.
-    ///
-    /// The default cost for containers is the combined total cost of all elements.
+    /// Computes the total cost of a container with its selected elements.
+    fn total_container_cost(
+        &self,
+        egraph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+        element_costs: &[C],
+    ) -> C;
+}
+
+/// Derives total costs by folding marginal costs with selected child costs.
+///
+/// Implement this trait to accept the default combine-based folds or override
+/// either fold for context-sensitive tree extraction. This opt-in is separate
+/// from [`MarginalCostModel`] so custom models can choose between this derived
+/// implementation and a direct [`TotalCostModel`] implementation.
+pub trait FoldCostModel<C: CombinableCost>: MarginalCostModel<C> {
+    /// Folds an enode's marginal cost together with its selected child costs.
+    fn fold_enode_cost(
+        &self,
+        egraph: &EGraph,
+        func: &Function,
+        enode: &Enode<'_>,
+        marginal_cost: C,
+        child_costs: &[C],
+    ) -> C {
+        let _ = (egraph, func, enode);
+        child_costs
+            .iter()
+            .fold(marginal_cost, |cost, child| cost.combine(child))
+    }
+
+    /// Folds a container's marginal cost with its selected element costs.
+    fn fold_container_cost(
+        &self,
+        egraph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+        marginal_cost: C,
+        element_costs: &[C],
+    ) -> C {
+        let _ = (egraph, sort, value);
+        element_costs
+            .iter()
+            .fold(marginal_cost, |cost, element| cost.combine(element))
+    }
+}
+
+impl<C: CombinableCost, M: FoldCostModel<C>> TotalCostModel<C> for M {
+    fn total_enode_cost(
+        &self,
+        egraph: &EGraph,
+        func: &Function,
+        enode: &Enode<'_>,
+        child_costs: &[C],
+    ) -> C {
+        self.fold_enode_cost(
+            egraph,
+            func,
+            enode,
+            self.marginal_enode_cost(egraph, func, enode),
+            child_costs,
+        )
+    }
+
     fn total_container_cost(
         &self,
         egraph: &EGraph,
@@ -38,108 +168,62 @@ pub trait TreeCostModel<C: Cost>: BaseCostModel<C> {
         value: Value,
         element_costs: &[C],
     ) -> C {
-        let _egraph = egraph;
-        let _sort = sort;
-        let _value = value;
-        element_costs
-            .iter()
-            .fold(C::identity(), |s, c| s.combine(c))
+        self.fold_container_cost(
+            egraph,
+            sort,
+            value,
+            self.marginal_container_cost(egraph, sort, value),
+            element_costs,
+        )
     }
 }
 
-/// Requirements for a type to be usable as an extraction cost.
-///
-/// Extraction cost accumulation relies on `identity` being neutral and
-/// `combine` being associative and commutative for the values used during
-/// extraction. Rust cannot enforce those laws, so custom cost implementations
-/// are responsible for preserving them. Raw floats do not implement this trait
-/// because extractors need a total order; use `OrderedFloat` for approximate
-/// floating-point costs.
-pub trait Cost: Clone + Ord + Eq + Debug {
-    /// The neutral value for [`Cost::combine`], usually zero.
-    fn identity() -> Self;
-
-    /// Accumulates two values, usually addition.
-    ///
-    /// This operation must not overflow or panic when given large values.
-    fn combine(self, other: &Self) -> Self;
-}
-
-macro_rules! cost_impl_int {
-    ($($cost:ty),*) => {$(
-        impl Cost for $cost {
-            fn identity() -> Self { 0 }
-            fn combine(self, other: &Self) -> Self {
-                self.saturating_add(*other)
-            }
-        }
-    )*};
-}
-cost_impl_int!(u8, u16, u32, u64, u128, usize);
-cost_impl_int!(i8, i16, i32, i64, i128, isize);
-
-macro_rules! cost_impl_num {
-    ($($cost:ty),*) => {$(
-        impl Cost for $cost {
-            fn identity() -> Self {
-                use num::Zero;
-                Self::zero()
-            }
-            fn combine(self, other: &Self) -> Self {
-                self + other
-            }
-        }
-    )*};
-}
-cost_impl_num!(num::BigInt, num::BigRational);
-use ordered_float::OrderedFloat;
-cost_impl_num!(OrderedFloat<f32>, OrderedFloat<f64>);
-
+/// The default extraction cost type.
 pub type DefaultCost = u64;
 
-/// A cost model that sums constructor, primitive leaf, and child costs.
+/// The default model for additive tree and DAG extraction costs.
 ///
-/// With the default cost type, constructor `:cost` declarations override
-/// `node_cost`. Other cost types can use this as a reusable base-value model,
-/// but still need their own `TreeCostModel` impl for constructor costs.
+/// With [`DefaultCost`], constructor `:cost` declarations override `node_cost`
+/// and selected child costs are combined with each constructor's cost. Other
+/// cost types can reuse this model's [`BaseCostModel`] implementation, but must
+/// define their own marginal or total constructor costs.
 #[derive(Clone, Debug)]
-pub struct TreeAdditiveCostModel<C = DefaultCost> {
-    /// The fallback cost for primitive leaves and constructors without `:cost`.
+pub struct AdditiveCostModel<C = DefaultCost> {
+    /// The fallback cost for primitive values and constructors without `:cost`.
     pub node_cost: C,
 }
 
-impl<C> TreeAdditiveCostModel<C> {
+impl<C> AdditiveCostModel<C> {
+    /// Creates an additive model with the given fallback node cost.
     pub fn new(node_cost: C) -> Self {
         Self { node_cost }
     }
 }
 
-impl Default for TreeAdditiveCostModel<DefaultCost> {
+impl Default for AdditiveCostModel<DefaultCost> {
     fn default() -> Self {
         Self { node_cost: 1 }
     }
 }
 
-impl<C: Cost> BaseCostModel<C> for TreeAdditiveCostModel<C> {
+impl<C: Cost> BaseCostModel<C> for AdditiveCostModel<C> {
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> C {
         self.node_cost.clone()
     }
 }
 
-impl TreeCostModel<DefaultCost> for TreeAdditiveCostModel<DefaultCost> {
-    fn total_enode_cost(
+impl MarginalCostModel<DefaultCost> for AdditiveCostModel<DefaultCost> {
+    fn marginal_enode_cost(
         &self,
         egraph: &EGraph,
         func: &Function,
         _enode: &Enode<'_>,
-        child_costs: &[DefaultCost],
     ) -> DefaultCost {
-        child_costs.iter().fold(
-            func.extraction_head_cost(egraph, self.node_cost),
-            |cost, child| cost.combine(child),
-        )
+        func.extraction_head_cost(egraph, self.node_cost)
     }
 }
+
+impl FoldCostModel<DefaultCost> for AdditiveCostModel<DefaultCost> {}
 
 #[derive(Clone, Debug)]
 pub struct ExtractedTerm<C> {
@@ -166,16 +250,21 @@ pub struct ExtractedTermVariants<C> {
     pub variants: Vec<Vec<ExtractedTerm<C>>>,
 }
 
-/// The default, Bellman-Ford like extractor. This extractor is optimal for [`TreeCostModel`].
+/// The default, Bellman-Ford like extractor. This extractor is optimal for [`TotalCostModel`].
 ///
 /// Note that this assumes optimal substructure in the cost model, that is, a lower-cost
 /// subterm should always lead to a non-worse superterm, to guarantee the extracted term
 /// being optimal under the given cost model.
 /// If this is not followed, the extractor may panic on reconstruction
+///
+/// Cost models should usually make a term no cheaper than its subterms; that
+/// rules out cycles in common extraction workloads. More specialized models may
+/// assign lower costs to larger terms, but then the model is responsible for
+/// avoiding negative-cost cycles and cyclic extracted terms.
 struct Extractor<C: Cost> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
-    cost_model: Box<dyn TreeCostModel<C>>,
+    cost_model: Box<dyn TotalCostModel<C>>,
     costs: HashMap<String, HashMap<Value, C>>,
     topo_rnk_cnt: usize,
     topo_rnk: HashMap<String, HashMap<Value, usize>>,
@@ -192,7 +281,7 @@ impl<C: Cost> Extractor<C> {
     fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
-        cost_model: impl TreeCostModel<C> + 'static,
+        cost_model: impl TotalCostModel<C> + 'static,
     ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
@@ -568,8 +657,6 @@ impl<C: Cost> Extractor<C> {
 
         match self.compute_cost_node(egraph, canonical_value, &sort) {
             Some(best_cost) => {
-                log::debug!("Best cost for the extract root: {best_cost:?}");
-
                 let term = self.reconstruct_termdag_node_helper(
                     egraph,
                     termdag,
@@ -775,7 +862,7 @@ impl EGraph {
     ///
     /// This is the normal user extraction path: it respects `:unextractable`
     /// and hidden internal functions.
-    pub fn extract_best<C: Cost, M: TreeCostModel<C> + 'static>(
+    pub fn extract_best<C: Cost, M: TotalCostModel<C> + 'static>(
         &self,
         roots: Vec<(ArcSort, Value)>,
         cost_model: M,
@@ -795,7 +882,7 @@ impl EGraph {
     }
 
     /// Extract up to `nvariants` default tree root variants for each requested root.
-    pub fn extract_variants<C: Cost, M: TreeCostModel<C> + 'static>(
+    pub fn extract_variants<C: Cost, M: TotalCostModel<C> + 'static>(
         &self,
         roots: Vec<(ArcSort, Value)>,
         nvariants: usize,
@@ -857,7 +944,7 @@ impl EGraph {
             })
             .collect();
         let ExtractedTerms { mut termdag, terms } =
-            self.extract_best(roots, TreeAdditiveCostModel::default())?;
+            self.extract_best(roots, AdditiveCostModel::default())?;
         let mut terms = terms.into_iter();
 
         for row in rows {

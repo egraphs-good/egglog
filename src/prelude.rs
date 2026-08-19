@@ -107,7 +107,7 @@
 //! let (sort, value) = eg.eval_expr(&exprs::var("$root"))?;
 //! let extracted = eg.extract_best(
 //!     vec![(sort, value)],
-//!     egglog::extract::TreeAdditiveCostModel::default(),
+//!     egglog::extract::AdditiveCostModel::default(),
 //! )?;
 //! let root = extracted.terms.into_iter().next().unwrap().unwrap();
 //! let _text = extracted.termdag.to_string(root.term);

@@ -1,21 +1,13 @@
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
-    extract::{BaseCostModel, Cost, DefaultCost, TreeAdditiveCostModel, TreeCostModel},
+    extract::{
+        AdditiveCostModel, BaseCostModel, CombinableCost, DefaultCost, FoldCostModel,
+        MarginalCostModel, TotalCostModel,
+    },
     *,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct CustomCost(u128);
-
-impl Cost for CustomCost {
-    fn identity() -> Self {
-        Self(0)
-    }
-
-    fn combine(self, other: &Self) -> Self {
-        Self(self.0 + other.0)
-    }
-}
+type CustomCost = u128;
 
 struct CustomCostModel {
     node_cost: CustomCost,
@@ -23,26 +15,71 @@ struct CustomCostModel {
 
 impl BaseCostModel<CustomCost> for CustomCostModel {
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
-        self.node_cost.clone()
+        self.node_cost
     }
 }
 
-impl TreeCostModel<CustomCost> for CustomCostModel {
-    fn total_enode_cost(
+impl MarginalCostModel<CustomCost> for CustomCostModel {
+    fn marginal_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        _func: &Function,
+        _enode: &Enode<'_>,
+    ) -> CustomCost {
+        self.node_cost
+    }
+}
+
+impl FoldCostModel<CustomCost> for CustomCostModel {
+    fn fold_enode_cost(
         &self,
         _egraph: &EGraph,
         func: &Function,
         _enode: &Enode<'_>,
+        marginal_cost: CustomCost,
         child_costs: &[CustomCost],
     ) -> CustomCost {
-        let children_total = child_costs
+        let child_cost = child_costs
             .iter()
             .fold(CustomCost::identity(), |cost, child| cost.combine(child));
         if func.name() == "Wide" {
-            CustomCost(children_total.0 * 10)
+            child_cost.saturating_mul(10)
         } else {
-            children_total.combine(&self.node_cost)
+            marginal_cost.combine(&child_cost)
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct OrderedOnlyCost(u128);
+
+struct DirectTotalCostModel;
+
+impl BaseCostModel<OrderedOnlyCost> for DirectTotalCostModel {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> OrderedOnlyCost {
+        OrderedOnlyCost(1)
+    }
+}
+
+impl TotalCostModel<OrderedOnlyCost> for DirectTotalCostModel {
+    fn total_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        _func: &Function,
+        _enode: &Enode<'_>,
+        child_costs: &[OrderedOnlyCost],
+    ) -> OrderedOnlyCost {
+        OrderedOnlyCost(1 + child_costs.iter().map(|cost| cost.0).sum::<u128>())
+    }
+
+    fn total_container_cost(
+        &self,
+        _egraph: &EGraph,
+        _sort: &ArcSort,
+        _value: Value,
+        element_costs: &[OrderedOnlyCost],
+    ) -> OrderedOnlyCost {
+        OrderedOnlyCost(element_costs.iter().map(|cost| cost.0).sum())
     }
 }
 
@@ -555,23 +592,21 @@ fn test_extract_variants1() {
 }
 
 #[test]
-fn test_tree_extract_accepts_custom_cost_type() {
+fn fold_cost_model_accepts_custom_enode_fold() {
     let mut egraph = EGraph::default();
     add_daggy_example(&mut egraph);
 
     let (sort, value) = daggy_root(&mut egraph);
 
-    let extracted = egraph
+    let extracted: extract::ExtractedTerms<u128> = egraph
         .extract_best(
             vec![(sort.clone(), value)],
-            CustomCostModel {
-                node_cost: CustomCost(1),
-            },
+            CustomCostModel { node_cost: 1 },
         )
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
-    assert_eq!(root.cost, CustomCost(5));
+    assert_eq!(root.cost, 5);
     let extracted_term = extracted.termdag.to_string(root.term);
     assert_eq!(extracted_term, "(Pair (Leaf 1) (Leaf 2))");
     let extracted_expr = egraph
@@ -584,14 +619,40 @@ fn test_tree_extract_accepts_custom_cost_type() {
 }
 
 #[test]
-fn tree_additive_cost_model_uses_configured_default_node_cost() {
+fn total_cost_model_does_not_require_combinable_cost() {
+    let mut egraph = EGraph::default();
+    add_daggy_example(&mut egraph);
+
+    let (sort, value) = daggy_root(&mut egraph);
+    let extracted = egraph
+        .extract_best(vec![(sort, value)], DirectTotalCostModel)
+        .unwrap();
+    let root = extracted.terms.into_iter().next().unwrap().unwrap();
+
+    assert_eq!(root.cost, OrderedOnlyCost(5));
+    assert_eq!(
+        extracted.termdag.to_string(root.term),
+        "(Pair (Leaf 1) (Leaf 2))"
+    );
+}
+
+#[test]
+fn combinable_unsigned_cost_saturates() {
+    assert_eq!(<usize as CombinableCost>::identity(), 0);
+    assert_eq!(usize::MAX.combine(&1), usize::MAX);
+    assert_eq!(u64::MAX.combine(&1), u64::MAX);
+    assert_eq!(u128::MAX.combine(&1), u128::MAX);
+}
+
+#[test]
+fn additive_cost_model_uses_configured_default_node_cost() {
     let mut egraph = EGraph::default();
     add_daggy_example(&mut egraph);
 
     let (sort, value) = daggy_root(&mut egraph);
 
     let extracted = egraph
-        .extract_best(vec![(sort, value)], TreeAdditiveCostModel::new(2))
+        .extract_best(vec![(sort, value)], AdditiveCostModel::new(2))
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
@@ -630,7 +691,7 @@ fn extract_best_returns_none_for_unextractable_roots() {
     let extracted = egraph
         .extract_best(
             vec![(sort.clone(), visible), (sort, hidden)],
-            TreeAdditiveCostModel::default(),
+            AdditiveCostModel::default(),
         )
         .unwrap();
 
