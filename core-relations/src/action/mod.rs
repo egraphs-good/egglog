@@ -3,6 +3,7 @@
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::{
+    any::Any,
     ops::Deref,
     sync::{
         Arc,
@@ -326,6 +327,7 @@ impl PredictedVals {
 
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
+    pub(crate) external_context: ExternalContext<'a>,
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a ExternalFunctions,
@@ -333,6 +335,16 @@ pub(crate) struct DbView<'a> {
     pub(crate) containers: &'a ContainerValues,
     pub(crate) notification_list: &'a NotificationList<TableId>,
 }
+
+/// A borrowed value an embedder can make visible to every [`ExecutionState`]
+/// created for one operation, for its [`ExternalFunction`]s to read back with
+/// [`ExecutionState::external_context`].
+///
+/// It is borrowed for exactly the operation that supplied it, so an embedder
+/// cannot mutate the state it shared while that operation runs.
+///
+/// [`ExternalFunction`]: crate::ExternalFunction
+pub type ExternalContext<'a> = Option<&'a (dyn Any + Send + Sync)>;
 
 /// A handle on a database that may be in the process of running a rule.
 ///
@@ -466,6 +478,12 @@ impl<'a> ExecutionState<'a> {
         self.db.external_funcs[func].invoke(self, args)
     }
 
+    /// The value the caller of this operation supplied as its
+    /// [`ExternalContext`], if any.
+    pub fn external_context(&self) -> ExternalContext<'a> {
+        self.db.external_context
+    }
+
     pub fn inc_counter(&self, ctr: CounterId) -> usize {
         self.db.counters.inc(ctr)
     }
@@ -485,11 +503,8 @@ impl<'a> ExecutionState<'a> {
         &self.db.table_info[table].table
     }
 
-    /// Iterate over visible rows in `table` whose `col` equals `value`.
-    ///
-    /// Cacheable columns use the table's lazy column index; uncacheable columns
-    /// fall back to scanning with the equality constraint. The callback
-    /// receives each matching row as a full value slice.
+    /// Call `f` on each visible row in `table` whose `col` equals `value`,
+    /// with the whole row as a value slice.
     pub fn for_each_matching_col(
         &self,
         table: TableId,
@@ -499,29 +514,28 @@ impl<'a> ExecutionState<'a> {
     ) {
         let table_info = &self.db.table_info[table];
         let constraint = Constraint::EqConst { col, val: value };
-        let (mut subset, _fast, mut slow) = table_info
-            .table
-            .split_fast_slow(std::slice::from_ref(&constraint));
-
-        debug_assert!(slow.iter().all(|c| matches!(c, Constraint::EqConst { .. })));
-
-        if !*table_info
+        // Same order of preference as `Database::process_constraints`, for the
+        // one equality this takes: a sort the table already has, else an index
+        // on the column if it can be cached, else the constraint applied during
+        // the scan.
+        let cacheable = !*table_info
             .spec
             .uncacheable_columns
             .get(col)
-            .unwrap_or(&false)
-        {
+            .unwrap_or(&false);
+        let (subset, slow) = if let Some(subset) = table_info.table.fast_subset(&constraint) {
+            (subset, Vec::new())
+        } else if cacheable {
             let index = get_column_index_from_tableinfo(table_info, col);
-            match index.get().unwrap().get_subset(&value) {
-                Some(s) => {
-                    with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
-                }
-                None => {
-                    subset = Subset::empty();
-                }
-            }
-            slow.clear();
-        }
+            let subset = match index.get().unwrap().get_subset(&value) {
+                Some(subset) => with_pool_set(|ps| subset.to_owned(&ps.get_pool())),
+                // No rows hold this key.
+                None => Subset::empty(),
+            };
+            (subset, Vec::new())
+        } else {
+            (table_info.table.all(), vec![constraint])
+        };
 
         let imp = &table_info.table;
         let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
@@ -530,7 +544,7 @@ impl<'a> ExecutionState<'a> {
 
         macro_rules! drain_buf {
             ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
+                for (_, row) in $buf.iter() {
                     f(row);
                 }
                 $buf.clear();

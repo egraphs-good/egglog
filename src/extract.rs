@@ -257,7 +257,7 @@ impl<C: Cost> Extractor<C> {
                         let func = egraph.functions.get(h).unwrap();
                         // For view tables, children are all but the last input (which is the e-class)
                         let num_children = func.extraction_num_children();
-                        for ch in func.schema.input.iter().take(num_children) {
+                        for ch in func.func_type.input.iter().take(num_children) {
                             let ch_name = ch.name();
                             if !seen.contains(ch_name) {
                                 q.push_back(ch.clone());
@@ -332,7 +332,7 @@ impl<C: Cost> Extractor<C> {
         func: &Function,
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
-        let sorts = &func.schema.input;
+        let sorts = &func.func_type.input;
         let num_children = func.extraction_num_children();
         for (value, sort) in row.vals.iter().take(num_children).zip(sorts.iter()) {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
@@ -379,7 +379,7 @@ impl<C: Cost> Extractor<C> {
         row: &egglog_bridge::ScanEntry,
         func: &Function,
     ) -> usize {
-        let sorts = &func.schema.input;
+        let sorts = &func.func_type.input;
         let num_children = func.extraction_num_children();
         row.vals
             .iter()
@@ -531,7 +531,7 @@ impl<C: Cost> Extractor<C> {
                 .get(&value)
                 .unwrap();
             let func = egraph.functions.get(func_name).unwrap();
-            let ch_sorts = &func.schema.input;
+            let ch_sorts = &func.func_type.input;
 
             let num_children = func.extraction_num_children();
             let output_name = func.extraction_term_name();
@@ -676,7 +676,7 @@ impl<C: Cost> Extractor<C> {
             for (cost, func_name, hyperedge) in root_variants {
                 let mut ch_terms: Vec<TermId> = Vec::new();
                 let func = egraph.functions.get(&func_name).unwrap();
-                let ch_sorts = &func.schema.input;
+                let ch_sorts = &func.func_type.input;
                 let num_children = func.extraction_num_children();
                 // For view tables, children are all but the last input (which is the e-class)
                 for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()).take(num_children) {
@@ -729,9 +729,9 @@ impl Function {
     /// This is used by extraction to determine which sort a table produces values for.
     pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
         if self.decl.term_constructor.is_some() {
-            self.schema.input.last().unwrap()
+            self.func_type.input.last().unwrap()
         } else {
-            &self.schema.output
+            &self.func_type.output
         }
     }
 
@@ -739,9 +739,9 @@ impl Function {
     /// For view tables, this excludes the last column (the e-class).
     pub(crate) fn extraction_num_children(&self) -> usize {
         if self.decl.term_constructor.is_some() {
-            self.schema.input.len() - 1
+            self.func_type.input.len() - 1
         } else {
-            self.schema.input.len()
+            self.func_type.input.len()
         }
     }
 
@@ -762,10 +762,10 @@ impl Function {
             // For view tables: input is [children..., eclass], output is view_sort
             // Row is [children..., eclass, view_sort]
             // We want eclass which is at index input.len() - 1
-            self.schema.input.len() - 1
+            self.func_type.input.len() - 1
         } else {
             // For regular tables: row is [inputs..., output]
-            self.schema.input.len()
+            self.func_type.input.len()
         }
     }
 }
@@ -825,9 +825,9 @@ impl EGraph {
             .functions
             .get(sym)
             .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
-        let mut cell_sorts = func.schema.input.clone();
+        let mut cell_sorts = func.func_type.input.clone();
         if include_output {
-            cell_sorts.push(func.schema.output.clone());
+            cell_sorts.push(func.func_type.output.clone());
         }
         let mut rows: Vec<Vec<Value>> = Vec::new();
         let mut inputs: Vec<TermId> = Vec::new();
@@ -862,7 +862,7 @@ impl EGraph {
 
         for row in rows {
             let mut children: Vec<TermId> = Vec::new();
-            for _ in row.iter().take(func.schema.input.len()) {
+            for _ in row.iter().take(func.func_type.input.len()) {
                 let term = terms
                     .next()
                     .expect("one extraction result per displayed input")

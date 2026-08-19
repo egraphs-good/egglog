@@ -160,9 +160,10 @@ impl ContainerValues {
     }
 
     /// Rebuild a single container value by remapping each contained value
-    /// through `remap`, returning the (possibly new) interned value, or `value`
-    /// unchanged if it is not a registered container of the type behind
-    /// `type_id`.
+    /// through `remap`, returning the (possibly new) interned value, or `None`
+    /// if `value` is not a registered container of the type behind `type_id`.
+    ///
+    /// The original container is left alone; the result is interned separately.
     ///
     /// Unlike [`ContainerValues::rebuild_all`], which drives rebuilds off the
     /// backend union-find, the caller supplies the remapping explicitly and
@@ -173,15 +174,10 @@ impl ContainerValues {
         value: Value,
         exec_state: &mut ExecutionState,
         remap: &(dyn Fn(Value) -> Value + Send + Sync),
-    ) -> Value {
-        let Some(id) = self.container_ids.get(&type_id) else {
-            return value;
-        };
-        let Some(env) = self.data.get(id) else {
-            return value;
-        };
+    ) -> Option<Value> {
+        let id = self.container_ids.get(&type_id)?;
+        let env = self.data.get(id)?;
         env.rebuild_val_with(value, exec_state, remap)
-            .unwrap_or(value)
     }
 
     /// Apply the given rebuild to the contents of each container.

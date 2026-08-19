@@ -36,6 +36,13 @@ use thiserror::Error;
 /// those, see [`enum@crate::Error`].
 #[derive(Debug, Error)]
 pub enum ApiError {
+    /// The execution was created without the e-graph's declarations, so a
+    /// table's signature cannot be resolved. Distinct from a missing table:
+    /// nothing was looked up.
+    #[error(
+        "declarations are not available in this execution, so the signature of `{name}` cannot be read"
+    )]
+    SchemasUnavailable { name: String },
     #[error("no table named `{name}` is registered")]
     MissingTable { name: String },
 

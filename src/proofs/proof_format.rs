@@ -1,8 +1,8 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
-    ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
+    ast::{ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::{proof_checker::gather_globals, proof_encoding_helpers::EncodingNames},
-    typechecking::{FuncType, PrimitiveValidator},
+    typechecking::PrimitiveValidator,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
@@ -598,16 +598,9 @@ impl ProofStore {
             // In proof normal form, this is the only way that function calls apppear.
             ResolvedFact::Eq(
                 _span,
-                ResolvedExpr::Call(
-                    _span2,
-                    head @ ResolvedCall::Func(FuncType {
-                        subtype: FunctionSubtype::Custom,
-                        ..
-                    }),
-                    args,
-                ),
+                ResolvedExpr::Call(_span2, head @ ResolvedCall::Func(_), args),
                 ResolvedExpr::Var(_span3, v),
-            ) => {
+            ) if head.is_custom_func() => {
                 let term = proof.rhs();
                 let children = match self.term_dag.get(term) {
                     Term::App(head_name, children) if head_name == head.name() => children.clone(),

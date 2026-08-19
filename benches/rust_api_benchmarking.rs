@@ -1,3 +1,11 @@
+#[divan::bench(sample_count = 20)]
+fn resolve_declaration_heavy(bencher: divan::Bencher) {
+    let program = include_str!("../tests/taylor51.egg");
+    bencher
+        .with_inputs(egglog::EGraph::default)
+        .bench_local_values(|mut egraph| egraph.resolve_program(None, program).unwrap());
+}
+
 #[derive(Clone, Copy)]
 struct RustRuleBenchCase {
     n_facts_input: Option<usize>,

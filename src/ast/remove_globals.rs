@@ -57,12 +57,12 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         var.is_global_ref,
         "resolved_var_to_call called on non-global var"
     );
-    ResolvedCall::Func(FuncType {
+    ResolvedCall::Func(Arc::new(FuncType {
         name: var.name.clone(),
         subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
-    })
+    }))
 }
 
 /// TODO (yz) it would be better to implement replace_global_var
@@ -93,12 +93,12 @@ impl GlobalRemover<'_> {
                 GenericAction::Let(span, name, expr) => {
                     let ty = expr.output_type();
 
-                    let resolved_call = ResolvedCall::Func(FuncType {
+                    let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                         name: name.name.clone(),
                         subtype: FunctionSubtype::Custom,
                         input: vec![],
                         output: ty.clone(),
-                    });
+                    }));
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,
                         subtype: FunctionSubtype::Custom,
@@ -106,7 +106,6 @@ impl GlobalRemover<'_> {
                             input: vec![],
                             output: ty.name().to_owned(),
                         },
-                        resolved_schema: resolved_call.clone(),
                         merge: None,
                         cost: None,
                         unextractable: true,

@@ -1301,12 +1301,19 @@ pub enum FunctionSubtype {
     Custom,
 }
 
+impl FunctionSubtype {
+    /// How this subtype is spelled in a program, and in diagnostics about one.
+    pub fn label(self) -> &'static str {
+        match self {
+            FunctionSubtype::Constructor => "constructor",
+            FunctionSubtype::Custom => "function",
+        }
+    }
+}
+
 impl Display for FunctionSubtype {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            FunctionSubtype::Constructor => write!(f, "constructor"),
-            FunctionSubtype::Custom => write!(f, "function"),
-        }
+        write!(f, "{}", self.label())
     }
 }
 
@@ -1320,10 +1327,9 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
-    /// Untyped schema
+    /// The schema as written. The resolved signature lives in `TypeInfo`,
+    /// keyed by `name`.
     pub schema: Schema,
-    /// Resolved schema after typechecking is stored here, otherwise "".
-    pub resolved_schema: Head,
     pub merge: Option<GenericExpr<Head, Leaf>>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
@@ -1391,7 +1397,6 @@ impl FunctionDecl {
             name,
             subtype: FunctionSubtype::Custom,
             schema,
-            resolved_schema: String::new(),
             merge,
             cost: None,
             unextractable: true,
@@ -1414,7 +1419,6 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
-            resolved_schema: String::new(),
             schema,
             merge: None,
             cost,
@@ -1440,7 +1444,6 @@ where
             name: self.name,
             subtype: self.subtype,
             schema: self.schema,
-            resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
             unextractable: self.unextractable,

@@ -192,6 +192,25 @@ fn primitive_error_in_run_schedule_returns_error() {
 }
 
 #[test]
+fn check_facts_stops_safely_in_parallel_mode() {
+    use std::fmt::Write;
+
+    let mut program = String::from("(relation Candidate (i64))\n");
+    for i in 0..20_000 {
+        writeln!(&mut program, "(Candidate {i})").unwrap();
+    }
+
+    let mut egraph = EGraph::new(32);
+    egraph.parse_and_run_program(None, &program).unwrap();
+    egraph
+        .parse_and_run_program(None, "(check (Candidate x))")
+        .unwrap();
+    egraph
+        .parse_and_run_program(None, "(check (Candidate 19999))")
+        .unwrap();
+}
+
+#[test]
 fn prove_exists_reports_query_mismatch() {
     let _ = env_logger::builder().is_test(true).try_init();
 

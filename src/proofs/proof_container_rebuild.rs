@@ -112,6 +112,8 @@ fn rebuild_with_leaders(
     cvs.rebuild_val_with(type_id, value, es, &|v| {
         leaders.get(&v).copied().unwrap_or(v)
     })
+    // The sort said this value is a container of that type.
+    .unwrap_or(value)
 }
 
 /// Recursively canonicalize a container `value` of sort `sort` for the term

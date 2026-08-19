@@ -15,7 +15,6 @@ use crate::{
     },
     core::ResolvedCall,
     proofs::proof_format::{Justification, ProofId, ProofStore, Proposition},
-    typechecking::FuncType,
     util::{HashMap, HashSet, SymbolGen},
 };
 use thiserror::Error;
@@ -1077,17 +1076,10 @@ impl ProofStore {
             // In the term representation, custom functions store output as last arg: f(args..., v)
             ResolvedFact::Eq(
                 _,
-                ResolvedExpr::Call(
-                    _,
-                    ResolvedCall::Func(FuncType {
-                        subtype: FunctionSubtype::Custom,
-                        name,
-                        ..
-                    }),
-                    args,
-                ),
+                ResolvedExpr::Call(_, call @ ResolvedCall::Func(_), args),
                 ResolvedExpr::Var(_, v),
-            ) => {
+            ) if call.is_custom_func() => {
+                let name = call.name();
                 // Get the output variable's term
                 let var_term = subst_with_globals.get(&v.name).copied().ok_or_else(|| {
                     ProofCheckErrorKind::UnboundVariable {
@@ -1113,7 +1105,7 @@ impl ProofStore {
                 // Add the output variable as the last argument
                 arg_terms.push(var_term);
 
-                let expected_term_id = self.term_dag.app(name.clone(), arg_terms);
+                let expected_term_id = self.term_dag.app(name.to_owned(), arg_terms);
 
                 // The proposition should be a reflexive equality for this term
                 if lhs != expected_term_id || rhs != expected_term_id {

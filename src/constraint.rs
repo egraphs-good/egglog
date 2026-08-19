@@ -1,8 +1,5 @@
 use crate::{
-    core::{
-        Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
-        StringOrEq,
-    },
+    core::{Atom, CoreAction, GenericCoreActions, GenericCoreRule, HeadOrEq, Query, StringOrEq},
     *,
 };
 use std::{cmp, rc::Rc};
@@ -770,30 +767,6 @@ impl Problem<AtomTerm, ArcSort> {
                 _ => (),
             }
         }
-        Ok(())
-    }
-
-    pub(crate) fn add_rule(
-        &mut self,
-        rule: &CoreRule,
-        typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
-        query_ctx: crate::Context,
-        action_ctx: crate::Context,
-    ) -> Result<(), TypeError> {
-        let CoreRule {
-            span: _,
-            head,
-            body,
-        } = rule;
-        // Rule body atoms run as the LHS query; head atoms run as the
-        // RHS action. Contexts come from the caller — currently rule
-        // bodies always typecheck under `Read` and actions under
-        // `Full`; whether the rule actually opts out of seminaive is
-        // decided post-typecheck by walking for non-`Pure`/non-`Write`
-        // primitive kinds.
-        self.add_query(body, typeinfo, query_ctx)?;
-        self.add_actions(head, typeinfo, symbol_gen, action_ctx)?;
         Ok(())
     }
 
