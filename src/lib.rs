@@ -366,11 +366,6 @@ impl Function {
         self.decl.term_constructor.as_deref()
     }
 
-    /// Whether this table is a declared constructor or relation table.
-    pub fn is_constructor(&self) -> bool {
-        self.decl.subtype == FunctionSubtype::Constructor
-    }
-
     /// Whether this constructor is excluded from ordinary extraction.
     pub fn is_unextractable(&self) -> bool {
         self.decl.unextractable
@@ -1846,6 +1841,17 @@ impl EGraph {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
 
+                // Preserve the command's file-error ordering: reject an invalid
+                // output path before evaluating expressions.
+                use std::io::Write;
+                let mut f = File::options()
+                    .append(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+
+                // Evaluation may mutate the e-graph, so finish it before
+                // extraction takes a shared borrow for its prepared costs.
                 let roots = exprs
                     .iter()
                     .map(|expr| {
@@ -1854,31 +1860,20 @@ impl EGraph {
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
                 let extracted = self.extract_best(roots, AdditiveCostModel::default())?;
-                let termdag = extracted.termdag;
                 let terms = extracted
                     .terms
                     .into_iter()
-                    .map(|extracted_root| {
-                        extracted_root
+                    .map(|root| {
+                        root.map(|root| extracted.termdag.to_string(root.term))
                             .ok_or_else(|| {
                                 Error::ExtractError(
                                     "Unable to find any valid extraction".to_string(),
                                 )
                             })
-                            .map(|root| root.term)
                     })
-                    .collect::<Result<Vec<_>, Error>>()?;
-
-                // append to file only after all requested roots have extracted
-                use std::io::Write;
-                let mut f = File::options()
-                    .append(true)
-                    .create(true)
-                    .open(&filename)
-                    .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-
+                    .collect::<Result<Vec<_>, _>>()?;
                 for term in terms {
-                    writeln!(f, "{}", termdag.to_string(term))
+                    writeln!(f, "{term}")
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
@@ -2341,12 +2336,17 @@ impl EGraph {
         self.functions.get(name)
     }
 
-    /// Return the typed child values stored inside a container-sort value.
+    /// Returns the typed child values stored inside a container-sort value.
+    ///
+    /// `sort` must be a container sort and `value` must belong to that sort.
     pub fn container_inner_values(&self, sort: &ArcSort, value: Value) -> Vec<(ArcSort, Value)> {
         sort.inner_values(self.backend.container_values(), value)
     }
 
-    /// Reconstruct a base-sort value into a [`TermDag`].
+    /// Reconstructs a base-sort value into a [`TermDag`].
+    ///
+    /// `sort` must be a base sort and `value` must belong to that sort in this
+    /// e-graph.
     pub fn reconstruct_base_value(
         &self,
         sort: &ArcSort,
@@ -2356,8 +2356,11 @@ impl EGraph {
         sort.reconstruct_termdag_base(self.backend.base_values(), value, termdag)
     }
 
-    /// Reconstruct a container-sort value into a [`TermDag`] from extracted
-    /// element terms.
+    /// Reconstructs a container-sort value from its extracted element terms.
+    ///
+    /// `sort` and `value` must identify a container in this e-graph, and
+    /// `element_terms` must correspond to [`EGraph::container_inner_values`] in
+    /// the same order.
     pub fn reconstruct_container_value(
         &self,
         sort: &ArcSort,

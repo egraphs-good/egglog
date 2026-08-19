@@ -1,8 +1,10 @@
+use std::cell::Cell;
+
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
     extract::{
         AdditiveCostModel, BaseCostModel, CombinableCost, DefaultCost, FoldCostModel,
-        MarginalCostModel, TotalCostModel,
+        MarginalCostModel, TotalCostModel, TreeExtractor,
     },
     *,
 };
@@ -11,6 +13,39 @@ type CustomCost = u128;
 
 struct CustomCostModel {
     node_cost: CustomCost,
+}
+
+struct BorrowedCountingTotalCostModel<'a>(&'a Cell<usize>);
+
+impl BaseCostModel<DefaultCost> for BorrowedCountingTotalCostModel<'_> {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
+        self.0.set(self.0.get() + 1);
+        1
+    }
+}
+
+impl TotalCostModel<DefaultCost> for BorrowedCountingTotalCostModel<'_> {
+    fn total_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        _func: &Function,
+        _enode: &Enode<'_>,
+        child_costs: &[DefaultCost],
+    ) -> DefaultCost {
+        self.0.set(self.0.get() + 1);
+        1 + child_costs.iter().sum::<DefaultCost>()
+    }
+
+    fn total_container_cost(
+        &self,
+        _egraph: &EGraph,
+        _sort: &ArcSort,
+        _value: Value,
+        element_costs: &[DefaultCost],
+    ) -> DefaultCost {
+        self.0.set(self.0.get() + 1);
+        element_costs.iter().sum()
+    }
 }
 
 impl BaseCostModel<CustomCost> for CustomCostModel {
@@ -80,6 +115,47 @@ impl TotalCostModel<OrderedOnlyCost> for DirectTotalCostModel {
         element_costs: &[OrderedOnlyCost],
     ) -> OrderedOnlyCost {
         OrderedOnlyCost(element_costs.iter().map(|cost| cost.0).sum())
+    }
+}
+
+struct DirectAndMarginalCostModel;
+
+impl BaseCostModel<CustomCost> for DirectAndMarginalCostModel {
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
+        1
+    }
+}
+
+impl MarginalCostModel<CustomCost> for DirectAndMarginalCostModel {
+    fn marginal_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        _func: &Function,
+        _enode: &Enode<'_>,
+    ) -> CustomCost {
+        1
+    }
+}
+
+impl TotalCostModel<CustomCost> for DirectAndMarginalCostModel {
+    fn total_enode_cost(
+        &self,
+        _egraph: &EGraph,
+        _func: &Function,
+        _enode: &Enode<'_>,
+        child_costs: &[CustomCost],
+    ) -> CustomCost {
+        1 + child_costs.iter().sum::<CustomCost>()
+    }
+
+    fn total_container_cost(
+        &self,
+        _egraph: &EGraph,
+        _sort: &ArcSort,
+        _value: Value,
+        element_costs: &[CustomCost],
+    ) -> CustomCost {
+        element_costs.iter().sum()
     }
 }
 
@@ -634,6 +710,15 @@ fn total_cost_model_does_not_require_combinable_cost() {
         extracted.termdag.to_string(root.term),
         "(Pair (Leaf 1) (Leaf 2))"
     );
+
+    // A model may expose marginals for DAG extraction while defining tree
+    // totals directly; it opts into the blanket total implementation only by
+    // implementing FoldCostModel.
+    let (sort, value) = daggy_root(&mut egraph);
+    let extracted = egraph
+        .extract_best(vec![(sort, value)], DirectAndMarginalCostModel)
+        .unwrap();
+    assert_eq!(extracted.terms[0].as_ref().unwrap().cost, 5);
 }
 
 #[test]
@@ -652,7 +737,7 @@ fn additive_cost_model_uses_configured_default_node_cost() {
     let (sort, value) = daggy_root(&mut egraph);
 
     let extracted = egraph
-        .extract_best(vec![(sort, value)], AdditiveCostModel::new(2))
+        .extract_best(vec![(sort, value)], AdditiveCostModel { node_cost: 2 })
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
@@ -661,6 +746,116 @@ fn additive_cost_model_uses_configured_default_node_cost() {
         extracted.termdag.to_string(root.term),
         "(Pair (Leaf 1) (Leaf 2))"
     );
+}
+
+#[test]
+fn tree_extractor_reuses_costs_for_multiple_values() {
+    let mut egraph = EGraph::default();
+    add_daggy_example(&mut egraph);
+
+    let (sort, root_value) = daggy_root(&mut egraph);
+    let leaf = egraph
+        .parser
+        .get_expr_from_string(None, "(Leaf 9)")
+        .unwrap();
+    let (_, leaf_value) = egraph.eval_expr(&leaf).unwrap();
+    let calls = Cell::new(0);
+    let extractor = TreeExtractor::compute_costs_from_rootsorts(
+        Some(vec![sort.clone()]),
+        &egraph,
+        BorrowedCountingTotalCostModel(&calls),
+    );
+    assert!(calls.get() > 0);
+    let prepared_calls = calls.get();
+    let mut termdag = TermDag::default();
+
+    let root = extractor
+        .extract_best_with_sort(&mut termdag, root_value, sort.clone())
+        .unwrap();
+    let leaf = extractor
+        .extract_best_with_sort(&mut termdag, leaf_value, sort.clone())
+        .unwrap();
+
+    assert_eq!(termdag.to_string(root.term), "(Pair (Leaf 1) (Leaf 2))");
+    assert_eq!(termdag.to_string(leaf.term), "(Leaf 9)");
+    assert_eq!(calls.get(), prepared_calls);
+
+    let all_sorts =
+        TreeExtractor::compute_costs_from_rootsorts(None, &egraph, AdditiveCostModel::default());
+    let leaf = all_sorts
+        .extract_best_with_sort(&mut termdag, leaf_value, sort)
+        .unwrap();
+    assert_eq!(termdag.to_string(leaf.term), "(Leaf 9)");
+}
+
+#[test]
+fn tree_extractor_supports_reachable_sorts_and_zero_variants() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Child)
+            (constructor Leaf (i64) Child)
+            (sort Parent)
+            (constructor Wrap (Child) Parent)
+            (sort IntVec (Vec i64))
+            (let $root (Wrap (Leaf 1)))
+            "#,
+        )
+        .unwrap();
+
+    let child_expr = egraph
+        .parser
+        .get_expr_from_string(None, "(Leaf 1)")
+        .unwrap();
+    let (child_sort, child_value) = egraph.eval_expr(&child_expr).unwrap();
+    let parent_sort = egraph.get_arcsort_by(|sort| sort.name() == "Parent");
+    let primitive = egraph.parser.get_expr_from_string(None, "1").unwrap();
+    let (primitive_sort, primitive_value) = egraph.eval_expr(&primitive).unwrap();
+    let container = egraph
+        .parser
+        .get_expr_from_string(None, "(vec-of 1)")
+        .unwrap();
+    let (container_sort, container_value) = egraph.eval_expr(&container).unwrap();
+
+    let extractor = TreeExtractor::compute_costs_from_rootsorts(
+        Some(vec![parent_sort]),
+        &egraph,
+        AdditiveCostModel::default(),
+    );
+    let mut termdag = TermDag::default();
+
+    let variants =
+        extractor.extract_variants_with_sort(&mut termdag, child_value, 1, child_sort.clone());
+    assert_eq!(termdag.to_string(variants[0].term), "(Leaf 1)");
+    assert!(
+        extractor
+            .extract_variants_with_sort(&mut termdag, child_value, 0, child_sort)
+            .is_empty()
+    );
+    assert!(
+        extractor
+            .extract_variants_with_sort(&mut termdag, primitive_value, 0, primitive_sort.clone())
+            .is_empty()
+    );
+    assert!(
+        extractor
+            .extract_variants_with_sort(&mut termdag, container_value, 0, container_sort)
+            .is_empty()
+    );
+
+    let calls = Cell::new(0);
+    let extracted = egraph
+        .extract_variants(
+            vec![(primitive_sort, primitive_value)],
+            0,
+            BorrowedCountingTotalCostModel(&calls),
+        )
+        .unwrap();
+    assert_eq!(extracted.variants.len(), 1);
+    assert!(extracted.variants[0].is_empty());
+    assert_eq!(calls.get(), 0);
 }
 
 #[test]

@@ -89,8 +89,9 @@
 //!   representative for each requested root under a user-supplied cost
 //!   model.
 //!
-//! See the [`crate::extract`] module for custom cost types and batch
-//! extraction APIs.
+//! See the [`crate::extract`] module for custom cost types, batch extraction,
+//! and [`crate::extract::TreeExtractor`] when several values should reuse one
+//! sort-based cost preparation.
 //!
 //! To get the `(sort, Value)` pair an `extract_best` call needs in
 //! the first place, the easiest path is to let-bind a global name in

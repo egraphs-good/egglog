@@ -38,4 +38,5 @@ global name to it (`(let $root ...)`), resolve the global with
 [`EGraph::eval_expr`] to get its `(sort, Value)`, then call
 [`EGraph::extract_best`] with a cost model such as
 [`extract::AdditiveCostModel`]. The [`extract`] module also
-exposes custom cost types and variant extraction APIs.
+exposes custom cost types, variant extraction, and the reusable
+[`extract::TreeExtractor`] for preparing costs by sort once.

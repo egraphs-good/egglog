@@ -514,6 +514,7 @@ impl<'a> ExecutionState<'a> {
     ) {
         let table_info = &self.db.table_info[table];
         let constraint = Constraint::EqConst { col, val: value };
+
         // Same order of preference as `Database::process_constraints`, for the
         // one equality this takes: a sort the table already has, else an index
         // on the column if it can be cached, else the constraint applied during
