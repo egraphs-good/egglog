@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- **Add `Read::eclass_enodes`, and rename `Read::enodes_for_eclass` to `Read::constructor_enodes_for_eclass`.** The old name read as "the e-nodes of this e-class" but returned only the rows of the one table it was given. `eclass_enodes(eclass, f)` is the method that name promised: it spans every constructor, and `Enode` gained a `name` field saying which one each row came from. A caller that already knows the e-class's sort should still narrow to that sort's constructors and call `constructor_enodes_for_eclass`, which is one probe rather than one per constructor — a `Value` does not say what sort it belongs to, so the spanning version has to ask each of them.
+
 ## [3.0.0] - 2026-08-18
 
 ### Breaking changes

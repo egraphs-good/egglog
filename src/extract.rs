@@ -292,6 +292,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let head_name = func.extraction_term_name();
         let output_idx = func.extraction_output_index();
         let enode = Enode {
+            name: head_name,
             children: &row.vals[..output_idx],
             eclass: row.vals[output_idx],
             subsumed: row.subsumed,

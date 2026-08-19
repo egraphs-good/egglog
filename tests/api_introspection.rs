@@ -1,5 +1,6 @@
 //! Tests for the e-graph introspection a primitive body can reach:
-//! `Read::enodes_for_eclass`, `Read::constructor_schema` /
+//! `Read::constructor_enodes_for_eclass`, `Read::eclass_enodes`,
+//! `Read::constructor_schema` /
 //! `function_schema` / `table_subtype`, and `Core::map_container`.
 
 use egglog::ast::Span;
@@ -17,11 +18,11 @@ const MATH: &str = "
 (function cost (Math) i64 :no-merge)
 ";
 
-/// `enodes_for_eclass` returns exactly the rows a full scan would, filtered on
-/// the eclass column — that equivalence is the invariant the indexed path has
-/// to preserve.
+/// `constructor_enodes_for_eclass` returns exactly the rows a full scan would,
+/// filtered on the eclass column — that equivalence is the invariant the
+/// indexed path has to preserve.
 #[test]
-fn enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
+fn constructor_enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -53,7 +54,7 @@ fn enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
 
         let mut indexed: Vec<Vec<Value>> = Vec::new();
         egraph.read(|state| {
-            state.enodes_for_eclass("Add", eclass, |enode| {
+            state.constructor_enodes_for_eclass("Add", eclass, |enode| {
                 indexed.push(enode.children.to_vec());
             })
         })?;
@@ -72,16 +73,51 @@ fn enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
 }
 
 #[test]
-fn enodes_for_eclass_rejects_a_function_table() -> Result<(), Error> {
+fn constructor_enodes_for_eclass_rejects_a_function_table() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, MATH)?;
     let err = egraph
-        .read(|state| state.enodes_for_eclass("cost", Value::new_const(0), |_| {}))
+        .read(|state| state.constructor_enodes_for_eclass("cost", Value::new_const(0), |_| {}))
         .unwrap_err();
     assert!(
         matches!(err, Error::ApiError(ApiError::WrongSubtype { .. })),
         "expected WrongSubtype, got {err}"
     );
+    Ok(())
+}
+
+/// `eclass_enodes` finds an e-class's e-nodes across every constructor, and
+/// says which one each came from — the caller does not have to know the sort,
+/// or which tables to ask.
+#[test]
+fn eclass_enodes_spans_every_constructor() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(
+        None,
+        &format!(
+            "{MATH}
+(constructor Neg (Math) Math)
+(datatype Other (Wrap Math))
+(let $a (Add (Num 1) (Num 2)))
+(union $a (Neg (Num 3)))
+(let $unrelated (Wrap $a))
+"
+        ),
+    )?;
+    let eclass = egraph.eval_expr(&exprs::var("$a"))?.1;
+
+    let mut found: Vec<String> = Vec::new();
+    egraph.read(|state| {
+        state.eclass_enodes(eclass, |enode| {
+            assert_eq!(enode.eclass, eclass);
+            found.push(enode.name.to_owned());
+        })
+    })?;
+    found.sort();
+
+    // Both of the class's constructors, and neither the `Other`-sorted
+    // constructor that merely references it nor the `cost` function table.
+    assert_eq!(found, ["Add", "Neg"]);
     Ok(())
 }
 

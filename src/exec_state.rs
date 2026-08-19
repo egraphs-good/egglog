@@ -339,7 +339,8 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// The single-entry methods (`lookup`, `eclass_of`, `contains`)
 /// return `None` if absent — never insert. The iteration /
 /// introspection methods (`function_entries`, `constructor_enodes`,
-/// `enodes_for_eclass`, `table_size`, `table_sizes`) walk the current
+/// `constructor_enodes_for_eclass`, `eclass_enodes`, `table_size`,
+/// `table_sizes`) walk the current
 /// contents of the database, while `constructor_schema` /
 /// `function_schema` / `table_subtype` report how a table is declared
 /// rather than what it holds.
@@ -449,6 +450,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
                 .split_last()
                 .expect("constructor row has at least an eclass column");
             f(Enode {
+                name,
                 children,
                 eclass: *eclass,
                 subsumed: row.subsumed,
@@ -457,11 +459,14 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(())
     }
 
-    /// Call `f` on each [`Enode`] of a constructor / relation table whose
-    /// eclass column holds exactly `eclass`. Rows whose eclass has since been
-    /// merged into another are matched under the id they store, not their
-    /// canonical one. Errors with `WrongSubtype` if `name` is a function.
-    fn enodes_for_eclass(
+    /// Call `f` on the [`Enode`]s of the *one* table `name` whose eclass column
+    /// holds exactly `eclass`. For every constructor at once, use
+    /// [`Read::eclass_enodes`].
+    ///
+    /// Rows whose eclass has since been merged into another are matched under
+    /// the id they store, not their canonical one. Errors with `WrongSubtype`
+    /// if `name` is a function.
+    fn constructor_enodes_for_eclass(
         &self,
         name: &str,
         eclass: Value,
@@ -475,11 +480,40 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
                 .split_last()
                 .expect("constructor row has at least an eclass column");
             f(Enode {
+                name,
                 children,
                 eclass: *eclass,
                 subsumed: row.subsumed,
             });
         });
+        Ok(())
+    }
+
+    /// Call `f` on every [`Enode`] of `eclass`, across every constructor.
+    /// [`Enode::name`] says which one each row came from.
+    ///
+    /// A [`Value`] does not say what sort it belongs to, so this probes each
+    /// constructor whose output is an eq-sort. A caller that already knows the
+    /// sort should narrow to those constructors itself and use
+    /// [`Read::constructor_enodes_for_eclass`], which is one probe rather than
+    /// one per constructor.
+    fn eclass_enodes(&self, eclass: Value, mut f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
+        let names: Vec<String> = self
+            .table_sizes()
+            .into_iter()
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        for name in names {
+            // A function's last column is an output, not an eclass, and a
+            // constructor over a base sort has no eclass column to match.
+            let Ok(func_type) = self.constructor_schema(&name) else {
+                continue;
+            };
+            if !func_type.output.is_eq_sort() {
+                continue;
+            }
+            self.constructor_enodes_for_eclass(&name, eclass, &mut f)?;
+        }
         Ok(())
     }
 
@@ -525,6 +559,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 /// [`Value`]s; convert with [`Core::value_to_base`] / [`Core::value_to_container`].
 #[derive(Clone, Copy, Debug)]
 pub struct Enode<'a> {
+    /// The constructor this row belongs to.
+    pub name: &'a str,
     /// The constructor's input columns.
     pub children: &'a [Value],
     /// The eclass id this enode belongs to.
