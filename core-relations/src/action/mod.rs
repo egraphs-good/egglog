@@ -497,6 +497,13 @@ impl<'a> ExecutionState<'a> {
         self.db.table_info.iter().map(|(id, _)| id)
     }
 
+    /// Whether `table` is visible to this execution state. Ids obtained
+    /// elsewhere can name a table this state does not have, and every accessor
+    /// here panics on those.
+    pub fn table_exists(&self, table: TableId) -> bool {
+        self.db.table_info.get(table).is_some()
+    }
+
     /// Get an immutable reference to the table with id `table`.
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {

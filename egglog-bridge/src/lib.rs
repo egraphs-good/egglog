@@ -71,15 +71,19 @@ impl ActionRegistry {
     }
 
     /// Look up the [`TableAction`] for a table by name, or `None` if
-    /// no table with that name has been registered.
+    /// no table with that name has been registered. The registry outlives
+    /// `push`/`pop`, so a hit may name a table a given execution state no
+    /// longer has; check it with [`TableAction::is_live`] before use.
     pub fn lookup_table(&self, name: &str) -> Option<&TableAction> {
         self.table_actions.get(name)
     }
 
-    /// Snapshot the registered table names and their current row counts.
+    /// Snapshot the names and row counts of the registered tables that exist
+    /// in `state`.
     pub fn table_sizes(&self, state: &ExecutionState) -> Vec<(&str, usize)> {
         self.table_actions
             .iter()
+            .filter(|(_, action)| action.is_live(state))
             .map(|(name, action)| (name.as_str(), action.row_count(state)))
             .collect()
     }
@@ -1421,6 +1425,14 @@ impl TableAction {
             timestamp: egraph.timestamp_counter,
             kind,
         }
+    }
+
+    /// Whether the table this acts on still exists in `state`. Every other
+    /// method taking a state panics when it does not: a table declared inside
+    /// a `push` is dropped by the `pop`, while `TableAction`s handed out
+    /// beforehand keep naming it.
+    pub fn is_live(&self, state: &ExecutionState) -> bool {
+        state.table_exists(self.table)
     }
 
     /// Whether this table is a `Function` (no auto-insert) or a

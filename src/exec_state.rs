@@ -358,7 +358,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// **Only valid for `function` tables.** Constructors error;
     /// use [`Read::eclass_of`] for those.
     fn lookup<K: IntoValues>(&self, name: &str, key: K) -> Result<Option<Value>, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Function)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
@@ -371,7 +371,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Read::lookup`] for those.
     fn eclass_of<K: IntoValues>(&self, name: &str, inputs: K) -> Result<Option<Value>, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         let key_values: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
@@ -381,7 +381,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// True iff a row with the given key exists in the table. Works
     /// for any subtype — never mints.
     fn contains<K: IntoValues>(&self, name: &str, key: K) -> Result<bool, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values).is_some())
@@ -415,8 +415,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Return the current row count for the named table, or `None` if no table
     /// with that name is registered.
     fn table_size(&self, name: &str) -> Option<usize> {
-        self.registry()
-            .lookup_table(name)
+        lookup_action(self.registry(), self.es(), name)
+            .ok()
             .map(|action| action.row_count(self.es()))
     }
 
@@ -442,7 +442,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         name: &str,
         mut f: impl FnMut(Enode<'_>) -> bool,
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         action.for_each_while(self.es(), |row| {
             let (eclass, children) = row
@@ -472,7 +472,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         eclass: Value,
         mut f: impl FnMut(Enode<'_>),
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         action.for_each_output_value(self.es(), eclass, |row| {
             let (eclass, children) = row
@@ -538,7 +538,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         name: &str,
         mut f: impl FnMut(FunctionEntry<'_>) -> bool,
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Function)?;
         action.for_each_while(self.es(), |row| {
             let (output, inputs) = row
@@ -601,7 +601,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
         value: V,
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Function)?;
         let bv = self.base_values();
         let mut row: ValueRow = key.into_values(bv).collect();
@@ -619,7 +619,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Write::set`] for those.
     fn add<R: IntoValues>(&mut self, name: &str, inputs: R) -> Result<Value, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         let key: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key.len())?;
@@ -631,7 +631,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// Remove a row from the named table. Works for any subtype.
     fn remove<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         action.remove(self.es_mut(), &key_values);
@@ -640,7 +640,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// Subsume a row in the named table.
     fn subsume<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         action.subsume(self.es_mut(), key_values.into_iter());
@@ -693,13 +693,24 @@ fn func_type_of<'db>(
     Ok(func_type)
 }
 
-fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
-    registry.lookup_table(name).cloned().ok_or_else(|| {
-        ApiError::MissingTable {
-            name: name.to_string(),
-        }
-        .into()
-    })
+/// The registry outlives `push`/`pop`, so it can still name a table this
+/// execution state no longer has. Those read as missing rather than reaching
+/// the backend, which would panic on them.
+fn lookup_action(
+    registry: &ActionRegistry,
+    es: &ExecutionState,
+    name: &str,
+) -> Result<TableAction, Error> {
+    registry
+        .lookup_table(name)
+        .filter(|action| action.is_live(es))
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::MissingTable {
+                name: name.to_string(),
+            }
+            .into()
+        })
 }
 
 fn check_subtype(name: &str, action: &TableAction, expected: TableKind) -> Result<(), Error> {
@@ -732,7 +743,7 @@ fn apply_registered_function<'a, 'db: 'a>(
     func: &FuncType,
     args: &[Value],
 ) -> Option<Value> {
-    let action = lookup_action(state.registry(), &func.name).ok()?;
+    let action = lookup_action(state.registry(), state.es(), &func.name).ok()?;
     state.apply_table_function(func.subtype, &action, args)
 }
 

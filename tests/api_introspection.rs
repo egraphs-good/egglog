@@ -264,3 +264,76 @@ fn a_primitive_can_resolve_a_signature_from_inside_a_rule() -> Result<(), Error>
     )?;
     Ok(())
 }
+
+/// A primitive reporting how many tables it can see, so a program can observe
+/// the registry from inside a rule.
+#[derive(Clone)]
+struct TableCount;
+impl Primitive for TableCount {
+    fn name(&self) -> &str {
+        "table-count"
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![StringSort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl ReadPrim for TableCount {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+        let n = state.table_sizes().len();
+        Some(state.base_values().get::<i64>(i64::try_from(n).ok()?))
+    }
+}
+
+/// A table declared inside a `push` is gone after the `pop`, but the registry
+/// naming it is shared across snapshots and keeps the entry. Every lookup has
+/// to report it as missing rather than hand the backend an id it no longer has.
+#[test]
+fn a_popped_table_is_missing_rather_than_stale() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, MATH)?;
+    egraph.parse_and_run_program(
+        None,
+        "(push)
+(constructor Neg (Math) Math)
+(let $n (Neg (Num 1)))
+(pop)
+",
+    )?;
+
+    assert!(matches!(
+        egraph.constructor_enodes("Neg", |_| {}),
+        Err(Error::ApiError(ApiError::MissingTable { .. }))
+    ));
+    egraph.read(|state| {
+        assert_eq!(state.table_size("Neg"), None);
+        assert!(!state.table_sizes().iter().any(|(name, _)| *name == "Neg"));
+        Ok::<_, Error>(())
+    })?;
+    Ok(())
+}
+
+/// Enumerating the tables during rule execution reaches the same stale entry
+/// through the row count rather than through a lookup by name.
+#[test]
+fn table_sizes_skips_a_popped_table_from_inside_a_rule() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.add_read_primitive(TableCount, None);
+    egraph.parse_and_run_program(None, MATH)?;
+    // Declared before the `push`, so nothing reclaims the id the `pop` frees
+    // and the registry's entry for `Neg` stays dangling.
+    egraph.parse_and_run_program(None, "(function count-of (String) i64 :no-merge)")?;
+    egraph.parse_and_run_program(None, "(push)\n(constructor Neg (Math) Math)\n(pop)")?;
+    egraph.parse_and_run_program(
+        None,
+        r#"
+(rule () ((set (count-of "n") (table-count "x"))) :naive)
+(run 1)
+"#,
+    )?;
+    Ok(())
+}
