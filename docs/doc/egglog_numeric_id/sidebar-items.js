@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":["define_id"],"struct":["DenseIdMap","DenseIdMapWithReuse","IdVec"],"trait":["NumericId"]};

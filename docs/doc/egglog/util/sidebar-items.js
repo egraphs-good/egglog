@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["INTERNAL_SYMBOL_PREFIX"],"struct":["SymbolGen"],"trait":["FreshGen"],"type":["IndexMap","IndexSet"]};
