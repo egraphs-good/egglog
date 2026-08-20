@@ -5,12 +5,15 @@ release `egglog-experimental` against the new egglog version. Publishing a
 crate version is permanent, so run the dry run immediately before each real
 publish and stop if it reports an error.
 
-Set both versions before running the commands below. These example values do
-not prescribe the next release number, and they do not include a leading `v`:
+Set both versions before running the commands below. The experimental release
+must use the same major version as the egglog release; its minor and patch
+versions may differ. These example values do not prescribe the next release
+number, and they do not include a leading `v`:
 
 ```sh
 EGGLOG_RELEASE=3.0.0
-EXPERIMENTAL_RELEASE=1.0.0
+EXPERIMENTAL_RELEASE=3.0.0
+test "${EXPERIMENTAL_RELEASE%%.*}" = "${EGGLOG_RELEASE%%.*}"
 ```
 
 ## 1. Prepare the egglog release PR
@@ -194,21 +197,29 @@ Update its `Cargo.toml` as follows:
    development; if so, point `rev` at the tagged egglog release commit. Cargo
    uses the Git source locally and the versioned registry source in the
    published package.
-3. Update version examples or release notes in that repository as needed.
+3. In `CHANGELOG.md`, move the user-facing changes from `Unreleased` into a
+   section for `$EXPERIMENTAL_RELEASE` and the release date, add a new empty
+   `Unreleased` section, and update the comparison links.
+4. Update the README dependency example.
+5. Review the crate, module, and public-item rustdoc so it accurately describes
+   the released features and APIs.
 
 Update its lockfile and test it:
 
 ```sh
 cargo update
 cargo test --release
+cargo fmt --check
+cargo clippy --tests -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 git diff --check
 git status --short
 ```
 
-Commit these changes and open an egglog-experimental release PR. Wait for CI
-and human approval, and do not have the agent that prepared the PR merge it. A
-maintainer should merge it after review. Then tag the merged commit and publish
-it:
+Commit these changes, run `cargo publish --dry-run` from the clean commit, and
+open an egglog-experimental release PR. Wait for CI and human approval, and do
+not have the agent that prepared the PR merge it. A maintainer should merge it
+after review. Then tag the merged commit and publish it:
 
 ```sh
 git switch main
