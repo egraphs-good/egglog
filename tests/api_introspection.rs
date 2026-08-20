@@ -7,7 +7,7 @@ use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::prelude::*;
 use egglog::sort::{I64Sort, MapContainer, S, StringSort, VecContainer};
-use egglog::{ApiError, Core, Error, Primitive, Read, ReadPrim, ReadState, Value};
+use egglog::{ApiError, Core, Error, Primitive, RawValues, Read, ReadPrim, ReadState, Value};
 use std::any::TypeId;
 
 const MATH: &str = "
@@ -314,6 +314,34 @@ fn a_popped_table_is_missing_rather_than_stale() -> Result<(), Error> {
         assert!(!state.table_sizes().iter().any(|(name, _)| *name == "Neg"));
         Ok::<_, Error>(())
     })?;
+    Ok(())
+}
+
+/// A later declaration may reuse a popped table's id. The old registry entry
+/// must stay missing instead of silently reading from or writing to the new
+/// table.
+#[test]
+fn a_reused_table_id_does_not_revive_a_popped_name() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, MATH)?;
+    egraph.parse_and_run_program(
+        None,
+        "(push)\n(constructor Neg (Math) Math)\n(pop)\n(constructor Other (Math) Math)",
+    )?;
+
+    assert!(matches!(
+        egraph.constructor_enodes("Neg", |_| {}),
+        Err(Error::ApiError(ApiError::MissingTable { .. }))
+    ));
+    assert!(matches!(
+        egraph.update(|mut state| state.add("Neg", RawValues(vec![Value::new_const(0)]))),
+        Err(Error::ApiError(ApiError::MissingTable { .. }))
+    ));
+    egraph.read(|state| {
+        assert_eq!(state.table_size("Neg"), None);
+        assert!(state.tables().all(|name| name != "Neg"));
+        assert!(state.tables().any(|name| name == "Other"));
+    });
     Ok(())
 }
 

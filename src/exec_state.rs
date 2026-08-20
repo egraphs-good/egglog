@@ -340,7 +340,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// return `None` if absent — never insert. The iteration /
 /// introspection methods (`function_entries`, `constructor_enodes`,
 /// `constructor_enodes_for_eclass`, `eclass_enodes`, `table_size`,
-/// `table_sizes`) walk the current
+/// `tables`, `table_sizes`) walk the current
 /// contents of the database, while `constructor_schema` /
 /// `function_schema` / `table_subtype` report how a table is declared
 /// rather than what it holds.
@@ -388,7 +388,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// A constructor's declared signature: its input sorts and the sort of the
-    /// eclass column. Pair with [`Read::table_sizes`] to walk every table.
+    /// eclass column. Pair with [`Read::tables`] to walk every table.
     ///
     /// **Only valid for constructor tables.** Functions error; use
     /// [`Read::function_schema`] for those.
@@ -423,6 +423,11 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Snapshot the registered table names and their current row counts.
     fn table_sizes(&self) -> Vec<(&str, usize)> {
         self.registry().table_sizes(self.es())
+    }
+
+    /// Iterate over the registered table names visible to this state.
+    fn tables(&self) -> impl Iterator<Item = &str> {
+        self.table_sizes().into_iter().map(|(name, _)| name)
     }
 
     /// Call `f` on each [`Enode`] of a constructor / relation table.
@@ -498,11 +503,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// [`Read::constructor_enodes_for_eclass`], which is one probe rather than
     /// one per constructor.
     fn eclass_enodes(&self, eclass: Value, mut f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
-        let names: Vec<String> = self
-            .table_sizes()
-            .into_iter()
-            .map(|(name, _)| name.to_owned())
-            .collect();
+        let names: Vec<String> = self.tables().map(str::to_owned).collect();
         for name in names {
             // A function's last column is an output, not an eclass, and a
             // constructor over a base sort has no eclass column to match.
