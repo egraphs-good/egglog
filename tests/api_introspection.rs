@@ -1,12 +1,13 @@
 //! Tests for the e-graph introspection a primitive body can reach:
-//! `Read::enodes_for_eclass`, `Read::constructor_schema` /
+//! `Read::constructor_enodes_for_eclass`, `Read::eclass_enodes`,
+//! `Read::constructor_schema` /
 //! `function_schema` / `table_subtype`, and `Core::map_container`.
 
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::prelude::*;
 use egglog::sort::{I64Sort, MapContainer, S, StringSort, VecContainer};
-use egglog::{ApiError, Core, Error, Primitive, Read, ReadPrim, ReadState, Value};
+use egglog::{ApiError, Core, Error, Primitive, RawValues, Read, ReadPrim, ReadState, Value};
 use std::any::TypeId;
 
 const MATH: &str = "
@@ -17,11 +18,11 @@ const MATH: &str = "
 (function cost (Math) i64 :no-merge)
 ";
 
-/// `enodes_for_eclass` returns exactly the rows a full scan would, filtered on
-/// the eclass column — that equivalence is the invariant the indexed path has
-/// to preserve.
+/// `constructor_enodes_for_eclass` returns exactly the rows a full scan would,
+/// filtered on the eclass column — that equivalence is the invariant the
+/// indexed path has to preserve.
 #[test]
-fn enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
+fn constructor_enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -53,7 +54,7 @@ fn enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
 
         let mut indexed: Vec<Vec<Value>> = Vec::new();
         egraph.read(|state| {
-            state.enodes_for_eclass("Add", eclass, |enode| {
+            state.constructor_enodes_for_eclass("Add", eclass, |enode| {
                 indexed.push(enode.children.to_vec());
             })
         })?;
@@ -72,16 +73,51 @@ fn enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Error> {
 }
 
 #[test]
-fn enodes_for_eclass_rejects_a_function_table() -> Result<(), Error> {
+fn constructor_enodes_for_eclass_rejects_a_function_table() -> Result<(), Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, MATH)?;
     let err = egraph
-        .read(|state| state.enodes_for_eclass("cost", Value::new_const(0), |_| {}))
+        .read(|state| state.constructor_enodes_for_eclass("cost", Value::new_const(0), |_| {}))
         .unwrap_err();
     assert!(
         matches!(err, Error::ApiError(ApiError::WrongSubtype { .. })),
         "expected WrongSubtype, got {err}"
     );
+    Ok(())
+}
+
+/// `eclass_enodes` finds an e-class's e-nodes across every constructor, and
+/// says which one each came from — the caller does not have to know the sort,
+/// or which tables to ask.
+#[test]
+fn eclass_enodes_spans_every_constructor() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(
+        None,
+        &format!(
+            "{MATH}
+(constructor Neg (Math) Math)
+(datatype Other (Wrap Math))
+(let $a (Add (Num 1) (Num 2)))
+(union $a (Neg (Num 3)))
+(let $unrelated (Wrap $a))
+"
+        ),
+    )?;
+    let eclass = egraph.eval_expr(&exprs::var("$a"))?.1;
+
+    let mut found: Vec<String> = Vec::new();
+    egraph.read(|state| {
+        state.eclass_enodes(eclass, |enode| {
+            assert_eq!(enode.eclass, eclass);
+            found.push(enode.name.to_owned());
+        })
+    })?;
+    found.sort();
+
+    // Both of the class's constructors, and neither the `Other`-sorted
+    // constructor that merely references it nor the `cost` function table.
+    assert_eq!(found, ["Add", "Neg"]);
     Ok(())
 }
 
@@ -224,6 +260,107 @@ fn a_primitive_can_resolve_a_signature_from_inside_a_rule() -> Result<(), Error>
 (rule () ((set (arity-of "Add") (constructor-arity "Add"))) :naive)
 (run 1)
 (check (= (arity-of "Add") 2))
+"#,
+    )?;
+    Ok(())
+}
+
+/// A primitive reporting how many tables it can see, so a program can observe
+/// the registry from inside a rule.
+#[derive(Clone)]
+struct TableCount;
+impl Primitive for TableCount {
+    fn name(&self) -> &str {
+        "table-count"
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![StringSort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl ReadPrim for TableCount {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+        let n = state.table_sizes().len();
+        Some(state.base_values().get::<i64>(i64::try_from(n).ok()?))
+    }
+}
+
+/// A table declared inside a `push` is gone after the `pop`, but the registry
+/// naming it is shared across snapshots and keeps the entry. Every lookup has
+/// to report it as missing rather than hand the backend an id it no longer has.
+#[test]
+fn a_popped_table_is_missing_rather_than_stale() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, MATH)?;
+    egraph.parse_and_run_program(
+        None,
+        "(push)
+(constructor Neg (Math) Math)
+(let $n (Neg (Num 1)))
+(pop)
+",
+    )?;
+
+    assert!(matches!(
+        egraph.constructor_enodes("Neg", |_| {}),
+        Err(Error::ApiError(ApiError::MissingTable { .. }))
+    ));
+    egraph.read(|state| {
+        assert_eq!(state.table_size("Neg"), None);
+        assert!(!state.table_sizes().iter().any(|(name, _)| *name == "Neg"));
+        Ok::<_, Error>(())
+    })?;
+    Ok(())
+}
+
+/// A later declaration may reuse a popped table's id. The old registry entry
+/// must stay missing instead of silently reading from or writing to the new
+/// table.
+#[test]
+fn a_reused_table_id_does_not_revive_a_popped_name() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, MATH)?;
+    egraph.parse_and_run_program(
+        None,
+        "(push)\n(constructor Neg (Math) Math)\n(pop)\n(constructor Other (Math) Math)",
+    )?;
+
+    assert!(matches!(
+        egraph.constructor_enodes("Neg", |_| {}),
+        Err(Error::ApiError(ApiError::MissingTable { .. }))
+    ));
+    assert!(matches!(
+        egraph.update(|mut state| state.add("Neg", RawValues(vec![Value::new_const(0)]))),
+        Err(Error::ApiError(ApiError::MissingTable { .. }))
+    ));
+    egraph.read(|state| {
+        assert_eq!(state.table_size("Neg"), None);
+        assert!(state.tables().all(|name| name != "Neg"));
+        assert!(state.tables().any(|name| name == "Other"));
+    });
+    Ok(())
+}
+
+/// Enumerating the tables during rule execution reaches the same stale entry
+/// through the row count rather than through a lookup by name.
+#[test]
+fn table_sizes_skips_a_popped_table_from_inside_a_rule() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.add_read_primitive(TableCount, None);
+    egraph.parse_and_run_program(None, MATH)?;
+    // Declared before the `push`, so nothing reclaims the id the `pop` frees
+    // and the registry's entry for `Neg` stays dangling.
+    egraph.parse_and_run_program(None, "(function count-of (String) i64 :no-merge)")?;
+    egraph.parse_and_run_program(None, "(push)\n(constructor Neg (Math) Math)\n(pop)")?;
+    egraph.parse_and_run_program(
+        None,
+        r#"
+(rule () ((set (count-of "n") (table-count "x"))) :naive)
+(run 1)
 "#,
     )?;
     Ok(())

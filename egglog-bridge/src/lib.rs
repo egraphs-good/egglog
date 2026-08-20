@@ -19,7 +19,7 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, ExecutionState, ExternalContext, ExternalFunction,
-    ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId,
+    ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TableIdentity,
     TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
@@ -71,15 +71,20 @@ impl ActionRegistry {
     }
 
     /// Look up the [`TableAction`] for a table by name, or `None` if
-    /// no table with that name has been registered.
+    /// no table with that name has been registered. The registry may become
+    /// obsolete because of `push`/`pop`, so a hit may name a table a given
+    /// execution state no longer has; check it with [`TableAction::is_live`]
+    /// before use.
     pub fn lookup_table(&self, name: &str) -> Option<&TableAction> {
         self.table_actions.get(name)
     }
 
-    /// Snapshot the registered table names and their current row counts.
+    /// Snapshot the names and row counts of the registered tables that exist
+    /// in `state`.
     pub fn table_sizes(&self, state: &ExecutionState) -> Vec<(&str, usize)> {
         self.table_actions
             .iter()
+            .filter(|(_, action)| action.is_live(state))
             .map(|(name, action)| (name.as_str(), action.row_count(state)))
             .collect()
     }
@@ -1392,6 +1397,8 @@ impl TableKind {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TableAction {
     table: TableId,
+    identity: TableIdentity,
+    name: Arc<str>,
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
@@ -1409,6 +1416,8 @@ impl TableAction {
         };
         TableAction {
             table: func_info.table,
+            identity: egraph.db.get_table_info(func_info.table).identity(),
+            name: Arc::clone(&func_info.name),
             table_math: SchemaMath {
                 func_cols: func_info.schema.len(),
                 subsume: func_info.can_subsume,
@@ -1421,6 +1430,16 @@ impl TableAction {
             timestamp: egraph.timestamp_counter,
             kind,
         }
+    }
+
+    /// Whether this still names the same table allocation in `state`.
+    ///
+    /// A table declared inside a `push` is dropped by the corresponding `pop`.
+    /// Its [`TableId`] may then be reused by a different table, while handles
+    /// handed out before the pop still hold the old id.
+    pub fn is_live(&self, state: &ExecutionState) -> bool {
+        state.table_identity(self.table) == Some(self.identity)
+            && state.table_name(self.table) == Some(self.name.as_ref())
     }
 
     /// Whether this table is a `Function` (no auto-insert) or a

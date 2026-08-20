@@ -131,7 +131,25 @@ pub(crate) struct VarInfo {
 pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;
 pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 
+static NEXT_TABLE_IDENTITY: AtomicUsize = AtomicUsize::new(0);
+
+/// An opaque identity for one table allocation.
+///
+/// Unlike [`TableId`], identities are not reused after a database snapshot is
+/// restored. This is exposed for workspace crates that retain table handles
+/// across snapshots; most users should use [`TableId`] instead.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TableIdentity(usize);
+
+impl TableIdentity {
+    fn fresh() -> Self {
+        Self(NEXT_TABLE_IDENTITY.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 pub struct TableInfo {
+    identity: TableIdentity,
     pub(crate) name: Option<Arc<str>>,
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
@@ -140,6 +158,11 @@ pub struct TableInfo {
 }
 
 impl TableInfo {
+    #[doc(hidden)]
+    pub fn identity(&self) -> TableIdentity {
+        self.identity
+    }
+
     pub fn table(&self) -> &WrappedTable {
         &self.table
     }
@@ -170,6 +193,7 @@ impl Clone for TableInfo {
             })
         }
         TableInfo {
+            identity: self.identity,
             name: self.name.clone(),
             spec: self.spec.clone(),
             table: self.table.dyn_clone(),
@@ -719,6 +743,7 @@ impl Database {
         let spec = table.spec();
         let table = WrappedTable::new(table);
         let res = self.tables.push(TableInfo {
+            identity: TableIdentity::fresh(),
             name,
             spec,
             table,

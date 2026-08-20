@@ -2,6 +2,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add `Read::eclass_enodes` to scan an e-class across every constructor, rename the single-constructor method to `constructor_enodes_for_eclass`, and add `Enode::name`.
+
+- Treat tables dropped by `pop` as missing in the name-indexed `Read` and `Write` APIs.
+
 ## [3.0.0] - 2026-08-18
 
 ### Breaking changes

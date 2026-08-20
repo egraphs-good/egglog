@@ -497,6 +497,13 @@ impl<'a> ExecutionState<'a> {
         self.db.table_info.iter().map(|(id, _)| id)
     }
 
+    /// Return the stable identity of `table`, or `None` if it is not visible to
+    /// this execution state.
+    #[doc(hidden)]
+    pub fn table_identity(&self, table: TableId) -> Option<crate::TableIdentity> {
+        self.db.table_info.get(table).map(TableInfo::identity)
+    }
+
     /// Get an immutable reference to the table with id `table`.
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
@@ -562,7 +569,7 @@ impl<'a> ExecutionState<'a> {
 
     /// Get the human-readable name for a table, if one exists.
     pub fn table_name(&self, table: TableId) -> Option<&'a str> {
-        self.db.table_info[table].name()
+        self.db.table_info.get(table).and_then(TableInfo::name)
     }
 
     pub fn base_values(&self) -> &'a BaseValues {
