@@ -679,18 +679,23 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         value: Value,
         sort: ArcSort,
     ) -> Option<ExtractedTerm<C>> {
+        self.extract_best_with_sort_cached(termdag, &mut Default::default(), value, sort)
+    }
+
+    fn extract_best_with_sort_cached(
+        &self,
+        termdag: &mut TermDag,
+        cache: &mut HashMap<(Value, String), TermId>,
+        value: Value,
+        sort: ArcSort,
+    ) -> Option<ExtractedTerm<C>> {
         let egraph = self.egraph;
         // Canonicalize the value using the union-find if available (for term-encoding mode)
         let canonical_value = self.find_canonical(egraph, value, &sort);
 
         let best_cost = self.compute_cost_node(egraph, canonical_value, &sort)?;
-        let term = self.reconstruct_termdag_node_helper(
-            egraph,
-            termdag,
-            canonical_value,
-            &sort,
-            &mut Default::default(),
-        );
+        let term =
+            self.reconstruct_termdag_node_helper(egraph, termdag, canonical_value, &sort, cache);
 
         Some(ExtractedTerm {
             cost: best_cost,
@@ -895,9 +900,12 @@ impl EGraph {
         let extractor =
             TreeExtractor::compute_costs_from_rootsorts(Some(rootsorts), self, cost_model);
         let mut termdag = TermDag::default();
+        let mut cache = Default::default();
         let extracted_roots = roots
             .into_iter()
-            .map(|(sort, value)| extractor.extract_best_with_sort(&mut termdag, value, sort))
+            .map(|(sort, value)| {
+                extractor.extract_best_with_sort_cached(&mut termdag, &mut cache, value, sort)
+            })
             .collect();
 
         Ok(ExtractedTerms {

@@ -841,9 +841,13 @@ fn tree_extractor_supports_reachable_sorts_and_zero_variants() {
     );
     assert!(
         extractor
-            .extract_variants_with_sort(&mut termdag, container_value, 0, container_sort)
+            .extract_variants_with_sort(&mut termdag, container_value, 0, container_sort.clone())
             .is_empty()
     );
+    let container_variants =
+        extractor.extract_variants_with_sort(&mut termdag, container_value, 2, container_sort);
+    assert_eq!(container_variants.len(), 1);
+    assert_eq!(termdag.to_string(container_variants[0].term), "(vec-of 1)");
 
     let calls = Cell::new(0);
     let extracted = egraph
