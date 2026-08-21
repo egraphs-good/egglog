@@ -1,4 +1,5 @@
 use std::{
+    alloc::Layout,
     cell::Cell,
     mem,
     sync::{
@@ -14,7 +15,7 @@ use smallvec::SmallVec;
 
 use crate::{
     BitSet, ConcurrentVec, Notification, NotificationList, ParallelVecWriter, ReadOptimizedLock,
-    ResettableOnceLock, SharedArena, SharedRef, parallel_writer::write_cell_slice,
+    ResettableOnceLock, SharedArena, parallel_writer::write_cell_slice,
 };
 
 #[test]
@@ -682,10 +683,216 @@ fn shared_arena_allocates_from_scoped_threads() {
         .into_inner()
         .unwrap()
         .into_iter()
-        .map(|value| *value)
+        .copied()
         .collect::<Vec<_>>();
     values.sort_unstable();
     assert_eq!(values, (0..N_THREADS * PER_THREAD).collect::<Vec<_>>());
+}
+
+#[test]
+fn shared_arena_raw_layout_honors_alignment() {
+    #[repr(C, align(128))]
+    struct AlignedHeader {
+        value: u64,
+    }
+
+    let arena = SharedArena::new();
+    let handle = arena.new_handle();
+    let layout = Layout::new::<AlignedHeader>();
+    let mut raw = handle.alloc_layout(layout);
+
+    assert_eq!(raw.layout(), layout);
+    assert_eq!((raw.as_mut_ptr() as usize) % layout.align(), 0);
+    // SAFETY: The raw allocation has exactly `AlignedHeader`'s layout. We
+    // initialize the complete header before publishing it and retain
+    // no pointer used for mutation afterward.
+    let published = unsafe {
+        raw.as_mut_ptr()
+            .cast::<AlignedHeader>()
+            .write(AlignedHeader { value: 37 });
+        raw.assume_init_no_drop::<AlignedHeader>()
+    };
+
+    assert_eq!(published.value, 37);
+}
+
+#[test]
+fn shared_arena_raw_layout_publishes_header_with_trailing_data() {
+    #[repr(C)]
+    struct PackedHeader {
+        len: usize,
+        tail_offset: usize,
+    }
+
+    let values = [2u32, 3, 5, 7, 11];
+    let (layout, tail_offset) = Layout::new::<PackedHeader>()
+        .extend(Layout::array::<u32>(values.len()).unwrap())
+        .unwrap();
+    let layout = layout.pad_to_align();
+    let arena = SharedArena::new();
+    let handle = arena.new_handle();
+    let mut raw = handle.alloc_layout(layout);
+    let base = raw.as_mut_ptr();
+
+    // SAFETY: `Layout::extend` produced both offsets. We initialize the full
+    // header and every trailing `u32` before publishing, and all writes
+    // end before the resulting shared reference is created.
+    let published = unsafe {
+        base.cast::<PackedHeader>().write(PackedHeader {
+            len: values.len(),
+            tail_offset,
+        });
+        let tail = base.add(tail_offset).cast::<u32>();
+        for (idx, value) in values.into_iter().enumerate() {
+            tail.add(idx).write(value);
+        }
+        raw.assume_init_no_drop::<PackedHeader>()
+    };
+    let header = published;
+
+    // SAFETY: The header and tail came from the checked packed layout above,
+    // and `header.len` elements were initialized before publication.
+    let got = unsafe {
+        std::slice::from_raw_parts(
+            (header as *const PackedHeader)
+                .cast::<u8>()
+                .add(header.tail_offset)
+                .cast::<u32>(),
+            header.len,
+        )
+    };
+    assert_eq!(got, &values);
+}
+
+#[test]
+fn shared_arena_raw_publications_outlive_parallel_handles() {
+    #[repr(transparent)]
+    struct ParallelHeader(usize);
+
+    const N_THREADS: usize = 8;
+    let arena = SharedArena::new();
+    let published = Mutex::new(Vec::new());
+
+    thread::scope(|scope| {
+        for value in 0..N_THREADS {
+            let arena = &arena;
+            let published = &published;
+            scope.spawn(move || {
+                let handle = arena.new_handle();
+                let mut raw = handle.alloc_layout(Layout::new::<ParallelHeader>());
+                // SAFETY: The allocation has the header's exact layout and the
+                // complete header is initialized before publication.
+                let shared = unsafe {
+                    raw.as_mut_ptr()
+                        .cast::<ParallelHeader>()
+                        .write(ParallelHeader(value));
+                    raw.assume_init_no_drop::<ParallelHeader>()
+                };
+                published.lock().unwrap().push(shared);
+            });
+        }
+    });
+
+    // Every allocating handle and worker is gone, but the arena still owns the
+    // published headers.
+    let mut values = published
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    assert_eq!(values, (0..N_THREADS).collect::<Vec<_>>());
+}
+
+#[test]
+fn shared_arena_raw_initialization_panic_does_not_publish() {
+    #[repr(transparent)]
+    struct Header(usize);
+
+    fn build<'arena>(handle: &crate::Handle<'arena>, panic_before_publish: bool) -> &'arena Header {
+        let mut raw = handle.alloc_layout(Layout::new::<Header>());
+        // SAFETY: The allocation has `Header`'s exact layout and this writes the
+        // complete header. It is not yet published.
+        unsafe {
+            raw.as_mut_ptr().cast::<Header>().write(Header(41));
+        }
+        assert!(!panic_before_publish, "injected initialization panic");
+        // SAFETY: The complete header was initialized above and no raw pointer
+        // is used after this publication point.
+        unsafe { raw.assume_init_no_drop::<Header>() }
+    }
+
+    let arena = SharedArena::new();
+    let handle = arena.new_handle();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = build(&handle, true);
+    }));
+    assert!(result.is_err());
+
+    // The abandoned allocation registered no destructor and published no
+    // reference; another allocation in the same local arena remains usable.
+    assert_eq!(build(&handle, false).0, 41);
+}
+
+#[test]
+fn shared_arena_raw_publication_validates_header_layout() {
+    #[repr(C)]
+    struct WideHeader([usize; 2]);
+
+    #[repr(C, align(64))]
+    struct OverAlignedHeader([u8; 64]);
+
+    let arena = SharedArena::new();
+    let handle = arena.new_handle();
+
+    let too_small = handle.alloc_layout(Layout::new::<usize>());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: `assume_init_no_drop` checks size before it relies on the
+        // initialization invariant, so this deliberately undersized token
+        // must panic without interpreting its storage as `WideHeader`.
+        let _ = unsafe { too_small.assume_init_no_drop::<WideHeader>() };
+    }));
+    assert!(result.is_err());
+
+    let under_aligned = handle
+        .alloc_layout(Layout::from_size_align(mem::size_of::<OverAlignedHeader>(), 1).unwrap());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: The method checks alignment before relying on initialization,
+        // so this must panic without interpreting the under-aligned storage.
+        let _ = unsafe { under_aligned.assume_init_no_drop::<OverAlignedHeader>() };
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn shared_arena_raw_publication_deliberately_forgets_drop_header() {
+    struct DropHeader<'a>(&'a AtomicUsize);
+
+    impl Drop for DropHeader<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let drops = AtomicUsize::new(0);
+    {
+        let arena = SharedArena::new();
+        let handle = arena.new_handle();
+        let mut raw = handle.alloc_layout(Layout::new::<DropHeader<'_>>());
+        // SAFETY: The allocation has the header's exact layout. The complete
+        // header is initialized before publication, and this test deliberately
+        // uses the raw path to omit its otherwise observable destructor.
+        let published = unsafe {
+            raw.as_mut_ptr()
+                .cast::<DropHeader<'_>>()
+                .write(DropHeader(&drops));
+            raw.assume_init_no_drop::<DropHeader<'_>>()
+        };
+        assert!(mem::needs_drop::<DropHeader<'_>>());
+        assert_eq!(published.0.load(Ordering::Relaxed), 0);
+    }
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -723,7 +930,6 @@ fn shared_arena_send_sync_bounds() {
     fn assert_send_sync<T: Send + Sync>() {}
 
     assert_send_sync::<SharedArena>();
-    assert_send_sync::<SharedRef<'static, usize>>();
 }
 
 #[test]
