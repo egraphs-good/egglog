@@ -14,6 +14,10 @@ const DEFAULT_TABLE_OP_CUTOFF: usize = 400_000;
 const DEFAULT_FREE_JOIN_FORK_DEPTH: usize = 2;
 const DEFAULT_ACTION_BATCH_SIZE: usize = 8 * 1024;
 
+/// Minimum number of top-index leader keys required per worker before coarse
+/// generic-join partitioning is worthwhile.
+pub(crate) const MIN_TOP_INDEX_KEYS_PER_WORKER: usize = 16;
+
 static CUTOFFS: OnceLock<Cutoffs> = OnceLock::new();
 
 struct Cutoffs {
