@@ -9,7 +9,8 @@
 //! needed to charge shared dependencies once. [`DagCostModel`] computes the
 //! marginal costs consumed by DAG extractors. [`TreeCostModelFromDag`] adapts
 //! such a model to tree extraction by combining each node's marginal cost with
-//! its selected child costs.
+//! its selected child costs. [`DEFAULT_COST_MODEL`] is the default additive
+//! tree model.
 
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
@@ -195,7 +196,7 @@ impl<C: MonoidCost, M: DagCostModel<C>> TreeCostModel<C> for TreeCostModelFromDa
 /// The default extraction cost type.
 pub type DefaultCost = u64;
 
-/// The default model for additive tree and DAG extraction costs.
+/// The marginal-cost model underlying default tree and DAG extraction.
 ///
 /// With [`DefaultCost`], constructor `:cost` declarations override `node_cost`
 /// and selected child costs are combined with each constructor's cost.
@@ -211,6 +212,10 @@ impl Default for AdditiveCostModel {
     }
 }
 
+/// The default additive model used by tree extraction.
+pub const DEFAULT_COST_MODEL: TreeCostModelFromDag<AdditiveCostModel> =
+    TreeCostModelFromDag(AdditiveCostModel { node_cost: 1 });
+
 impl DagCostModel<DefaultCost> for AdditiveCostModel {
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
         self.node_cost
@@ -218,39 +223,6 @@ impl DagCostModel<DefaultCost> for AdditiveCostModel {
 
     fn enode_cost(&self, egraph: &EGraph, func: &Function, _enode: &Enode<'_>) -> DefaultCost {
         func.extraction_head_cost(egraph).unwrap_or(self.node_cost)
-    }
-}
-
-impl TreeCostModel<DefaultCost> for AdditiveCostModel {
-    type EnodeCost = DefaultCost;
-    type ContainerCost = DefaultCost;
-
-    fn base_value_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> DefaultCost {
-        DagCostModel::base_value_cost(self, egraph, sort, value)
-    }
-
-    fn enode_cost(&self, egraph: &EGraph, func: &Function, enode: &Enode<'_>) -> DefaultCost {
-        DagCostModel::enode_cost(self, egraph, func, enode)
-    }
-
-    fn container_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> DefaultCost {
-        DagCostModel::container_cost(self, egraph, sort, value)
-    }
-
-    fn fold_enode_cost(&self, enode_cost: DefaultCost, child_costs: &[DefaultCost]) -> DefaultCost {
-        child_costs
-            .iter()
-            .fold(enode_cost, |cost, child| cost.combine(child))
-    }
-
-    fn fold_container_cost(
-        &self,
-        container_cost: DefaultCost,
-        element_costs: &[DefaultCost],
-    ) -> DefaultCost {
-        element_costs
-            .iter()
-            .fold(container_cost, |cost, element| cost.combine(element))
     }
 }
 
@@ -901,6 +873,15 @@ impl Function {
 }
 
 impl EGraph {
+    /// Extracts the best tree term for each requested `(sort, value)` root
+    /// using [`DEFAULT_COST_MODEL`].
+    pub fn extract_best(
+        &self,
+        roots: Vec<(ArcSort, Value)>,
+    ) -> Result<ExtractedTerms<DefaultCost>, Error> {
+        self.extract_best_with_cost_model(roots, DEFAULT_COST_MODEL)
+    }
+
     /// Extracts the best tree term for each requested `(sort, value)` root.
     ///
     /// This is the normal user extraction path: it respects `:unextractable`
@@ -927,6 +908,16 @@ impl EGraph {
             termdag,
             terms: extracted_roots,
         })
+    }
+
+    /// Extracts up to `nvariants` tree root variants for each requested root
+    /// using [`DEFAULT_COST_MODEL`].
+    pub fn extract_variants(
+        &self,
+        roots: Vec<(ArcSort, Value)>,
+        nvariants: usize,
+    ) -> Result<ExtractedTermVariants<DefaultCost>, Error> {
+        self.extract_variants_with_cost_model(roots, nvariants, DEFAULT_COST_MODEL)
     }
 
     /// Extracts up to `nvariants` tree root variants for each requested root.
@@ -967,10 +958,7 @@ impl EGraph {
         value: Value,
     ) -> Result<(TermDag, TermId, DefaultCost), Error> {
         let sort_name = sort.name().to_owned();
-        let mut extracted = self.extract_best_with_cost_model(
-            vec![(sort.clone(), value)],
-            AdditiveCostModel::default(),
-        )?;
+        let mut extracted = self.extract_best(vec![(sort.clone(), value)])?;
         let root = extracted
             .terms
             .pop()
@@ -998,11 +986,8 @@ impl EGraph {
         if include_output {
             rootsorts.push(func.func_type.output.clone());
         }
-        let extractor = TreeExtractor::compute_costs_from_rootsorts(
-            Some(rootsorts),
-            self,
-            AdditiveCostModel::default(),
-        );
+        let extractor =
+            TreeExtractor::compute_costs_from_rootsorts(Some(rootsorts), self, DEFAULT_COST_MODEL);
 
         let mut termdag = TermDag::default();
         let mut inputs: Vec<TermId> = Vec::new();

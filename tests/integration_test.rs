@@ -3,8 +3,8 @@ use std::cell::Cell;
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
     extract::{
-        AdditiveCostModel, DagCostModel, DefaultCost, MonoidCost, TreeCostModel,
-        TreeCostModelFromDag, TreeExtractor,
+        AdditiveCostModel, DEFAULT_COST_MODEL, DagCostModel, DefaultCost, MonoidCost,
+        TreeCostModel, TreeCostModelFromDag, TreeExtractor,
     },
     *,
 };
@@ -758,7 +758,7 @@ fn additive_cost_model_uses_configured_default_node_cost() {
     let extracted = egraph
         .extract_best_with_cost_model(
             vec![(sort.clone(), value)],
-            AdditiveCostModel { node_cost: 2 },
+            TreeCostModelFromDag(AdditiveCostModel { node_cost: 2 }),
         )
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
@@ -806,8 +806,7 @@ fn tree_extractor_reuses_costs_for_multiple_values() {
     assert_eq!(termdag.to_string(leaf.term), "(Leaf 9)");
     assert_eq!(calls.get(), prepared_calls);
 
-    let all_sorts =
-        TreeExtractor::compute_costs_from_rootsorts(None, &egraph, AdditiveCostModel::default());
+    let all_sorts = TreeExtractor::compute_costs_from_rootsorts(None, &egraph, DEFAULT_COST_MODEL);
     let leaf = all_sorts
         .extract_best_with_sort(&mut termdag, leaf_value, sort)
         .unwrap();
@@ -848,7 +847,7 @@ fn tree_extractor_supports_reachable_sorts_and_zero_variants() {
     let extractor = TreeExtractor::compute_costs_from_rootsorts(
         Some(vec![parent_sort]),
         &egraph,
-        AdditiveCostModel::default(),
+        DEFAULT_COST_MODEL,
     );
     let mut termdag = TermDag::default();
 
@@ -933,10 +932,7 @@ fn extract_best_returns_none_for_unextractable_roots() {
     let (_, hidden) = egraph.eval_expr(&hidden).unwrap();
 
     let extracted = egraph
-        .extract_best_with_cost_model(
-            vec![(sort.clone(), visible), (sort, hidden)],
-            AdditiveCostModel::default(),
-        )
+        .extract_best(vec![(sort.clone(), visible), (sort, hidden)])
         .unwrap();
 
     assert_eq!(extracted.terms.len(), 2);

@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{AdditiveCostModel, DefaultCost};
+use extract::DefaultCost;
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -1745,11 +1745,7 @@ impl EGraph {
                             "cannot extract a negative number of variants".to_string(),
                         ));
                     }
-                    let extracted = self.extract_variants_with_cost_model(
-                        vec![(sort, x)],
-                        n as usize,
-                        AdditiveCostModel::default(),
-                    )?;
+                    let extracted = self.extract_variants(vec![(sort, x)], n as usize)?;
                     let terms: Vec<TermId> = extracted
                         .variants
                         .into_iter()
@@ -1848,8 +1844,7 @@ impl EGraph {
                         Ok((expr.output_type(), value))
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
-                let extracted =
-                    self.extract_best_with_cost_model(roots, AdditiveCostModel::default())?;
+                let extracted = self.extract_best(roots)?;
                 let terms = extracted
                     .terms
                     .into_iter()
