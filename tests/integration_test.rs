@@ -3,8 +3,8 @@ use std::cell::Cell;
 use egglog::{
     ast::{ResolvedCommand, sanitize_internal_names},
     extract::{
-        AdditiveCostModel, BaseCostModel, CombinableCost, DefaultCost, FoldCostModel,
-        MarginalCostModel, TotalCostModel, TreeExtractor,
+        AdditiveCostModel, DagCostModel, DefaultCost, MonoidCost, TreeCostModel,
+        TreeCostModelFromDag, TreeExtractor,
     },
     *,
 };
@@ -15,147 +15,159 @@ struct CustomCostModel {
     node_cost: CustomCost,
 }
 
-struct BorrowedCountingTotalCostModel<'a>(&'a Cell<usize>);
+struct BorrowedCountingTreeCostModel<'a>(&'a Cell<usize>);
 
-impl BaseCostModel<DefaultCost> for BorrowedCountingTotalCostModel<'_> {
+impl TreeCostModel<DefaultCost> for BorrowedCountingTreeCostModel<'_> {
+    type EnodeCost = ();
+    type ContainerCost = ();
+
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> DefaultCost {
         self.0.set(self.0.get() + 1);
         1
     }
-}
 
-impl TotalCostModel<DefaultCost> for BorrowedCountingTotalCostModel<'_> {
-    fn total_enode_cost(
-        &self,
-        _egraph: &EGraph,
-        _func: &Function,
-        _enode: &Enode<'_>,
-        child_costs: &[DefaultCost],
-    ) -> DefaultCost {
+    fn enode_cost(&self, _egraph: &EGraph, _func: &Function, _enode: &Enode<'_>) {
         self.0.set(self.0.get() + 1);
+    }
+
+    fn container_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) {
+        self.0.set(self.0.get() + 1);
+    }
+
+    fn fold_enode_cost(&self, (): (), child_costs: &[DefaultCost]) -> DefaultCost {
         1 + child_costs.iter().sum::<DefaultCost>()
     }
 
-    fn total_container_cost(
-        &self,
-        _egraph: &EGraph,
-        _sort: &ArcSort,
-        _value: Value,
-        element_costs: &[DefaultCost],
-    ) -> DefaultCost {
-        self.0.set(self.0.get() + 1);
+    fn fold_container_cost(&self, (): (), element_costs: &[DefaultCost]) -> DefaultCost {
         element_costs.iter().sum()
     }
 }
 
-impl BaseCostModel<CustomCost> for CustomCostModel {
+enum CustomEnodeCost {
+    Wide,
+    Other(CustomCost),
+}
+
+struct CustomContainerCost(CustomCost);
+
+impl TreeCostModel<CustomCost> for CustomCostModel {
+    type EnodeCost = CustomEnodeCost;
+    type ContainerCost = CustomContainerCost;
+
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
         self.node_cost
     }
-}
 
-impl MarginalCostModel<CustomCost> for CustomCostModel {
-    fn marginal_enode_cost(
+    fn enode_cost(&self, _egraph: &EGraph, func: &Function, _enode: &Enode<'_>) -> CustomEnodeCost {
+        if func.name() == "Wide" {
+            CustomEnodeCost::Wide
+        } else {
+            CustomEnodeCost::Other(self.node_cost)
+        }
+    }
+
+    fn container_cost(
         &self,
         _egraph: &EGraph,
-        _func: &Function,
-        _enode: &Enode<'_>,
-    ) -> CustomCost {
-        self.node_cost
+        _sort: &ArcSort,
+        _value: Value,
+    ) -> CustomContainerCost {
+        CustomContainerCost(3)
     }
-}
 
-impl FoldCostModel<CustomCost> for CustomCostModel {
     fn fold_enode_cost(
         &self,
-        _egraph: &EGraph,
-        func: &Function,
-        _enode: &Enode<'_>,
-        marginal_cost: CustomCost,
+        enode_cost: CustomEnodeCost,
         child_costs: &[CustomCost],
     ) -> CustomCost {
         let child_cost = child_costs
             .iter()
             .fold(CustomCost::identity(), |cost, child| cost.combine(child));
-        if func.name() == "Wide" {
-            child_cost.saturating_mul(10)
-        } else {
-            marginal_cost.combine(&child_cost)
+        match enode_cost {
+            CustomEnodeCost::Wide => child_cost.saturating_mul(10),
+            CustomEnodeCost::Other(cost) => cost.combine(&child_cost),
         }
+    }
+
+    fn fold_container_cost(
+        &self,
+        container_cost: CustomContainerCost,
+        element_costs: &[CustomCost],
+    ) -> CustomCost {
+        element_costs
+            .iter()
+            .fold(container_cost.0, |cost, element| cost.combine(element))
     }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct OrderedOnlyCost(u128);
 
-struct DirectTotalCostModel;
+struct DirectTreeCostModel;
 
-impl BaseCostModel<OrderedOnlyCost> for DirectTotalCostModel {
+impl TreeCostModel<OrderedOnlyCost> for DirectTreeCostModel {
+    type EnodeCost = ();
+    type ContainerCost = ();
+
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> OrderedOnlyCost {
         OrderedOnlyCost(1)
     }
-}
 
-impl TotalCostModel<OrderedOnlyCost> for DirectTotalCostModel {
-    fn total_enode_cost(
-        &self,
-        _egraph: &EGraph,
-        _func: &Function,
-        _enode: &Enode<'_>,
-        child_costs: &[OrderedOnlyCost],
-    ) -> OrderedOnlyCost {
+    fn enode_cost(&self, _egraph: &EGraph, _func: &Function, _enode: &Enode<'_>) {}
+
+    fn container_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) {}
+
+    fn fold_enode_cost(&self, (): (), child_costs: &[OrderedOnlyCost]) -> OrderedOnlyCost {
         OrderedOnlyCost(1 + child_costs.iter().map(|cost| cost.0).sum::<u128>())
     }
 
-    fn total_container_cost(
-        &self,
-        _egraph: &EGraph,
-        _sort: &ArcSort,
-        _value: Value,
-        element_costs: &[OrderedOnlyCost],
-    ) -> OrderedOnlyCost {
+    fn fold_container_cost(&self, (): (), element_costs: &[OrderedOnlyCost]) -> OrderedOnlyCost {
         OrderedOnlyCost(element_costs.iter().map(|cost| cost.0).sum())
     }
 }
 
-struct DirectAndMarginalCostModel;
+struct IndependentTreeAndDagCostModel;
 
-impl BaseCostModel<CustomCost> for DirectAndMarginalCostModel {
+impl DagCostModel<CustomCost> for IndependentTreeAndDagCostModel {
     fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
         1
     }
-}
 
-impl MarginalCostModel<CustomCost> for DirectAndMarginalCostModel {
-    fn marginal_enode_cost(
-        &self,
-        _egraph: &EGraph,
-        _func: &Function,
-        _enode: &Enode<'_>,
-    ) -> CustomCost {
+    fn enode_cost(&self, _egraph: &EGraph, _func: &Function, _enode: &Enode<'_>) -> CustomCost {
         1
     }
+
+    fn container_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
+        3
+    }
 }
 
-impl TotalCostModel<CustomCost> for DirectAndMarginalCostModel {
-    fn total_enode_cost(
-        &self,
-        _egraph: &EGraph,
-        _func: &Function,
-        _enode: &Enode<'_>,
-        child_costs: &[CustomCost],
-    ) -> CustomCost {
-        1 + child_costs.iter().sum::<CustomCost>()
+impl TreeCostModel<CustomCost> for IndependentTreeAndDagCostModel {
+    type EnodeCost = CustomCost;
+    type ContainerCost = CustomCost;
+
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
+        1
     }
 
-    fn total_container_cost(
+    fn enode_cost(&self, _egraph: &EGraph, _func: &Function, _enode: &Enode<'_>) -> CustomCost {
+        1
+    }
+
+    fn container_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> CustomCost {
+        0
+    }
+
+    fn fold_enode_cost(&self, enode_cost: CustomCost, child_costs: &[CustomCost]) -> CustomCost {
+        enode_cost + child_costs.iter().sum::<CustomCost>()
+    }
+
+    fn fold_container_cost(
         &self,
-        _egraph: &EGraph,
-        _sort: &ArcSort,
-        _value: Value,
+        container_cost: CustomCost,
         element_costs: &[CustomCost],
     ) -> CustomCost {
-        element_costs.iter().sum()
+        container_cost + element_costs.iter().sum::<CustomCost>()
     }
 }
 
@@ -668,14 +680,14 @@ fn test_extract_variants1() {
 }
 
 #[test]
-fn fold_cost_model_accepts_custom_enode_fold() {
+fn tree_cost_model_accepts_custom_enode_annotation() {
     let mut egraph = EGraph::default();
     add_daggy_example(&mut egraph);
 
     let (sort, value) = daggy_root(&mut egraph);
 
     let extracted: extract::ExtractedTerms<u128> = egraph
-        .extract_best(
+        .extract_best_with_cost_model(
             vec![(sort.clone(), value)],
             CustomCostModel { node_cost: 1 },
         )
@@ -695,13 +707,13 @@ fn fold_cost_model_accepts_custom_enode_fold() {
 }
 
 #[test]
-fn total_cost_model_does_not_require_combinable_cost() {
+fn tree_cost_model_does_not_require_monoid_cost() {
     let mut egraph = EGraph::default();
     add_daggy_example(&mut egraph);
 
     let (sort, value) = daggy_root(&mut egraph);
     let extracted = egraph
-        .extract_best(vec![(sort, value)], DirectTotalCostModel)
+        .extract_best_with_cost_model(vec![(sort, value)], DirectTreeCostModel)
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
@@ -711,19 +723,26 @@ fn total_cost_model_does_not_require_combinable_cost() {
         "(Pair (Leaf 1) (Leaf 2))"
     );
 
-    // A model may expose marginals for DAG extraction while defining tree
-    // totals directly; it opts into the blanket total implementation only by
-    // implementing FoldCostModel.
+    // One type may implement the independent tree and DAG model interfaces.
     let (sort, value) = daggy_root(&mut egraph);
     let extracted = egraph
-        .extract_best(vec![(sort, value)], DirectAndMarginalCostModel)
+        .extract_best_with_cost_model(vec![(sort, value)], IndependentTreeAndDagCostModel)
+        .unwrap();
+    assert_eq!(extracted.terms[0].as_ref().unwrap().cost, 5);
+
+    let (sort, value) = daggy_root(&mut egraph);
+    let extracted = egraph
+        .extract_best_with_cost_model(
+            vec![(sort, value)],
+            TreeCostModelFromDag(IndependentTreeAndDagCostModel),
+        )
         .unwrap();
     assert_eq!(extracted.terms[0].as_ref().unwrap().cost, 5);
 }
 
 #[test]
-fn combinable_unsigned_cost_saturates() {
-    assert_eq!(<usize as CombinableCost>::identity(), 0);
+fn monoid_unsigned_cost_saturates() {
+    assert_eq!(<usize as MonoidCost>::identity(), 0);
     assert_eq!(usize::MAX.combine(&1), usize::MAX);
     assert_eq!(u64::MAX.combine(&1), u64::MAX);
     assert_eq!(u128::MAX.combine(&1), u128::MAX);
@@ -737,7 +756,10 @@ fn additive_cost_model_uses_configured_default_node_cost() {
     let (sort, value) = daggy_root(&mut egraph);
 
     let extracted = egraph
-        .extract_best(vec![(sort, value)], AdditiveCostModel { node_cost: 2 })
+        .extract_best_with_cost_model(
+            vec![(sort.clone(), value)],
+            AdditiveCostModel { node_cost: 2 },
+        )
         .unwrap();
     let root = extracted.terms.into_iter().next().unwrap().unwrap();
 
@@ -746,6 +768,10 @@ fn additive_cost_model_uses_configured_default_node_cost() {
         extracted.termdag.to_string(root.term),
         "(Pair (Leaf 1) (Leaf 2))"
     );
+
+    let (termdag, term, cost) = egraph.extract_value(&sort, value).unwrap();
+    assert_eq!(cost, 5);
+    assert_eq!(termdag.to_string(term), "(Pair (Leaf 1) (Leaf 2))");
 }
 
 #[test]
@@ -763,7 +789,7 @@ fn tree_extractor_reuses_costs_for_multiple_values() {
     let extractor = TreeExtractor::compute_costs_from_rootsorts(
         Some(vec![sort.clone()]),
         &egraph,
-        BorrowedCountingTotalCostModel(&calls),
+        BorrowedCountingTreeCostModel(&calls),
     );
     assert!(calls.get() > 0);
     let prepared_calls = calls.get();
@@ -844,17 +870,36 @@ fn tree_extractor_supports_reachable_sorts_and_zero_variants() {
             .extract_variants_with_sort(&mut termdag, container_value, 0, container_sort.clone())
             .is_empty()
     );
-    let container_variants =
-        extractor.extract_variants_with_sort(&mut termdag, container_value, 2, container_sort);
+    let container_variants = extractor.extract_variants_with_sort(
+        &mut termdag,
+        container_value,
+        2,
+        container_sort.clone(),
+    );
     assert_eq!(container_variants.len(), 1);
     assert_eq!(termdag.to_string(container_variants[0].term), "(vec-of 1)");
 
+    let annotated = egraph
+        .extract_best_with_cost_model(
+            vec![(container_sort.clone(), container_value)],
+            CustomCostModel { node_cost: 1 },
+        )
+        .unwrap();
+    assert_eq!(annotated.terms[0].as_ref().unwrap().cost, 4);
+    let adapted = egraph
+        .extract_best_with_cost_model(
+            vec![(container_sort, container_value)],
+            TreeCostModelFromDag(IndependentTreeAndDagCostModel),
+        )
+        .unwrap();
+    assert_eq!(adapted.terms[0].as_ref().unwrap().cost, 4);
+
     let calls = Cell::new(0);
     let extracted = egraph
-        .extract_variants(
+        .extract_variants_with_cost_model(
             vec![(primitive_sort, primitive_value)],
             0,
-            BorrowedCountingTotalCostModel(&calls),
+            BorrowedCountingTreeCostModel(&calls),
         )
         .unwrap();
     assert_eq!(extracted.variants.len(), 1);
@@ -888,7 +933,7 @@ fn extract_best_returns_none_for_unextractable_roots() {
     let (_, hidden) = egraph.eval_expr(&hidden).unwrap();
 
     let extracted = egraph
-        .extract_best(
+        .extract_best_with_cost_model(
             vec![(sort.clone(), visible), (sort, hidden)],
             AdditiveCostModel::default(),
         )

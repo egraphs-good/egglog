@@ -1733,18 +1733,7 @@ impl EGraph {
                 let n: i64 = self.backend.base_values().unwrap(n);
 
                 return if n == 0 {
-                    let extracted =
-                        self.extract_best(vec![(sort, x)], AdditiveCostModel::default())?;
-                    let mut terms = extracted.terms;
-                    let extracted_root = terms
-                        .pop()
-                        .expect("extract_best returns one result for one root")
-                        .ok_or_else(|| {
-                            Error::ExtractError("Unable to find any valid extraction".to_string())
-                        })?;
-                    let termdag = extracted.termdag;
-                    let cost = extracted_root.cost;
-                    let term = extracted_root.term;
+                    let (termdag, term, cost) = self.extract_value(&sort, x)?;
                     // dont turn termdag into a string if we have messages disabled for performance reasons
                     if log_enabled!(Level::Info) {
                         log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
@@ -1756,7 +1745,7 @@ impl EGraph {
                             "cannot extract a negative number of variants".to_string(),
                         ));
                     }
-                    let extracted = self.extract_variants(
+                    let extracted = self.extract_variants_with_cost_model(
                         vec![(sort, x)],
                         n as usize,
                         AdditiveCostModel::default(),
@@ -1859,7 +1848,8 @@ impl EGraph {
                         Ok((expr.output_type(), value))
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
-                let extracted = self.extract_best(roots, AdditiveCostModel::default())?;
+                let extracted =
+                    self.extract_best_with_cost_model(roots, AdditiveCostModel::default())?;
                 let terms = extracted
                     .terms
                     .into_iter()

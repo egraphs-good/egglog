@@ -2,7 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
-- **Breaking:** extraction cost models are split into direct `TotalCostModel`s and combinable `MarginalCostModel`s, with `FoldCostModel` deriving totals from marginals. Batch extraction now returns named result structs, and the reusable tree extractor is exposed as `TreeExtractor`.
+- **Breaking:** extraction now uses independent `TreeCostModel` and `DagCostModel` traits. `MonoidCost` supplies the lawful combination operation required by DAG extraction, and `TreeCostModelFromDag` explicitly adapts a DAG model to tree extraction. Batch extraction returns named result structs through `extract_best_with_cost_model` and `extract_variants_with_cost_model`, and the reusable tree extractor is exposed as `TreeExtractor`.
 
 ## [3.0.0] - 2026-08-18
 
