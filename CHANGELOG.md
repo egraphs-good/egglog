@@ -4,6 +4,10 @@
 
 - **Breaking:** extraction now uses independent `TreeCostModel` and `DagCostModel` traits. `MonoidCost` supplies the lawful combination operation required by DAG extraction, and `TreeCostModelFromDag` explicitly adapts a DAG model to tree extraction. Batch extraction returns named result structs through `extract_best_with_cost_model` and `extract_variants_with_cost_model`, and the reusable tree extractor is exposed as `TreeExtractor`.
 
+- Add `Read::eclass_enodes` to scan an e-class across every constructor, rename the single-constructor method to `constructor_enodes_for_eclass`, and add `Enode::name`.
+
+- Treat tables dropped by `pop` as missing in the name-indexed `Read` and `Write` APIs.
+
 ## [3.0.0] - 2026-08-18
 
 ### Breaking changes

@@ -471,8 +471,10 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         for (value, sort) in row.vals.iter().take(num_children).zip(sorts.iter()) {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
+        let head_name = func.extraction_term_name();
         let output_idx = func.extraction_output_index();
         let enode = Enode {
+            name: head_name,
             children: &row.vals[..output_idx],
             eclass: row.vals[output_idx],
             subsumed: row.subsumed,

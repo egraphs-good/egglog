@@ -339,7 +339,8 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// The single-entry methods (`lookup`, `eclass_of`, `contains`)
 /// return `None` if absent — never insert. The iteration /
 /// introspection methods (`function_entries`, `constructor_enodes`,
-/// `enodes_for_eclass`, `table_size`, `table_sizes`) walk the current
+/// `constructor_enodes_for_eclass`, `eclass_enodes`, `table_size`,
+/// `tables`, `table_sizes`) walk the current
 /// contents of the database, while `constructor_schema` /
 /// `function_schema` / `table_subtype` report how a table is declared
 /// rather than what it holds.
@@ -357,7 +358,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// **Only valid for `function` tables.** Constructors error;
     /// use [`Read::eclass_of`] for those.
     fn lookup<K: IntoValues>(&self, name: &str, key: K) -> Result<Option<Value>, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Function)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
@@ -370,7 +371,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Read::lookup`] for those.
     fn eclass_of<K: IntoValues>(&self, name: &str, inputs: K) -> Result<Option<Value>, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         let key_values: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
@@ -380,14 +381,14 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// True iff a row with the given key exists in the table. Works
     /// for any subtype — never mints.
     fn contains<K: IntoValues>(&self, name: &str, key: K) -> Result<bool, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         Ok(action.lookup(self.es(), &key_values).is_some())
     }
 
     /// A constructor's declared signature: its input sorts and the sort of the
-    /// eclass column. Pair with [`Read::table_sizes`] to walk every table.
+    /// eclass column. Pair with [`Read::tables`] to walk every table.
     ///
     /// **Only valid for constructor tables.** Functions error; use
     /// [`Read::function_schema`] for those.
@@ -414,14 +415,19 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Return the current row count for the named table, or `None` if no table
     /// with that name is registered.
     fn table_size(&self, name: &str) -> Option<usize> {
-        self.registry()
-            .lookup_table(name)
+        lookup_action(self.registry(), self.es(), name)
+            .ok()
             .map(|action| action.row_count(self.es()))
     }
 
     /// Snapshot the registered table names and their current row counts.
     fn table_sizes(&self) -> Vec<(&str, usize)> {
         self.registry().table_sizes(self.es())
+    }
+
+    /// Iterate over the registered table names visible to this state.
+    fn tables(&self) -> impl Iterator<Item = &str> {
+        self.table_sizes().into_iter().map(|(name, _)| name)
     }
 
     /// Call `f` on each [`Enode`] of a constructor / relation table.
@@ -441,7 +447,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         name: &str,
         mut f: impl FnMut(Enode<'_>) -> bool,
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         action.for_each_while(self.es(), |row| {
             let (eclass, children) = row
@@ -449,6 +455,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
                 .split_last()
                 .expect("constructor row has at least an eclass column");
             f(Enode {
+                name,
                 children,
                 eclass: *eclass,
                 subsumed: row.subsumed,
@@ -457,17 +464,20 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(())
     }
 
-    /// Call `f` on each [`Enode`] of a constructor / relation table whose
-    /// eclass column holds exactly `eclass`. Rows whose eclass has since been
-    /// merged into another are matched under the id they store, not their
-    /// canonical one. Errors with `WrongSubtype` if `name` is a function.
-    fn enodes_for_eclass(
+    /// Call `f` on the [`Enode`]s of the *one* table `name` whose eclass column
+    /// holds exactly `eclass`. For every constructor at once, use
+    /// [`Read::eclass_enodes`].
+    ///
+    /// Rows whose eclass has since been merged into another are matched under
+    /// the id they store, not their canonical one. Errors with `WrongSubtype`
+    /// if `name` is a function.
+    fn constructor_enodes_for_eclass(
         &self,
         name: &str,
         eclass: Value,
         mut f: impl FnMut(Enode<'_>),
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         action.for_each_output_value(self.es(), eclass, |row| {
             let (eclass, children) = row
@@ -475,11 +485,36 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
                 .split_last()
                 .expect("constructor row has at least an eclass column");
             f(Enode {
+                name,
                 children,
                 eclass: *eclass,
                 subsumed: row.subsumed,
             });
         });
+        Ok(())
+    }
+
+    /// Call `f` on every [`Enode`] of `eclass`, across every constructor.
+    /// [`Enode::name`] says which one each row came from.
+    ///
+    /// A [`Value`] does not say what sort it belongs to, so this probes each
+    /// constructor whose output is an eq-sort. A caller that already knows the
+    /// sort should narrow to those constructors itself and use
+    /// [`Read::constructor_enodes_for_eclass`], which is one probe rather than
+    /// one per constructor.
+    fn eclass_enodes(&self, eclass: Value, mut f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
+        let names: Vec<String> = self.tables().map(str::to_owned).collect();
+        for name in names {
+            // A function's last column is an output, not an eclass, and a
+            // constructor over a base sort has no eclass column to match.
+            let Ok(func_type) = self.constructor_schema(&name) else {
+                continue;
+            };
+            if !func_type.output.is_eq_sort() {
+                continue;
+            }
+            self.constructor_enodes_for_eclass(&name, eclass, &mut f)?;
+        }
         Ok(())
     }
 
@@ -504,7 +539,7 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         name: &str,
         mut f: impl FnMut(FunctionEntry<'_>) -> bool,
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Function)?;
         action.for_each_while(self.es(), |row| {
             let (output, inputs) = row
@@ -525,6 +560,8 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 /// [`Value`]s; convert with [`Core::value_to_base`] / [`Core::value_to_container`].
 #[derive(Clone, Copy, Debug)]
 pub struct Enode<'a> {
+    /// The constructor this row belongs to.
+    pub name: &'a str,
     /// The constructor's input columns.
     pub children: &'a [Value],
     /// The eclass id this enode belongs to.
@@ -565,7 +602,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         key: K,
         value: V,
     ) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Function)?;
         let bv = self.base_values();
         let mut row: ValueRow = key.into_values(bv).collect();
@@ -583,7 +620,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// **Only valid for constructor tables.** Functions error;
     /// use [`Write::set`] for those.
     fn add<R: IntoValues>(&mut self, name: &str, inputs: R) -> Result<Value, Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         check_subtype(name, &action, TableKind::Constructor)?;
         let key: ValueRow = inputs.into_values(self.base_values()).collect();
         check_arity(name, &action, key.len())?;
@@ -595,7 +632,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// Remove a row from the named table. Works for any subtype.
     fn remove<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         action.remove(self.es_mut(), &key_values);
@@ -604,7 +641,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 
     /// Subsume a row in the named table.
     fn subsume<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
-        let action = lookup_action(self.registry(), name)?;
+        let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
         check_arity(name, &action, key_values.len())?;
         action.subsume(self.es_mut(), key_values.into_iter());
@@ -657,13 +694,24 @@ fn func_type_of<'db>(
     Ok(func_type)
 }
 
-fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
-    registry.lookup_table(name).cloned().ok_or_else(|| {
-        ApiError::MissingTable {
-            name: name.to_string(),
-        }
-        .into()
-    })
+/// The registry outlives `push`/`pop`, so it can still name a table this
+/// execution state no longer has. Those read as missing rather than reaching
+/// the backend, which would panic on them.
+fn lookup_action(
+    registry: &ActionRegistry,
+    es: &ExecutionState,
+    name: &str,
+) -> Result<TableAction, Error> {
+    registry
+        .lookup_table(name)
+        .filter(|action| action.is_live(es))
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::MissingTable {
+                name: name.to_string(),
+            }
+            .into()
+        })
 }
 
 fn check_subtype(name: &str, action: &TableAction, expected: TableKind) -> Result<(), Error> {
@@ -696,7 +744,7 @@ fn apply_registered_function<'a, 'db: 'a>(
     func: &FuncType,
     args: &[Value],
 ) -> Option<Value> {
-    let action = lookup_action(state.registry(), &func.name).ok()?;
+    let action = lookup_action(state.registry(), state.es(), &func.name).ok()?;
     state.apply_table_function(func.subtype, &action, args)
 }
 
