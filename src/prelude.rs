@@ -85,17 +85,21 @@
 //!
 //! Pulling a Rust-side term out of an eclass:
 //!
-//! - [`crate::EGraph::extract_best`] — picks the lowest-cost representative for
-//!   each requested root under the default cost model.
-//! - [`crate::EGraph::extract_best_with_cost_model`] — does the same under a
+//! - [`crate::EGraph::extract_value`] — picks the lowest-cost
+//!   representative under the default tree-additive cost model and
+//!   returns it as a [`crate::TermId`] in a [`crate::TermDag`].
+//! - [`crate::EGraph::extract_best`] / [`crate::EGraph::extract_variants`] —
+//!   extract batches of roots under the default cost model.
+//! - [`crate::EGraph::extract_best_with_cost_model`] /
+//!   [`crate::EGraph::extract_variants_with_cost_model`] — do the same under a
 //!   user-supplied cost model.
 //!
-//! See the [`crate::extract`] module for custom cost types, batch extraction,
-//! and [`crate::extract::TreeExtractor`] when several values should reuse one
-//! sort-based cost preparation.
+//! See the [`crate::extract`] module for the full API
+//! ([`crate::extract::TreeExtractor`], variant extraction,
+//! sort-restricted extraction, custom cost types).
 //!
-//! To get the `(sort, Value)` pair an `extract_best` call needs in the first
-//! place, the easiest path is to let-bind a global name in
+//! To get the `(sort, Value)` pair an `extract_value` call needs in
+//! the first place, the easiest path is to let-bind a global name in
 //! egglog and then resolve it with [`crate::EGraph::eval_expr`]:
 //!
 //! ```
@@ -107,9 +111,7 @@
 //!      (let $root (Add (Num 1) (Num 2)))",
 //! )?;
 //! let (sort, value) = eg.eval_expr(&exprs::var("$root"))?;
-//! let extracted = eg.extract_best(vec![(sort, value)])?;
-//! let root = extracted.terms.into_iter().next().unwrap().unwrap();
-//! let _text = extracted.termdag.to_string(root.term);
+//! let (_dag, _term, _cost) = eg.extract_value(&sort, value)?;
 //! # Ok::<(), egglog::Error>(())
 //! ```
 //!

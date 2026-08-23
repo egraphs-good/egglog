@@ -265,12 +265,11 @@ pub struct ExtractedTermVariants<C> {
     pub variants: Vec<Vec<ExtractedTerm<C>>>,
 }
 
-/// The default Bellman-Ford-like extractor.
+/// Bellman-Ford-like tree extraction with reusable cost preparation.
 ///
-/// The extractor stores a shared borrow of the e-graph because preparation only
-/// computes reusable costs and parent choices; reconstruction still needs the
-/// same e-graph's sort storage and constructor metadata. Holding that borrow
-/// prevents prepared results from being used after the e-graph is mutated.
+/// The prepared state borrows the e-graph because reconstruction still needs
+/// its sort storage and constructor metadata. This prevents prepared costs from
+/// being used after the e-graph is mutated.
 pub struct TreeExtractor<'g, C: Cost> {
     egraph: &'g EGraph,
     funcs: Vec<String>,
@@ -282,18 +281,16 @@ pub struct TreeExtractor<'g, C: Cost> {
 }
 
 impl<'g, C: Cost> TreeExtractor<'g, C> {
-    /// Computes reusable eq-sort extraction costs for the requested root sorts.
+    /// Prepares extraction costs for constructors reachable from `rootsorts`.
     ///
-    /// Later calls to [`TreeExtractor::extract_best_with_sort`] and
+    /// Pass `None` to prepare every extractable root sort. Later calls to
+    /// [`TreeExtractor::extract_best_with_sort`] and
     /// [`TreeExtractor::extract_variants_with_sort`] reuse the prepared best
-    /// costs and producer choices for reachable eq-sort values. Primitive and
-    /// container roots are scored structurally, and root variants rescore their
-    /// candidate enodes. The extractor borrows `egraph`, preventing it from
-    /// being mutated while the prepared results are in use. If `rootsorts` is
-    /// `None`, all extractable root sorts are prepared.
+    /// costs and producer choices.
     ///
-    /// The cost model must remain stable from preparation through every call
-    /// made on the returned extractor.
+    /// Primitive and container roots are costed when extracted. Variant
+    /// extraction also uses the model to rescore candidate root enodes, so the
+    /// model must return stable results for the extractor's lifetime.
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &'g EGraph,

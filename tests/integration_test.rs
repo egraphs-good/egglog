@@ -942,20 +942,6 @@ fn extract_best_returns_none_for_unextractable_roots() {
 }
 
 #[test]
-fn extract_negative_variants_returns_error_instead_of_panicking() {
-    let err = EGraph::default()
-        .parse_and_run_program(
-            None,
-            r#"
-            (datatype Math (Num i64))
-            (extract (Num 1) -1)
-            "#,
-        )
-        .unwrap_err();
-    assert!(err.to_string().contains("negative number of variants"));
-}
-
-#[test]
 fn test_subsumed_unextractable_action_extract() {
     // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();

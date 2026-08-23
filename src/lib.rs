@@ -1845,20 +1845,14 @@ impl EGraph {
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
                 let extracted = self.extract_best(roots)?;
-                let terms = extracted
-                    .terms
-                    .into_iter()
-                    .map(|root| {
-                        root.map(|root| extracted.termdag.to_string(root.term))
-                            .ok_or_else(|| {
-                                Error::ExtractError(
-                                    "Unable to find any valid extraction".to_string(),
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                for term in terms {
-                    writeln!(f, "{term}")
+                for root in extracted.terms {
+                    let root = root.ok_or_else(|| {
+                        Error::ExtractError(
+                            "Unable to find any valid extraction (likely due to subsume or delete)"
+                                .to_string(),
+                        )
+                    })?;
+                    writeln!(f, "{}", extracted.termdag.to_string(root.term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
