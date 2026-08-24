@@ -15,7 +15,7 @@
 use egglog::add_primitive;
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
-use egglog::scheduler::{Matches, Scheduler};
+use egglog::scheduler::{Matches, Scheduler, SchedulerContext};
 use egglog::sort::{I64Sort, S, StringSort};
 use egglog::{
     EGraph, Error, FullPrim, FullState, Primitive, PurePrim, PureState, RawValues, Read, ReadPrim,
@@ -42,7 +42,13 @@ fn assert_ambiguous_primitive<T: std::fmt::Debug>(result: Result<T, Error>) {
 #[derive(Clone)]
 struct ChooseAllScheduler;
 impl Scheduler for ChooseAllScheduler {
-    fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+    fn filter_matches(
+        &mut self,
+        _ctx: &SchedulerContext,
+        _rule: &str,
+        _ruleset: &str,
+        matches: &mut Matches,
+    ) -> bool {
         matches.choose_all();
         false
     }

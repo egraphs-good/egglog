@@ -10,6 +10,21 @@ use numeric_id::define_id;
 
 use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
 
+/// Read-only information about the e-graph handed to a scheduler on each
+/// callback.
+pub struct SchedulerContext<'a> {
+    /// The e-graph the rules run on, for size queries such as
+    /// [`EGraph::get_size`], [`EGraph::total_size`], and [`EGraph::num_nodes`].
+    ///
+    /// Sizes only change between iterations: matches chosen in the current
+    /// iteration are staged and not yet visible in the database.
+    pub egraph: &'a EGraph,
+    /// 0-based count of iterations this scheduler has completed on this
+    /// ruleset. Schedulers can use a change in this value to detect an
+    /// iteration boundary (e.g., to re-read sizes once per iteration).
+    pub iteration: usize,
+}
+
 /// A scheduler decides which matches to be applied for a rule.
 ///
 /// The matches that are not chosen in this iteration will be delayed
@@ -20,8 +35,8 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     ///
     /// This is only called when the runner is otherwise saturated.
     /// Default implementation just returns `true`.
-    fn can_stop(&mut self, rules: &[&str], ruleset: &str) -> bool {
-        let _ = (rules, ruleset);
+    fn can_stop(&mut self, ctx: &SchedulerContext, rules: &[&str], ruleset: &str) -> bool {
+        let _ = (ctx, rules, ruleset);
         true
     }
 
@@ -29,7 +44,13 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     ///
     /// Return `true` if the scheduler's next run of the rule should feed
     /// `filter_matches` with a new iteration of matches.
-    fn filter_matches(&mut self, rule: &str, ruleset: &str, matches: &mut Matches) -> bool;
+    fn filter_matches(
+        &mut self,
+        ctx: &SchedulerContext,
+        rule: &str,
+        ruleset: &str,
+        matches: &mut Matches,
+    ) -> bool;
 }
 
 dyn_clone::clone_trait_object!(Scheduler);
@@ -176,6 +197,7 @@ impl EGraph {
         self.schedulers.push(SchedulerRecord {
             scheduler,
             rule_info: Default::default(),
+            iterations: 0,
         })
     }
 
@@ -232,6 +254,8 @@ impl EGraph {
         let result = (|| -> Result<RunReport, Error> {
             // Step 1: build all the query/action rules and worklist if have not already
             let record = &mut schedulers[scheduler_id];
+            let iteration = record.iterations;
+            record.iterations += 1;
             for (id, rule) in rules.iter() {
                 if !record.rule_info.contains_key(id) {
                     let info = SchedulerRuleInfo::new(self, rule, id)?;
@@ -259,6 +283,10 @@ impl EGraph {
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
             // Step 3: let the scheduler decide which matches need to be kept
+            let ctx = SchedulerContext {
+                egraph: self,
+                iteration,
+            };
             self.backend
                 .with_execution_state(Some(&self.type_info), |state| {
                     for (rule_id, _rule) in rules.iter() {
@@ -270,7 +298,7 @@ impl EGraph {
                         rule_info.should_seek =
                             record
                                 .scheduler
-                                .filter_matches(rule_id, ruleset, &mut matches);
+                                .filter_matches(&ctx, rule_id, ruleset, &mut matches);
                         let table_action = TableAction::new(&self.backend, rule_info.decided);
                         *rule_info.matches.lock().unwrap() =
                             matches.instantiate(state, &table_action);
@@ -302,7 +330,11 @@ impl EGraph {
             // determines whether a no-op iteration can be treated as fully stopped.
             action_report.can_stop = !action_report.updated && {
                 let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
-                record.scheduler.can_stop(&rule_ids, ruleset)
+                let ctx = SchedulerContext {
+                    egraph: self,
+                    iteration,
+                };
+                record.scheduler.can_stop(&ctx, &rule_ids, ruleset)
             };
 
             query_report.union(action_report);
@@ -321,6 +353,8 @@ impl EGraph {
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
     rule_info: HashMap<String, SchedulerRuleInfo>,
+    /// Number of iterations this scheduler has run, across all rulesets.
+    iterations: usize,
 }
 
 /// To enable scheduling without modifying the backend,
@@ -460,7 +494,13 @@ mod test {
     }
 
     impl Scheduler for FirstNScheduler {
-        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+        fn filter_matches(
+            &mut self,
+            _ctx: &SchedulerContext,
+            _rule: &str,
+            _ruleset: &str,
+            matches: &mut Matches,
+        ) -> bool {
             if matches.match_size() <= self.n {
                 matches.choose_all();
             } else {
@@ -568,12 +608,18 @@ mod test {
     }
 
     impl Scheduler for DelayStopScheduler {
-        fn can_stop(&mut self, _rules: &[&str], _ruleset: &str) -> bool {
+        fn can_stop(&mut self, _ctx: &SchedulerContext, _rules: &[&str], _ruleset: &str) -> bool {
             self.can_stop_calls += 1;
             self.can_stop_calls > 1
         }
 
-        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, _matches: &mut Matches) -> bool {
+        fn filter_matches(
+            &mut self,
+            _ctx: &SchedulerContext,
+            _rule: &str,
+            _ruleset: &str,
+            _matches: &mut Matches,
+        ) -> bool {
             false
         }
     }
@@ -619,7 +665,13 @@ mod test {
     struct InspectSizeScheduler;
 
     impl Scheduler for InspectSizeScheduler {
-        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+        fn filter_matches(
+            &mut self,
+            _ctx: &SchedulerContext,
+            _rule: &str,
+            _ruleset: &str,
+            matches: &mut Matches,
+        ) -> bool {
             // Calling `match_size` on a rule with no free variables used to panic
             // with a divide-by-zero. Just exercise it and stop.
             let _ = matches.match_size();
@@ -644,12 +696,87 @@ mod test {
             .unwrap();
     }
 
+    /// A scheduler that stops choosing matches once the e-graph holds
+    /// `limit` e-nodes, and checks the iteration counter it is handed.
+    #[derive(Clone)]
+    struct NodeLimitScheduler {
+        limit: usize,
+        expected_iteration: usize,
+    }
+
+    impl Scheduler for NodeLimitScheduler {
+        fn can_stop(&mut self, ctx: &SchedulerContext, _rules: &[&str], _ruleset: &str) -> bool {
+            ctx.egraph.num_nodes() >= self.limit
+        }
+
+        fn filter_matches(
+            &mut self,
+            ctx: &SchedulerContext,
+            _rule: &str,
+            _ruleset: &str,
+            matches: &mut Matches,
+        ) -> bool {
+            assert_eq!(ctx.iteration, self.expected_iteration);
+            self.expected_iteration += 1;
+            if ctx.egraph.num_nodes() < self.limit {
+                matches.choose_all();
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    #[test]
+    fn test_scheduler_sees_egraph_size() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(NodeLimitScheduler {
+            limit: 10,
+            expected_iteration: 0,
+        }));
+        // Each firing adds one `Num` e-node; `depth` rows are analysis data
+        // (base-sort output) and must not count towards `num_nodes`.
+        let input = r#"
+        (ruleset grow)
+        (datatype Math (Num i64))
+        (function depth (Math) i64 :no-merge)
+        (Num 0)
+        (rule ((= e (Num i)) (< i 100))
+              ((Num (+ i 1)) (set (depth e) i))
+              :ruleset grow :name "grow")
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+        for _ in 0..20 {
+            let report = egraph
+                .step_rules_with_scheduler(scheduler_id, "grow")
+                .unwrap();
+            if report.can_stop {
+                break;
+            }
+        }
+        // One match per iteration, so the scheduler stops exactly at the limit.
+        assert_eq!(egraph.get_size("Num"), 10);
+        assert_eq!(egraph.num_nodes(), 10);
+        // `depth` rows exist but only count towards `total_size`.
+        assert!(egraph.get_size("depth") > 0);
+        assert_eq!(
+            egraph.total_size(),
+            egraph.num_nodes() + egraph.get_size("depth")
+        );
+    }
+
     /// A scheduler that fires every match.
     #[derive(Clone)]
     struct ChooseAllScheduler;
 
     impl Scheduler for ChooseAllScheduler {
-        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+        fn filter_matches(
+            &mut self,
+            _ctx: &SchedulerContext,
+            _rule: &str,
+            _ruleset: &str,
+            matches: &mut Matches,
+        ) -> bool {
             matches.choose_all();
             false
         }

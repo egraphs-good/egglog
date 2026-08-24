@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- **Schedulers now receive a `SchedulerContext`.** `Scheduler::filter_matches` and `Scheduler::can_stop` take a `&SchedulerContext` exposing the e-graph (read-only) and a 0-based iteration counter, so schedulers can consult e-graph sizes when choosing matches (e.g., to respect a node limit). Add `EGraph::total_size` and `EGraph::num_nodes` size queries; `num_nodes` counts only rows of tables whose output is an eq-sort, matching the e-node count of a traditional e-graph.
+
 - Add `Read::eclass_enodes` to scan an e-class across every constructor, rename the single-constructor method to `constructor_enodes_for_eclass`, and add `Enode::name`.
 
 - Treat tables dropped by `pop` as missing in the name-indexed `Read` and `Write` APIs.

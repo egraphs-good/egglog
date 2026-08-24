@@ -2313,6 +2313,28 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
+    /// The total number of rows across all user-visible functions.
+    pub fn total_size(&self) -> usize {
+        self.functions
+            .values()
+            .filter(|f| !f.is_hidden())
+            .map(|f| self.backend.table_size(f.backend_id))
+            .sum()
+    }
+
+    /// The number of e-nodes in the e-graph: the total number of rows across
+    /// all user-visible tables whose output is an eq-sort (constructors and
+    /// relations over eq-sorts). Unlike [`EGraph::total_size`], this excludes
+    /// analysis tables such as functions to base-sort values, so it matches
+    /// the e-node count of a traditional e-graph.
+    pub fn num_nodes(&self) -> usize {
+        self.functions
+            .values()
+            .filter(|f| !f.is_hidden() && f.func_type().output.is_eq_sort())
+            .map(|f| self.backend.table_size(f.backend_id))
+            .sum()
+    }
+
     /// Get a function by name.
     ///
     /// Returns `None` if the function does not exist.
