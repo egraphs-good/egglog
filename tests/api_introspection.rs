@@ -31,6 +31,7 @@ fn constructor_enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Err
 (let $a (Add (Num 1) (Num 2)))
 (let $b (Add (Num 2) (Num 1)))
 (union $a $b)
+(subsume (Add (Num 1) (Num 2)))
 (let $c (Add (Num 9) (Num 9)))
 "
         ),
@@ -45,17 +46,17 @@ fn constructor_enodes_for_eclass_agrees_with_a_filtered_scan() -> Result<(), Err
 
     let mut total_indexed = 0;
     for eclass in eclasses {
-        let mut scanned: Vec<Vec<Value>> = Vec::new();
+        let mut scanned: Vec<(Vec<Value>, bool)> = Vec::new();
         egraph.constructor_enodes("Add", |enode| {
             if enode.eclass == eclass {
-                scanned.push(enode.children.to_vec());
+                scanned.push((enode.children.to_vec(), enode.subsumed));
             }
         })?;
 
-        let mut indexed: Vec<Vec<Value>> = Vec::new();
+        let mut indexed: Vec<(Vec<Value>, bool)> = Vec::new();
         egraph.read(|state| {
             state.constructor_enodes_for_eclass("Add", eclass, |enode| {
-                indexed.push(enode.children.to_vec());
+                indexed.push((enode.children.to_vec(), enode.subsumed));
             })
         })?;
 

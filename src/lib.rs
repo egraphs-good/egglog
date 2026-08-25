@@ -46,7 +46,7 @@ use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::DefaultCost;
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -364,6 +364,11 @@ impl Function {
     /// back to the user-visible constructor name.
     pub fn term_constructor(&self) -> Option<&str> {
         self.decl.term_constructor.as_deref()
+    }
+
+    /// Whether this constructor is excluded from ordinary extraction.
+    pub fn is_unextractable(&self) -> bool {
+        self.decl.unextractable
     }
 }
 
@@ -1727,42 +1732,36 @@ impl EGraph {
                 let n = self.eval_resolved_expr(span, &variants)?;
                 let n: i64 = self.backend.base_values().unwrap(n);
 
-                let mut termdag = TermDag::default();
-
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    Some(vec![sort]),
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
                 return if n == 0 {
-                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
-                        // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if log_enabled!(Level::Info) {
-                            log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
-                        }
-                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
-                    } else {
-                        Err(Error::ExtractError(
-                            "Unable to find any valid extraction (likely due to subsume or delete)"
-                                .to_string(),
-                        ))
+                    let (termdag, term, cost) = self.extract_value(&sort, x)?;
+                    // dont turn termdag into a string if we have messages disabled for performance reasons
+                    if log_enabled!(Level::Info) {
+                        log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                     }
+                    Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                 } else {
                     if n < 0 {
                         return Err(Error::ExtractError(
                             "cannot extract a negative number of variants".to_string(),
                         ));
                     }
-                    let terms: Vec<TermId> = extractor
-                        .extract_variants(self, &mut termdag, x, n as usize)
-                        .iter()
-                        .map(|e| e.1)
+                    let extracted = self.extract_variants(vec![(sort, x)], n as usize)?;
+                    let terms: Vec<TermId> = extracted
+                        .variants
+                        .into_iter()
+                        .next()
+                        .expect("extract_variants returns one result for one root")
+                        .into_iter()
+                        .map(|extracted| extracted.term)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
+                    Ok(vec![CommandOutput::ExtractVariants(
+                        extracted.termdag,
+                        terms,
+                    )])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -1826,38 +1825,34 @@ impl EGraph {
             ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
-                // append to file
+
+                // Preserve the command's file-error ordering: reject an invalid
+                // output path before evaluating expressions.
+                use std::io::Write;
                 let mut f = File::options()
                     .append(true)
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    None,
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
-                let mut termdag: TermDag = Default::default();
-
-                use std::io::Write;
-                for expr in exprs {
-                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
-                    let expr_type = expr.output_type();
-
-                    let term = match extractor.extract_best_with_sort(
-                        self,
-                        &mut termdag,
-                        value,
-                        expr_type,
-                    ) {
-                        Some((_, term)) => term,
-                        None => return Err(Error::ExtractError(
+                // Evaluation may mutate the e-graph, so finish it before
+                // extraction takes a shared borrow for its prepared costs.
+                let roots = exprs
+                    .iter()
+                    .map(|expr| {
+                        let value = self.eval_resolved_expr(span.clone(), expr)?;
+                        Ok((expr.output_type(), value))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                let extracted = self.extract_best(roots)?;
+                for root in extracted.terms {
+                    let root = root.ok_or_else(|| {
+                        Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
                                 .to_string(),
-                        )),
-                    };
-                    writeln!(f, "{}", termdag.to_string(term))
+                        )
+                    })?;
+                    writeln!(f, "{}", extracted.termdag.to_string(root.term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
@@ -2318,6 +2313,46 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// Returns the typed child values stored inside a container-sort value.
+    ///
+    /// `sort` must be a container sort and `value` must belong to that sort.
+    pub fn container_inner_values(&self, sort: &ArcSort, value: Value) -> Vec<(ArcSort, Value)> {
+        sort.inner_values(self.backend.container_values(), value)
+    }
+
+    /// Reconstructs a base-sort value into a [`TermDag`].
+    ///
+    /// `sort` must be a base sort and `value` must belong to that sort in this
+    /// e-graph.
+    pub fn reconstruct_base_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> TermId {
+        sort.reconstruct_termdag_base(self.backend.base_values(), value, termdag)
+    }
+
+    /// Reconstructs a container-sort value from its extracted element terms.
+    ///
+    /// `sort` and `value` must identify a container in this e-graph, and
+    /// `element_terms` must correspond to [`EGraph::container_inner_values`] in
+    /// the same order.
+    pub fn reconstruct_container_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<TermId>,
+    ) -> TermId {
+        sort.reconstruct_termdag_container(
+            self.backend.container_values(),
+            value,
+            termdag,
+            element_terms,
+        )
     }
 
     /// Returns `true` if a user-defined command with the given name is
