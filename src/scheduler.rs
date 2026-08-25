@@ -799,15 +799,18 @@ mod test {
             limit: 10,
             expected_iteration: 0,
         }));
-        // Each firing adds one `Num` e-node; `depth` rows are analysis data
-        // (base-sort output) and must not count towards `num_nodes`.
+        // Each firing adds one `Num` e-node; `depth` rows (base-sort output)
+        // and `seen` rows (a relation, i.e. a constructor over a fresh
+        // non-unionable sort) are analysis data and must not count towards
+        // `num_nodes`.
         let input = r#"
         (ruleset grow)
         (datatype Math (Num i64))
         (function depth (Math) i64 :no-merge)
+        (relation seen (Math))
         (Num 0)
         (rule ((= e (Num i)) (< i 100))
-              ((Num (+ i 1)) (set (depth e) i))
+              ((Num (+ i 1)) (set (depth e) i) (seen e))
               :ruleset grow :name "grow")
         "#;
         egraph.parse_and_run_program(None, input).unwrap();
@@ -822,11 +825,12 @@ mod test {
         // One match per iteration, so the scheduler stops exactly at the limit.
         assert_eq!(egraph.get_size("Num"), 10);
         assert_eq!(egraph.num_nodes(), 10);
-        // `depth` rows exist but only count towards `total_size`.
+        // `depth` and `seen` rows exist but only count towards `total_size`.
         assert!(egraph.get_size("depth") > 0);
+        assert!(egraph.get_size("seen") > 0);
         assert_eq!(
             egraph.total_size(),
-            egraph.num_nodes() + egraph.get_size("depth")
+            egraph.num_nodes() + egraph.get_size("depth") + egraph.get_size("seen")
         );
     }
 
