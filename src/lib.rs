@@ -330,10 +330,6 @@ pub struct Function {
     func_type: Arc<FuncType>,
     can_subsume: bool,
     backend_id: egglog_bridge::FunctionId,
-    /// Whether rows of this table are e-nodes (see [`EGraph::num_nodes`]):
-    /// the output sort is a unionable eq-sort. Computed at declaration so
-    /// size queries on the scheduler's hot path need no sort lookups.
-    counts_as_enodes: bool,
 }
 
 impl Function {
@@ -860,13 +856,11 @@ impl EGraph {
             can_subsume,
         });
 
-        let counts_as_enodes = self.type_info.is_sort_unionable(&func_type.output);
         let function = Function {
             decl: decl.clone(),
             func_type,
             can_subsume,
             backend_id,
-            counts_as_enodes,
         };
 
         let old = self.functions.insert(decl.name.clone(), function);
@@ -2339,7 +2333,7 @@ impl EGraph {
     pub fn num_nodes(&self) -> usize {
         self.functions
             .values()
-            .filter(|f| !f.is_hidden() && f.counts_as_enodes)
+            .filter(|f| !f.is_hidden() && self.type_info.is_sort_unionable(&f.func_type().output))
             .map(|f| self.backend.table_size(f.backend_id))
             .sum()
     }
