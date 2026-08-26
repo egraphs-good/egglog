@@ -674,6 +674,65 @@ impl EGraph {
         install_thread_pool(thread_pool, || self.run_rules_inner(rules, context))
     }
 
+    /// Run `rules` for one iteration like [`EGraph::run_rules`], but without
+    /// rebuilding afterwards. Unions made by the rules are recorded in the
+    /// union-find but ids in the tables are not canonicalized until
+    /// [`EGraph::rebuild_now`] is called; until then, size queries may count
+    /// rows that a rebuild would merge. This lets a runner apply rules one at
+    /// a time and rebuild once per iteration, as egg does.
+    pub fn run_rules_no_rebuild(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let ts = self.next_ts();
+            let rule_set_report = run_rules_impl(
+                &mut self.db,
+                &mut self.rules,
+                rules,
+                ts,
+                self.report_level,
+                context,
+            )?;
+            if let Some(message) = self.panic_message.lock().unwrap().take() {
+                return Err(PanicError(message).into());
+            }
+            self.inc_ts();
+            Ok(IterationReport {
+                rule_set_report,
+                rebuild_time: Duration::ZERO,
+            })
+        })
+    }
+
+    /// Flush the pending update buffers without rebuilding, for use with
+    /// [`EGraph::run_rules_no_rebuild`]. Returns `true` if the database is
+    /// updated.
+    pub fn flush_updates_no_rebuild(&mut self) -> bool {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let updated = self.db.merge_all();
+            self.inc_ts();
+            updated
+        })
+    }
+
+    /// Canonicalize the database after deferred-rebuild runs. Returns the time
+    /// spent rebuilding.
+    pub fn rebuild_now(&mut self) -> Result<Duration> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let timer = Instant::now();
+            self.rebuild()?;
+            if let Some(message) = self.panic_message.lock().unwrap().take() {
+                return Err(PanicError(message).into());
+            }
+            Ok(timer.elapsed())
+        })
+    }
+
     fn run_rules_inner(
         &mut self,
         rules: &[RuleId],

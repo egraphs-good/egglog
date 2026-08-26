@@ -5,7 +5,7 @@ use core_relations::{ExecutionState, ExternalFunction, Value};
 use egglog_bridge::{
     ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId, TableAction,
 };
-use egglog_reports::RunReport;
+use egglog_reports::{IterationReport, RunReport};
 use numeric_id::define_id;
 
 use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
@@ -302,12 +302,16 @@ impl EGraph {
 
             // Steps 3 and 4: let the scheduler decide which matches need to be
             // kept, and run the action rules on the chosen ones.
+            let seminaive = self.seminaive;
             let mut action_report = if record.scheduler.apply_immediately() {
                 // Immediate mode: apply each rule's chosen matches (flush +
                 // action rule) before the next rule's `filter_matches`, so the
                 // scheduler observes up-to-date e-graph sizes within the
-                // iteration.
+                // iteration. Rebuilding is deferred to the end of the
+                // iteration, as in egg: between rules the tables may hold
+                // rows a rebuild would merge, so sizes are upper bounds.
                 let mut action_report = RunReport::default();
+                let mut any_applied = false;
                 for (rule_id, _rule) in rules.iter() {
                     let mut inserted = false;
                     let ctx = SchedulerContext {
@@ -329,18 +333,35 @@ impl EGraph {
                             );
                             inserted = matches.any_chosen();
                             let table_action = TableAction::new(&self.backend, rule_info.decided);
+                            let residual = matches.instantiate(state, &table_action);
+                            // Under seminaive evaluation unchosen matches must be kept for
+                            // later iterations; a naive query re-finds them every iteration.
                             *rule_info.matches.lock().unwrap() =
-                                matches.instantiate(state, &table_action);
+                                if seminaive { residual } else { Vec::new() };
                         });
                     if inserted {
-                        self.backend.flush_updates();
+                        any_applied = true;
+                        self.backend.flush_updates_no_rebuild();
                         let action_rule = record.rule_info.get(rule_id).unwrap().action_rule;
                         let rule_report = self
                             .backend
-                            .run_rules(&[action_rule], Some(&self.type_info))
+                            .run_rules_no_rebuild(&[action_rule], Some(&self.type_info))
                             .map_err(|e| Error::BackendError(e.to_string()))?;
                         action_report.union(RunReport::singleton(ruleset, rule_report));
                     }
+                }
+                if any_applied {
+                    let rebuild_time = self
+                        .backend
+                        .rebuild_now()
+                        .map_err(|e| Error::BackendError(e.to_string()))?;
+                    action_report.union(RunReport::singleton(
+                        ruleset,
+                        IterationReport {
+                            rule_set_report: Default::default(),
+                            rebuild_time,
+                        },
+                    ));
                 }
                 action_report
             } else {
@@ -365,8 +386,9 @@ impl EGraph {
                                 &mut matches,
                             );
                             let table_action = TableAction::new(&self.backend, rule_info.decided);
+                            let residual = matches.instantiate(state, &table_action);
                             *rule_info.matches.lock().unwrap() =
-                                matches.instantiate(state, &table_action);
+                                if seminaive { residual } else { Vec::new() };
                         }
                     });
                 self.backend.flush_updates();
@@ -489,12 +511,15 @@ impl SchedulerRuleInfo {
             can_subsume: false,
         });
 
-        // Step 1: build the query rule
+        // Step 1: build the query rule. It follows the EGraph's seminaive
+        // setting like an ordinary rule: with `--naive` it re-searches the
+        // whole database every iteration (and widens to Read/Full contexts).
+        let seminaive = egraph.seminaive;
         let mut qrule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, true),
+            egraph.backend.new_rule(name, seminaive),
             &egraph.functions,
             &egraph.type_info,
-            false, // seminaive query: Pure/Write contexts
+            !seminaive,
         );
         qrule_builder.query(&rule.body, false)?;
         let mut entries = free_vars
