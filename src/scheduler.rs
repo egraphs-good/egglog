@@ -16,8 +16,10 @@ pub struct SchedulerContext<'a> {
     /// The e-graph the rules run on, for size queries such as
     /// [`EGraph::get_size`], [`EGraph::total_size`], and [`EGraph::num_nodes`].
     ///
-    /// Sizes only change between iterations: matches chosen in the current
-    /// iteration are staged and not yet visible in the database.
+    /// Each rule's chosen matches are applied before the next rule's
+    /// `filter_matches`, so sizes are live within an iteration. Between rules
+    /// the tables may still hold rows that the end-of-iteration rebuild will
+    /// merge, so a size read mid-iteration is an upper bound.
     pub egraph: &'a EGraph,
     /// 0-based count of iterations this scheduler has completed on this
     /// ruleset. Schedulers can use a change in this value to detect an
@@ -42,6 +44,10 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
 
     /// Filter the matches for a rule.
     ///
+    /// The chosen matches are applied (actions run, database flushed) before
+    /// the next rule's `filter_matches` is called, so the e-graph reached
+    /// through `ctx` reflects every earlier decision of this iteration.
+    ///
     /// Return `true` if the scheduler's next run of the rule should feed
     /// `filter_matches` with a new iteration of matches.
     fn filter_matches(
@@ -51,19 +57,6 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
         ruleset: &str,
         matches: &mut Matches,
     ) -> bool;
-
-    /// Whether each rule's chosen matches should be applied (actions run,
-    /// database flushed) before the next rule's `filter_matches` is called,
-    /// instead of batching all rules' chosen matches into a single apply at
-    /// the end of the iteration.
-    ///
-    /// With immediate application, the e-graph sizes observed through the
-    /// [`SchedulerContext`] are up to date within an iteration, at the cost
-    /// of one flush and one action-rule run per rule that chose matches.
-    /// Default is `false` (batched).
-    fn apply_immediately(&self) -> bool {
-        false
-    }
 }
 
 dyn_clone::clone_trait_object!(Scheduler);
@@ -300,112 +293,66 @@ impl EGraph {
                 .run_rules(&query_rules, Some(&self.type_info))
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
-            // Steps 3 and 4: let the scheduler decide which matches need to be
-            // kept, and run the action rules on the chosen ones.
+            // Steps 3 and 4: for each rule, let the scheduler decide which
+            // matches to keep, then apply them (flush + that rule's action
+            // rule) before moving on to the next rule, so the scheduler
+            // observes up-to-date e-graph sizes within the iteration. Rules
+            // that choose nothing skip the flush and run. Rebuilding is
+            // deferred to the end of the iteration, as in egg: between rules
+            // the tables may hold rows a rebuild would merge, so sizes are
+            // upper bounds.
             let seminaive = self.seminaive;
-            let mut action_report = if record.scheduler.apply_immediately() {
-                // Immediate mode: apply each rule's chosen matches (flush +
-                // action rule) before the next rule's `filter_matches`, so the
-                // scheduler observes up-to-date e-graph sizes within the
-                // iteration. Rebuilding is deferred to the end of the
-                // iteration, as in egg: between rules the tables may hold
-                // rows a rebuild would merge, so sizes are upper bounds.
-                let mut action_report = RunReport::default();
-                let mut any_applied = false;
-                for (rule_id, _rule) in rules.iter() {
-                    let mut inserted = false;
-                    let ctx = SchedulerContext {
-                        egraph: self,
-                        iteration,
-                    };
-                    self.backend
-                        .with_execution_state(Some(&self.type_info), |state| {
-                            let rule_info = record.rule_info.get_mut(rule_id).unwrap();
-
-                            let matches: Vec<Value> =
-                                std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                            let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                            rule_info.should_seek = record.scheduler.filter_matches(
-                                &ctx,
-                                rule_id,
-                                ruleset,
-                                &mut matches,
-                            );
-                            inserted = matches.any_chosen();
-                            let table_action = TableAction::new(&self.backend, rule_info.decided);
-                            let residual = matches.instantiate(state, &table_action);
-                            // Under seminaive evaluation unchosen matches must be kept for
-                            // later iterations; a naive query re-finds them every iteration.
-                            *rule_info.matches.lock().unwrap() =
-                                if seminaive { residual } else { Vec::new() };
-                        });
-                    if inserted {
-                        any_applied = true;
-                        self.backend.flush_updates_no_rebuild();
-                        let action_rule = record.rule_info.get(rule_id).unwrap().action_rule;
-                        let rule_report = self
-                            .backend
-                            .run_rules_no_rebuild(&[action_rule], Some(&self.type_info))
-                            .map_err(|e| Error::BackendError(e.to_string()))?;
-                        action_report.union(RunReport::singleton(ruleset, rule_report));
-                    }
-                }
-                if any_applied {
-                    let rebuild_time = self
-                        .backend
-                        .rebuild_now()
-                        .map_err(|e| Error::BackendError(e.to_string()))?;
-                    action_report.union(RunReport::singleton(
-                        ruleset,
-                        IterationReport {
-                            rule_set_report: Default::default(),
-                            rebuild_time,
-                        },
-                    ));
-                }
-                action_report
-            } else {
-                // Batched mode: decide for every rule first, then apply all
-                // chosen matches in a single flush and action-rule run.
+            let mut action_report = RunReport::default();
+            let mut any_applied = false;
+            for (rule_id, _rule) in rules.iter() {
+                let mut inserted = false;
                 let ctx = SchedulerContext {
                     egraph: self,
                     iteration,
                 };
                 self.backend
                     .with_execution_state(Some(&self.type_info), |state| {
-                        for (rule_id, _rule) in rules.iter() {
-                            let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+                        let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
-                            let matches: Vec<Value> =
-                                std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                            let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                            rule_info.should_seek = record.scheduler.filter_matches(
-                                &ctx,
-                                rule_id,
-                                ruleset,
-                                &mut matches,
-                            );
-                            let table_action = TableAction::new(&self.backend, rule_info.decided);
-                            let residual = matches.instantiate(state, &table_action);
-                            *rule_info.matches.lock().unwrap() =
-                                if seminaive { residual } else { Vec::new() };
-                        }
+                        let matches: Vec<Value> =
+                            std::mem::take(rule_info.matches.lock().unwrap().as_mut());
+                        let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+                        rule_info.should_seek =
+                            record
+                                .scheduler
+                                .filter_matches(&ctx, rule_id, ruleset, &mut matches);
+                        inserted = matches.any_chosen();
+                        let table_action = TableAction::new(&self.backend, rule_info.decided);
+                        let residual = matches.instantiate(state, &table_action);
+                        // Under seminaive evaluation unchosen matches must be kept for
+                        // later iterations; a naive query re-finds them every iteration.
+                        *rule_info.matches.lock().unwrap() =
+                            if seminaive { residual } else { Vec::new() };
                     });
-                self.backend.flush_updates();
-
-                let action_rules = rules
-                    .iter()
-                    .map(|(rule_id, _rule)| {
-                        let rule_info = record.rule_info.get(rule_id).unwrap();
-                        rule_info.action_rule
-                    })
-                    .collect::<Vec<_>>();
-                let action_iter_report = self
+                if inserted {
+                    any_applied = true;
+                    self.backend.flush_updates_no_rebuild();
+                    let action_rule = record.rule_info.get(rule_id).unwrap().action_rule;
+                    let rule_report = self
+                        .backend
+                        .run_rules_no_rebuild(&[action_rule], Some(&self.type_info))
+                        .map_err(|e| Error::BackendError(e.to_string()))?;
+                    action_report.union(RunReport::singleton(ruleset, rule_report));
+                }
+            }
+            if any_applied {
+                let rebuild_time = self
                     .backend
-                    .run_rules(&action_rules, Some(&self.type_info))
+                    .rebuild_now()
                     .map_err(|e| Error::BackendError(e.to_string()))?;
-                RunReport::singleton(ruleset, action_iter_report)
-            };
+                action_report.union(RunReport::singleton(
+                    ruleset,
+                    IterationReport {
+                        rule_set_report: Default::default(),
+                        rebuild_time,
+                    },
+                ));
+            }
 
             // Step 5: combine the reports
             let mut query_report = RunReport::singleton(ruleset, query_iter_report);
@@ -628,10 +575,18 @@ mod test {
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));
 
+            // A rule whose matches were all consumed is not run (its action
+            // rule is skipped), so it has no entry in the final iteration.
             let expected_matches = if iter <= 10 { 10 } else { 12 - iter };
+            let rule_name: Arc<str> = "test-rule".into();
+            let expected = if expected_matches == 0 {
+                vec![]
+            } else {
+                vec![(&rule_name, &expected_matches)]
+            };
             assert_eq!(
                 report.num_matches_per_rule.iter().collect::<Vec<_>>(),
-                [(&"test-rule".into(), &expected_matches)]
+                expected
             );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
@@ -859,18 +814,14 @@ mod test {
         );
     }
 
-    /// A scheduler with `apply_immediately` that records the e-graph size it
-    /// observes at each `filter_matches` call.
+    /// A scheduler that records the e-graph size it observes at each
+    /// `filter_matches` call.
     #[derive(Clone)]
-    struct EagerProbeScheduler {
+    struct SizeProbeScheduler {
         sizes_seen: Arc<Mutex<Vec<(String, usize)>>>,
     }
 
-    impl Scheduler for EagerProbeScheduler {
-        fn apply_immediately(&self) -> bool {
-            true
-        }
-
+    impl Scheduler for SizeProbeScheduler {
         fn filter_matches(
             &mut self,
             ctx: &SchedulerContext,
@@ -888,15 +839,15 @@ mod test {
     }
 
     #[test]
-    fn test_apply_immediately_sees_fresh_sizes() {
+    fn test_filter_matches_sees_fresh_sizes() {
         let mut egraph = EGraph::default();
         let sizes_seen = Arc::new(Mutex::new(Vec::new()));
-        let scheduler_id = egraph.add_scheduler(Box::new(EagerProbeScheduler {
+        let scheduler_id = egraph.add_scheduler(Box::new(SizeProbeScheduler {
             sizes_seen: sizes_seen.clone(),
         }));
-        // "a-grow" adds one Num per iteration; "b-watch" only matches. With
-        // immediate application, "b-watch" must observe "a-grow"'s new node
-        // within the same iteration.
+        // "a-grow" adds one Num per iteration; "b-watch" only matches. Since
+        // each rule's matches are applied before the next rule is consulted,
+        // "b-watch" must observe "a-grow"'s new node within the same iteration.
         let input = r#"
         (ruleset t)
         (datatype Math (Num i64))
