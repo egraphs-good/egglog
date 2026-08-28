@@ -44,7 +44,7 @@ struct ChooseAllScheduler;
 impl Scheduler for ChooseAllScheduler {
     fn filter_matches(
         &mut self,
-        _ctx: &SchedulerContext,
+        _ctx: &SchedulerContext<'_>,
         _rule: &str,
         _ruleset: &str,
         matches: &mut Matches,

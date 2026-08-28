@@ -862,6 +862,11 @@ impl EGraph {
             can_subsume,
             backend_id,
         };
+        if function.is_hidden() {
+            self.type_info
+                .hidden_functions
+                .insert(function.name().to_owned());
+        }
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -1123,8 +1128,8 @@ impl EGraph {
         ) {
             match &rulesets[ruleset] {
                 Ruleset::Rules(rules) => {
-                    for (_, id) in rules.values() {
-                        ids.push(*id);
+                    for rule in rules.values() {
+                        ids.push(rule.backend_id);
                     }
                 }
                 Ruleset::Combined(sub_rulesets) => {
@@ -1188,7 +1193,14 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             return Err(Error::RuleAlreadyExists(rule.name, rule.span));
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
+                        indexmap::map::Entry::Vacant(e) => e.insert(CompiledRule {
+                            core: core_rule,
+                            backend_id: rule_id,
+                            seminaive,
+                            requires_read_context,
+                            no_decomp,
+                            include_subsumed: rule.include_subsumed,
+                        }),
                     };
                     Ok(rule.name)
                 }
@@ -2313,27 +2325,29 @@ impl EGraph {
         self.backend.table_size(function_id)
     }
 
-    /// The total number of rows across all user-visible functions.
-    pub fn total_size(&self) -> usize {
-        self.functions
-            .values()
-            .filter(|f| !f.is_hidden())
-            .map(|f| self.backend.table_size(f.backend_id))
-            .sum()
-    }
-
     /// The number of e-nodes in the e-graph: the total number of rows across
-    /// all user-visible tables whose output is a unionable eq-sort, i.e. the
-    /// constructors of `datatype`s and of user-declared `sort`s. Unlike
-    /// [`EGraph::total_size`], this excludes analysis data: functions to
-    /// base-sort values, and `relation`s (which desugar to constructors over
-    /// a fresh non-unionable sort and are facts *about* e-classes rather than
-    /// members of them). It therefore matches the e-node count of a
-    /// traditional e-graph.
+    /// visible constructor tables for unionable eq-sorts, including their
+    /// term/proof-encoding views. Analysis functions, global lets, hidden
+    /// helpers, and `relation`s are excluded.
     pub fn num_nodes(&self) -> usize {
         self.functions
             .values()
-            .filter(|f| !f.is_hidden() && self.type_info.is_sort_unionable(&f.func_type().output))
+            .filter(|f| {
+                // Encoded views all carry `term_constructor`. A constructor's
+                // hidden term table has only its original inputs, while an
+                // analysis function's also stores its output, so only a
+                // constructor view is one column wider than its term table.
+                let is_constructor_view = f.term_constructor().is_some_and(|name| {
+                    self.functions.get(name).is_some_and(|term_table| {
+                        term_table.func_type().input.len() + 1 == f.func_type().input.len()
+                    })
+                });
+                !f.is_hidden()
+                    && !f.is_let_binding()
+                    && (f.func_type().subtype == FunctionSubtype::Constructor
+                        || is_constructor_view)
+                    && self.type_info.is_sort_unionable(f.extraction_output_sort())
+            })
             .map(|f| self.backend.table_size(f.backend_id))
             .sum()
     }
@@ -2502,7 +2516,7 @@ impl EGraph {
         // succeeded or not.
         if let Some(Ruleset::Rules(rules)) = self.rulesets.swap_remove(&ruleset) {
             for (_, rule) in rules {
-                self.backend.free_rule(rule.1);
+                self.backend.free_rule(rule.backend_id);
             }
         }
         outcome?;

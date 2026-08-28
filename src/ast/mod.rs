@@ -52,11 +52,24 @@ pub struct ProofConstructorNames {
     pub normalize: String,
 }
 
+/// A lowered rule plus the execution options needed to rebuild it for scheduling.
 #[derive(Clone, Debug)]
-/// The egglog internal representation of already compiled rules
+pub(crate) struct CompiledRule {
+    pub(crate) core: ResolvedCoreRule,
+    pub(crate) backend_id: egglog_bridge::RuleId,
+    /// Whether this rule's query uses delta evaluation.
+    pub(crate) seminaive: bool,
+    /// Whether its query or action may read the live database.
+    pub(crate) requires_read_context: bool,
+    pub(crate) no_decomp: bool,
+    pub(crate) include_subsumed: bool,
+}
+
+/// The egglog internal representation of already compiled rules.
+#[derive(Clone, Debug)]
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
-    Rules(IndexMap<String, (ResolvedCoreRule, egglog_bridge::RuleId)>),
+    Rules(IndexMap<String, CompiledRule>),
     /// A combined ruleset may contain other rulesets.
     Combined(Vec<String>),
 }

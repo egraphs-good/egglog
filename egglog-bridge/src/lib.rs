@@ -677,9 +677,9 @@ impl EGraph {
     /// Run `rules` for one iteration like [`EGraph::run_rules`], but without
     /// rebuilding afterwards. Unions made by the rules are recorded in the
     /// union-find but ids in the tables are not canonicalized until
-    /// [`EGraph::rebuild_now`] is called; until then, size queries may count
-    /// rows that a rebuild would merge. This lets a runner apply rules one at
-    /// a time and rebuild once per iteration, as egg does.
+    /// [`EGraph::rebuild_now`] is called; until then, rebuilding may increase
+    /// or decrease table sizes. This lets a runner apply rules one at a time
+    /// and rebuild at most once per iteration, as egg does.
     pub fn run_rules_no_rebuild(
         &mut self,
         rules: &[RuleId],
