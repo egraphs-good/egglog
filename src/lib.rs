@@ -3495,4 +3495,56 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, Error::IoError(..)));
     }
+
+    /// Regression test: `SymbolGen::fresh` minted colliding names for
+    /// different hints (e.g. hint "x" at count 11 and hint "x1" at count 1
+    /// both produce "@x11"). Two distinct globals sharing one minted name
+    /// were then conflated while compiling an action, silently binding a
+    /// global to the wrong term.
+    #[test]
+    fn test_fresh_name_collision_globals() {
+        let mut egraph = EGraph::default();
+        // Each `(or2 x y)` command consumes one `fresh("x")`. After the ten
+        // `t` commands (plus the definition of `x` itself), the minted name
+        // for a fresh "x" is "@x11". Global `x1` has only been minted once
+        // (by its own definition), so minting for it also produces "@x11".
+        // The final command references both globals, conflating them.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort B)
+                (constructor var (String) B)
+                (constructor and2 (B B) B)
+                (constructor or2 (B B) B)
+                (let x (var "x"))
+                (let y (var "y"))
+                (let t1 (or2 x y))
+                (let t2 (or2 x y))
+                (let t3 (or2 x y))
+                (let t4 (or2 x y))
+                (let t5 (or2 x y))
+                (let t6 (or2 x y))
+                (let t7 (or2 x y))
+                (let t8 (or2 x y))
+                (let t9 (or2 x y))
+                (let t10 (or2 x y))
+                (let x1 (var "x1"))
+                (let out (and2 x x1))
+                "#,
+            )
+            .unwrap();
+
+        // `out` must equal the term it was bound to. With the name
+        // collision, the last action was miscompiled as
+        // `(set (out) (and2 (x1) (x1)))`, so this check failed.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (check (= out (and2 (var "x") x1)))
+                "#,
+            )
+            .unwrap();
+    }
 }
