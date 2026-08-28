@@ -15,6 +15,17 @@ pub use egglog_ast::generic_ast_helpers::INTERNAL_SYMBOL_PREFIX;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolGen {
     hint_to_count: HashMap<String, usize>,
+    /// Every symbol minted by this generator so far.
+    ///
+    /// `fresh` concatenates a hint with a per-hint counter, which by itself is
+    /// *not* collision-free across different hints: e.g. minting for hint
+    /// "n414" at count 11 and for hint "n4141" at count 1 both produce
+    /// "n41411". Downstream passes treat resolved variables by name, so two
+    /// distinct variables with the same name silently get conflated and
+    /// corrupt action compilation. This set guarantees every minted symbol is
+    /// unique, by advancing the per-hint counter past any name that has
+    /// already been used.
+    minted: HashSet<String>,
     reserved_string: String,
     leave_off_zero: bool,
 }
@@ -24,6 +35,7 @@ impl SymbolGen {
     pub fn new(reserved_string: String) -> Self {
         Self {
             hint_to_count: HashMap::default(),
+            minted: HashSet::default(),
             reserved_string,
             leave_off_zero: true,
         }
@@ -60,18 +72,28 @@ pub trait FreshGen<Head: ?Sized, Leaf> {
 impl FreshGen<str, String> for SymbolGen {
     fn fresh(&mut self, name_hint: &str) -> String {
         let entry = self.hint_to_count.entry(name_hint.to_string()).or_insert(0);
-        let count_before = *entry;
-        *entry += 1;
-        format!(
-            "{}{}{}",
-            self.reserved_string,
-            name_hint,
-            if self.leave_off_zero && count_before == 0 {
-                "".to_string()
-            } else {
-                count_before.to_string()
+        let mut count = *entry;
+        let name = loop {
+            let candidate = format!(
+                "{}{}{}",
+                self.reserved_string,
+                name_hint,
+                if self.leave_off_zero && count == 0 {
+                    "".to_string()
+                } else {
+                    count.to_string()
+                }
+            );
+            // Advance past any name that has already been minted (possibly
+            // via a different hint), so minted names are pairwise unique.
+            if !self.minted.contains(&candidate) {
+                break candidate;
             }
-        )
+            count += 1;
+        };
+        *entry = count + 1;
+        self.minted.insert(name.clone());
+        name
     }
 }
 
@@ -87,18 +109,26 @@ impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
             .hint_to_count
             .entry(format!("{name_hint}"))
             .or_insert(0);
-        let count = *entry;
-        *entry += 1;
-        let name = format!(
-            "{}{}{}",
-            self.reserved_string,
-            name_hint,
-            if self.leave_off_zero && count == 0 {
-                "".to_string()
-            } else {
-                count.to_string()
+        let mut count = *entry;
+        let name = loop {
+            let candidate = format!(
+                "{}{}{}",
+                self.reserved_string,
+                name_hint,
+                if self.leave_off_zero && count == 0 {
+                    "".to_string()
+                } else {
+                    count.to_string()
+                }
+            );
+            // Keep minted names pairwise unique; see the `str` impl.
+            if !self.minted.contains(&candidate) {
+                break candidate;
             }
-        );
+            count += 1;
+        };
+        *entry = count + 1;
+        self.minted.insert(name.clone());
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
             ResolvedCall::Primitive(prim) => prim.output().clone(),
