@@ -8,6 +8,8 @@
 
 - Treat tables dropped by `pop` as missing in the name-indexed `Read` and `Write` APIs.
 
+- Escape quotes and backslashes in printed rule names so the generated syntax round-trips through the parser.
+
 ## [3.0.0] - 2026-08-18
 
 ### Breaking changes
