@@ -3,8 +3,9 @@
 ## [Unreleased] - ReleaseDate
 
 - **The scheduler runner applies each rule's chosen matches immediately.** After a rule's `filter_matches`, its chosen matches are applied before the next rule's `filter_matches` is called, so schedulers observe up-to-date e-node counts within an iteration. The e-graph is still rebuilt at most once per iteration (egglog-bridge gains `run_rules_no_rebuild`, `flush_updates_no_rebuild`, and `rebuild_now` for this). Measured on Herbie's rewriting workload with identical scheduling decisions, the per-rule application costs nothing single-threaded and 0–7 % wall time with 8 threads.
+- Egglog-level rule-action errors preserve completed effects without rollback; successful recovery rebuilds leave the e-graph reusable in a canonical partial state. Custom schedulers clear failed decided rows instead of retaining them, though a later query may rediscover the match.
 - `Read::is_sort_unionable` and `Read::is_table_hidden` let read primitives classify visible constructor tables without exposing the e-graph; `EGraph::num_nodes` also handles term/proof constructor views.
-- **Schedulers now receive a `SchedulerContext`.** `Scheduler::filter_matches` and `can_stop` receive the current e-node count, the only read access needed by size-aware scheduling. Add `EGraph::num_nodes` for the same constructor-node measure.
+- **Schedulers now receive a `SchedulerContext`.** `Scheduler::filter_matches` and `can_stop` receive read-only access to the e-graph and a runner-cached `num_nodes()` convenience. Add `EGraph::total_size` for all non-hidden function rows and `EGraph::num_nodes` for the constructor-node measure.
 
 - Add `Read::eclass_enodes` to scan an e-class across every constructor, rename the single-constructor method to `constructor_enodes_for_eclass`, and add `Enode::name`.
 

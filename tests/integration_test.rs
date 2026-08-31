@@ -123,6 +123,30 @@ fn primitive_error_in_run_schedule_returns_error() {
 }
 
 #[test]
+fn fail_run_continues_from_canonical_partial_state() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (ruleset problematic)
+            (datatype E (A) (B))
+            (function P (E) i64 :merge old)
+            (set (P (A)) 0)
+            (set (P (B)) 0)
+            (rule ((= a (A)) (= b (B)))
+                  ((union a b) (panic "boom"))
+                  :ruleset problematic)
+            (fail (run problematic 1))
+            (check (= (A) (B)))
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(egraph.get_size("P"), 1);
+}
+
+#[test]
 fn check_facts_stops_safely_in_parallel_mode() {
     use std::fmt::Write;
 

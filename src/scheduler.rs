@@ -1,4 +1,4 @@
-use std::cell::OnceCell;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -18,19 +18,29 @@ use crate::{
 
 /// Read-only information about the e-graph handed to a scheduler callback.
 pub struct SchedulerContext<'a> {
-    egraph: &'a EGraph,
-    num_nodes: OnceCell<usize>,
+    /// The e-graph the rules run on, for read-only queries such as
+    /// [`EGraph::get_size`], [`EGraph::total_size`], and [`EGraph::num_nodes`].
+    pub egraph: &'a EGraph,
+    num_nodes: &'a Cell<Option<usize>>,
 }
 
 impl SchedulerContext<'_> {
     /// Return the current number of e-nodes. The count is computed only if the
-    /// scheduler asks for it, then cached for the lifetime of this context.
+    /// scheduler asks for it, then cached until an action or rebuild may change
+    /// it.
     /// Actions chosen for an earlier rule have run before the next callback.
     /// Rebuilding is deferred, however, so merge functions may still increase
     /// or decrease this count before the iteration finishes. `can_stop`
     /// receives the final count after actions and rebuilding.
     pub fn num_nodes(&self) -> usize {
-        *self.num_nodes.get_or_init(|| self.egraph.num_nodes())
+        match self.num_nodes.get() {
+            Some(num_nodes) => num_nodes,
+            None => {
+                let num_nodes = self.egraph.num_nodes();
+                self.num_nodes.set(Some(num_nodes));
+                num_nodes
+            }
+        }
     }
 }
 
@@ -145,6 +155,11 @@ impl Matches {
         self.all_chosen = true;
     }
 
+    /// Whether at least one match has been chosen to be fired.
+    pub fn any_chosen(&self) -> bool {
+        (self.all_chosen && self.match_size() > 0) || !self.chosen.is_empty()
+    }
+
     /// Apply the chosen matches and return the residual matches.
     fn instantiate(
         mut self,
@@ -219,7 +234,12 @@ impl EGraph {
         self.schedulers.take(scheduler_id).map(|r| r.scheduler)
     }
 
-    /// Runs a ruleset for one iteration using the given ruleset
+    /// Runs a ruleset for one iteration using the given scheduler.
+    ///
+    /// If a rule action fails, effects completed before the error are preserved
+    /// and its decided worklist rows are cleared. A successful recovery rebuild
+    /// leaves the e-graph canonical for a later call. The rows are not retained
+    /// for retry, although a later query may rediscover the same logical match.
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
@@ -297,17 +317,15 @@ impl EGraph {
             // Rebuilding remains deferred until every rule has run.
             let mut action_iteration_report = IterationReport::default();
             let mut any_applied = false;
+            let num_nodes = Cell::new(None);
             for (rule_id, _rule) in rules.iter() {
-                let (pending, action_rule) = {
+                let (decided, action_rule) = {
                     let rule_info = record.rule_info.get(rule_id).unwrap();
-                    (
-                        self.backend.table_size(rule_info.decided) > 0,
-                        rule_info.action_rule,
-                    )
+                    (rule_info.decided, rule_info.action_rule)
                 };
                 let ctx = SchedulerContext {
                     egraph: self,
-                    num_nodes: OnceCell::new(),
+                    num_nodes: &num_nodes,
                 };
                 let mut inserted = false;
                 self.backend
@@ -320,9 +338,8 @@ impl EGraph {
                             record
                                 .scheduler
                                 .filter_matches(&ctx, rule_id, ruleset, &mut matches);
-                        inserted = (matches.all_chosen && matches.match_size() > 0)
-                            || !matches.chosen.is_empty();
-                        let table_action = TableAction::new(&self.backend, rule_info.decided);
+                        inserted = matches.any_chosen();
+                        let table_action = TableAction::new(&self.backend, decided);
                         let residual = matches.instantiate(state, &table_action);
                         // A naive query re-finds all residuals when the scheduler asks
                         // for a fresh query. Otherwise they remain available for the
@@ -336,19 +353,17 @@ impl EGraph {
                     });
                 if inserted {
                     self.backend.flush_updates_no_rebuild();
-                }
-                if inserted || pending {
                     any_applied = true;
-                    let rule_report = match self
+                    let action_result = self
                         .backend
-                        .run_rules_no_rebuild(&[action_rule], Some(&self.type_info))
-                    {
+                        .run_rules_no_rebuild(&[action_rule], Some(&self.type_info));
+                    num_nodes.set(None);
+                    let rule_report = match action_result {
                         Ok(report) => report,
                         Err(action_error) => {
-                            // This or an earlier action may already have made a
-                            // union. Restore canonical tables before returning
-                            // the error. The failed row remains pending and is
-                            // retried on the next step.
+                            // Keep effects that completed before the error, but
+                            // consume this batch before restoring canonical tables.
+                            self.backend.clear_table(decided);
                             if let Err(rebuild_error) = self.backend.rebuild_now() {
                                 return Err(Error::BackendError(format!(
                                     "{action_error}; rebuilding after the failed action also failed: {rebuild_error}"
@@ -376,6 +391,7 @@ impl EGraph {
                     .backend
                     .rebuild_now()
                     .map_err(|e| Error::BackendError(e.to_string()))?;
+                num_nodes.set(None);
             }
             let mut action_report = RunReport::singleton(ruleset, action_iteration_report);
 
@@ -391,7 +407,7 @@ impl EGraph {
                 let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
                 let ctx = SchedulerContext {
                     egraph: self,
-                    num_nodes: OnceCell::new(),
+                    num_nodes: &num_nodes,
                 };
                 record.scheduler.can_stop(&ctx, &rule_ids, ruleset)
             };
@@ -950,9 +966,13 @@ mod test {
         // One match per iteration, so the scheduler stops exactly at the limit.
         assert_eq!(egraph.get_size("Num"), 10);
         assert_eq!(egraph.num_nodes(), 10);
-        // `depth` and `seen` rows exist but do not count as e-nodes.
+        // `depth` and `seen` rows exist but only count towards `total_size`.
         assert!(egraph.get_size("depth") > 0);
         assert!(egraph.get_size("seen") > 0);
+        assert_eq!(
+            egraph.total_size(),
+            egraph.num_nodes() + egraph.get_size("depth") + egraph.get_size("seen")
+        );
     }
 
     #[test]
@@ -1059,7 +1079,7 @@ mod test {
     }
 
     #[test]
-    fn test_failed_action_is_rebuilt_and_retried() {
+    fn test_failed_action_is_rebuilt_and_consumed() {
         let mut egraph = EGraph::default();
         let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
         egraph
@@ -1069,11 +1089,16 @@ mod test {
                 (ruleset test)
                 (datatype E (A) (B))
                 (function P (E) i64 :merge old)
+                (relation Ready ())
+                (relation Done ())
                 (set (P (A)) 0)
                 (set (P (B)) 0)
+                (Ready)
                 (rule ((= a (A)) (= b (B)))
                       ((union a b) (panic "boom"))
-                      :ruleset test :name "union-then-panic")
+                      :ruleset test :name "a-union-then-panic")
+                (rule ((Ready)) ((Done))
+                      :ruleset test :name "z-continue")
                 "#,
             )
             .unwrap();
@@ -1083,13 +1108,15 @@ mod test {
                 .step_rules_with_scheduler(scheduler_id, "test")
                 .is_err()
         );
-        assert_eq!(egraph.get_size("P"), 1, "the failed step must rebuild");
-        assert!(
-            egraph
-                .step_rules_with_scheduler(scheduler_id, "test")
-                .is_err(),
-            "the pending failed action must not be silently dropped"
+        assert_eq!(
+            egraph.get_size("P"),
+            1,
+            "the union before the error is preserved and rebuilt"
         );
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .expect("the failed batch is consumed, so a later step can continue");
+        assert_eq!(egraph.get_size("Done"), 1);
     }
 
     #[test]

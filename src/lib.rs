@@ -2190,6 +2190,11 @@ impl EGraph {
 
     /// Run a program, represented as an AST.
     /// Return a list of messages.
+    ///
+    /// Egglog errors, including `(panic ...)`, are not transactional: effects
+    /// completed before an error remain. After a rule-action error, a successful
+    /// recovery rebuild leaves the database canonical and reusable. Rust panics
+    /// in extension code unwind normally instead of becoming [`enum@Error`] values.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
         let res = self.process_program_internal(program, true)?;
         Ok(res.outputs)
@@ -2323,6 +2328,16 @@ impl EGraph {
     pub fn get_size(&self, func: &str) -> usize {
         let function_id = self.functions.get(func).unwrap().backend_id;
         self.backend.table_size(function_id)
+    }
+
+    /// The total number of rows across all non-hidden functions, including
+    /// global `let` bindings.
+    pub fn total_size(&self) -> usize {
+        self.functions
+            .values()
+            .filter(|f| !f.is_hidden())
+            .map(|f| self.backend.table_size(f.backend_id))
+            .sum()
     }
 
     /// The number of e-nodes in the e-graph: the total number of rows across

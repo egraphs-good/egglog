@@ -1509,6 +1509,58 @@ fn primitive_failure_panics() {
 }
 
 #[test]
+fn action_panic_rebuilds_before_returning() {
+    let mut egraph = EGraph::default();
+    let facts = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "facts".into(),
+        can_subsume: false,
+    });
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    egraph.add_values([(facts, vec![a, a]), (facts, vec![b, b])]);
+    assert_eq!(egraph.table_size(facts), 2);
+
+    let id = |val| QueryEntry::Const {
+        val,
+        ty: ColumnTy::Id,
+    };
+    let union_then_panic = {
+        let mut rb = egraph.new_rule("union_then_panic", true);
+        rb.union(id(a), id(b));
+        rb.panic("boom".to_string());
+        rb.build()
+    };
+
+    let error = egraph.run_rules(&[union_then_panic], None).unwrap_err();
+    assert_eq!(error.to_string(), "Panic: boom");
+    assert_eq!(
+        egraph.get_canon_repr(a, ColumnTy::Id),
+        egraph.get_canon_repr(b, ColumnTy::Id)
+    );
+    assert_eq!(
+        egraph.table_size(facts),
+        1,
+        "effects before the panic should be canonicalized before Err"
+    );
+
+    let c = egraph.fresh_id();
+    let continue_after_error = {
+        let mut rb = egraph.new_rule("continue_after_error", true);
+        rb.union(id(a), id(c));
+        rb.build()
+    };
+    egraph.run_rules(&[continue_after_error], None).unwrap();
+    assert_eq!(
+        egraph.get_canon_repr(a, ColumnTy::Id),
+        egraph.get_canon_repr(c, ColumnTy::Id),
+        "the egraph should remain usable after the action error"
+    );
+}
+
+#[test]
 fn panic_functions_trigger_early_stop() {
     let db = core_relations::Database::default();
 

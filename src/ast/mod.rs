@@ -988,6 +988,11 @@ where
     /// The argument specifies how many egraphs to pop.
     Pop(Span, usize),
     /// Assert that a command fails with an error.
+    ///
+    /// This catches an egglog error but does not roll back effects completed
+    /// before it. If recovery from a rule-action error rebuilds successfully,
+    /// later commands see a canonical partial state. A Rust panic in extension
+    /// code unwinds normally and is not caught.
     Fail(Span, Box<GenericCommand<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
     Include(Span, String),
