@@ -319,10 +319,7 @@ impl EGraph {
             let mut any_applied = false;
             let num_nodes = Cell::new(None);
             for (rule_id, _rule) in rules.iter() {
-                let (decided, action_rule) = {
-                    let rule_info = record.rule_info.get(rule_id).unwrap();
-                    (rule_info.decided, rule_info.action_rule)
-                };
+                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
                 let ctx = SchedulerContext {
                     egraph: self,
                     num_nodes: &num_nodes,
@@ -330,7 +327,6 @@ impl EGraph {
                 let mut inserted = false;
                 self.backend
                     .with_execution_state(Some(&self.type_info), |state| {
-                        let rule_info = record.rule_info.get_mut(rule_id).unwrap();
                         let matches: Vec<Value> =
                             std::mem::take(rule_info.matches.lock().unwrap().as_mut());
                         let mut matches = Matches::new(matches, rule_info.free_vars.clone());
@@ -339,7 +335,7 @@ impl EGraph {
                                 .scheduler
                                 .filter_matches(&ctx, rule_id, ruleset, &mut matches);
                         inserted = matches.any_chosen();
-                        let table_action = TableAction::new(&self.backend, decided);
+                        let table_action = TableAction::new(&self.backend, rule_info.decided);
                         let residual = matches.instantiate(state, &table_action);
                         // A naive query re-finds all residuals when the scheduler asks
                         // for a fresh query. Otherwise they remain available for the
@@ -356,14 +352,14 @@ impl EGraph {
                     any_applied = true;
                     let action_result = self
                         .backend
-                        .run_rules_no_rebuild(&[action_rule], Some(&self.type_info));
+                        .run_rules_no_rebuild(&[rule_info.action_rule], Some(&self.type_info));
                     num_nodes.set(None);
                     let rule_report = match action_result {
                         Ok(report) => report,
                         Err(action_error) => {
                             // Keep effects that completed before the error, but
                             // consume this batch before restoring canonical tables.
-                            self.backend.clear_table(decided);
+                            self.backend.clear_table(rule_info.decided);
                             if let Err(rebuild_error) = self.backend.rebuild_now() {
                                 return Err(Error::BackendError(format!(
                                     "{action_error}; rebuilding after the failed action also failed: {rebuild_error}"
