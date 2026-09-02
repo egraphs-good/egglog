@@ -129,9 +129,12 @@ pub trait FullPrim: Primitive {
     fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
-/// A user-defined command output trait.
-pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
-impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send + Sync {}
+/// A type-erased output from a user-defined command.
+///
+/// The [`Any`] supertrait lets consumers safely downcast a trait object to a
+/// known concrete output type.
+pub trait UserDefinedCommandOutput: Any + Debug + std::fmt::Display + Send + Sync {}
+impl<T> UserDefinedCommandOutput for T where T: Any + Debug + std::fmt::Display + Send + Sync {}
 
 /// Output from a command.
 #[derive(Clone, Debug)]

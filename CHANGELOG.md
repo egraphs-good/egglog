@@ -6,6 +6,8 @@
 
 - Add `Read::eclass_enodes` to scan an e-class across every constructor, rename the single-constructor method to `constructor_enodes_for_eclass`, and add `Enode::name`.
 
+- Allow consumers to safely downcast `UserDefinedCommandOutput` trait objects to known concrete output types.
+
 - Treat tables dropped by `pop` as missing in the name-indexed `Read` and `Write` APIs.
 
 - Escape quotes and backslashes in printed rule names so the generated syntax round-trips through the parser.
