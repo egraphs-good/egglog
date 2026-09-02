@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -8,23 +9,39 @@ use egglog_bridge::{
 use egglog_reports::{IterationReport, RunReport};
 use numeric_id::define_id;
 
-use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
+use crate::{
+    ast::{CompiledRule, ResolvedVar, Ruleset},
+    core::GenericAtomTerm,
+    util::IndexMap,
+    *,
+};
 
-/// Read-only information about the e-graph handed to a scheduler on each
-/// callback.
+/// Read-only information about the e-graph handed to a scheduler callback.
 pub struct SchedulerContext<'a> {
-    /// The e-graph the rules run on, for size queries such as
+    /// The e-graph the rules run on, for read-only queries such as
     /// [`EGraph::get_size`], [`EGraph::total_size`], and [`EGraph::num_nodes`].
-    ///
-    /// Each rule's chosen matches are applied before the next rule's
-    /// `filter_matches`, so sizes are live within an iteration. Between rules
-    /// the tables may still hold rows that the end-of-iteration rebuild will
-    /// merge, so a size read mid-iteration is an upper bound.
     pub egraph: &'a EGraph,
-    /// 0-based count of iterations this scheduler has completed on this
-    /// ruleset. Schedulers can use a change in this value to detect an
-    /// iteration boundary (e.g., to re-read sizes once per iteration).
-    pub iteration: usize,
+    num_nodes: &'a Cell<Option<usize>>,
+}
+
+impl SchedulerContext<'_> {
+    /// Return the current number of e-nodes. The count is computed only if the
+    /// scheduler asks for it, then cached until an action or rebuild may change
+    /// it.
+    /// Actions chosen for an earlier rule have run before the next callback.
+    /// Rebuilding is deferred, however, so merge functions may still increase
+    /// or decrease this count before the iteration finishes. `can_stop`
+    /// receives the final count after actions and rebuilding.
+    pub fn num_nodes(&self) -> usize {
+        match self.num_nodes.get() {
+            Some(num_nodes) => num_nodes,
+            None => {
+                let num_nodes = self.egraph.num_nodes();
+                self.num_nodes.set(Some(num_nodes));
+                num_nodes
+            }
+        }
+    }
 }
 
 /// A scheduler decides which matches to be applied for a rule.
@@ -37,22 +54,23 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     ///
     /// This is only called when the runner is otherwise saturated.
     /// Default implementation just returns `true`.
-    fn can_stop(&mut self, ctx: &SchedulerContext, rules: &[&str], ruleset: &str) -> bool {
+    fn can_stop(&mut self, ctx: &SchedulerContext<'_>, rules: &[&str], ruleset: &str) -> bool {
         let _ = (ctx, rules, ruleset);
         true
     }
 
     /// Filter the matches for a rule.
     ///
-    /// The chosen matches are applied (actions run, database flushed) before
-    /// the next rule's `filter_matches` is called, so the e-graph reached
-    /// through `ctx` reflects every earlier decision of this iteration.
+    /// Chosen matches are applied (actions run, database flushed) before the
+    /// next rule's `filter_matches` is called, so `ctx.num_nodes()` reflects
+    /// earlier decisions. Queries are still collected together before any
+    /// callback.
     ///
     /// Return `true` if the scheduler's next run of the rule should feed
     /// `filter_matches` with a new iteration of matches.
     fn filter_matches(
         &mut self,
-        ctx: &SchedulerContext,
+        ctx: &SchedulerContext<'_>,
         rule: &str,
         ruleset: &str,
         matches: &mut Matches,
@@ -208,7 +226,6 @@ impl EGraph {
         self.schedulers.push(SchedulerRecord {
             scheduler,
             rule_info: Default::default(),
-            iterations: 0,
         })
     }
 
@@ -217,7 +234,12 @@ impl EGraph {
         self.schedulers.take(scheduler_id).map(|r| r.scheduler)
     }
 
-    /// Runs a ruleset for one iteration using the given ruleset
+    /// Runs a ruleset for one iteration using the given scheduler.
+    ///
+    /// If a rule action fails, effects completed before the error are preserved
+    /// and its decided worklist rows are cleared. A successful recovery rebuild
+    /// leaves the e-graph canonical for a later call. The rows are not retained
+    /// for retry, although a later query may rediscover the same logical match.
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
@@ -226,15 +248,15 @@ impl EGraph {
         fn collect_rules<'a>(
             ruleset: &str,
             rulesets: &'a IndexMap<String, Ruleset>,
-            ids: &mut Vec<(String, &'a ResolvedCoreRule)>,
+            ids: &mut Vec<(String, &'a CompiledRule)>,
         ) -> Result<(), Error> {
             let Some(r) = rulesets.get(ruleset) else {
                 return Err(Error::BackendError(format!("no such ruleset: {ruleset}")));
             };
             match r {
                 Ruleset::Rules(rules) => {
-                    for (rule_name, (core_rule, _)) in rules.iter() {
-                        ids.push((rule_name.clone(), core_rule));
+                    for (rule_name, rule) in rules.iter() {
+                        ids.push((rule_name.clone(), rule));
                     }
                 }
                 Ruleset::Combined(sub_rulesets) => {
@@ -265,8 +287,6 @@ impl EGraph {
         let result = (|| -> Result<RunReport, Error> {
             // Step 1: build all the query/action rules and worklist if have not already
             let record = &mut schedulers[scheduler_id];
-            let iteration = record.iterations;
-            record.iterations += 1;
             for (id, rule) in rules.iter() {
                 if !record.rule_info.contains_key(id) {
                     let info = SchedulerRuleInfo::new(self, rule, id)?;
@@ -293,27 +313,20 @@ impl EGraph {
                 .run_rules(&query_rules, Some(&self.type_info))
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
-            // Steps 3 and 4: for each rule, let the scheduler decide which
-            // matches to keep, then apply them (flush + that rule's action
-            // rule) before moving on to the next rule, so the scheduler
-            // observes up-to-date e-graph sizes within the iteration. Rules
-            // that choose nothing skip the flush and run. Rebuilding is
-            // deferred to the end of the iteration, as in egg: between rules
-            // the tables may hold rows a rebuild would merge, so sizes are
-            // upper bounds.
-            let seminaive = self.seminaive;
-            let mut action_report = RunReport::default();
+            // Steps 3 and 4: choose and immediately apply each rule's matches.
+            // Rebuilding remains deferred until every rule has run.
+            let mut action_iteration_report = IterationReport::default();
             let mut any_applied = false;
+            let num_nodes = Cell::new(None);
             for (rule_id, _rule) in rules.iter() {
-                let mut inserted = false;
+                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
                 let ctx = SchedulerContext {
                     egraph: self,
-                    iteration,
+                    num_nodes: &num_nodes,
                 };
+                let mut inserted = false;
                 self.backend
                     .with_execution_state(Some(&self.type_info), |state| {
-                        let rule_info = record.rule_info.get_mut(rule_id).unwrap();
-
                         let matches: Vec<Value> =
                             std::mem::take(rule_info.matches.lock().unwrap().as_mut());
                         let mut matches = Matches::new(matches, rule_info.free_vars.clone());
@@ -324,35 +337,59 @@ impl EGraph {
                         inserted = matches.any_chosen();
                         let table_action = TableAction::new(&self.backend, rule_info.decided);
                         let residual = matches.instantiate(state, &table_action);
-                        // Under seminaive evaluation unchosen matches must be kept for
-                        // later iterations; a naive query re-finds them every iteration.
+                        // A naive query re-finds all residuals when the scheduler asks
+                        // for a fresh query. Otherwise they remain available for the
+                        // next callback; seminaive queries only add fresh matches.
                         *rule_info.matches.lock().unwrap() =
-                            if seminaive { residual } else { Vec::new() };
+                            if rule_info.seminaive || !rule_info.should_seek {
+                                residual
+                            } else {
+                                Vec::new()
+                            };
                     });
                 if inserted {
-                    any_applied = true;
                     self.backend.flush_updates_no_rebuild();
-                    let action_rule = record.rule_info.get(rule_id).unwrap().action_rule;
-                    let rule_report = self
+                    any_applied = true;
+                    let action_result = self
                         .backend
-                        .run_rules_no_rebuild(&[action_rule], Some(&self.type_info))
-                        .map_err(|e| Error::BackendError(e.to_string()))?;
-                    action_report.union(RunReport::singleton(ruleset, rule_report));
+                        .run_rules_no_rebuild(&[rule_info.action_rule], Some(&self.type_info));
+                    num_nodes.set(None);
+                    let rule_report = match action_result {
+                        Ok(report) => report,
+                        Err(action_error) => {
+                            // Keep effects that completed before the error, but
+                            // consume this batch before restoring canonical tables.
+                            self.backend.clear_table(rule_info.decided);
+                            if let Err(rebuild_error) = self.backend.rebuild_now() {
+                                return Err(Error::BackendError(format!(
+                                    "{action_error}; rebuilding after the failed action also failed: {rebuild_error}"
+                                )));
+                            }
+                            return Err(Error::BackendError(action_error.to_string()));
+                        }
+                    };
+                    let aggregate = &mut action_iteration_report.rule_set_report;
+                    let current = rule_report.rule_set_report;
+                    aggregate.changed |= current.changed;
+                    aggregate.search_and_apply_time += current.search_and_apply_time;
+                    aggregate.merge_time += current.merge_time;
+                    for (rule, reports) in current.rule_reports {
+                        aggregate
+                            .rule_reports
+                            .entry(rule)
+                            .or_default()
+                            .extend(reports);
+                    }
                 }
             }
             if any_applied {
-                let rebuild_time = self
+                action_iteration_report.rebuild_time = self
                     .backend
                     .rebuild_now()
                     .map_err(|e| Error::BackendError(e.to_string()))?;
-                action_report.union(RunReport::singleton(
-                    ruleset,
-                    IterationReport {
-                        rule_set_report: Default::default(),
-                        rebuild_time,
-                    },
-                ));
+                num_nodes.set(None);
             }
+            let mut action_report = RunReport::singleton(ruleset, action_iteration_report);
 
             // Step 5: combine the reports
             let mut query_report = RunReport::singleton(ruleset, query_iter_report);
@@ -366,7 +403,7 @@ impl EGraph {
                 let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
                 let ctx = SchedulerContext {
                     egraph: self,
-                    iteration,
+                    num_nodes: &num_nodes,
                 };
                 record.scheduler.can_stop(&ctx, &rule_ids, ruleset)
             };
@@ -387,8 +424,6 @@ impl EGraph {
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
     rule_info: HashMap<String, SchedulerRuleInfo>,
-    /// Number of iterations this scheduler has run, across all rulesets.
-    iterations: usize,
 }
 
 /// To enable scheduling without modifying the backend,
@@ -403,6 +438,8 @@ struct SchedulerRuleInfo {
     query_rule: RuleId,
     action_rule: RuleId,
     free_vars: Vec<ResolvedVar>,
+    /// Whether this rule's scheduler query uses delta evaluation.
+    seminaive: bool,
 }
 
 struct CollectMatches {
@@ -433,10 +470,15 @@ impl ExternalFunction for CollectMatches {
 impl SchedulerRuleInfo {
     fn new(
         egraph: &mut EGraph,
-        rule: &ResolvedCoreRule,
+        rule: &CompiledRule,
         name: &str,
     ) -> Result<SchedulerRuleInfo, Error> {
-        let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
+        let free_vars = rule
+            .core
+            .head
+            .get_free_vars()
+            .into_iter()
+            .collect::<Vec<_>>();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
         let unit = egraph.backend.base_values().get(());
         let unit_entry = egraph.backend.base_value_constant(());
@@ -450,25 +492,28 @@ impl SchedulerRuleInfo {
             .map(|v| v.sort.column_ty(&egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
+        // This table is registered for primitive access, so its name must not
+        // shadow a user table in the name-indexed registry.
+        let decided_name = egraph.parser.symbol_gen.fresh("scheduler_decided");
         let decided = egraph.backend.add_table(FunctionConfig {
             schema,
             default: DefaultVal::Const(unit),
             merge: MergeFn::AssertEq,
-            name: "backend".to_string(),
+            name: decided_name,
             can_subsume: false,
         });
 
-        // Step 1: build the query rule. It follows the EGraph's seminaive
-        // setting like an ordinary rule: with `--naive` it re-searches the
-        // whole database every iteration (and widens to Read/Full contexts).
-        let seminaive = egraph.seminaive;
+        // Step 1: rebuild the query with the same evaluation mode and planner
+        // options as the ordinary compiled rule.
+        let mut qrule = egraph.backend.new_rule(name, rule.seminaive);
+        qrule.set_no_decomp(rule.no_decomp);
         let mut qrule_builder = BackendRule::new(
-            egraph.backend.new_rule(name, seminaive),
+            qrule,
             &egraph.functions,
             &egraph.type_info,
-            !seminaive,
+            rule.requires_read_context,
         );
-        qrule_builder.query(&rule.body, false)?;
+        qrule_builder.query(&rule.core.body, rule.include_subsumed)?;
         let mut entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -493,7 +538,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
-            true, // action rule reads the DB: Read/Full contexts
+            rule.requires_read_context,
         );
         let mut entries = free_vars
             .iter()
@@ -504,7 +549,7 @@ impl SchedulerRuleInfo {
             .rb
             .query_table(decided, &entries, None)
             .unwrap();
-        arule_builder.actions(&rule.head)?;
+        arule_builder.actions(&rule.core.head)?;
         // Remove the entry as it's now done
         entries.pop();
         arule_builder.rb.remove(decided, &entries);
@@ -517,6 +562,7 @@ impl SchedulerRuleInfo {
             matches,
             decided,
             should_seek: true,
+            seminaive: rule.seminaive,
         })
     }
 }
@@ -533,7 +579,7 @@ mod test {
     impl Scheduler for FirstNScheduler {
         fn filter_matches(
             &mut self,
-            _ctx: &SchedulerContext,
+            _ctx: &SchedulerContext<'_>,
             _rule: &str,
             _ruleset: &str,
             matches: &mut Matches,
@@ -616,8 +662,113 @@ mod test {
         assert_eq!(iter, 12);
     }
 
+    #[derive(Clone)]
+    struct DrainThreeScheduler;
+
+    impl Scheduler for DrainThreeScheduler {
+        fn filter_matches(
+            &mut self,
+            _ctx: &SchedulerContext<'_>,
+            _rule: &str,
+            _ruleset: &str,
+            matches: &mut Matches,
+        ) -> bool {
+            for i in 0..matches.match_size().min(3) {
+                matches.choose(i);
+            }
+            false
+        }
+    }
+
     #[test]
-    fn test_scheduler_does_not_apply_fresh_subsumed_matches() {
+    fn test_naive_scheduler_preserves_residual_matches_without_requerying() {
+        let mut egraph = EGraph {
+            seminaive: false,
+            ..Default::default()
+        };
+        let scheduler_id = egraph.add_scheduler(Box::new(DrainThreeScheduler));
+        let mut input = r#"
+            (ruleset test)
+            (relation R (i64))
+            (relation S (i64))
+            (rule ((R x)) ((S x)) :ruleset test :name "copy")
+            "#
+        .to_owned();
+        for i in 0..20 {
+            input.push_str(&format!("(R {i})\n"));
+        }
+        egraph.parse_and_run_program(None, &input).unwrap();
+
+        for expected in [3, 6, 9, 12, 15, 18, 20] {
+            egraph
+                .step_rules_with_scheduler(scheduler_id, "test")
+                .unwrap();
+            assert_eq!(egraph.get_size("S"), expected);
+        }
+    }
+
+    #[test]
+    fn test_rule_modes_requery_and_read_earlier_actions() {
+        for (case, mut egraph, annotation, requery) in [
+            (
+                "global naive",
+                EGraph {
+                    seminaive: false,
+                    ..Default::default()
+                },
+                "",
+                true,
+            ),
+            ("rule-local naive", EGraph::default(), ":naive", true),
+            (
+                "unsafe seminaive",
+                EGraph::default(),
+                ":unsafe-seminaive",
+                false,
+            ),
+        ] {
+            let scheduler_id = egraph.add_scheduler(Box::new(FirstNScheduler { n: 10 }));
+            egraph
+                .parse_and_run_program(
+                    None,
+                    &format!(
+                        r#"
+                        (ruleset test)
+                        (relation trigger ())
+                        (function f () i64 :merge new)
+                        (function g () i64 :merge new)
+                        (set (f) 0)
+                        (trigger)
+                        (rule ((trigger)) ((set (f) (+ (f) 1))) {annotation}
+                              :ruleset test :name "a-write")
+                        (rule ((trigger)) ((set (g) (f))) {annotation}
+                              :ruleset test :name "b-read")
+                        "#
+                    ),
+                )
+                .unwrap();
+
+            egraph
+                .step_rules_with_scheduler(scheduler_id, "test")
+                .unwrap();
+            egraph
+                .parse_and_run_program(None, "(check (= (f) 1)) (check (= (g) 1))")
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+
+            if requery {
+                // A naive query must search the whole database again.
+                egraph
+                    .step_rules_with_scheduler(scheduler_id, "test")
+                    .unwrap();
+                egraph
+                    .parse_and_run_program(None, "(check (= (f) 2)) (check (= (g) 2))")
+                    .unwrap_or_else(|error| panic!("{case}: {error}"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_scheduler_preserves_include_subsumed_mode() {
         let mut egraph = EGraph::default();
         let scheduler_id = egraph.add_scheduler(Box::new(FirstNScheduler { n: 10 }));
         let input = r#"
@@ -628,23 +779,25 @@ mod test {
           (Mul Math Math)
           (Num i64))
         (relation Hit (i64))
+        (relation IncludedHit (i64))
         (let expr (Add (Mul (Num 0) (Num 1)) (Num 2)))
         (rewrite (Mul (Num 0) x) (Num 0) :subsume :ruleset analysis)
         (rewrite (Add (Num 0) x) x :subsume :ruleset analysis)
-        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a)) :ruleset test :name "hit-subsumed-affine")
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((Hit a))
+              :ruleset test :name "visible-only")
+        (rule ((= e (Add (Mul (Num a) x) (Num b)))) ((IncludedHit a))
+              :ruleset test :name "including-subsumed"
+              :internal-include-subsumed)
         (run-schedule (saturate (run analysis)))
         "#;
         egraph.parse_and_run_program(None, input).unwrap();
 
-        let report = egraph
+        egraph
             .step_rules_with_scheduler(scheduler_id, "test")
             .unwrap();
 
         assert_eq!(egraph.get_size("Hit"), 0);
-        assert!(
-            !report.updated,
-            "subsumed rows should not be collected as fresh scheduler matches"
-        );
+        assert_eq!(egraph.get_size("IncludedHit"), 1);
     }
 
     #[derive(Clone, Default)]
@@ -653,14 +806,19 @@ mod test {
     }
 
     impl Scheduler for DelayStopScheduler {
-        fn can_stop(&mut self, _ctx: &SchedulerContext, _rules: &[&str], _ruleset: &str) -> bool {
+        fn can_stop(
+            &mut self,
+            _ctx: &SchedulerContext<'_>,
+            _rules: &[&str],
+            _ruleset: &str,
+        ) -> bool {
             self.can_stop_calls += 1;
             self.can_stop_calls > 1
         }
 
         fn filter_matches(
             &mut self,
-            _ctx: &SchedulerContext,
+            _ctx: &SchedulerContext<'_>,
             _rule: &str,
             _ruleset: &str,
             _matches: &mut Matches,
@@ -712,7 +870,7 @@ mod test {
     impl Scheduler for InspectSizeScheduler {
         fn filter_matches(
             &mut self,
-            _ctx: &SchedulerContext,
+            _ctx: &SchedulerContext<'_>,
             _rule: &str,
             _ruleset: &str,
             matches: &mut Matches,
@@ -742,28 +900,30 @@ mod test {
     }
 
     /// A scheduler that stops choosing matches once the e-graph holds
-    /// `limit` e-nodes, and checks the iteration counter it is handed.
+    /// `limit` e-nodes.
     #[derive(Clone)]
     struct NodeLimitScheduler {
         limit: usize,
-        expected_iteration: usize,
     }
 
     impl Scheduler for NodeLimitScheduler {
-        fn can_stop(&mut self, ctx: &SchedulerContext, _rules: &[&str], _ruleset: &str) -> bool {
-            ctx.egraph.num_nodes() >= self.limit
+        fn can_stop(
+            &mut self,
+            ctx: &SchedulerContext<'_>,
+            _rules: &[&str],
+            _ruleset: &str,
+        ) -> bool {
+            ctx.num_nodes() >= self.limit
         }
 
         fn filter_matches(
             &mut self,
-            ctx: &SchedulerContext,
+            ctx: &SchedulerContext<'_>,
             _rule: &str,
             _ruleset: &str,
             matches: &mut Matches,
         ) -> bool {
-            assert_eq!(ctx.iteration, self.expected_iteration);
-            self.expected_iteration += 1;
-            if ctx.egraph.num_nodes() < self.limit {
+            if ctx.num_nodes() < self.limit {
                 matches.choose_all();
                 true
             } else {
@@ -775,10 +935,7 @@ mod test {
     #[test]
     fn test_scheduler_sees_egraph_size() {
         let mut egraph = EGraph::default();
-        let scheduler_id = egraph.add_scheduler(Box::new(NodeLimitScheduler {
-            limit: 10,
-            expected_iteration: 0,
-        }));
+        let scheduler_id = egraph.add_scheduler(Box::new(NodeLimitScheduler { limit: 10 }));
         // Each firing adds one `Num` e-node; `depth` rows (base-sort output)
         // and `seen` rows (a relation, i.e. a constructor over a fresh
         // non-unionable sort) are analysis data and must not count towards
@@ -814,6 +971,35 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_num_nodes_uses_constructor_semantics_in_all_encodings() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (datatype E (C))
+                    (function analysis () E :merge old)
+                    (relation R ())
+                    (constructor Hidden () E :internal-hidden)
+                    (C)
+                    (C)
+                    (set (analysis) (C))
+                    (let alias (C))
+                    (R)
+                    (Hidden)
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(egraph.get_size("C"), 1, "{mode}");
+            assert_eq!(egraph.num_nodes(), 1, "{mode}");
+        }
+    }
+
     /// A scheduler that records the e-graph size it observes at each
     /// `filter_matches` call.
     #[derive(Clone)]
@@ -824,7 +1010,7 @@ mod test {
     impl Scheduler for SizeProbeScheduler {
         fn filter_matches(
             &mut self,
-            ctx: &SchedulerContext,
+            ctx: &SchedulerContext<'_>,
             rule: &str,
             _ruleset: &str,
             matches: &mut Matches,
@@ -832,7 +1018,7 @@ mod test {
             self.sizes_seen
                 .lock()
                 .unwrap()
-                .push((rule.to_owned(), ctx.egraph.num_nodes()));
+                .push((rule.to_owned(), ctx.num_nodes()));
             matches.choose_all();
             true
         }
@@ -852,17 +1038,23 @@ mod test {
         (ruleset t)
         (datatype Math (Num i64))
         (Num 0)
-        (rule ((= e (Num i)) (< i 10)) ((Num (+ i 1))) :ruleset t :name "a-grow")
+        (rule ((= e (Num i)) (< i 10)) ((union e (Num (+ i 1)))) :ruleset t :name "a-grow")
         (rule ((Num i)) ((Num i)) :ruleset t :name "b-watch")
         "#;
         egraph.parse_and_run_program(None, input).unwrap();
-        egraph.step_rules_with_scheduler(scheduler_id, "t").unwrap();
+        let report = egraph.step_rules_with_scheduler(scheduler_id, "t").unwrap();
 
         assert_eq!(
             *sizes_seen.lock().unwrap(),
             vec![("a-grow".to_owned(), 1), ("b-watch".to_owned(), 2)]
         );
         assert_eq!(egraph.get_size("Num"), 2);
+        assert_eq!(
+            report.iterations.len(),
+            2,
+            "one scheduler step has one query report and one action report"
+        );
+        assert_eq!(report.iterations[1].rule_reports().len(), 2);
     }
 
     /// A scheduler that fires every match.
@@ -872,7 +1064,7 @@ mod test {
     impl Scheduler for ChooseAllScheduler {
         fn filter_matches(
             &mut self,
-            _ctx: &SchedulerContext,
+            _ctx: &SchedulerContext<'_>,
             _rule: &str,
             _ruleset: &str,
             matches: &mut Matches,
@@ -880,6 +1072,71 @@ mod test {
             matches.choose_all();
             false
         }
+    }
+
+    #[test]
+    fn test_failed_action_is_rebuilt_and_consumed() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (ruleset test)
+                (datatype E (A) (B))
+                (function P (E) i64 :merge old)
+                (relation Ready ())
+                (relation Done ())
+                (set (P (A)) 0)
+                (set (P (B)) 0)
+                (Ready)
+                (rule ((= a (A)) (= b (B)))
+                      ((union a b) (panic "boom"))
+                      :ruleset test :name "a-union-then-panic")
+                (rule ((Ready)) ((Done))
+                      :ruleset test :name "z-continue")
+                "#,
+            )
+            .unwrap();
+
+        assert!(
+            egraph
+                .step_rules_with_scheduler(scheduler_id, "test")
+                .is_err()
+        );
+        assert_eq!(
+            egraph.get_size("P"),
+            1,
+            "the union before the error is preserved and rebuilt"
+        );
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .expect("the failed batch is consumed, so a later step can continue");
+        assert_eq!(egraph.get_size("Done"), 1);
+    }
+
+    #[test]
+    fn test_scheduler_internal_table_does_not_shadow_a_constructor() {
+        let mut egraph = EGraph::default();
+        let scheduler_id = egraph.add_scheduler(Box::new(ChooseAllScheduler));
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (ruleset test)
+                (datatype E (backend))
+                (relation Seen (E))
+                (let root (backend))
+                (rule ((= x (backend))) ((Seen x))
+                      :ruleset test :name "see-backend")
+                "#,
+            )
+            .unwrap();
+
+        egraph
+            .step_rules_with_scheduler(scheduler_id, "test")
+            .unwrap();
+        assert_eq!(egraph.num_nodes(), 1);
     }
 
     #[test]
