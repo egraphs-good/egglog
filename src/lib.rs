@@ -133,6 +133,10 @@ pub trait FullPrim: Primitive {
 pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {
     /// Views a stored output as [`Any`] so consumers can safely downcast it.
     ///
+    /// Call this on a `&dyn UserDefinedCommandOutput`; smart pointers that
+    /// themselves satisfy this trait should first be dereferenced with
+    /// `as_ref()`.
+    ///
     /// [`CommandOutput::UserDefined`] owns its output, so values stored there
     /// satisfy the required `'static` bound. Keeping the bound on this method
     /// lets borrowed values continue to implement `UserDefinedCommandOutput`.
