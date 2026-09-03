@@ -659,10 +659,16 @@ impl EGraph {
         &self.action_registry
     }
 
-    /// Run the given rules, returning whether the database changed.
+    /// Run the given rules for one iteration and return its report.
     ///
     /// `context` is visible to any external function the rules reach; pass
     /// `None` if there is nothing to share.
+    ///
+    /// If a rule action raises an egglog-level panic, actions completed before
+    /// it remain applied. A successful recovery rebuild leaves the e-graph
+    /// canonical and reusable; it does not roll effects back or guarantee that
+    /// the failed action will be retried. If rebuilding also fails, the returned
+    /// error reports both failures and the e-graph has no reuse guarantee.
     ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(
@@ -672,6 +678,69 @@ impl EGraph {
     ) -> Result<IterationReport> {
         let thread_pool = self.thread_pool();
         install_thread_pool(thread_pool, || self.run_rules_inner(rules, context))
+    }
+
+    /// Run `rules` for one iteration like [`EGraph::run_rules`], but without
+    /// rebuilding afterwards. Unions made by the rules are recorded in the
+    /// union-find but ids in the tables are not canonicalized until
+    /// [`EGraph::rebuild_now`] is called; until then, rebuilding may increase
+    /// or decrease table sizes. This lets a runner apply rules one at a time
+    /// and rebuild at most once per iteration, as egg does.
+    ///
+    /// Completed actions are not rolled back on error, and this method does not
+    /// rebuild on either success or error; the caller retains responsibility
+    /// for calling [`EGraph::rebuild_now`].
+    pub fn run_rules_no_rebuild(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let ts = self.next_ts();
+            let rule_set_report = run_rules_impl(
+                &mut self.db,
+                &mut self.rules,
+                rules,
+                ts,
+                self.report_level,
+                context,
+            )?;
+            if let Some(message) = self.panic_message.lock().unwrap().take() {
+                return Err(PanicError(message).into());
+            }
+            self.inc_ts();
+            Ok(IterationReport {
+                rule_set_report,
+                rebuild_time: Duration::ZERO,
+            })
+        })
+    }
+
+    /// Flush the pending update buffers without rebuilding, for use with
+    /// [`EGraph::run_rules_no_rebuild`]. Returns `true` if the database is
+    /// updated.
+    pub fn flush_updates_no_rebuild(&mut self) -> bool {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let updated = self.db.merge_all();
+            self.inc_ts();
+            updated
+        })
+    }
+
+    /// Canonicalize the database after deferred-rebuild runs. Returns the time
+    /// spent rebuilding.
+    pub fn rebuild_now(&mut self) -> Result<Duration> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let timer = Instant::now();
+            self.rebuild()?;
+            if let Some(message) = self.panic_message.lock().unwrap().take() {
+                return Err(PanicError(message).into());
+            }
+            Ok(timer.elapsed())
+        })
     }
 
     fn run_rules_inner(
@@ -690,8 +759,25 @@ impl EGraph {
             self.report_level,
             context,
         )?;
-        if let Some(message) = self.panic_message.lock().unwrap().take() {
-            return Err(PanicError(message).into());
+        let panic_message = self.panic_message.lock().unwrap().take();
+        if let Some(message) = panic_message {
+            let action_error = PanicError(message);
+
+            // Some actions may already have changed the database. Canonicalize
+            // those effects before surfacing the catchable egglog error.
+            let rebuild_error = self.rebuild().err();
+            let rebuild_panic = self.panic_message.lock().unwrap().take();
+            let recovery_error = match (rebuild_error, rebuild_panic) {
+                (None, None) => return Err(action_error.into()),
+                (Some(error), None) => error.to_string(),
+                (None, Some(message)) => PanicError(message).to_string(),
+                (Some(error), Some(message)) => {
+                    format!("{error}; {}", PanicError(message))
+                }
+            };
+            return Err(anyhow::anyhow!(
+                "{action_error}; rebuilding after the failed rule action also failed: {recovery_error}"
+            ));
         }
 
         let mut iteration_report = IterationReport {
