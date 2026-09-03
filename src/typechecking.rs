@@ -215,6 +215,8 @@ pub struct TypeInfo {
     pub(crate) global_sorts: HashMap<String, ArcSort>,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
+    /// Function declarations hidden from user-facing table listings.
+    pub(crate) hidden_functions: HashSet<String>,
 }
 
 // These methods need to be on the `EGraph` in order to

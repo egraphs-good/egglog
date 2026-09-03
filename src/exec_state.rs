@@ -40,7 +40,7 @@ use crate::core_relations::{
     Value,
 };
 use crate::{
-    TypeInfo,
+    ArcSort, TypeInfo,
     ast::{FunctionSubtype, Literal, ResolvedExpr},
     core::ResolvedCall,
     sort::{F, S},
@@ -428,6 +428,22 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Iterate over the registered table names visible to this state.
     fn tables(&self) -> impl Iterator<Item = &str> {
         self.table_sizes().into_iter().map(|(name, _)| name)
+    }
+
+    /// Whether the named table was declared `:internal-hidden`. Returns `None`
+    /// when no [`TypeInfo`] is visible to this execution.
+    fn is_table_hidden(&self, name: &str) -> Option<bool> {
+        Some(self.type_info()?.hidden_functions.contains(name))
+    }
+
+    /// Whether `sort` is a unionable eq-sort, i.e. the output sort of a table
+    /// whose rows are e-nodes. `relation`s desugar to constructors over a
+    /// fresh *non*-unionable sort, so this separates e-node tables from fact
+    /// tables; pair it with [`Read::constructor_schema`] and
+    /// [`Read::table_subtype`]. Returns `None` when no [`TypeInfo`] is visible
+    /// to this execution (the e-graph's internal rebuild rules).
+    fn is_sort_unionable(&self, sort: &ArcSort) -> Option<bool> {
+        Some(self.type_info()?.is_sort_unionable(sort))
     }
 
     /// Call `f` on each [`Enode`] of a constructor / relation table.
