@@ -148,7 +148,9 @@ where
                     )
                 }
             }
-            GenericAction::Panic(_, msg) => write!(f, "(panic \"{msg}\")"),
+            GenericAction::Panic(_, msg) => {
+                write!(f, "(panic {})", Literal::String(msg.clone()))
+            }
             GenericAction::Expr(_, e) => write!(f, "{e}"),
         }
     }
@@ -828,5 +830,12 @@ mod tests {
         };
 
         assert!(rule.to_string().contains(r#":name "a\"b\\c""#));
+    }
+
+    #[test]
+    fn display_panic_message_escapes_special_characters() {
+        let action = GenericAction::<String, String>::Panic(Span::Panic, "a\"b\\c".into());
+
+        assert_eq!(action.to_string(), r#"(panic "a\"b\\c")"#);
     }
 }
