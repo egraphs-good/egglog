@@ -140,6 +140,53 @@ fn test_constructor_add_returns_id() -> Result<(), Error> {
 }
 
 #[test]
+fn test_subsume_predicted_constructor_rows() -> Result<(), Error> {
+    let mut eg = EGraph::default();
+    eg.parse_and_run_program(None, "(datatype Math (Num i64))")?;
+
+    // A direct subsume creates a missing constructor row as subsumed.
+    eg.update(|mut fs| fs.subsume("Num", 0_i64))?;
+    let direct = eg
+        .update(|fs| fs.eclass_of("Num", 0_i64))?
+        .expect("subsume should create a missing constructor row");
+
+    // Both action orders work without an intermediate flush. Repeated adds
+    // return the output predicted by the first operation for that key.
+    let (add_then, subsume_then) = eg.update(|mut fs| -> Result<_, Error> {
+        assert_eq!(fs.add("Num", 0_i64)?, direct);
+
+        let add_then = fs.add("Num", 1_i64)?;
+        fs.subsume("Num", 1_i64)?;
+        assert_eq!(fs.add("Num", 1_i64)?, add_then);
+
+        fs.subsume("Num", 2_i64)?;
+        let subsume_then = fs.add("Num", 2_i64)?;
+        assert_eq!(fs.add("Num", 2_i64)?, subsume_then);
+
+        Ok((add_then, subsume_then))
+    })?;
+
+    let mut rows = Vec::new();
+    eg.constructor_enodes("Num", |enode| {
+        rows.push((
+            eg.value_to_base::<i64>(enode.children[0]),
+            enode.eclass,
+            enode.subsumed,
+        ));
+    })?;
+    rows.sort_unstable_by_key(|row| row.0);
+    assert_eq!(
+        rows,
+        vec![
+            (0, direct, true),
+            (1, add_then, true),
+            (2, subsume_then, true)
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn test_eclass_of_constructor() -> Result<(), Error> {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))")?;

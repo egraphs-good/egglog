@@ -655,7 +655,10 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(())
     }
 
-    /// Subsume a row in the named table.
+    /// Subsume a row in the named table. For a subsumable constructor, a
+    /// missing row is inserted as subsumed. This may be sequenced with
+    /// [`Write::add`] for the same key without an intermediate flush; the
+    /// predicted output is reused and subsumption takes precedence.
     fn subsume<K: IntoValues>(&mut self, name: &str, key: K) -> Result<(), Error> {
         let action = lookup_action(self.registry(), self.es(), name)?;
         let key_values: ValueRow = key.into_values(self.base_values()).collect();
