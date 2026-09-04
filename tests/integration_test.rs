@@ -1219,6 +1219,70 @@ fn test_subsume_ok() {
 }
 
 #[test]
+fn test_rule_subsume_predicted_rows() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math (Num i64))
+            (relation fire (i64))
+            (relation after (i64))
+            (relation saw-num (i64))
+            (ruleset mutate)
+            (ruleset observe)
+
+            ;; Subsume a missing row directly.
+            (rule ((fire 0))
+                  ((subsume (Num 0))
+                   (after 0))
+                  :ruleset mutate)
+
+            ;; Add, then subsume, within one rule action.
+            (rule ((fire 1))
+                  ((let n (Num 1))
+                   (subsume (Num 1))
+                   (after 1))
+                  :ruleset mutate)
+
+            ;; Subsumption remains dominant when followed by an add.
+            (rule ((fire 2))
+                  ((subsume (Num 2))
+                   (let n (Num 2))
+                   (after 2))
+                  :ruleset mutate)
+
+            (rule ((= e (Num n)))
+                  ((saw-num n))
+                  :ruleset observe)
+
+            (fire 0)
+            (fire 1)
+            (fire 2)
+            (run mutate 1)
+            (check (after 0) (after 1) (after 2))
+            (run observe 1)
+            (fail (check (saw-num 0)))
+            (fail (check (saw-num 1)))
+            (fail (check (saw-num 2)))
+            "#,
+        )
+        .unwrap();
+
+    let mut nums = Vec::new();
+    egraph
+        .constructor_enodes("Num", |enode| {
+            nums.push((
+                egraph.value_to_base::<i64>(enode.children[0]),
+                enode.subsumed,
+            ));
+        })
+        .unwrap();
+    nums.sort_unstable();
+    assert_eq!(nums, vec![(0, true), (1, true), (2, true)]);
+}
+
+#[test]
 fn test_cant_subsume_merge() {
     // Test that we can't subsume something with a merge function
 

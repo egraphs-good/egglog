@@ -1674,12 +1674,16 @@ impl TableAction {
         state.stage_remove(self.table, key);
     }
 
-    /// Subsume a row in this table.
+    /// Subsume a row in a table with subsumption enabled. For a constructor,
+    /// the configured default is inserted if the key is absent. Rows predicted
+    /// earlier in the same action are reused.
     pub fn subsume(&self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
         let mut scratch = key.collect::<SmallVec<[_; 8]>>();
 
-        let ret_val = self.lookup(state, &scratch).expect("subsume lookup failed");
+        let ret_val = self
+            .lookup_or_insert(state, &scratch)
+            .expect("subsume lookup failed");
 
         self.table_math.write_table_row(
             &mut scratch,
