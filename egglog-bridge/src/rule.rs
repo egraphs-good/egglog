@@ -495,7 +495,9 @@ impl RuleBuilder<'_> {
 
         let ret: QueryEntry = ret.into();
         self.add_callback(move |inner, rb| {
-            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
+            // Then add the same row with a subsumed status. The table merge
+            // makes subsumption dominant whether the row was committed or
+            // predicted by an earlier action for this match.
             let mut dst_entries = inner.convert_all(&entries);
             schema_math.write_table_row(
                 &mut dst_entries,
@@ -505,26 +507,7 @@ impl RuleBuilder<'_> {
                     ret_val: Some(inner.convert(&ret)),
                 },
             );
-            // Look up the current subsume value, including rows predicted by
-            // earlier actions for the same rule match.
-            let default_vals = dst_entries[schema_math.num_keys()..]
-                .iter()
-                .copied()
-                .map(WriteVal::from)
-                .collect::<SmallVec<[_; 4]>>();
-            let cur_subsume_val = rb.lookup_or_insert(
-                table,
-                &dst_entries[..schema_math.num_keys()],
-                &default_vals,
-                ColumnId::from_usize(schema_math.subsume_col()),
-            )?;
-            rb.insert_if_eq(
-                table,
-                cur_subsume_val.into(),
-                NOT_SUBSUMED.into(),
-                &dst_entries,
-            )?;
-            Ok(())
+            rb.insert(table, &dst_entries).context("subsume")
         });
     }
 
