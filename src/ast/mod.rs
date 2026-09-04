@@ -1145,7 +1145,7 @@ where
             GenericCommand::Rule { rule } => rule.fmt(f),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics(_span, file) => match file {
-                Some(file) => write!(f, "(print-stats :file {file})"),
+                Some(file) => write!(f, "(print-stats :file {})", Literal::String(file.clone())),
                 None => write!(f, "(print-stats)"),
             },
             GenericCommand::Check(_ann, facts) => {
@@ -1169,7 +1169,7 @@ where
                     write!(f, " {n}")?;
                 }
                 if let Some(file) = file {
-                    write!(f, " :file {file:?}")?;
+                    write!(f, " :file {}", Literal::String(file.clone()))?;
                 }
                 match mode {
                     PrintFunctionMode::Default => {}
@@ -1185,15 +1185,22 @@ where
                 name,
                 file,
             } => {
-                write!(f, "(input {name} {file:?})")
+                write!(f, "(input {name} {})", Literal::String(file.clone()))
             }
             GenericCommand::Output {
                 span: _,
                 file,
                 exprs,
-            } => write!(f, "(output {file:?} {})", ListDisplay(exprs, " ")),
+            } => write!(
+                f,
+                "(output {} {})",
+                Literal::String(file.clone()),
+                ListDisplay(exprs, " ")
+            ),
             GenericCommand::Fail(_span, cmd) => write!(f, "(fail {cmd})"),
-            GenericCommand::Include(_span, file) => write!(f, "(include {file:?})"),
+            GenericCommand::Include(_span, file) => {
+                write!(f, "(include {})", Literal::String(file.clone()))
+            }
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()

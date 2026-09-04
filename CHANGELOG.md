@@ -11,7 +11,12 @@
 
 - Add `Read::eclass_enodes` to scan an e-class across every constructor, rename the single-constructor method to `constructor_enodes_for_eclass`, and add `Enode::name`.
 
+- Allow consumers to safely downcast `UserDefinedCommandOutput` trait-object
+  references to known concrete output types with `as_any`.
+
 - Treat tables dropped by `pop` as missing in the name-indexed `Read` and `Write` APIs.
+
+- Escape quotes and backslashes in printed rule names and panic messages, and print command paths as string literals, so the generated syntax round-trips through the parser.
 
 ## [3.0.0] - 2026-08-18
 

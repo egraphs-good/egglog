@@ -129,9 +129,32 @@ pub trait FullPrim: Primitive {
     fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
-/// A user-defined command output trait.
-pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
-impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send + Sync {}
+/// A type-erased output from a user-defined command.
+pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {
+    /// Views a stored output as [`Any`] so consumers can safely downcast it.
+    ///
+    /// Call this on a `&dyn UserDefinedCommandOutput`; smart pointers that
+    /// themselves satisfy this trait should first be dereferenced with
+    /// `as_ref()`.
+    ///
+    /// [`CommandOutput::UserDefined`] owns its output, so values stored there
+    /// satisfy the required `'static` bound. Keeping the bound on this method
+    /// lets borrowed values continue to implement `UserDefinedCommandOutput`.
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static;
+}
+impl<T> UserDefinedCommandOutput for T
+where
+    T: Debug + std::fmt::Display + Send + Sync,
+{
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static,
+    {
+        self
+    }
+}
 
 /// Output from a command.
 #[derive(Clone, Debug)]

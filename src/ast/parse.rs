@@ -1313,6 +1313,41 @@ mod tests {
     }
 
     #[test]
+    fn test_file_command_display_roundtrip() {
+        let file = "quoted\"-backslash\\-combining\u{300}";
+        let commands = [
+            Command::PrintOverallStatistics(Span::Panic, Some(file.into())),
+            Command::PrintFunction(
+                Span::Panic,
+                "f".into(),
+                None,
+                Some(file.into()),
+                PrintFunctionMode::Default,
+            ),
+            Command::Input {
+                span: Span::Panic,
+                name: "f".into(),
+                file: file.into(),
+            },
+            Command::Output {
+                span: Span::Panic,
+                file: file.into(),
+                exprs: vec![],
+            },
+            Command::Include(Span::Panic, file.into()),
+        ];
+
+        for command in commands {
+            let displayed = command.to_string();
+            let reparsed = Parser::default()
+                .get_program_from_string(None, &displayed)
+                .unwrap();
+            assert_eq!(reparsed.len(), 1);
+            assert_eq!(reparsed[0].to_string(), displayed);
+        }
+    }
+
+    #[test]
     #[rustfmt::skip]
     fn rust_span_display() {
         let actual = format!("{}", span!()).replace('\\', "/");
