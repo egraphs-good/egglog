@@ -254,6 +254,23 @@ fn agrees_with_relation_oracle_on_small_cyclic_graphs() {
             assert!(egraph_comparison::verify(&cert, &left, &right).unwrap());
             assert!(!egraph_comparison::verify(&cert, &left, &left).unwrap());
         }
+        let (mut left, mut right) = (left, right);
+        for db in [&mut left, &mut right] {
+            for function in db.functions.values_mut() {
+                function.kind = FunctionKind::Function;
+            }
+        }
+        let result = compare(&left, &right).unwrap();
+        assert!(result.terms_equal);
+        assert_eq!(
+            result.database_equal,
+            oracle(&left, &right),
+            "function seed {seed}"
+        );
+        if let Some(cert) = egraph_comparison::certificate(&left, &right).unwrap() {
+            assert!(egraph_comparison::verify(&cert, &left, &right).unwrap());
+            assert!(!egraph_comparison::verify(&cert, &left, &left).unwrap());
+        }
     }
 }
 
