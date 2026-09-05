@@ -28,8 +28,9 @@ arguments. Bisimulation includes ungrounded cycles and is deliberately stronger
 than equality of finite ground-term languages. This is not graph isomorphism.
 
 `database_equal` additionally compares function declarations and all rows,
-including constructor rows and subsumption flags. It runs a separate refinement
-with ordinary function calls included in class observations. This preserves
+including constructor rows and subsumption flags. Its full-database refinement
+includes ordinary function calls in class observations; constructor-only inputs
+without subsumption can reuse the term partition. This preserves
 structure carried only by function tables, even when values have no constructor
 terms. Values in the rows are compared using this full-database partition.
 Non-constructor functions never become term operators or enter finite term
@@ -41,9 +42,11 @@ different observations.
 Costs, roots, extraction preferences, and runtime implementation details are
 outside this database format.
 
-The initial implementation recomputes exact signatures each round. It has at
-most a linear number of splitting rounds and can take quadratic time (plus
-ordered-map/set costs). There is no probabilistic equality or depth limit.
+The implementation recomputes exact signatures each round. It has at most a
+linear number of splitting rounds and can take quadratic time (plus signature
+sorting). There is no probabilistic equality or depth limit. The
+[performance study](PERFORMANCE.md) measures `math-microbenchmark` at run counts
+1 through 12 and explains the optimizations and reproduction procedure.
 
 ## Version 1 JSON
 

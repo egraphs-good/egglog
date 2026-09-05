@@ -87,10 +87,11 @@ pub fn certificate(left: &Database, right: &Database) -> Result<Option<Certifica
         ] {
             let other = partition.root_blocks(target);
             for (class, id) in &source.index {
-                if source.roots.contains(id) && !other.contains(&partition.blocks[*id]) {
+                if source.roots.binary_search(id).is_ok() && !other.contains(&partition.blocks[*id])
+                {
                     return Ok(Some(Certificate::Structure {
                         side,
-                        class: class.clone(),
+                        class: (*class).to_owned(),
                         rounds: partition.rounds,
                     }));
                 }
@@ -405,8 +406,8 @@ fn verify_with_partition(
                 Side::Left => (&partition.left, &partition.right),
                 Side::Right => (&partition.right, &partition.left),
             };
-            return source.index.get(class).is_some_and(|id| {
-                source.roots.contains(id)
+            return source.index.get(class.as_str()).is_some_and(|id| {
+                source.roots.binary_search(id).is_ok()
                     && !partition
                         .root_blocks(target)
                         .contains(&partition.blocks[*id])
@@ -432,6 +433,8 @@ fn verify_with_partition(
                 .iter()
                 .chain([&row.output])
                 .zip(other.inputs.iter().chain([&other.output]))
-                .all(|(x, y)| partition.blocks[a.index[x]] == partition.blocks[b.index[y]])
+                .all(|(x, y)| {
+                    partition.blocks[a.index[x.as_str()]] == partition.blocks[b.index[y.as_str()]]
+                })
     })
 }

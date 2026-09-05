@@ -622,8 +622,11 @@ name = "egraph-comparison"
 version = "3.0.0"
 dependencies = [
  "clap",
+ "hashbrown 0.16.0",
+ "rustc-hash",
  "serde",
  "serde_json",
+ "smallvec",
  "thiserror",
 ]
 

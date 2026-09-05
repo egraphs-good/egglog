@@ -254,6 +254,24 @@ fn agrees_with_relation_oracle_on_small_cyclic_graphs() {
             assert!(egraph_comparison::verify(&cert, &left, &right).unwrap());
             assert!(!egraph_comparison::verify(&cert, &left, &left).unwrap());
         }
+        // An unused ordinary declaration forces the full-database path without
+        // changing either graph's observations. Check the reuse optimization
+        // against that path on every generated cyclic pair.
+        let (mut full_left, mut full_right) = (left.clone(), right.clone());
+        for db in [&mut full_left, &mut full_right] {
+            db.functions.insert(
+                "unused".into(),
+                Function {
+                    kind: FunctionKind::Function,
+                    inputs: vec![],
+                    output: "E".into(),
+                },
+            );
+        }
+        assert_eq!(
+            compare(&left, &right).unwrap(),
+            compare(&full_left, &full_right).unwrap()
+        );
         let (mut left, mut right) = (left, right);
         for db in [&mut left, &mut right] {
             for function in db.functions.values_mut() {
