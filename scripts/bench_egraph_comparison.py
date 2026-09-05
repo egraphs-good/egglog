@@ -46,23 +46,28 @@ def generate(output):
     (output / "corpus.json").write_text(json.dumps(corpus, indent=2))
 
 
-def measure(output, label, samples, min_ms, bin_dir, runs):
+def measure(output, label, samples, min_ms, bin_dir, runs, canonical):
     corpus = json.loads((output / "corpus.json").read_text())
     results = []
     for case in corpus:
         if case["run"] not in runs:
             continue
-        data = subprocess.check_output([
-            bin_dir / "examples/benchmark", case["left"], case["right"],
-            "--samples", str(samples), "--min-sample-ms", str(min_ms)], cwd=ROOT)
+        command = [bin_dir / "examples/benchmark", case["left"], case["right"],
+                   "--samples", str(samples), "--min-sample-ms", str(min_ms)]
+        if canonical:
+            command.append("--canonical")
+            if case["run"] == 12:
+                command.append("--single-pass")
+        data = subprocess.check_output(command, cwd=ROOT)
         row = {"run": case["run"], **json.loads(data)}
         cli = []
-        for _ in range(samples + 1):
+        for _ in range(0 if canonical else samples + 1):
             start = time.perf_counter()
             subprocess.run([bin_dir / "egraph-comparison", case["left"], case["right"]],
                            stdout=subprocess.DEVNULL, check=True, cwd=ROOT)
             cli.append((time.perf_counter() - start) * 1000)
-        row["cli_median_ms"] = statistics.median(cli[1:])
+        if cli:
+            row["cli_median_ms"] = statistics.median(cli[1:])
         results.append(row)
         (output / f"{label}.json").write_text(json.dumps(results, indent=2))
         print(json.dumps(row), flush=True)
@@ -72,6 +77,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=["generate", "measure"])
     parser.add_argument("--output", type=Path, default=ROOT / "target/comparison-performance")
+    parser.add_argument("--canonical", action="store_true",
+                        help="measure canonicalization; run 12 uses one pass; skip CLI timings")
     parser.add_argument("--label", default="measure")
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/release")
@@ -85,7 +92,7 @@ def main():
     if args.phase == "generate":
         generate(output)
     else:
-        measure(output, args.label, args.samples, args.min_sample_ms, args.bin_dir.resolve(), args.runs)
+        measure(output, args.label, args.samples, args.min_sample_ms, args.bin_dir.resolve(), args.runs, args.canonical)
 
 
 if __name__ == "__main__":

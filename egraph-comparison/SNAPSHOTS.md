@@ -28,21 +28,37 @@ strings match, but database comparison fails and produces a valid certificate.
 | --- | --- | --- |
 | Stored JSON database + semantic comparison | Changes across commits and thread counts; certificates explain failures | Larger baselines and explicit format/version maintenance |
 | Compare a fresh sequential run with parallel/desugared runs | Differences between execution treatments, without stored state | Both treatments can regress identically; extra program execution |
-| Snapshot a deterministic minimized serialization | Potentially smaller, text-reviewable snapshots | Needs a separate canonical labeling/serialization design; joint partition block numbers are not stable labels |
+| Snapshot a deterministic minimized serialization | Canonical bytes capture the same database semantics independently of input IDs | Extra sorting during generation; raw sidecars currently retained for failure certificates |
 | Keep command-output snapshots | Errors, formatting, extraction costs, command order, intermediate outputs | Does not establish database equality |
 
-Use stored JSON for accepted database contents, differential checks to broaden
-threading coverage, and focused output tests for observable command behavior.
+The pilot now uses canonical JSON for accepted database contents, with raw JSON
+as a diagnostic sidecar. Use differential checks to broaden threading coverage
+and focused output tests for observable command behavior.
 Final-state equality cannot replace intermediate-state checks, extraction-cost
 checks, or error snapshots.
 
 ## Working pilot
 
-Three checked-in JSON baselines cover constructor equalities (`eqsat-basic`),
-relations (`path`), and ordinary functions (`fibonacci`). The test compares each
-baseline against fresh runs with 1, 4, and 32 threads. It never relies on the
-baseline's raw IDs or row ordering. On failure it writes the actual database and
-a verified certificate under `target/comparison-snapshots/` and prints the paths.
+Three checked-in canonical baselines cover constructor equalities (`eqsat-basic`),
+relations (`path`), and ordinary functions (`fibonacci`). Each fresh run with
+1, 4, or 32 threads is canonicalized in full-database mode and compared to the
+accepted bytes. The success path reads no raw baseline and performs no joint
+refinement. Both term and function changes remain observable.
+
+Each `.canonical.json` has a raw `.json` diagnostic sidecar. On byte mismatch,
+the test loads that sidecar and checks that it canonicalizes to the accepted
+bytes. It then generates and verifies a disequality certificate. The actual raw
+database, actual canonical bytes, and verified certificate are written under
+`target/comparison-snapshots/`, with paths in the failure message. A stale or
+missing sidecar produces a diagnostic error; it cannot justify a certificate.
+A separate consistency test checks every accepted baseline/sidecar pair, and
+regressions exercise constructor, equality, and ordinary-function failures.
+
+Keeping sidecars lets the pilot use the existing certificate APIs, since a
+minimized quotient is not necessarily valid input `Database` JSON. A future
+certificate reader for [canonical graphs](CANONICAL.md) could remove these
+sidecars. Canonical IDs are deterministic but a semantic change may renumber
+many classes, so use the certificate to understand a large byte diff.
 
 ```sh
 cargo test -p egglog --test comparison_snapshots
@@ -50,10 +66,13 @@ cargo test -p egglog --test comparison_snapshots
 EGGLOG_UPDATE_COMPARISON_SNAPSHOTS=1 cargo test -p egglog --test comparison_snapshots golden_databases_match_sequential_and_parallel_runs
 ```
 
-Updates run the sequential program once per baseline. They are never triggered
-by ordinary test execution. Review a proposed baseline semantically with the
-comparison binary as well as inspecting its JSON diff. The three baselines total
-about 7.4 KB, versus very small existing count-only snapshots.
+Updates run the sequential program once per baseline and regenerate both files.
+They are never triggered by ordinary test execution. Review a proposed baseline
+semantically with the comparison binary on the raw sidecars, as well as inspecting
+its canonical JSON diff. The canonical format is separately versioned; a version
+change requires baseline regeneration. [Canonical benchmarks](CANONICAL-PERFORMANCE.md)
+measure the extra work and storage tradeoffs. Existing count, output, error, and
+extraction-cost tests remain in place.
 
 ## Bounded survey
 
