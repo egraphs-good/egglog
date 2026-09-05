@@ -3,6 +3,9 @@ use clap::Parser;
 use egraph_comparison::{Database, compare};
 use std::{hint::black_box, path::PathBuf, time::Instant};
 
+#[path = "support/canonical.rs"]
+mod canonical;
+
 #[derive(Parser)]
 struct Args {
     left: PathBuf,
@@ -17,6 +20,9 @@ struct Args {
     /// Time one comparison for inputs too large for repeated sampling.
     #[arg(long)]
     single_pass: bool,
+    /// Compare pairwise refinement with canonical serialization and byte equality.
+    #[arg(long, conflicts_with = "profile_seconds")]
+    canonical: bool,
 }
 
 fn timings(mut f: impl FnMut(), samples: usize, min_ms: u64) -> serde_json::Value {
@@ -59,6 +65,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The benchmark corpus is equal with unrelated IDs and row order.
     if !result.database_equal {
         return Err("benchmark inputs must compare equal".into());
+    }
+    if args.canonical {
+        let mut measurement = canonical::measure(
+            &left,
+            &right,
+            args.samples,
+            args.min_sample_ms,
+            args.single_pass,
+            compare_ms,
+        )?;
+        measurement["left_classes"] = left.classes.len().into();
+        measurement["left_rows"] = left.rows.len().into();
+        measurement["left_bytes"] = left_bytes.len().into();
+        measurement["right_bytes"] = right_bytes.len().into();
+        measurement["parse_ms"] = parse_ms.into();
+        measurement["result"] = serde_json::to_value(result)?;
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &measurement)?;
+        return Ok(());
     }
     if args.single_pass {
         serde_json::to_writer_pretty(

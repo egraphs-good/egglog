@@ -106,6 +106,13 @@ option; a fresh CLI still pays the JSON and allocation costs. This workload
 contains constructors only, so it does not quantify speedups on databases with
 ordinary functions, subsumption, or requested disequality certificates.
 
+## Canonical serialization
+
+The [canonical benchmark](CANONICAL-PERFORMANCE.md) extends this corpus to measure
+independent canonicalization of both inputs, checking a fresh input against saved
+canonical bytes, and byte comparison alone. It reports the slowdown relative to
+the pairwise API measured in the same build and session.
+
 ## Reproduction
 
 ```sh
