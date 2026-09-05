@@ -38,6 +38,9 @@ use crate::action::{ExecutionState, ExternalContext};
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
+// The packed trie is exercised independently before it is wired into execution.
+#[allow(dead_code)]
+pub(crate) mod packed_trie;
 pub(crate) mod plan;
 
 define_id!(
