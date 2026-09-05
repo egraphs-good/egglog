@@ -125,3 +125,9 @@ including normalized floating-point zeros/NaNs. It rejects encountered container
 and custom base values, and rejects term/proof encoding. These cases require
 explicit value semantics or a projection to user-visible tables; treating their
 raw IDs or debug strings as values would give misleading equality results.
+
+## Snapshot infrastructure
+
+[The snapshot evaluation](SNAPSHOTS.md) compares adoption options and records a
+working pilot with saved databases, 1/4/32-thread checks, verified failure
+certificates, and a reproducible survey of the remaining migration requirements.
