@@ -12,7 +12,10 @@ use crate::{
     PlanStrategy,
     action::WriteVal,
     common::Value,
-    free_join::{CounterId, Database, TableId},
+    free_join::{
+        CounterId, Database, TableId,
+        plan::{JoinStage, Plan},
+    },
     make_external_func,
     query::RuleSetBuilder,
     table::SortedWritesTable,
@@ -211,6 +214,575 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let mut got = Vec::from_iter(vals.iter().map(|(_, row)| row.to_vec()));
     got.sort();
     assert_eq!(expected, got);
+}
+
+#[test]
+fn prepared_plan_indexes_refresh_across_runs_and_clear() {
+    let mut db = Database::default();
+    let make_table = |arity| {
+        SortedWritesTable::new(
+            arity,
+            arity,
+            None,
+            vec![],
+            Box::new(|_, old, new, _| {
+                assert_eq!(old, new, "test tables have unique keys");
+                false
+            }),
+        )
+    };
+    let driver = db.add_table(make_table(2), iter::empty(), iter::empty());
+    let target = db.add_table(make_table(3), iter::empty(), iter::empty());
+    let allowed = db.add_table(make_table(1), iter::empty(), iter::empty());
+    let output = db.add_table(make_table(1), iter::empty(), iter::empty());
+
+    const KEYS: usize = 4;
+    const VALUES_PER_KEY: usize = 32;
+    let populate_inputs = |db: &Database, value_base: usize| {
+        {
+            let mut buf = db.new_buffer(target);
+            for x in 0..KEYS {
+                for z in 0..VALUES_PER_KEY {
+                    buf.stage_insert(&[v(x), v(10_000 + x), v(value_base + x * 100 + z)]);
+                }
+            }
+        }
+        {
+            let mut buf = db.new_buffer(allowed);
+            for x in 0..KEYS {
+                for z in 0..VALUES_PER_KEY {
+                    buf.stage_insert(&[v(value_base + x * 100 + z)]);
+                }
+            }
+        }
+    };
+
+    {
+        let mut buf = db.new_buffer(driver);
+        for x in 0..KEYS {
+            buf.stage_insert(&[v(x), v(10_000 + x)]);
+        }
+    }
+    populate_inputs(&db, 20_000);
+    db.merge_all();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::PureSize);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
+    query.add_atom(driver, &[x.into(), y.into()], &[]).unwrap();
+    query
+        .add_atom(target, &[x.into(), y.into(), z.into()], &[])
+        .unwrap();
+    query.add_atom(allowed, &[z.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[z.into()]).unwrap();
+    rule.build_with_description("prepared-index-lifecycle");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert!(
+        plan.stages.instrs.iter().any(|stage| matches!(
+            stage,
+            JoinStage::FusedIntersect { to_intersect, .. }
+                if to_intersect
+                    .iter()
+                    .any(|(scan, _)| scan.to_index.vars.len() > 1)
+        )),
+        "test must exercise a prepared tuple index"
+    );
+    assert!(
+        plan.stages
+            .instrs
+            .iter()
+            .any(|stage| matches!(stage, JoinStage::Intersect { scans, .. } if !scans.is_empty())),
+        "test must exercise a prepared column index"
+    );
+
+    let planned_tuple_lookups = plan
+        .stages
+        .instrs
+        .iter()
+        .map(|stage| match stage {
+            JoinStage::Intersect { .. } => 0,
+            JoinStage::FusedIntersect { to_intersect, .. }
+            | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                .iter()
+                .filter(|(scan, _)| {
+                    plan.atoms[scan.to_index.atom].table == target && scan.to_index.vars.len() != 1
+                })
+                .count(),
+        })
+        .sum::<usize>();
+    let planned_allowed_column_lookups = plan
+        .stages
+        .instrs
+        .iter()
+        .map(|stage| match stage {
+            JoinStage::Intersect { scans, .. } => scans
+                .iter()
+                .filter(|scan| plan.atoms[scan.atom].table == allowed)
+                .count(),
+            JoinStage::FusedIntersect { to_intersect, .. }
+            | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                .iter()
+                .filter(|(scan, _)| {
+                    plan.atoms[scan.to_index.atom].table == allowed && scan.to_index.vars.len() == 1
+                })
+                .count(),
+        })
+        .sum::<usize>();
+    assert!(planned_tuple_lookups > 0);
+    assert!(planned_allowed_column_lookups > 0);
+
+    let expected = KEYS * VALUES_PER_KEY;
+    let tuple_lookups_before = db.get_table_info(target).indexes.get_or_insert_calls();
+    let allowed_column_lookups_before = db
+        .get_table_info(allowed)
+        .column_indexes
+        .get_or_insert_calls();
+    let first = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    assert_eq!(first.num_matches("prepared-index-lifecycle"), expected);
+    assert_eq!(db.get_table(output).len(), expected);
+    assert_eq!(
+        db.get_table_info(target).indexes.get_or_insert_calls() - tuple_lookups_before,
+        planned_tuple_lookups,
+        "tuple-index catalog access must be plan-static, not recursion-static"
+    );
+    assert_eq!(
+        db.get_table_info(allowed)
+            .column_indexes
+            .get_or_insert_calls()
+            - allowed_column_lookups_before,
+        planned_allowed_column_lookups,
+        "column-index catalog access must be plan-static, not recursion-static"
+    );
+
+    // Reusing the same logical plan must not retain catalog Arcs across the
+    // merge at the end of the previous run.
+    let second = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    assert_eq!(second.num_matches("prepared-index-lifecycle"), expected);
+    assert_eq!(db.get_table(output).len(), expected);
+
+    db.clear_table(target);
+    db.clear_table(allowed);
+    db.clear_table(output);
+    populate_inputs(&db, 40_000);
+    db.merge_all();
+
+    // Clearing bumps the table generation, so every prepared global index must
+    // be refreshed before its borrowed reference is exposed to execution.
+    let after_clear = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    assert_eq!(
+        after_clear.num_matches("prepared-index-lifecycle"),
+        expected
+    );
+    let output_table = db.get_table(output);
+    let output_rows = output_table.scan(output_table.all().as_ref());
+    assert_eq!(output_rows.len(), expected);
+    assert!(output_rows.iter().all(|(_, row)| row[0].index() >= 40_000));
+}
+
+#[test]
+fn prepared_plan_indexes_preserve_uncacheable_columns() {
+    let mut db = Database::default();
+    let displaced = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+    let make_table = || {
+        SortedWritesTable::new(
+            1,
+            1,
+            None,
+            vec![],
+            Box::new(|_, old, new, _| {
+                assert_eq!(old, new);
+                false
+            }),
+        )
+    };
+    let representatives = db.add_table(make_table(), iter::empty(), iter::empty());
+    let output = db.add_table(make_table(), iter::empty(), iter::empty());
+    {
+        let mut buf = db.new_buffer(displaced);
+        buf.stage_insert(&[v(0), v(10), v(0)]);
+    }
+    db.merge_all();
+    let displaced_table = db.get_table(displaced);
+    let displaced_rows = displaced_table.scan(displaced_table.all().as_ref());
+    let displaced_row = displaced_rows.iter().next().unwrap().1;
+    let displaced_key = displaced_row[0];
+    let canonical = displaced_row[1];
+    let displaced_timestamp = displaced_row[2];
+    {
+        let mut buf = db.new_buffer(representatives);
+        buf.stage_insert(&[canonical]);
+    }
+    db.merge_all();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    let representative = query.new_var_named("representative");
+    query
+        .add_atom(
+            displaced,
+            &[
+                displaced_key.into(),
+                representative.into(),
+                displaced_timestamp.into(),
+            ],
+            &[],
+        )
+        .unwrap();
+    query
+        .add_atom(representatives, &[representative.into()], &[])
+        .unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[representative.into()]).unwrap();
+    rule.build_with_description("uncacheable-prepared-index");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert!(plan.stages.instrs.iter().any(|stage| matches!(
+        stage,
+        JoinStage::Intersect { scans, .. }
+            if scans.iter().any(|scan| {
+                plan.atoms[scan.atom].table == displaced && scan.column == ColumnId::new(1)
+            })
+    )));
+
+    let catalog_calls_before = db
+        .get_table_info(displaced)
+        .column_indexes
+        .get_or_insert_calls();
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+    assert_eq!(report.num_matches("uncacheable-prepared-index"), 1);
+    assert_eq!(
+        db.get_table_info(displaced)
+            .column_indexes
+            .get_or_insert_calls(),
+        catalog_calls_before,
+        "preparation must not create a global index for a dynamic column"
+    );
+    assert_eq!(db.get_table(output).len(), 1);
+}
+
+#[test]
+fn gj_top_index_shards_preserve_count_and_materialization() {
+    gj_top_index_shards_preserve_count_and_materialization_inner();
+}
+
+fn gj_top_index_shards_preserve_count_and_materialization_inner() {
+    let pool = egglog_concurrency::ThreadPool::new(4);
+    pool.install(|| {
+        let mut db = Database::default();
+        let make_table = || {
+            SortedWritesTable::new(
+                2,
+                2,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "test tables have unique keys");
+                    false
+                }),
+            )
+        };
+        let left = db.add_table(make_table(), iter::empty(), iter::empty());
+        let right = db.add_table(make_table(), iter::empty(), iter::empty());
+        let output = db.add_table(
+            SortedWritesTable::new(
+                2,
+                2,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "materialized pairs are unique");
+                    false
+                }),
+            ),
+            iter::empty(),
+            iter::empty(),
+        );
+
+        const KEYS: usize = 513;
+        const DEGREE: usize = 17;
+        {
+            let mut buf = db.new_buffer(left);
+            for x in 0..KEYS {
+                for y in 0..DEGREE {
+                    buf.stage_insert(&[v(x), v(100_000 + x * DEGREE + y)]);
+                }
+            }
+        }
+        {
+            let mut buf = db.new_buffer(right);
+            for x in 0..KEYS {
+                for z in 0..DEGREE {
+                    buf.stage_insert(&[v(x), v(200_000 + x * DEGREE + z)]);
+                }
+            }
+        }
+        db.merge_all();
+
+        let mut rsb = RuleSetBuilder::new(&mut db);
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        let x = query.new_var_named("x");
+        let y = query.new_var_named("y");
+        let z = query.new_var_named("z");
+        query.add_atom(left, &[x.into(), y.into()], &[]).unwrap();
+        query.add_atom(right, &[x.into(), z.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[y.into(), z.into()]).unwrap();
+        rule.build_with_description("sharded-gj");
+        let rules = rsb.build();
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let scheduler = pool.scheduler_metrics();
+        // The root rule job plus one job for each of the cached index's
+        // 2 * worker-count shards.  Merge work may add more global jobs.
+        assert!(
+            scheduler.global_pushes >= 9,
+            "top index sharding did not activate: {scheduler:?}"
+        );
+        assert_eq!(
+            scheduler.local_pushes, 0,
+            "the fixed scheduler policy should keep each shard subtree serial"
+        );
+        let expected = KEYS * DEGREE * DEGREE;
+        assert_eq!(report.num_matches("sharded-gj"), expected);
+
+        let table = db.get_table(output);
+        let materialized = table.scan(table.all().as_ref());
+        assert_eq!(materialized.len(), expected);
+        for (_, row) in materialized.iter() {
+            let y = row[0].index() - 100_000;
+            let z = row[1].index() - 200_000;
+            assert_eq!(y / DEGREE, z / DEGREE);
+        }
+    });
+}
+
+#[test]
+fn gj_small_top_fallback_uses_local_queue() {
+    let pool = egglog_concurrency::ThreadPool::new(4);
+    pool.install(|| {
+        let mut db = Database::default();
+        let make_table = || {
+            SortedWritesTable::new(
+                3,
+                3,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "test tables have unique keys");
+                    false
+                }),
+            )
+        };
+        let left = db.add_table(make_table(), iter::empty(), iter::empty());
+        let right = db.add_table(make_table(), iter::empty(), iter::empty());
+        let output = db.add_table(make_table(), iter::empty(), iter::empty());
+
+        // The sorted top variable has only two keys and is therefore too small
+        // for coarse index-shard partitioning, while the database is large
+        // enough to enable parallel rule execution.
+        const ROWS: usize = 8192;
+        for table in [left, right] {
+            let mut buf = db.new_buffer(table);
+            for i in 0..ROWS {
+                buf.stage_insert(&[v(i % 2), v(10_000 + i), v(20_000 + i)]);
+            }
+        }
+        db.merge_all();
+
+        let mut rsb = RuleSetBuilder::new(&mut db);
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("x");
+        let y = query.new_var_named("y");
+        let z = query.new_var_named("z");
+        query
+            .add_atom(left, &[x.into(), y.into(), z.into()], &[])
+            .unwrap();
+        query
+            .add_atom(right, &[x.into(), y.into(), z.into()], &[])
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into(), y.into(), z.into()])
+            .unwrap();
+        rule.build_with_description("local-fallback-gj");
+        let rules = rsb.build();
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let scheduler = pool.scheduler_metrics();
+        assert!(
+            scheduler.local_pushes > 0,
+            "small-top fallback did not use worker-local tasks: {scheduler:?}"
+        );
+        assert_eq!(
+            scheduler.local_pushes,
+            scheduler.local_pops + scheduler.donated_jobs,
+            "every local task must run on its owner or be donated"
+        );
+        assert_eq!(report.num_matches("local-fallback-gj"), ROWS);
+
+        let table = db.get_table(output);
+        let materialized = table.scan(table.all().as_ref());
+        assert_eq!(materialized.len(), ROWS);
+        for (_, row) in materialized.iter() {
+            let i = row[2].index() - 20_000;
+            assert_eq!(row[0].index(), i % 2);
+            assert_eq!(row[1].index() - 10_000, i);
+        }
+    });
+}
+
+#[test]
+fn gj_decomposed_small_top_materialization_uses_local_queue() {
+    let pool = egglog_concurrency::ThreadPool::new(4);
+    pool.install(|| {
+        let mut db = Database::default();
+        let make_table = |arity| {
+            SortedWritesTable::new(
+                arity,
+                arity,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "test tables have unique keys");
+                    false
+                }),
+            )
+        };
+        let left_xa = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let left_ab = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let left_bx = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let right_xc = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let right_cd = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let right_dx = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let output = db.add_table(make_table(5), iter::empty(), iter::empty());
+
+        // Two cyclic bags joined through x force a decomposed plan. The left
+        // bag is large, but x has only two keys, so its materialization block
+        // must use recursive fallback work instead of top-index sharding.
+        const X_KEYS: usize = 2;
+        const LEFT_ROWS_PER_KEY: usize = 4096;
+        for x in 0..X_KEYS {
+            let mut xa = db.new_buffer(left_xa);
+            let mut ab = db.new_buffer(left_ab);
+            let mut bx = db.new_buffer(left_bx);
+            for i in 0..LEFT_ROWS_PER_KEY {
+                let a = 10_000 + x * LEFT_ROWS_PER_KEY + i;
+                let b = 20_000 + x * LEFT_ROWS_PER_KEY + i;
+                xa.stage_insert(&[v(x), v(a)]);
+                ab.stage_insert(&[v(a), v(b)]);
+                bx.stage_insert(&[v(b), v(x)]);
+            }
+        }
+        {
+            let mut xc = db.new_buffer(right_xc);
+            let mut cd = db.new_buffer(right_cd);
+            let mut dx = db.new_buffer(right_dx);
+            for x in 0..X_KEYS {
+                let c = 100_000 + x;
+                let d = 200_000 + x;
+                xc.stage_insert(&[v(x), v(c)]);
+                cd.stage_insert(&[v(c), v(d)]);
+                dx.stage_insert(&[v(d), v(x)]);
+            }
+        }
+        db.merge_all();
+
+        let mut rsb = RuleSetBuilder::new(&mut db);
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        let x = query.new_var_named("x");
+        let a = query.new_var_named("a");
+        let b = query.new_var_named("b");
+        let c = query.new_var_named("c");
+        let d = query.new_var_named("d");
+        query.add_atom(left_xa, &[x.into(), a.into()], &[]).unwrap();
+        query.add_atom(left_ab, &[a.into(), b.into()], &[]).unwrap();
+        query.add_atom(left_bx, &[b.into(), x.into()], &[]).unwrap();
+        query
+            .add_atom(right_xc, &[x.into(), c.into()], &[])
+            .unwrap();
+        query
+            .add_atom(right_cd, &[c.into(), d.into()], &[])
+            .unwrap();
+        query
+            .add_atom(right_dx, &[d.into(), x.into()], &[])
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into(), a.into(), b.into(), c.into(), d.into()])
+            .unwrap();
+        rule.build_with_description("local-materialization-fallback-gj");
+        let rules = rsb.build();
+
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::DecomposedPlan(plan) = plan else {
+            panic!("the two cyclic bags must produce a decomposed plan")
+        };
+        assert!(plan.stages.blocks.len() >= 2);
+        let first_materialization = &plan.stages.blocks[0].0;
+        assert!(first_materialization.instrs.len() >= 3);
+        let Some(JoinStage::Intersect { var, scans }) = first_materialization.instrs.first() else {
+            panic!("the first materialization block must start by intersecting x")
+        };
+        assert_eq!(*var, x);
+        assert!(
+            scans.iter().any(|scan| {
+                let table = plan.atoms[scan.atom].table;
+                table == right_xc || table == right_dx
+            }),
+            "the top x intersection must include a two-row index, making coarse sharding ineligible"
+        );
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly);
+        let scheduler = pool.scheduler_metrics();
+        assert!(
+            scheduler.local_pushes > 0,
+            "small-top materialization fallback did not use worker-local tasks: {scheduler:?}"
+        );
+        assert_eq!(
+            scheduler.local_pushes,
+            scheduler.local_pops + scheduler.donated_jobs,
+            "every local task must run on its owner or be donated"
+        );
+
+        let expected = X_KEYS * LEFT_ROWS_PER_KEY;
+        assert_eq!(
+            report.num_matches("local-materialization-fallback-gj"),
+            expected
+        );
+        let table = db.get_table(output);
+        let materialized = table.scan(table.all().as_ref());
+        assert_eq!(materialized.len(), expected);
+        for (_, row) in materialized.iter() {
+            let x = row[0].index();
+            let i = row[1].index() - 10_000 - x * LEFT_ROWS_PER_KEY;
+            assert!(x < X_KEYS);
+            assert!(i < LEFT_ROWS_PER_KEY);
+            assert_eq!(row[2].index(), 20_000 + x * LEFT_ROWS_PER_KEY + i);
+            assert_eq!(row[3].index(), 100_000 + x);
+            assert_eq!(row[4].index(), 200_000 + x);
+        }
+    });
 }
 
 #[test]
