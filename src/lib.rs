@@ -11,6 +11,8 @@ pub mod extract;
 pub mod prelude;
 mod proofs;
 
+#[cfg(feature = "comparison")]
+mod comparison;
 pub mod scheduler;
 mod serialize;
 pub mod sort;

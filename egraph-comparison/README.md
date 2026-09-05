@@ -96,3 +96,23 @@ refinement algorithm. Certificates are valid witnesses, not guaranteed minimal.
 Structural and row verification use exact refinement. Certificate generation
 currently repeats comparison/refinement and row-witness search can be quadratic;
 it is opt-in so equality checks do not pay this diagnostic cost.
+
+## Exporting egglog databases
+
+```sh
+cargo run -p egglog -- --to-comparison-json before.egg
+cargo run -p egglog -- --to-comparison-json after.egg
+cargo run -p egraph-comparison -- before.comparison.json after.comparison.json --certificate
+```
+
+`EGraph::serialize_for_comparison` is available with egglog's `comparison`
+feature (included by the default `bin` feature). It rebuilds before exporting
+all visible user tables, empty declarations, and subsumed rows. Relations are
+ordinary database tables. Global bindings and hidden helper tables are excluded.
+Visualization limits, splitting, and inlining do not affect this export.
+
+The initial exporter handles equality sorts and the built-in scalar types,
+including normalized floating-point zeros/NaNs. It rejects encountered container
+and custom base values, and rejects term/proof encoding. These cases require
+explicit value semantics or a projection to user-visible tables; treating their
+raw IDs or debug strings as values would give misleading equality results.
