@@ -617,6 +617,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "egraph-comparison"
+version = "3.0.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "egraph-serialize"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

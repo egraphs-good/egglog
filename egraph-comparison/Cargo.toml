@@ -1,0 +1,13 @@
+[package]
+name = "egraph-comparison"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compare serialized e-graphs modulo bisimulation"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

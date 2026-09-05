@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "concurrency",
   "core-relations",
+  "egraph-comparison",
   "egglog-ast",
   "egglog-bridge",
   "numeric-id",
