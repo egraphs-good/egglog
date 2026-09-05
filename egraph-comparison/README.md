@@ -62,3 +62,37 @@ are explicit even for empty tables. Unknown fields, unsupported versions,
 dangling IDs, wrong sorts/arity, duplicate literal identities, and conflicting
 function rows are errors. Producers must canonicalize IDs and rebuild first.
 This format is separate from visualization-oriented `egraph-serialize` JSON.
+
+## Disequality certificates
+
+Pass `--certificate` to include a `certificate` field (`null` for equal
+inputs). Save that field alone to `witness.json` and verify it with:
+
+```sh
+cargo run -p egraph-comparison -- left.json right.json --verify-certificate witness.json
+```
+
+Verification emits `{"valid": true}` or `{"valid": false}` with status 0 or 1.
+Malformed JSON/input still exits 2. The Rust API exposes `certificate` and
+`verify` for the same operations.
+
+* `missing_term`: a constructor term exists on only the indicated side.
+* `unequal_terms`: both terms exist in both inputs, and are equal only on the
+  indicated side.
+* `structure`: a constructor class has a bounded bisimulation observation absent
+  from all constructor classes in the other input. The class ID and refinement
+  round count let the verifier replay that observation. This is needed for
+  ungrounded cycles/holes, which may have no finite ground-term witness.
+* `declaration` / `row`: a schema or table row differs. Row IDs are interpreted
+  in the indicated input and compared modulo the joint constructor partition.
+
+Finite terms use a topologically ordered DAG: each application references earlier
+entries, and the certificate identifies its root(s). This avoids exponential
+expansion and recursive evaluation. Functions never appear in these terms.
+The extractor finds one ground representative per productive class, then checks
+constructor rows against their output representatives in both directions.
+Ground-term verification uses direct constructor lookup, independently of the
+refinement algorithm. Certificates are valid witnesses, not guaranteed minimal.
+Structural and row verification use exact refinement. Certificate generation
+currently repeats comparison/refinement and row-witness search can be quadratic;
+it is opt-in so equality checks do not pay this diagnostic cost.

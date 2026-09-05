@@ -1,5 +1,5 @@
 use clap::Parser;
-use egraph_comparison::{Database, compare};
+use egraph_comparison::{Certificate, Database, certificate, compare, verify};
 use std::{fs::File, io::BufReader, path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
@@ -10,14 +10,35 @@ struct Args {
     /// Use constructor-term equality for the exit status (still report both).
     #[arg(long)]
     terms_only: bool,
+    /// Include a verifiable explanation of disequality in the JSON result.
+    #[arg(long, conflicts_with = "verify_certificate")]
+    certificate: bool,
+    /// Verify a certificate JSON file (0 = valid, 1 = invalid, 2 = input error).
+    #[arg(long)]
+    verify_certificate: Option<PathBuf>,
 }
 
 fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     let read = |path: &PathBuf| -> Result<Database, Box<dyn std::error::Error>> {
         Ok(serde_json::from_reader(BufReader::new(File::open(path)?))?)
     };
-    let result = compare(&read(&args.left)?, &read(&args.right)?)?;
-    serde_json::to_writer_pretty(std::io::stdout().lock(), &result)?;
+    let left = read(&args.left)?;
+    let right = read(&args.right)?;
+    if let Some(path) = &args.verify_certificate {
+        let witness: Certificate = serde_json::from_reader(BufReader::new(File::open(path)?))?;
+        let valid = verify(&witness, &left, &right)?;
+        serde_json::to_writer_pretty(
+            std::io::stdout().lock(),
+            &serde_json::json!({"valid": valid}),
+        )?;
+        return Ok(valid);
+    }
+    let result = compare(&left, &right)?;
+    let mut output = serde_json::to_value(&result)?;
+    if args.certificate {
+        output["certificate"] = serde_json::to_value(certificate(&left, &right)?)?;
+    }
+    serde_json::to_writer_pretty(std::io::stdout().lock(), &output)?;
     Ok(if args.terms_only {
         result.terms_equal
     } else {
