@@ -10,3 +10,6 @@ mod refine;
 pub use certificate::{Certificate, Side, Term, certificate, verify};
 pub use model::{Class, Database, Error, Function, FunctionKind, Row};
 pub use refine::{Comparison, compare};
+
+pub(crate) type HashMap<K, V> =
+    hashbrown::HashMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;

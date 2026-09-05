@@ -20,7 +20,10 @@ struct Args {
 
 fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     let read = |path: &PathBuf| -> Result<Database, Box<dyn std::error::Error>> {
-        Ok(serde_json::from_reader(BufReader::new(File::open(path)?))?)
+        // Parsing a slice avoids the per-byte reader adapter. Drop each input
+        // buffer before loading the next graph to bound the extra memory.
+        let bytes = std::fs::read(path)?;
+        Ok(serde_json::from_slice(&bytes)?)
     };
     let left = read(&args.left)?;
     let right = read(&args.right)?;

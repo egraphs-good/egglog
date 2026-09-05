@@ -1,3 +1,4 @@
+use crate::HashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -21,7 +22,7 @@ pub struct Class {
     pub literal: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Function {
     pub kind: FunctionKind,
@@ -29,7 +30,7 @@ pub struct Function {
     pub output: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FunctionKind {
     Constructor,
@@ -71,7 +72,7 @@ impl Database {
                 self.version
             )));
         }
-        let mut literals = BTreeMap::new();
+        let mut literals = HashMap::default();
         for (id, class) in &self.classes {
             if let Some(value) = &class.literal
                 && let Some(previous) = literals.insert((&class.sort, value), id)
@@ -81,7 +82,15 @@ impl Database {
                 )));
             }
         }
-        let mut calls = BTreeMap::new();
+        // Borrow the serialized names; repeated row lookups should not traverse
+        // a string-keyed tree. The public, ordered serialization stays unchanged.
+        let classes: HashMap<_, _> = self
+            .classes
+            .iter()
+            .map(|(id, c)| (id.as_str(), c))
+            .collect();
+        let mut calls = HashMap::default();
+        calls.reserve(self.rows.len());
         for (index, row) in self.rows.iter().enumerate() {
             let error = |message: String| Error(format!("row {index}: {message}"));
             let function = self
@@ -97,9 +106,8 @@ impl Database {
                 .zip(&function.inputs)
                 .chain(std::iter::once((&row.output, &function.output)))
             {
-                let class = self
-                    .classes
-                    .get(id)
+                let class = classes
+                    .get(id.as_str())
                     .ok_or_else(|| error(format!("unknown class {id}")))?;
                 if &class.sort != sort {
                     return Err(error(format!(
@@ -109,7 +117,7 @@ impl Database {
                 }
             }
             if function.kind == FunctionKind::Constructor
-                && self.classes[&row.output].literal.is_some()
+                && classes[row.output.as_str()].literal.is_some()
             {
                 return Err(error("constructor output cannot be a literal".into()));
             }
