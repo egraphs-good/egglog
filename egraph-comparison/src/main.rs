@@ -1,12 +1,23 @@
 use clap::Parser;
-use egraph_comparison::{Certificate, Database, certificate, compare, verify};
-use std::{fs::File, io::BufReader, path::PathBuf, process::ExitCode};
+use egraph_comparison::{
+    CanonicalMode, Certificate, Database, canonicalize, certificate, compare, verify,
+};
+use std::{
+    fs::File,
+    io::{BufReader, Write},
+    path::PathBuf,
+    process::ExitCode,
+};
 
 #[derive(Parser)]
 #[command(about = "Compare two serialized e-graphs modulo constructor bisimulation")]
 struct Args {
     left: PathBuf,
-    right: PathBuf,
+    #[arg(required_unless_present = "canonical", conflicts_with = "canonical")]
+    right: Option<PathBuf>,
+    /// Write canonical JSON for one input; --terms-only selects the projection.
+    #[arg(long, conflicts_with_all = ["certificate", "verify_certificate"])]
+    canonical: bool,
     /// Use constructor-term equality for the exit status (still report both).
     #[arg(long)]
     terms_only: bool,
@@ -26,7 +37,18 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         Ok(serde_json::from_slice(&bytes)?)
     };
     let left = read(&args.left)?;
-    let right = read(&args.right)?;
+    if args.canonical {
+        let mode = if args.terms_only {
+            CanonicalMode::Terms
+        } else {
+            CanonicalMode::Database
+        };
+        std::io::stdout()
+            .lock()
+            .write_all(&canonicalize(&left, mode)?)?;
+        return Ok(true);
+    }
+    let right = read(args.right.as_ref().ok_or("missing right input")?)?;
     if let Some(path) = &args.verify_certificate {
         let witness: Certificate = serde_json::from_reader(BufReader::new(File::open(path)?))?;
         let valid = verify(&witness, &left, &right)?;
