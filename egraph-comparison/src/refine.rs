@@ -17,8 +17,8 @@ pub struct Comparison {
 
 // Intern complete labels jointly across the inputs. Neither names nor schemas
 // are copied per node or per refinement round; hash collisions still use Eq.
-#[derive(PartialEq, Eq, Hash)]
-enum Label<'a> {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub(crate) enum Label<'a> {
     Literal(&'a str),
     Call(&'a str, &'a Function, bool),
 }
@@ -29,21 +29,21 @@ fn intern<'a>(labels: &mut HashMap<Label<'a>, usize>, label: Label<'a>) -> usize
 }
 
 #[derive(Clone)]
-struct Node {
-    symbol: usize,
-    children: SmallVec<[usize; 2]>,
+pub(crate) struct Node {
+    pub symbol: usize,
+    pub children: SmallVec<[usize; 2]>,
 }
 
 pub(crate) struct Graph<'a> {
-    sorts: Vec<&'a str>,
-    nodes: Vec<Vec<Node>>,
+    pub sorts: Vec<&'a str>,
+    pub nodes: Vec<Vec<Node>>,
     /// Sorted, unique output IDs. Mark once per row instead of tree insertion.
     pub roots: Vec<usize>,
     pub index: HashMap<&'a str, usize>,
 }
 
 impl<'a> Graph<'a> {
-    fn new(
+    pub(crate) fn new(
         db: &'a Database,
         offset: usize,
         include_functions: bool,

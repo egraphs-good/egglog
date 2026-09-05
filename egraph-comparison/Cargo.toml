@@ -13,4 +13,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 hashbrown.workspace = true
 rustc-hash.workspace = true
-smallvec.workspace = true
+smallvec = { workspace = true, features = ["serde"] }

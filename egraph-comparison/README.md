@@ -126,6 +126,13 @@ and custom base values, and rejects term/proof encoding. These cases require
 explicit value semantics or a projection to user-visible tables; treating their
 raw IDs or debug strings as values would give misleading equality results.
 
+## Canonical representation
+
+Use `--canonical input.json` (optionally `--terms-only`) to write a versioned
+canonical quotient that can be compared using byte equality. The
+[format and algorithm](CANONICAL.md) explain deterministic numbering, cycles,
+and the relationship to pairwise comparison and certificates.
+
 ## Snapshot infrastructure
 
 [The snapshot evaluation](SNAPSHOTS.md) compares adoption options and records a
