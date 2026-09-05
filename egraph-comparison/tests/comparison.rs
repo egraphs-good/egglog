@@ -250,6 +250,10 @@ fn agrees_with_relation_oracle_on_small_cyclic_graphs() {
             "seed {seed}"
         );
         assert!(compare(&left, &left).unwrap().database_equal);
+        if let Some(cert) = egraph_comparison::certificate(&left, &right).unwrap() {
+            assert!(egraph_comparison::verify(&cert, &left, &right).unwrap());
+            assert!(!egraph_comparison::verify(&cert, &left, &left).unwrap());
+        }
     }
 }
 
