@@ -51,7 +51,7 @@ pub enum Certificate {
     },
     /// A declaration is absent or has a different signature/kind.
     Declaration { function: String },
-    /// This row exists only on `side`, modulo constructor bisimulation.
+    /// This row exists only on `side`, modulo full-database bisimulation.
     Row { side: Side, row: Row },
 }
 
@@ -104,6 +104,8 @@ pub fn certificate(left: &Database, right: &Database) -> Result<Option<Certifica
             }));
         }
     }
+    let mut partition = Partition::database(left, right);
+    partition.finish();
     for side in [Side::Left, Side::Right] {
         let (source, _) = sides(side, left, right);
         for row in &source.rows {
@@ -364,7 +366,11 @@ pub fn verify(certificate: &Certificate, left: &Database, right: &Database) -> R
             Ok(left.functions.get(function) != right.functions.get(function))
         }
         _ => {
-            let mut partition = Partition::new(left, right);
+            let mut partition = if matches!(certificate, Certificate::Structure { .. }) {
+                Partition::new(left, right)
+            } else {
+                Partition::database(left, right)
+            };
             if let Certificate::Structure { rounds, .. } = certificate {
                 if *rounds > partition.blocks.len() + 1 {
                     return Ok(false);

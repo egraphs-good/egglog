@@ -6,7 +6,8 @@ cargo run -p egraph-comparison -- --terms-only left.json right.json
 ```
 
 The binary reads two complete, rebuilt databases and emits JSON with
-`terms_equal`, `database_equal`, and `refinement_rounds`. Exit status is 0 for
+`terms_equal`, `database_equal`, `refinement_rounds`, and
+`database_refinement_rounds`. Exit status is 0 for
 equality, 1 for disequality, and 2 for invalid input or I/O failure. `--terms-only`
 selects term equality for the exit status; both results are always reported.
 
@@ -27,11 +28,16 @@ arguments. Bisimulation includes ungrounded cycles and is deliberately stronger
 than equality of finite ground-term languages. This is not graph isomorphism.
 
 `database_equal` additionally compares function declarations and all rows,
-including constructor rows and subsumption flags, using the constructor blocks
-as value identities. Non-constructor functions never become term operators.
-Function-only equality-sort values without constructors are indistinguishable
-when their sorts agree. All comparisons are of sets, so multiplicities of
-duplicate rows or bisimilar values are ignored. Unused classes are ignored.
+including constructor rows and subsumption flags. It runs a separate refinement
+with ordinary function calls included in class observations. This preserves
+structure carried only by function tables, even when values have no constructor
+terms. Values in the rows are compared using this full-database partition.
+Non-constructor functions never become term operators or enter finite term
+certificates. All comparisons are of sets, so multiplicities of duplicate rows
+or bisimilar values are ignored. Unused classes are ignored. This still compares
+bisimulation quotients, not bijective identities or graph isomorphism: empty
+classes of the same sort remain indistinguishable if no incoming rows give them
+different observations.
 Costs, roots, extraction preferences, and runtime implementation details are
 outside this database format.
 
@@ -84,7 +90,7 @@ Malformed JSON/input still exits 2. The Rust API exposes `certificate` and
   round count let the verifier replay that observation. This is needed for
   ungrounded cycles/holes, which may have no finite ground-term witness.
 * `declaration` / `row`: a schema or table row differs. Row IDs are interpreted
-  in the indicated input and compared modulo the joint constructor partition.
+  in the indicated input and compared modulo the joint full-database partition.
 
 Finite terms use a topologically ordered DAG: each application references earlier
 entries, and the certificate identifies its root(s). This avoids exponential
