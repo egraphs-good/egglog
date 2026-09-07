@@ -1,10 +1,12 @@
 //! Compare complete serialized databases by conservative partition refinement.
+mod certificate;
 mod hopcroft;
 mod ids;
 mod model;
 mod refine;
 mod signatures;
-pub use ids::{FormatVersion, RowId};
+pub use certificate::{Certificate, Side, Term, certificate, verify};
+pub use ids::{FormatVersion, RowId, TermId};
 pub use model::{Class, Database, Error, Function, FunctionKind, Row};
 pub use refine::{Comparison, compare};
 pub(crate) type HashMap<K, V> =

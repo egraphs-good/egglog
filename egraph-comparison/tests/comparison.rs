@@ -250,6 +250,10 @@ fn agrees_with_relation_oracle_on_small_cyclic_graphs() {
             "seed {seed}"
         );
         assert!(compare(&left, &left).unwrap().database_equal);
+        if let Some(cert) = egraph_comparison::certificate(&left, &right).unwrap() {
+            assert!(egraph_comparison::verify(&cert, &left, &right).unwrap());
+            assert!(!egraph_comparison::verify(&cert, &left, &left).unwrap());
+        }
         // An unused ordinary declaration forces the full-database path without
         // changing either graph's observations. Check the reuse optimization
         // against that path on every generated cyclic pair.
@@ -281,6 +285,10 @@ fn agrees_with_relation_oracle_on_small_cyclic_graphs() {
             oracle(&left, &right),
             "function seed {seed}"
         );
+        if let Some(cert) = egraph_comparison::certificate(&left, &right).unwrap() {
+            assert!(egraph_comparison::verify(&cert, &left, &right).unwrap());
+            assert!(!egraph_comparison::verify(&cert, &left, &left).unwrap());
+        }
     }
 }
 

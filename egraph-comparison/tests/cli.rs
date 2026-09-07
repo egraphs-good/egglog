@@ -28,6 +28,26 @@ fn exit_status_and_json_output() {
     assert_eq!(json["database_equal"], true);
     assert_eq!(run(&empty, &different, false).status.code(), Some(1));
     assert!(run(&empty, &different, true).status.success());
+    let output = Command::new(env!("CARGO_BIN_EXE_egraph-comparison"))
+        .args([&empty, &different])
+        .arg("--certificate")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let witness = dir.join("witness.json");
+    fs::write(&witness, serde_json::to_vec(&json["certificate"]).unwrap()).unwrap();
+    let verify = |right: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_egraph-comparison"))
+            .arg(&empty)
+            .arg(right)
+            .arg("--verify-certificate")
+            .arg(&witness)
+            .output()
+            .unwrap()
+    };
+    assert!(verify(&different).status.success());
+    assert_eq!(verify(&empty).status.code(), Some(1));
     assert_eq!(run(&empty, &invalid, false).status.code(), Some(2));
     assert_eq!(
         run(&empty, &dir.join("missing"), false).status.code(),

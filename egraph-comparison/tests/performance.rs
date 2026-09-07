@@ -1,4 +1,6 @@
-use egraph_comparison::{Class, Database, Function, FunctionKind, Row, compare};
+use egraph_comparison::{
+    Class, Database, Function, FunctionKind, Row, certificate, compare, verify,
+};
 
 fn wide() -> Database {
     let mut db = Database::default();
@@ -36,11 +38,14 @@ fn wide() -> Database {
 }
 
 #[test]
-fn spilled_signatures_preserve_argument_order() {
+fn spilled_signatures_preserve_argument_order_and_certificates() {
     let left = wide();
     let mut right = left.clone();
     right.rows[0].inputs.swap(6, 7);
     assert!(!compare(&left, &right).unwrap().terms_equal);
+    let witness = certificate(&left, &right).unwrap().unwrap();
+    assert!(verify(&witness, &left, &right).unwrap());
+    assert!(!verify(&witness, &left, &left).unwrap());
 }
 
 #[test]
