@@ -181,7 +181,15 @@ container kind in the label. Ordered sequences, unordered sets, multiplicities,
 and map key/value pairing must be preserved when comparing child blocks. The
 current fixed-arity ordered `Function` schema cannot express all these cases.
 
+## Canonical representation
+
+Use `--canonical input.json` (optionally `--terms-only`) to write a versioned
+canonical quotient that can be compared using byte equality. The
+[format and algorithm](CANONICAL.md) explain deterministic numbering, cycles,
+and the relationship to pairwise comparison and certificates.
+
 ## Snapshot infrastructure
 
-[The snapshot evaluation](SNAPSHOTS.md) describes the saved-database pilot,
-verified failure certificates, and the requirements for broader adoption.
+[The snapshot evaluation](SNAPSHOTS.md) compares adoption options and records a
+working pilot with saved databases, 1/4/32-thread checks, verified failure
+certificates, and a reproducible survey of the remaining migration requirements.
