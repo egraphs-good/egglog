@@ -15,3 +15,4 @@ egglog-numeric-id.workspace = true
 hashbrown.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
+fixedbitset.workspace = true
