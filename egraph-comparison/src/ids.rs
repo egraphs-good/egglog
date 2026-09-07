@@ -32,4 +32,10 @@ serial_id!(
     usize,
     "Equivalence block in one refinement partition. IDs are local to that partition and round, not stable e-class identities."
 );
+serial_id!(
+    TermId,
+    usize,
+    "Index of a term in a certificate's DAG. Application children must refer to earlier entries in that same DAG."
+);
 define_id!(pub RowId, usize, "Index in one input database's rows, used by the representative worklist.");
+define_id!(pub(crate) SymbolId, usize, "Interned complete node label, shared by both inputs during joint refinement.");
