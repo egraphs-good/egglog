@@ -122,6 +122,7 @@ required-features = ["bin"]
 default = ["bin"]
 
 bin = [
+  "comparison",
   "serde",
   "graphviz",
   "dep:clap",
@@ -130,9 +131,11 @@ bin = [
   "dep:mimalloc",
 ]
 serde = ["egraph-serialize/serde"]
+comparison = ["dep:egraph-comparison"]
 graphviz = ["egraph-serialize/graphviz"]
 
 [dependencies]
+egraph-comparison = { path = "egraph-comparison", version = "3.0.0", optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 egraph-serialize = { workspace = true}
 env_logger = { workspace = true, optional = true }
