@@ -2,6 +2,7 @@
 mod ids;
 mod model;
 mod refine;
+mod signatures;
 pub use ids::{FormatVersion, RowId};
 pub use model::{Class, Database, Error, Function, FunctionKind, Row};
 pub use refine::{Comparison, compare};

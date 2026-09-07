@@ -33,3 +33,4 @@ serial_id!(
     "Equivalence block in one refinement partition. IDs are local to that partition and round, not stable e-class identities."
 );
 define_id!(pub RowId, usize, "Index in one input database's rows, used by the representative worklist.");
+define_id!(pub(crate) SymbolId, usize, "Interned complete node label, shared by both inputs during joint refinement.");
