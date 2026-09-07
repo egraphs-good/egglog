@@ -1,4 +1,5 @@
 //! Compare complete serialized databases by conservative partition refinement.
+mod hopcroft;
 mod ids;
 mod model;
 mod refine;
