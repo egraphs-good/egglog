@@ -95,7 +95,7 @@ impl<TI: IndexBase> Index<TI> {
 
     /// Get the nonempty subset of rows associated with this key, if there is
     /// one.
-    pub(crate) fn get_subset<'a>(&'a self, key: &'a TI::Key) -> Option<SubsetRef<'a>> {
+    pub(crate) fn get_subset<'a>(&'a self, key: &TI::Key) -> Option<SubsetRef<'a>> {
         self.table.get_subset(key)
     }
 

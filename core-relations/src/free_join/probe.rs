@@ -172,6 +172,27 @@ enum ProbeMatch<'rows, 'exec> {
     Rows(AtomRows<'rows, 'exec>),
 }
 
+/// Worker-local arena handle initialized only by a path that actually builds
+/// a packed node. Cover-only queries and scalar projected-root probes never
+/// touch the arena allocator.
+struct LazyArenaHandle<'exec> {
+    arena: &'exec SharedArena,
+    handle: OnceCell<Handle<'exec>>,
+}
+
+impl<'exec> LazyArenaHandle<'exec> {
+    fn new(arena: &'exec SharedArena) -> Self {
+        Self {
+            arena,
+            handle: OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> &Handle<'exec> {
+        self.handle.get_or_init(|| self.arena.new_handle())
+    }
+}
+
 impl<'rows, 'exec> ProbeMatch<'rows, 'exec> {
     #[inline]
     fn refine(self, atom: AtomId, updates: &mut FrameUpdates<'rows, 'exec>) {
@@ -185,7 +206,7 @@ struct PackedProbe<'ctx, 'rows, 'exec> {
     first: &'rows TrieNode<'exec>,
     columns: ColumnIds,
     table: WrappedTableRef<'ctx>,
-    handle: &'ctx Handle<'exec>,
+    handle: &'ctx LazyArenaHandle<'exec>,
     scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
     terminal_child_shape: ChildShape,
 }
@@ -208,7 +229,7 @@ struct RootProjectionProbe<'ctx, 'rows, 'exec> {
     table: WrappedTableRef<'ctx>,
     continuations: &'rows RootContinuationCache,
     access: AccessId,
-    handle: &'ctx Handle<'exec>,
+    handle: &'ctx LazyArenaHandle<'exec>,
     scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
     terminal_child_shape: ChildShape,
 }
@@ -242,7 +263,7 @@ where
             .slot(ContinuationPosition::unsharded(key_index), self.access);
         let address = *slot.get_or_init(|| {
             TrieNode::build_from_subset(
-                self.handle,
+                self.handle.get(),
                 self.table,
                 self.first.subset_at(key_index),
                 self.columns[1],
@@ -276,7 +297,7 @@ where
                     self.terminal_child_shape
                 };
                 node = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -307,7 +328,7 @@ where
                     self.terminal_child_shape
                 };
                 let child = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -353,7 +374,7 @@ where
                     self.terminal_child_shape
                 };
                 node = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -384,7 +405,7 @@ where
                     self.terminal_child_shape
                 };
                 let child = cursor.child_index(
-                    self.handle,
+                    self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
                     0,
@@ -429,7 +450,7 @@ struct ProbeRequest<'scan, 'rows> {
     constraints: &'scan [Constraint],
     keep_rows: bool,
     terminal_child_shape: ChildShape,
-    prepared: &'rows PreparedIndexSlot,
+    prepared: PreparedIndexRef<'rows>,
 }
 
 impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
@@ -437,7 +458,7 @@ impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
         scan: &'scan SingleScanSpec,
         keep_rows: bool,
         terminal_child_shape: ChildShape,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> Self {
         Self {
             atom: scan.atom,
@@ -453,7 +474,7 @@ impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
         scan: &'scan ScanSpec,
         keep_rows: bool,
         terminal_child_shape: ChildShape,
-        prepared: &'rows PreparedIndexSlot,
+        prepared: PreparedIndexRef<'rows>,
     ) -> Self {
         Self {
             atom: scan.to_index.atom,
@@ -498,6 +519,30 @@ where
         }
     }
 
+    /// Return the result of a persistent catalog lookup when this access cannot
+    /// need another indexed column of the same atom.
+    ///
+    /// A nonterminal catalog result retains its [`IndexPosition`] so a later
+    /// access can use the corresponding continuation slot to publish a packed
+    /// child index. Here the planned child shape is a leaf, or the caller only
+    /// needs to know whether a match exists, so that position would never be
+    /// used. If `keep_rows` is true, the leaf's subset is still preserved for a
+    /// later cover or materialization barrier; it is stored with no
+    /// continuation. Otherwise the result is reduced to `Present` immediately.
+    fn terminal_catalog_match(
+        subset: SubsetRef<'rows>,
+        keep_rows: bool,
+    ) -> ProbeMatch<'rows, 'exec> {
+        if keep_rows {
+            ProbeMatch::Rows(AtomRows::Catalog {
+                subset,
+                continuation: None,
+            })
+        } else {
+            ProbeMatch::Present
+        }
+    }
+
     fn get_subset(&self, key: &[Value]) -> Option<ProbeMatch<'rows, 'exec>> {
         match &self.ix {
             ProbeIndex::CachedTuple {
@@ -507,6 +552,16 @@ where
                 child_shape,
             } => {
                 let table: &'rows Index<TupleIndex> = table;
+                if *child_shape == ChildShape::Leaf || !self.keep_rows {
+                    debug_assert!(self.keep_rows || *child_shape == ChildShape::Leaf);
+                    let subset = table.get_subset(key)?;
+                    let subset = if let Some(range) = intersect_outer {
+                        intersect_with_dense_ref(subset, *range)?
+                    } else {
+                        subset
+                    };
+                    return Some(Self::terminal_catalog_match(subset, self.keep_rows));
+                }
                 let (position, subset) = table.get_subset_positioned(key)?;
                 let subset = if let Some(range) = intersect_outer {
                     intersect_with_dense_ref(subset, *range)?
@@ -529,6 +584,16 @@ where
             } => {
                 debug_assert_eq!(key.len(), 1);
                 let table: &'rows Index<ColumnIndex> = table;
+                if *child_shape == ChildShape::Leaf || !self.keep_rows {
+                    debug_assert!(self.keep_rows || *child_shape == ChildShape::Leaf);
+                    let subset = table.get_subset(&key[0])?;
+                    let subset = if let Some(range) = intersect_outer {
+                        intersect_with_dense_ref(subset, *range)?
+                    } else {
+                        subset
+                    };
+                    return Some(Self::terminal_catalog_match(subset, self.keep_rows));
+                }
                 let (position, subset) = table.get_subset_positioned(&key[0])?;
                 let subset = if let Some(range) = intersect_outer {
                     intersect_with_dense_ref(subset, *range)?
