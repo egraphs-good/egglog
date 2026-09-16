@@ -132,7 +132,7 @@ type RootProjectionMap = DashMap<RootProjectionKey, RootProjectionSlot>;
 /// the same subset after publication.
 #[derive(Default)]
 struct TrieCache {
-    roots: DashMap<RootKey, Arc<TrieNode>>,
+    roots: DashMap<RootKey, Arc<TrieRoot>>,
     /// Interns canonical header-constraint sets to keep [`RootKey`] cheap.
     /// The table stays outside the id and remains the first part of `RootKey`.
     header_ids: DashMap<SmallVec<[Constraint; 2]>, HeaderConstraintId>,
@@ -217,23 +217,23 @@ impl TrieCache {
 }
 
 /// Owning root subset for an atom. Lower trie levels are execution-scoped
-/// packed nodes rather than persistent `TrieNode`s.
-pub(crate) struct TrieNode {
+/// packed nodes rather than persistent `TrieRoot`s.
+pub(crate) struct TrieRoot {
     subset: Subset,
     /// Shared roots lazily cache sorted top-level projections across plans.
     /// Child publication remains query-local in the packed arena.
     root_projections: Option<OnceLock<RootProjectionMap>>,
 }
 
-impl std::fmt::Debug for TrieNode {
+impl std::fmt::Debug for TrieRoot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrieNode")
+        f.debug_struct("TrieRoot")
             .field("subset", &self.subset)
             .finish()
     }
 }
 
-impl TrieNode {
+impl TrieRoot {
     fn new(subset: Subset) -> Self {
         Self {
             subset,

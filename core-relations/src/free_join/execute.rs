@@ -1,4 +1,12 @@
 //! Core free join execution.
+//!
+//! The probe layer in `probe.rs` adapts every physical representation of an
+//! atom's current rows to the two operations needed by join execution: look up
+//! one key, or enumerate all keys. A probe may read a persistent table index, a
+//! projection shared for the current ruleset run, a tiny residual index, or an
+//! arena-allocated packed trie. It returns the matching rows in a representation
+//! that later stages can refine without copying them. This separation keeps the
+//! stage executor independent of the storage strategy selected for each access.
 
 use std::{
     cmp, iter, mem,
@@ -45,8 +53,8 @@ use crate::{
 };
 
 use super::{
-    ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableId, TableInfo, Variable,
-    get_column_index_from_tableinfo,
+    ActionId, AtomId, ColumnIds, Database, HashColumnIndex, HashIndex, TableId, TableInfo,
+    Variable, get_column_index_from_tableinfo,
     plan::{JoinHeader, JoinStage, Plan},
     with_pool_set,
 };
@@ -1371,7 +1379,7 @@ impl<'a> JoinState<'a> {
         cols: impl Iterator<Item = ColumnId>,
         prepared: &'plan PreparedIndexSlot,
     ) -> Prober<'plan> {
-        let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
+        let cols = ColumnIds::from_iter(cols);
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
 
@@ -2177,8 +2185,7 @@ impl<'a> JoinState<'a> {
                     let cover_node = binding_info.unwrap_val(cover_atom);
                     let cover_subset = cover_node.subset.as_ref();
 
-                    let proj =
-                        SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                    let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
                     let vars = bind.iter().map(|(_, var)| *var).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
                     table.scan_project(
@@ -2202,8 +2209,7 @@ impl<'a> JoinState<'a> {
                     binding_info.binding_sets.pop();
                     binding_info.move_back_node(cover_atom, cover_node);
                 } else {
-                    let proj =
-                        SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                    let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
                     let cover_node = binding_info.unwrap_val(cover_atom);
                     let cover_subset = cover_node.subset.as_ref();
                     let mut offset = Offset::new(0);
@@ -2278,7 +2284,7 @@ impl<'a> JoinState<'a> {
                             .has_stale_rows()
                     })
                     .collect();
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
