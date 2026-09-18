@@ -51,6 +51,38 @@ pub(crate) struct Index<TI> {
     table: TI,
 }
 
+/// A stable position for one key within a frozen index.
+///
+/// Positions are scoped to the exact index that produced them. They may be
+/// retained while that index is only read. Existing positions also survive an
+/// append-only incremental refresh, but a clear/full rebuild invalidates every
+/// position. The two components are deliberately private so callers cannot
+/// manufacture positions belonging to another index.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Consumed by the packed-executor integration layer.
+pub(crate) struct IndexPosition {
+    shard: u32,
+    slot: u32,
+}
+
+#[allow(dead_code)] // Consumed by the packed-executor integration layer.
+impl IndexPosition {
+    fn new(shard: ShardId, slot: usize) -> Self {
+        Self {
+            shard: u32::try_from(shard.index()).expect("index shard exceeds u32::MAX"),
+            slot: u32::try_from(slot).expect("index shard contains more than u32::MAX keys"),
+        }
+    }
+
+    pub(crate) fn shard(self) -> usize {
+        self.shard as usize
+    }
+
+    pub(crate) fn slot(self) -> usize {
+        self.slot as usize
+    }
+}
+
 impl<TI: IndexBase> Index<TI> {
     pub(crate) fn new(key: Vec<ColumnId>, table: TI) -> Self {
         Index {
@@ -135,10 +167,6 @@ impl<TI: IndexBase> Index<TI> {
     }
 
     /// Call `f` over the elements stored in one physical index shard.
-    ///
-    /// The shards form a disjoint partition of the index keys.  Exposing that
-    /// partition lets query execution create a small number of coarse tasks
-    /// without first copying keys into a separate work list.
     pub(crate) fn for_each_shard(&self, shard: usize, f: impl FnMut(&TI::Key, SubsetRef)) {
         self.table.for_each_shard(shard, f);
     }
@@ -155,6 +183,34 @@ impl<TI: IndexBase> Index<TI> {
 
     pub(crate) fn len(&self) -> usize {
         self.table.len()
+    }
+}
+
+#[allow(dead_code)] // Consumed by the packed-executor integration layer.
+impl<TI: PositionedIndexBase> Index<TI> {
+    /// Get a key's execution-stable position along with its nonempty subset.
+    pub(crate) fn get_subset_positioned<'a>(
+        &'a self,
+        key: &TI::Key,
+    ) -> Option<(IndexPosition, SubsetRef<'a>)> {
+        self.table.get_subset_positioned(key)
+    }
+
+    /// Visit every key together with its execution-stable position.
+    pub(crate) fn for_each_positioned<'a>(
+        &'a self,
+        f: impl FnMut(IndexPosition, &'a TI::Key, SubsetRef<'a>),
+    ) {
+        self.table.for_each_positioned(f);
+    }
+
+    /// Visit one physical shard together with each key's stable position.
+    pub(crate) fn for_each_shard_positioned<'a>(
+        &'a self,
+        shard: usize,
+        f: impl FnMut(IndexPosition, &'a TI::Key, SubsetRef<'a>),
+    ) {
+        self.table.for_each_shard_positioned(shard, f);
     }
 }
 
@@ -232,6 +288,30 @@ pub(crate) trait IndexBase {
     }
 }
 
+/// Read-only index operations that also expose a stable per-index key position.
+///
+/// Implementations may choose different physical slot schemes. Positions only
+/// need to remain stable while the index is frozen; callers must treat them as
+/// opaque tokens belonging to the exact index that returned them.
+#[allow(dead_code)] // Consumed by the packed-executor integration layer.
+pub(crate) trait PositionedIndexBase: IndexBase {
+    fn get_subset_positioned<'a>(
+        &'a self,
+        key: &Self::Key,
+    ) -> Option<(IndexPosition, SubsetRef<'a>)>;
+
+    fn for_each_positioned<'a>(
+        &'a self,
+        f: impl FnMut(IndexPosition, &'a Self::Key, SubsetRef<'a>),
+    );
+
+    fn for_each_shard_positioned<'a>(
+        &'a self,
+        shard: usize,
+        f: impl FnMut(IndexPosition, &'a Self::Key, SubsetRef<'a>),
+    );
+}
+
 struct ColumnIndexShard {
     /// It's important that table is implemented using IndexMap instead of the more efficient
     /// HashMap because we want stable enumeration order.
@@ -299,12 +379,12 @@ impl IndexBase for ColumnIndex {
     }
 
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        for (subsets, (k, v)) in self
+        for (subsets, (key, subset)) in self
             .shards
             .iter()
-            .flat_map(|(_, shard)| shard.table.iter().map(|x| (&shard.subsets, x)))
+            .flat_map(|(_, shard)| shard.table.iter().map(|entry| (&shard.subsets, entry)))
         {
-            f(k, v.as_ref(subsets));
+            f(key, subset.as_ref(subsets));
         }
     }
 
@@ -443,6 +523,51 @@ impl IndexBase for ColumnIndex {
         // growing accumulator is re-copied every step), which matters for wide tables.
         let merged = merge_sorted_blocks_dedup(pairs, &bounds);
         self.build_subsets_from_sorted(&merged);
+    }
+}
+
+impl PositionedIndexBase for ColumnIndex {
+    fn get_subset_positioned<'a>(&'a self, key: &Value) -> Option<(IndexPosition, SubsetRef<'a>)> {
+        let mut hasher = FxHasher::default();
+        key.hash(&mut hasher);
+        let shard_id = self.shard_data.shard_id(hasher.finish());
+        let shard = &self.shards[shard_id];
+        let (slot, _, subset) = shard.table.get_full(key)?;
+        Some((
+            IndexPosition::new(shard_id, slot),
+            subset.as_ref(&shard.subsets),
+        ))
+    }
+
+    fn for_each_positioned<'a>(
+        &'a self,
+        mut f: impl FnMut(IndexPosition, &'a Value, SubsetRef<'a>),
+    ) {
+        for (shard_id, shard) in self.shards.iter() {
+            for (slot, (key, subset)) in shard.table.iter().enumerate() {
+                f(
+                    IndexPosition::new(shard_id, slot),
+                    key,
+                    subset.as_ref(&shard.subsets),
+                );
+            }
+        }
+    }
+
+    fn for_each_shard_positioned<'a>(
+        &'a self,
+        shard: usize,
+        mut f: impl FnMut(IndexPosition, &'a Value, SubsetRef<'a>),
+    ) {
+        let shard_id = ShardId::from_usize(shard);
+        let shard = &self.shards[shard_id];
+        for (slot, (key, subset)) in shard.table.iter().enumerate() {
+            f(
+                IndexPosition::new(shard_id, slot),
+                key,
+                subset.as_ref(&shard.subsets),
+            );
+        }
     }
 }
 
@@ -752,6 +877,7 @@ impl IndexBase for TupleIndex {
             self.add_row(key, src_id);
         }
     }
+
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
         for (_, shard) in self.shards.iter() {
             for entry in shard.table.hash.iter() {
@@ -871,6 +997,60 @@ impl IndexBase for TupleIndex {
                 }
             });
         });
+    }
+}
+
+impl PositionedIndexBase for TupleIndex {
+    fn get_subset_positioned<'a>(
+        &'a self,
+        key: &[Value],
+    ) -> Option<(IndexPosition, SubsetRef<'a>)> {
+        let hash = hash_key(key);
+        let shard_id = self.shard_data.shard_id(hash);
+        let shard = &self.shards[shard_id];
+        let entry = shard.table.hash.find(hash, |entry| {
+            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
+            entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
+        })?;
+        Some((
+            IndexPosition::new(shard_id, entry.key.index()),
+            entry.vals.as_ref(&shard.subsets),
+        ))
+    }
+
+    fn for_each_positioned<'a>(
+        &'a self,
+        mut f: impl FnMut(IndexPosition, &'a [Value], SubsetRef<'a>),
+    ) {
+        for (shard_id, shard) in self.shards.iter() {
+            for entry in shard.table.hash.iter() {
+                // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
+                let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
+                f(
+                    IndexPosition::new(shard_id, entry.key.index()),
+                    key,
+                    entry.vals.as_ref(&shard.subsets),
+                );
+            }
+        }
+    }
+
+    fn for_each_shard_positioned<'a>(
+        &'a self,
+        shard: usize,
+        mut f: impl FnMut(IndexPosition, &'a [Value], SubsetRef<'a>),
+    ) {
+        let shard_id = ShardId::from_usize(shard);
+        let shard = &self.shards[shard_id];
+        for entry in shard.table.hash.iter() {
+            // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
+            let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
+            f(
+                IndexPosition::new(shard_id, entry.key.index()),
+                key,
+                entry.vals.as_ref(&shard.subsets),
+            );
+        }
     }
 }
 
