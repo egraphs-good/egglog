@@ -184,7 +184,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         // via the `egglog::*` glob below).
         let cast1 = |x, t: &syn::Type, is_container| match is_container {
             false => quote!(state.base_values().unwrap::<#t>(*#x)),
-            true => quote!(state.container_values().get_val::<#t>(*#x).unwrap().clone()),
+            true => quote!(state.value_to_owned_container::<#t>(*#x).unwrap()),
         };
         let cast = if is_varargs {
             let Arg { x, t, is_mutable } = &args[0];
