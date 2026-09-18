@@ -14,7 +14,7 @@ use crossbeam_queue::SegQueue;
 use rustc_hash::FxHasher;
 
 use crate::{
-    ExecutionState, Offset, RowId, SequenceTable, Subset, TableChange, TableVersion,
+    BaseValues, ExecutionState, Offset, RowId, SequenceTable, Subset, TableChange, TableVersion,
     TaggedRowBuffer, Value,
     common::{HashMap, IndexSet, ShardData, ShardId},
     numeric_id::{DenseIdMap, NumericId},
@@ -37,11 +37,11 @@ use super::{
 /// directly.
 pub trait SequenceContainerValue: ContainerValue {
     /// Append the canonical serialized key to `out`.
-    fn encode_sequence(&self, out: &mut Vec<Value>);
+    fn encode_sequence(&self, base_values: &BaseValues, out: &mut Vec<Value>);
 
     /// Reconstruct the Rust container used by slow primitives and external
     /// APIs.
-    fn decode_sequence(sequence: &[Value]) -> Self;
+    fn decode_sequence(sequence: &[Value], base_values: &BaseValues) -> Self;
 
     /// Return the fast primitive view of the serialized key.
     ///
@@ -66,12 +66,13 @@ pub trait SequenceContainerValue: ContainerValue {
     /// the slow deserialize/rebuild/serialize round trip.
     fn rebuild_sequence(
         sequence: &[Value],
+        base_values: &BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
-        let mut container = Self::decode_sequence(sequence);
+        let mut container = Self::decode_sequence(sequence, base_values);
         if container.rebuild_contents(rebuilder) {
-            container.encode_sequence(out);
+            container.encode_sequence(base_values, out);
             true
         } else {
             false
@@ -79,18 +80,20 @@ pub trait SequenceContainerValue: ContainerValue {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SequenceCodec<C> {
-    encode: fn(&C, &mut Vec<Value>),
-    decode: fn(&[Value]) -> C,
+    base_values: BaseValues,
+    encode: fn(&C, &BaseValues, &mut Vec<Value>),
+    decode: fn(&[Value], &BaseValues) -> C,
     values: for<'a> fn(&'a [Value]) -> &'a [Value],
-    rebuild: fn(&[Value], &dyn ValueRebuilder, &mut Vec<Value>) -> bool,
+    rebuild: fn(&[Value], &BaseValues, &dyn ValueRebuilder, &mut Vec<Value>) -> bool,
     marker: PhantomData<fn() -> C>,
 }
 
 impl<C: SequenceContainerValue> SequenceCodec<C> {
-    fn new() -> Self {
+    fn new(base_values: BaseValues) -> Self {
         Self {
+            base_values,
             encode: C::encode_sequence,
             decode: C::decode_sequence,
             values: C::sequence_values,
@@ -156,6 +159,7 @@ impl<C: SequenceContainerValue> SequenceContainerEnv<C> {
         id: ContainerValueId,
         merge: Box<dyn MergeFn>,
         counter: crate::CounterId,
+        base_values: BaseValues,
     ) -> Self {
         let table_merge = move |state: &mut ExecutionState,
                                 current: &[Value],
@@ -185,7 +189,7 @@ impl<C: SequenceContainerValue> SequenceContainerEnv<C> {
             counter,
             table,
             reverse,
-            codec: SequenceCodec::new(),
+            codec: SequenceCodec::new(base_values),
         }
     }
 }
@@ -206,12 +210,15 @@ impl<C: ContainerValue> SequenceContainerEnv<C> {
     }
 
     pub(super) fn get_container(&self, value: Value) -> Option<C> {
-        Some((self.codec.decode)(self.get_key(value)?))
+        Some((self.codec.decode)(
+            self.get_key(value)?,
+            &self.codec.base_values,
+        ))
     }
 
     pub(super) fn get_or_insert(&self, container: &C, exec_state: &mut ExecutionState) -> Value {
         let mut key = Vec::new();
-        (self.codec.encode)(container, &mut key);
+        (self.codec.encode)(container, &self.codec.base_values, &mut key);
         self.get_or_insert_key(&key, exec_state)
     }
 
@@ -254,13 +261,14 @@ impl<C: ContainerValue> SequenceContainerEnv<C> {
     ) -> Option<C> {
         Some((self.codec.decode)(
             self.get_key_with_predictions(exec_state, value)?,
+            &self.codec.base_values,
         ))
     }
 
     pub(super) fn for_each(&self, f: &mut impl FnMut(&C, Value)) {
         self.table
             .scan_key_values(self.table.all().as_ref(), |_, key, values| {
-                let container = (self.codec.decode)(key);
+                let container = (self.codec.decode)(key, &self.codec.base_values);
                 f(&container, values[0]);
             });
     }
@@ -383,6 +391,7 @@ impl<C: ContainerValue> DynamicContainerEnv for SequenceContainerEnv<C> {
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary {
         let rebuild_sequence = self.codec.rebuild;
+        let base_values = &self.codec.base_values;
         let stable_changed_ids = SegQueue::new();
         let previous = self.table.version();
         let rebuild_row = |row: &[Value], rebuilt: &mut Vec<Value>| {
@@ -393,7 +402,7 @@ impl<C: ContainerValue> DynamicContainerEnv for SequenceContainerEnv<C> {
             let key = &row[..key_end];
             let old_id = row[key_end];
             let new_id = rebuilder.rebuild_val(old_id);
-            let key_changed = rebuild_sequence(key, rebuilder, rebuilt);
+            let key_changed = rebuild_sequence(key, base_values, rebuilder, rebuilt);
             if !key_changed && new_id == old_id {
                 debug_assert!(rebuilt.is_empty());
                 return false;
@@ -454,7 +463,12 @@ impl<C: ContainerValue> DynamicContainerEnv for SequenceContainerEnv<C> {
     ) -> Option<Value> {
         let key = self.get_key_with_predictions(exec_state, value)?.to_vec();
         let mut rebuilt = Vec::new();
-        if !(self.codec.rebuild)(&key, &ClosureRebuilder { remap }, &mut rebuilt) {
+        if !(self.codec.rebuild)(
+            &key,
+            &self.codec.base_values,
+            &ClosureRebuilder { remap },
+            &mut rebuilt,
+        ) {
             return Some(value);
         }
         Some(self.get_or_insert_key(&rebuilt, exec_state))
@@ -488,11 +502,11 @@ mod tests {
     }
 
     impl SequenceContainerValue for TestSequence {
-        fn encode_sequence(&self, out: &mut Vec<Value>) {
+        fn encode_sequence(&self, _base_values: &crate::BaseValues, out: &mut Vec<Value>) {
             out.extend_from_slice(&self.0);
         }
 
-        fn decode_sequence(sequence: &[Value]) -> Self {
+        fn decode_sequence(sequence: &[Value], _base_values: &crate::BaseValues) -> Self {
             Self(sequence.to_vec())
         }
 
@@ -502,6 +516,7 @@ mod tests {
 
         fn rebuild_sequence(
             sequence: &[Value],
+            _base_values: &crate::BaseValues,
             rebuilder: &dyn ValueRebuilder,
             out: &mut Vec<Value>,
         ) -> bool {
@@ -525,6 +540,7 @@ mod tests {
             crate::ContainerValueId::new(0),
             Box::new(|_state: &mut ExecutionState, left, right| left.min(right)),
             counter,
+            db.base_values().clone(),
         )
     }
 
