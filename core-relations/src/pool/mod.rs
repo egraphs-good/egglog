@@ -12,7 +12,7 @@ use std::{
 
 use crate::{
     AtomId,
-    free_join::execute::TrieNode,
+    free_join::execute::ChildLock,
     numeric_id::{DenseIdMap, IdVec},
 };
 use fixedbitset::FixedBitSet;
@@ -442,7 +442,7 @@ pool_set! {
         cached_subsets: IdVec<ColumnId, std::sync::OnceLock<std::sync::Arc<SortedColumnIndex>>> [ 4 << 20 ],
         intersected_on: DenseIdMap<AtomId, i64> [ 1 << 20 ],
 
-        cached_child: IdVec<ColumnId, std::sync::RwLock<HashMap<Value, (std::sync::Arc<TrieNode>, Box<[Constraint]>)>>> [ 1 << 20 ],
+        cached_child: IdVec<ColumnId, std::sync::OnceLock<ChildLock>> [ 1 << 20 ],
     }
 }
 
