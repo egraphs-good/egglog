@@ -1,3 +1,22 @@
+//! Root subsets and scalar projections shared across plans in one execution.
+
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
+
+use dashmap::mapref::entry::Entry;
+use smallvec::SmallVec;
+
+use crate::{
+    common::{DashMap, HashMap, HashSet, Value},
+    numeric_id::{NumericId, define_id},
+    offsets::{OffsetRange, RowId, SortedOffsetSlice, Subset, SubsetRef},
+    table_spec::{ColumnId, Constraint},
+};
+
+use super::{AtomId, TableId, plan::Plan};
+
 /// Canonical identity of the rows available at one atom's trie root: the
 /// atom's table together with the sorted conjunction of its fast (header)
 /// constraints.
@@ -12,7 +31,7 @@
 type RootSignature = (TableId, SmallVec<[Constraint; 2]>);
 
 define_id!(
-    HeaderConstraintId,
+    pub(super) HeaderConstraintId,
     u32,
     "an execution-local id for a canonical set of fast trie-root constraints"
 );
@@ -36,7 +55,7 @@ struct RootProjectionKey {
     constraints: SmallVec<[Constraint; 2]>,
 }
 
-struct RootProjection {
+pub(super) struct RootProjection {
     /// Final immutable scalar-index representation. Unlike the earlier pair
     /// cache, this is probed directly: queries do not copy it into their arenas.
     /// The trailing entry is an offset-only sentinel.
@@ -45,7 +64,7 @@ struct RootProjection {
 }
 
 impl RootProjection {
-    fn from_sorted_pairs(pairs: Vec<(Value, RowId)>) -> Self {
+    pub(super) fn from_sorted_pairs(pairs: Vec<(Value, RowId)>) -> Self {
         debug_assert!(pairs.windows(2).all(|pair| pair[0] <= pair[1]));
         let distinct = pairs
             .iter()
@@ -75,23 +94,23 @@ impl RootProjection {
         }
     }
 
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.keys.len().saturating_sub(1)
     }
 
-    fn find(&self, value: Value) -> Option<usize> {
+    pub(super) fn find(&self, value: Value) -> Option<usize> {
         let len = self.len();
         self.keys[..len]
             .binary_search_by_key(&value, |&(key, _)| key)
             .ok()
     }
 
-    fn value_at(&self, key_index: usize) -> Value {
+    pub(super) fn value_at(&self, key_index: usize) -> Value {
         assert!(key_index < self.len(), "projected root key out of bounds");
         self.keys[key_index].0
     }
 
-    fn subset_at(&self, key_index: usize) -> SubsetRef<'_> {
+    pub(super) fn subset_at(&self, key_index: usize) -> SubsetRef<'_> {
         assert!(key_index < self.len(), "projected root key out of bounds");
         let start = self.keys[key_index].1 as usize;
         let end = self.keys[key_index + 1].1 as usize;
@@ -109,7 +128,7 @@ impl RootProjection {
     }
 }
 
-type RootProjectionSlot = Arc<OnceLock<RootProjection>>;
+pub(super) type RootProjectionSlot = Arc<OnceLock<RootProjection>>;
 type RootProjectionMap = DashMap<RootProjectionKey, RootProjectionSlot>;
 
 /// A cache of trie roots shared across all plans within a single
@@ -131,14 +150,14 @@ type RootProjectionMap = DashMap<RootProjectionKey, RootProjectionSlot>;
 /// concurrently. Tables are frozen during a run, so each key continues to denote
 /// the same subset after publication.
 #[derive(Default)]
-struct TrieCache {
-    roots: DashMap<RootKey, Arc<TrieRoot>>,
+pub(super) struct TrieCache {
+    pub(super) roots: DashMap<RootKey, Arc<TrieRoot>>,
     /// Interns canonical header-constraint sets to keep [`RootKey`] cheap.
     /// The table stays outside the id and remains the first part of `RootKey`.
     header_ids: DashMap<SmallVec<[Constraint; 2]>, HeaderConstraintId>,
     next_header_id: AtomicUsize,
     /// Root signatures used by more than one plan; only these are shared.
-    shared: HashSet<RootSignature>,
+    pub(super) shared: HashSet<RootSignature>,
 }
 
 impl TrieCache {
@@ -148,7 +167,7 @@ impl TrieCache {
     /// the interning map entirely. [`RootKey`] carries the table separately;
     /// identical constraint sets may therefore reuse an id across tables
     /// without making the roots alias.
-    fn header_id(&self, fast: &[Constraint]) -> HeaderConstraintId {
+    pub(super) fn header_id(&self, fast: &[Constraint]) -> HeaderConstraintId {
         if fast.is_empty() {
             return HeaderConstraintId::new_const(0);
         }
@@ -179,7 +198,9 @@ impl TrieCache {
 
     /// Compute the set of root signatures used by more than one plan atom (across
     /// all plans); only these are worth sharing.
-    fn compute_shared<'a>(plans: impl Iterator<Item = &'a Plan>) -> HashSet<RootSignature> {
+    pub(super) fn compute_shared<'a>(
+        plans: impl Iterator<Item = &'a Plan>,
+    ) -> HashSet<RootSignature> {
         let mut counts: HashMap<RootSignature, u32> = HashMap::default();
         for plan in plans {
             for (atom, info) in plan.atoms().iter() {
@@ -201,7 +222,7 @@ impl TrieCache {
     /// (`4 * num_cpus`): on a many-core host the default allocates hundreds of
     /// shards per `run_rule_set`, which dwarfs the sharing savings on smaller
     /// runs. Serial runs get a single shard.
-    fn with_shared(shared: HashSet<RootSignature>) -> TrieCache {
+    pub(super) fn with_shared(shared: HashSet<RootSignature>) -> TrieCache {
         // DashMap requires at least 2 shards; that is plenty for serial runs and
         // still far below the default (4 * num_cpus).
         let shards = crate::parallel::current_num_threads()
@@ -219,7 +240,7 @@ impl TrieCache {
 /// Owning root subset for an atom. Lower trie levels are execution-scoped
 /// packed nodes rather than persistent `TrieRoot`s.
 pub(crate) struct TrieRoot {
-    subset: Subset,
+    pub(super) subset: Subset,
     /// Shared roots lazily cache sorted top-level projections across plans.
     /// Child publication remains query-local in the packed arena.
     root_projections: Option<OnceLock<RootProjectionMap>>,
@@ -234,14 +255,14 @@ impl std::fmt::Debug for TrieRoot {
 }
 
 impl TrieRoot {
-    fn new(subset: Subset) -> Self {
+    pub(super) fn new(subset: Subset) -> Self {
         Self {
             subset,
             root_projections: None,
         }
     }
 
-    fn new_shared(subset: Subset) -> Self {
+    pub(super) fn new_shared(subset: Subset) -> Self {
         Self {
             subset,
             root_projections: Some(OnceLock::new()),
@@ -253,7 +274,7 @@ impl TrieRoot {
     /// fast (header) constraints, so callers must not include them here.
     /// Different slow constraints on the same root and column require
     /// separate projections.
-    fn projection_slot(
+    pub(super) fn projection_slot(
         &self,
         column: ColumnId,
         constraints: &[Constraint],
@@ -280,3 +301,7 @@ impl TrieRoot {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "packed_cache_tests.rs"]
+mod tests;

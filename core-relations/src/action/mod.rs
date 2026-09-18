@@ -382,6 +382,31 @@ pub struct ExecutionState<'a> {
     stop_match: Arc<AtomicBool>,
 }
 
+/// Copyable query-side view of an [`ExecutionState`]. Join tasks only need
+/// immutable database access and the shared early-stop flag; an owned state is
+/// materialized lazily when an action batch actually executes.
+#[derive(Copy, Clone)]
+pub(crate) struct ExecutionStateSeed<'db, 'state> {
+    db: DbView<'db>,
+    stop_match: &'state Arc<AtomicBool>,
+}
+
+impl<'db> ExecutionStateSeed<'db, '_> {
+    pub(crate) fn to_execution_state(self) -> ExecutionState<'db> {
+        ExecutionState {
+            predicted: Default::default(),
+            db: self.db,
+            buffers: MutationBuffers::new(self.db.notification_list, Default::default()),
+            changed: false,
+            stop_match: Arc::clone(self.stop_match),
+        }
+    }
+
+    pub(crate) fn should_stop(self) -> bool {
+        self.stop_match.load(Ordering::Acquire)
+    }
+}
+
 /// A basic wrapper around an map from table id to a mutation buffer for that table that also
 /// tracks if a table has been modified.
 struct MutationBuffers<'a> {
@@ -446,6 +471,17 @@ impl<'a> ExecutionState<'a> {
             buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
             stop_match: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Borrow the immutable seed used by rule-search tasks. Rule execution
+    /// starts from an empty mutation-buffer set; action batches create their own
+    /// fresh state from this seed only when they are ready to run.
+    pub(crate) fn seed(&self) -> ExecutionStateSeed<'a, '_> {
+        debug_assert!(self.buffers.buffers.is_empty());
+        ExecutionStateSeed {
+            db: self.db,
+            stop_match: &self.stop_match,
         }
     }
 

@@ -1,11 +1,39 @@
-// This file is included into the `free_join::execute` module. Its module-level
-// documentation describes how these liveness, DVO, factorization, and
-// task-state helpers support recursive join execution.
+//! Analyze remaining join stages and manage recursive task state.
+//!
+//! Liveness determines which rows and materializations a child task retains.
+//! Dynamic variable ordering updates the stage schedule and the leaf-scan
+//! flags that allow bindings to remain factorized until action execution.
+
+use std::{
+    ops::Range,
+    sync::{Arc, Mutex, atomic::AtomicUsize},
+};
+
+use crossbeam::utils::CachePadded;
+use smallvec::SmallVec;
+
+use crate::{
+    common::{IndexMap, Value},
+    numeric_id::{DenseIdMap, IdVec},
+    offsets::Subset,
+    row_buffer::{RowBuffer, SmallValueVec, TaggedRowBuffer},
+};
+
+use super::{
+    ActionId, AtomId, Variable,
+    frame_update::FrameUpdates,
+    packed_cache::TrieRoot,
+    packed_trie::ChildShape,
+    plan::{JoinStage, MatId, MatScanMode},
+    prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes},
+    probe::{AtomRows, Prober},
+    with_pool_set,
+};
 
 /// Visit every atom whose trie node can be read while executing `stage`.
 /// Keep this match exhaustive: a new stage variant must declare its subset
 /// dependencies before task-state projection can remain sound.
-fn for_each_stage_atom(stage: &JoinStage, mut f: impl FnMut(AtomId)) {
+pub(super) fn for_each_stage_atom(stage: &JoinStage, mut f: impl FnMut(AtomId)) {
     match stage {
         JoinStage::Intersect { scans, .. } => {
             scans.iter().for_each(|scan| f(scan.atom));
@@ -31,7 +59,7 @@ fn for_each_stage_atom(stage: &JoinStage, mut f: impl FnMut(AtomId)) {
 /// Visit the prepared identity of every residual index probe in `stage`.
 /// Cover scans consume a subset directly and therefore do not need a packed
 /// child family of their own.
-fn for_each_stage_indexed_access(
+pub(super) fn for_each_stage_indexed_access(
     stage: &JoinStage,
     prepared: &[PreparedIndexSlot],
     mut f: impl FnMut(AtomId, AccessId),
@@ -58,15 +86,15 @@ fn for_each_stage_indexed_access(
 /// Whether an atom's rows are needed by the remaining join stages, together
 /// with the child-index storage required by its next reorderable phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AtomTailUse {
-    keep_rows: bool,
-    child_shape: ChildShape,
+pub(super) struct AtomTailUse {
+    pub(super) keep_rows: bool,
+    pub(super) child_shape: ChildShape,
 }
 
 /// Find the first dynamically reorderable phase that touches `atom`. That
 /// phase determines the packed child representation; finding any such phase
 /// also proves that the current rows must survive into the tail.
-fn scan_atom_tail_use(
+pub(super) fn scan_atom_tail_use(
     atom: AtomId,
     stages: &[JoinStage],
     prepared: &PreparedJoinIndexes,
@@ -133,7 +161,7 @@ fn scan_atom_tail_use(
     }
 }
 
-fn atom_tail_use(
+pub(super) fn atom_tail_use(
     atom: AtomId,
     stages: &[JoinStage],
     prepared: &PreparedJoinIndexes,
@@ -155,7 +183,7 @@ fn atom_tail_use(
 }
 
 #[cfg(test)]
-fn packed_child_shape_in_tail(
+pub(super) fn packed_child_shape_in_tail(
     atom: AtomId,
     stages: &[JoinStage],
     prepared: &PreparedJoinIndexes,
@@ -185,7 +213,7 @@ fn for_each_stage_materialization(stage: &JoinStage, mut f: impl FnMut(MatId)) {
     }
 }
 
-fn materialization_is_live_in_tail(
+pub(super) fn materialization_is_live_in_tail(
     stages: &[JoinStage],
     instr_order: &InstrOrder,
     resume_pos: usize,
@@ -211,17 +239,17 @@ fn materialization_is_live_in_tail(
 /// into the scalar bindings accumulated by non-leaf stages. The buffers are
 /// shared by `Arc` so recursive task-state clones retain a factor without
 /// copying its rows.
-type BindingSet = Vec<(SmallVec<[Variable; 4]>, Arc<TaggedRowBuffer<SmallValueVec>>)>;
+pub(super) type BindingSet = Vec<(SmallVec<[Variable; 4]>, Arc<TaggedRowBuffer<SmallValueVec>>)>;
 
 /// Bindings and row sets available in one recursive join branch. This includes
 /// scalar bindings, deferred [`BindingSet`] factors, current atom subsets, and
 /// materialized subquery results.
 #[derive(Default)]
-struct BindingInfo<'rows, 'exec> {
-    bindings: DenseIdMap<Variable, Value>,
-    binding_sets: BindingSet,
-    subsets: DenseIdMap<AtomId, AtomRows<'rows, 'exec>>,
-    materializations: DenseIdMap<MatId, Arc<IndexMap<Vec<Value>, RowBuffer>>>,
+pub(super) struct BindingInfo<'rows, 'exec> {
+    pub(super) bindings: DenseIdMap<Variable, Value>,
+    pub(super) binding_sets: BindingSet,
+    pub(super) subsets: DenseIdMap<AtomId, AtomRows<'rows, 'exec>>,
+    pub(super) materializations: DenseIdMap<MatId, Arc<IndexMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl<'rows, 'exec> BindingInfo<'rows, 'exec>
@@ -234,7 +262,7 @@ where
     /// nodes referenced only by that prefix are dead task state. Constructing
     /// the subset map from the remaining stages avoids both the increment and
     /// eventual decrement of their shared `Arc` counts.
-    fn clone_for_join_tail<'short>(
+    pub(super) fn clone_for_join_tail<'short>(
         &self,
         stages: &[JoinStage],
         instr_order: &InstrOrder,
@@ -274,7 +302,7 @@ where
     }
 
     /// Initializes the atom-related metadata in the [`BindingInfo`].    
-    fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
+    pub(super) fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
         let rows = match subset {
             Subset::Dense(range) => AtomRows::Dense(range),
             subset => AtomRows::Root(Arc::new(TrieRoot::new(subset))),
@@ -282,25 +310,25 @@ where
         self.subsets.insert(atom, rows);
     }
 
-    fn insert_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
+    pub(super) fn insert_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
         self.subsets.insert(atom, node.into());
     }
 
-    /// Probers returned from [`JoinState::get_index`] will move atom-related state out of the
+    /// Probers returned from `JoinState::get_index` will move atom-related state out of the
     /// [`BindingInfo`]. Once the caller is done using a prober, this method moves it back.
-    fn move_back(&mut self, atom: AtomId, prober: Prober<'_, 'rows, 'exec>) {
+    pub(super) fn move_back(&mut self, atom: AtomId, prober: Prober<'_, 'rows, 'exec>) {
         self.subsets.insert(atom, prober.source);
     }
 
-    fn move_back_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
+    pub(super) fn move_back_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
         self.subsets.insert(atom, node.into());
     }
 
-    fn has_empty_subset(&self, atom: AtomId) -> bool {
+    pub(super) fn has_empty_subset(&self, atom: AtomId) -> bool {
         self.subsets[atom].is_empty()
     }
 
-    fn unwrap_val(&mut self, atom: AtomId) -> AtomRows<'rows, 'exec> {
+    pub(super) fn unwrap_val(&mut self, atom: AtomId) -> AtomRows<'rows, 'exec> {
         self.subsets.unwrap_val(atom)
     }
 }
@@ -308,26 +336,26 @@ where
 /// Counts complete matches per rule action across concurrent join tasks.
 /// Each atomic counter occupies a separate cache line to avoid false sharing
 /// between tasks updating different actions.
-struct MatchCounter {
+pub(super) struct MatchCounter {
     matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
 }
 
 impl MatchCounter {
-    fn new(n_ids: usize) -> Self {
+    pub(super) fn new(n_ids: usize) -> Self {
         let mut matches = IdVec::with_capacity(n_ids);
         matches.resize_with(n_ids, || CachePadded::new(AtomicUsize::new(0)));
         Self { matches }
     }
 
-    fn inc_matches(&self, action: ActionId, by: usize) {
+    pub(super) fn inc_matches(&self, action: ActionId, by: usize) {
         self.matches[action].fetch_add(by, std::sync::atomic::Ordering::Relaxed);
     }
-    fn read_matches(&self, action: ActionId) -> usize {
+    pub(super) fn read_matches(&self, action: ActionId) -> usize {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
-fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo<'_, '_>) -> usize {
+pub(super) fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo<'_, '_>) -> usize {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans
             .iter()
@@ -347,7 +375,7 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     }
 }
 
-fn is_reorder_barrier(stage: &JoinStage) -> bool {
+pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
     matches!(
         stage,
         JoinStage::FusedIntersectMat {
@@ -364,7 +392,7 @@ fn is_reorder_barrier(stage: &JoinStage) -> bool {
 /// of intersected relations. Materialization stages that do not commute remain
 /// fixed barriers. Reordering can also change factorized leaf-scan eligibility,
 /// so [`recompute_leaf_scans`] runs after every change.
-fn sort_plan_by_size(
+pub(super) fn sort_plan_by_size(
     order: &mut InstrOrder,
     leaf_scans: &mut LeafScans,
     start: usize,
@@ -397,7 +425,7 @@ fn sort_plan_by_size(
 /// same cover atom for `FusedIntersect`, or (b) reads one of its bound variables
 /// as a scalar through `FusedIntersectMat { mode: Value | Lookup }`.
 /// `FusedIntersectMat::Lookup` binds nothing itself and is never a leaf scan.
-fn recompute_leaf_scans(
+pub(super) fn recompute_leaf_scans(
     order: &InstrOrder,
     leaf_scans: &mut LeafScans,
     instrs: &[JoinStage],
@@ -479,7 +507,7 @@ fn recompute_leaf_scans(
     }
 }
 
-fn sort_plan_by_size_inner(
+pub(super) fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
     instrs: &[JoinStage],
@@ -571,28 +599,28 @@ fn sort_plan_by_size_inner(
 /// variable ordering changes this permutation without moving the plan's stages
 /// or their prepared index state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct InstrOrder {
+pub(super) struct InstrOrder {
     data: SmallVec<[u16; 8]>,
 }
 
 impl InstrOrder {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         InstrOrder {
             data: SmallVec::new(),
         }
     }
 
-    fn from_iter(range: impl Iterator<Item = usize>) -> InstrOrder {
+    pub(super) fn from_iter(range: impl Iterator<Item = usize>) -> InstrOrder {
         let mut res = InstrOrder::new();
         res.data
             .extend(range.map(|x| u16::try_from(x).expect("too many instructions")));
         res
     }
 
-    fn get(&self, idx: usize) -> usize {
+    pub(super) fn get(&self, idx: usize) -> usize {
         self.data[idx] as usize
     }
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.data.len()
     }
 }
@@ -603,32 +631,35 @@ impl InstrOrder {
 /// `instrs[instr_order.get(i)]` has no consumers later in the current order and
 /// may append a [`BindingSet`] factor instead of expanding its rows immediately.
 /// [`sort_plan_by_size`] recomputes the flags whenever DVO changes that order.
-type LeafScans = SmallVec<[bool; 8]>;
+pub(super) type LeafScans = SmallVec<[bool; 8]>;
 
 /// Mutable view of the state used by a recursive join call. A call can update
 /// these fields directly or use [`Self::clone_state`] to create a separate
 /// [`LocalState`] for a child task.
-struct BorrowedLocalState<'a, 'rows, 'exec> {
-    instr_order: &'a mut InstrOrder,
-    leaf_scans: &'a mut LeafScans,
-    binding_info: &'a mut BindingInfo<'rows, 'exec>,
-    updates: &'a mut FrameUpdates<'rows, 'exec>,
+pub(super) struct BorrowedLocalState<'a, 'rows, 'exec> {
+    pub(super) instr_order: &'a mut InstrOrder,
+    pub(super) leaf_scans: &'a mut LeafScans,
+    pub(super) binding_info: &'a mut BindingInfo<'rows, 'exec>,
+    pub(super) updates: &'a mut FrameUpdates<'rows, 'exec>,
 }
 
 /// Identifies the remaining join stages when cloning state for a child task.
 /// `resume_pos` is a position in the current [`InstrOrder`], not an index into
 /// `stages`; the suffix determines which atom subsets and materializations
 /// the child must retain.
-struct SubsetClonePlan<'a> {
-    stages: &'a [JoinStage],
-    resume_pos: usize,
+pub(super) struct SubsetClonePlan<'a> {
+    pub(super) stages: &'a [JoinStage],
+    pub(super) resume_pos: usize,
 }
 
 impl<'rows, 'exec> BorrowedLocalState<'_, 'rows, 'exec>
 where
     'exec: 'rows,
 {
-    fn clone_state<'short>(&mut self, plan: SubsetClonePlan<'_>) -> LocalState<'short, 'exec>
+    pub(super) fn clone_state<'short>(
+        &mut self,
+        plan: SubsetClonePlan<'_>,
+    ) -> LocalState<'short, 'exec>
     where
         'rows: 'short,
     {
@@ -648,23 +679,23 @@ where
 /// State owned by one recursive join task: its stage order, factorization
 /// flags, bindings, and buffered frame updates. Row references within the
 /// state may still borrow shared indexes or execution-arena storage.
-struct LocalState<'rows, 'exec> {
-    instr_order: InstrOrder,
-    leaf_scans: LeafScans,
-    binding_info: BindingInfo<'rows, 'exec>,
-    updates: FrameUpdates<'rows, 'exec>,
+pub(super) struct LocalState<'rows, 'exec> {
+    pub(super) instr_order: InstrOrder,
+    pub(super) leaf_scans: LeafScans,
+    pub(super) binding_info: BindingInfo<'rows, 'exec>,
+    pub(super) updates: FrameUpdates<'rows, 'exec>,
 }
 
 /// Collects completed task states for destruction after their execution scope
 /// finishes. Deferring their cleanup reduces concurrent decrements of shared
 /// `Arc` counters as workers complete sibling tasks.
 #[derive(Default)]
-struct RetiredLocalStates<'rows, 'exec> {
+pub(super) struct RetiredLocalStates<'rows, 'exec> {
     states: Mutex<Vec<LocalState<'rows, 'exec>>>,
 }
 
 impl<'rows, 'exec> RetiredLocalStates<'rows, 'exec> {
-    fn retire(&self, state: LocalState<'rows, 'exec>) {
+    pub(super) fn retire(&self, state: LocalState<'rows, 'exec>) {
         self.states
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -673,7 +704,7 @@ impl<'rows, 'exec> RetiredLocalStates<'rows, 'exec> {
 }
 
 impl<'rows, 'exec> LocalState<'rows, 'exec> {
-    fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a, 'rows, 'exec> {
+    pub(super) fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a, 'rows, 'exec> {
         BorrowedLocalState {
             instr_order: &mut self.instr_order,
             leaf_scans: &mut self.leaf_scans,

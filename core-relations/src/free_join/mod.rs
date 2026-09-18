@@ -38,6 +38,11 @@ use crate::action::{ExecutionState, ExternalContext};
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
+mod join_tail;
+mod packed_cache;
+mod prepared_index;
+mod probe;
+mod residual_index;
 // The packed trie is exercised independently before it is wired into execution.
 #[allow(dead_code)]
 pub(crate) mod packed_trie;

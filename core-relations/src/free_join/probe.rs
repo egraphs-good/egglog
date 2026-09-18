@@ -1,3 +1,27 @@
+//! Adapt catalog, shared-root, residual, and packed indexes to join probes.
+
+use std::{cell::RefCell, cmp, sync::Arc};
+
+use egglog_concurrency::Handle;
+use smallvec::SmallVec;
+
+use crate::{
+    common::Value,
+    hash_index::{ColumnIndex, Index, IndexPosition, TupleIndex},
+    offsets::{OffsetRange, RowId, SubsetRef},
+    table_spec::{Constraint, WrappedTableRef},
+};
+
+use super::{
+    AtomId, ColumnIds,
+    frame_update::FrameUpdates,
+    packed_cache::{RootProjection, TrieRoot},
+    packed_trie::{ChildShape, PackedCursor, TrieNode},
+    plan::{ScanSpec, SingleScanSpec},
+    prepared_index::{AccessId, ContinuationPosition, PreparedIndexSlot, RootContinuationCache},
+    residual_index::{InlineRows, SmallColumnIndex, SmallExactProbe},
+};
+
 /// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
 /// borrowed `SubsetRef`, or `None` if the intersection is empty.
 ///
@@ -31,8 +55,8 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
 /// A plan-local continuation for rows borrowed from a catalog or root index.
 #[derive(Clone, Copy)]
 pub(super) struct CatalogContinuation<'rows> {
-    cache: &'rows RootContinuationCache,
-    position: ContinuationPosition,
+    pub(super) cache: &'rows RootContinuationCache,
+    pub(super) position: ContinuationPosition,
 }
 
 /// The rows currently associated with an atom during one plan execution.
@@ -83,7 +107,7 @@ where
         }
     }
 
-    fn subset(&self) -> SubsetRef<'_> {
+    pub(super) fn subset(&self) -> SubsetRef<'_> {
         match self {
             Self::Root(root) => root.subset.as_ref(),
             Self::Catalog { subset, .. } => *subset,
@@ -93,23 +117,23 @@ where
         }
     }
 
-    fn size(&self) -> usize {
+    pub(super) fn size(&self) -> usize {
         match self {
             Self::Packed(cursor) => cursor.size(),
             _ => self.subset().size(),
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.size() == 0
     }
 
-    fn is_root(&self) -> bool {
+    pub(super) fn is_root(&self) -> bool {
         matches!(self, Self::Root(_))
     }
 
     #[cfg(test)]
-    fn root_arc(&self) -> &Arc<TrieRoot> {
+    pub(super) fn root_arc(&self) -> &Arc<TrieRoot> {
         let Self::Root(root) = self else {
             panic!("expected root rows")
         };
@@ -124,10 +148,10 @@ impl<'rows, 'exec> From<Arc<TrieRoot>> for AtomRows<'rows, 'exec> {
 }
 
 /// Physical strategies available for looking up or enumerating the current
-/// rows of one atom. [`JoinState::get_index`] chooses one variant for each
+/// rows of one atom. `JoinState::get_index` chooses one variant for each
 /// logical scan based on the source subset, requested columns, and whether a
 /// reusable table index is valid.
-enum ProbeIndex<'ctx, 'rows, 'exec> {
+pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// A persistent, fully refreshed multi-column table index. This is used for
     /// a large dense root with cacheable columns, no additional constraints,
     /// and no stale rows. `intersect_outer` clips results when the root is a
@@ -152,7 +176,7 @@ enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// the scan has additional constraints.
     ProjectedRoot(RootProjectionProbe<'ctx, 'rows, 'exec>),
     /// An inline scalar index for a source containing at most
-    /// [`SMALL_RESIDUAL`] rows. It supports both exact lookup and enumeration
+    /// [`super::residual_index::SMALL_RESIDUAL`] rows. It supports both exact lookup and enumeration
     /// without constructing a general packed trie.
     SmallColumn(SmallColumnIndex),
     /// An exact-only multi-column probe over an inline residual. Join stages
@@ -167,34 +191,34 @@ enum ProbeIndex<'ctx, 'rows, 'exec> {
 /// A successful probe either carries rows needed by a later stage or only
 /// records existence when this atom is dead in the remaining join tail. The
 /// latter case avoids copying an inline subset into every buffered frame.
-enum ProbeMatch<'rows, 'exec> {
+pub(super) enum ProbeMatch<'rows, 'exec> {
     Present,
     Rows(AtomRows<'rows, 'exec>),
 }
 
 impl<'rows, 'exec> ProbeMatch<'rows, 'exec> {
     #[inline]
-    fn refine(self, atom: AtomId, updates: &mut FrameUpdates<'rows, 'exec>) {
+    pub(super) fn refine(self, atom: AtomId, updates: &mut FrameUpdates<'rows, 'exec>) {
         if let Self::Rows(rows) = self {
             updates.refine_atom(atom, rows);
         }
     }
 }
 
-struct PackedProbe<'ctx, 'rows, 'exec> {
-    first: &'rows TrieNode<'exec>,
-    columns: ColumnIds,
-    table: WrappedTableRef<'ctx>,
-    handle: &'ctx Handle<'exec>,
-    scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
-    terminal_child_shape: ChildShape,
+pub(super) struct PackedProbe<'ctx, 'rows, 'exec> {
+    pub(super) first: &'rows TrieNode<'exec>,
+    pub(super) columns: ColumnIds,
+    pub(super) table: WrappedTableRef<'ctx>,
+    pub(super) handle: &'ctx Handle<'exec>,
+    pub(super) scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
+    pub(super) terminal_child_shape: ChildShape,
 }
 
 /// Probes a first-column grouping shared by plans with the same root subset.
 ///
 /// A root projection is an execution-local index that groups a root's rows by
 /// one requested column and stores each distinct value beside its matching row
-/// subset. [`JoinState::get_index`] selects this representation when the atom
+/// subset. `JoinState::get_index` selects this representation when the atom
 /// has a cross-plan shared root but cannot use a persistent table index, such
 /// as when header or scan constraints have filtered the root. The grouping is
 /// built once and reused directly by every qualifying plan.
@@ -202,15 +226,15 @@ struct PackedProbe<'ctx, 'rows, 'exec> {
 /// For a one-column scan, this object returns the shared row subset. For a
 /// multi-column scan, only the first grouping is shared; subsequent packed
 /// trie nodes and their continuation slots remain local to this query.
-struct RootProjectionProbe<'ctx, 'rows, 'exec> {
-    first: &'rows RootProjection,
-    columns: ColumnIds,
-    table: WrappedTableRef<'ctx>,
-    continuations: &'rows RootContinuationCache,
-    access: AccessId,
-    handle: &'ctx Handle<'exec>,
-    scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
-    terminal_child_shape: ChildShape,
+pub(super) struct RootProjectionProbe<'ctx, 'rows, 'exec> {
+    pub(super) first: &'rows RootProjection,
+    pub(super) columns: ColumnIds,
+    pub(super) table: WrappedTableRef<'ctx>,
+    pub(super) continuations: &'rows RootContinuationCache,
+    pub(super) access: AccessId,
+    pub(super) handle: &'ctx Handle<'exec>,
+    pub(super) scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
+    pub(super) terminal_child_shape: ChildShape,
 }
 
 impl<'ctx, 'rows, 'exec> RootProjectionProbe<'ctx, 'rows, 'exec>
@@ -403,18 +427,18 @@ where
     }
 }
 
-struct Prober<'ctx, 'rows, 'exec> {
-    source: AtomRows<'rows, 'exec>,
-    ix: ProbeIndex<'ctx, 'rows, 'exec>,
+pub(super) struct Prober<'ctx, 'rows, 'exec> {
+    pub(super) source: AtomRows<'rows, 'exec>,
+    pub(super) ix: ProbeIndex<'ctx, 'rows, 'exec>,
     /// Whether a match returns [`ProbeMatch::Rows`] so a later stage can probe,
     /// scan, or materialize this atom's refined rows. If the atom is never read
     /// again, return only [`ProbeMatch::Present`] and skip refining its frame.
     /// This can be true even with [`ChildShape::Leaf`]: a later cover scan needs
     /// the rows without needing another column index.
-    keep_rows: bool,
+    pub(super) keep_rows: bool,
 }
 
-/// Normalized input to [`JoinState::get_index`] for one indexed scan.
+/// Normalized input to `JoinState::get_index` for one indexed scan.
 ///
 /// Both scalar [`SingleScanSpec`]s and tuple [`ScanSpec`]s are converted to
 /// this form so physical-strategy selection has one code path. It identifies
@@ -423,17 +447,17 @@ struct Prober<'ctx, 'rows, 'exec> {
 /// existence, and supplies the prepared sidecar slot used for cached indexes
 /// and continuations. `terminal_child_shape` describes how execution may
 /// continue after the final requested column.
-struct ProbeRequest<'scan, 'rows> {
-    atom: AtomId,
-    columns: ColumnIds,
-    constraints: &'scan [Constraint],
-    keep_rows: bool,
-    terminal_child_shape: ChildShape,
-    prepared: &'rows PreparedIndexSlot,
+pub(super) struct ProbeRequest<'scan, 'rows> {
+    pub(super) atom: AtomId,
+    pub(super) columns: ColumnIds,
+    pub(super) constraints: &'scan [Constraint],
+    pub(super) keep_rows: bool,
+    pub(super) terminal_child_shape: ChildShape,
+    pub(super) prepared: &'rows PreparedIndexSlot,
 }
 
 impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
-    fn column(
+    pub(super) fn column(
         scan: &'scan SingleScanSpec,
         keep_rows: bool,
         terminal_child_shape: ChildShape,
@@ -449,7 +473,7 @@ impl<'scan, 'rows> ProbeRequest<'scan, 'rows> {
         }
     }
 
-    fn tuple(
+    pub(super) fn tuple(
         scan: &'scan ScanSpec,
         keep_rows: bool,
         terminal_child_shape: ChildShape,
@@ -498,7 +522,7 @@ where
         }
     }
 
-    fn get_subset(&self, key: &[Value]) -> Option<ProbeMatch<'rows, 'exec>> {
+    pub(super) fn get_subset(&self, key: &[Value]) -> Option<ProbeMatch<'rows, 'exec>> {
         match &self.ix {
             ProbeIndex::CachedTuple {
                 intersect_outer,
@@ -564,7 +588,7 @@ where
         }
     }
 
-    fn for_each(&self, mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>)) {
+    pub(super) fn for_each(&self, mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>)) {
         match &self.ix {
             ProbeIndex::CachedTuple {
                 intersect_outer,
@@ -644,7 +668,11 @@ where
         }
     }
 
-    fn for_each_shard(&self, shard: usize, mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>)) {
+    pub(super) fn for_each_shard(
+        &self,
+        shard: usize,
+        mut f: impl FnMut(&[Value], ProbeMatch<'rows, 'exec>),
+    ) {
         match &self.ix {
             ProbeIndex::CachedTuple {
                 intersect_outer,
@@ -711,7 +739,7 @@ where
         }
     }
 
-    fn shard_count(&self) -> Option<usize> {
+    pub(super) fn shard_count(&self) -> Option<usize> {
         match &self.ix {
             ProbeIndex::CachedTuple { table, .. } => Some(table.shard_count()),
             ProbeIndex::CachedColumn { table, .. } => Some(table.shard_count()),
@@ -722,7 +750,7 @@ where
         }
     }
 
-    fn shard_len(&self, shard: usize) -> Option<usize> {
+    pub(super) fn shard_len(&self, shard: usize) -> Option<usize> {
         match &self.ix {
             ProbeIndex::CachedTuple {
                 intersect_outer: None,
@@ -749,7 +777,7 @@ where
         }
     }
 
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         match &self.ix {
             ProbeIndex::CachedTuple { table, .. } => table.len(),
             ProbeIndex::CachedColumn { table, .. } => table.len(),

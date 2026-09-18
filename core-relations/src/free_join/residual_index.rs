@@ -1,4 +1,21 @@
-const SMALL_RESIDUAL: usize = 8;
+//! Small residual row sets and indexes that avoid arena allocations.
+
+use std::ops::Range;
+
+use crate::{
+    common::Value,
+    numeric_id::NumericId,
+    offsets::{RowId, SortedOffsetSlice, SubsetRef},
+    row_buffer::RowSink,
+    table_spec::{ColumnId, Constraint, Offset, WrappedTableRef},
+};
+
+use super::{
+    ColumnIds,
+    probe::{AtomRows, ProbeMatch},
+};
+
+pub(super) const SMALL_RESIDUAL: usize = 8;
 
 /// An owned row subset small enough to travel inline with a buffered join
 /// frame. Rows are kept sorted so [`Self::subset`] can expose a borrowed
@@ -14,7 +31,7 @@ pub(super) struct InlineRows {
 }
 
 impl InlineRows {
-    fn from_sorted(rows: &[RowId]) -> Self {
+    pub(super) fn from_sorted(rows: &[RowId]) -> Self {
         assert!(
             !rows.is_empty() && rows.len() <= SMALL_RESIDUAL,
             "inline row subsets must contain 1..={SMALL_RESIDUAL} rows"
@@ -29,17 +46,17 @@ impl InlineRows {
     }
 
     #[inline]
-    fn rows(&self) -> &[RowId] {
+    pub(super) fn rows(&self) -> &[RowId] {
         &self.rows[..self.len as usize]
     }
 
     #[inline]
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.len as usize
     }
 
     #[inline]
-    fn subset(&self) -> SubsetRef<'_> {
+    pub(super) fn subset(&self) -> SubsetRef<'_> {
         // SAFETY: `from_sorted` is the only constructor and records a sorted,
         // nonempty prefix. Copies preserve that invariant.
         SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(self.rows()) })
@@ -132,16 +149,16 @@ impl RowSink for SmallColumnSink {
 /// A stack-owned index for a single column of a residual with at most eight
 /// rows. Key groups point into `row_ids`; both arrays are sorted and require no
 /// pool, Arc, or arena allocation.
-struct SmallColumnIndex {
-    n_keys: usize,
+pub(super) struct SmallColumnIndex {
+    pub(super) n_keys: usize,
     n_rows: usize,
-    keys: [Value; SMALL_RESIDUAL],
+    pub(super) keys: [Value; SMALL_RESIDUAL],
     offsets: [usize; SMALL_RESIDUAL],
     row_ids: [RowId; SMALL_RESIDUAL],
 }
 
 impl SmallColumnIndex {
-    fn new(
+    pub(super) fn new(
         table: WrappedTableRef<'_>,
         subset: SubsetRef<'_>,
         constraints: &[Constraint],
@@ -194,17 +211,17 @@ impl SmallColumnIndex {
     }
 
     #[inline]
-    fn find(&self, value: Value) -> Option<usize> {
+    pub(super) fn find(&self, value: Value) -> Option<usize> {
         self.keys[..self.n_keys].binary_search(&value).ok()
     }
 
     #[inline]
-    fn rows_at(&self, key_index: usize) -> InlineRows {
+    pub(super) fn rows_at(&self, key_index: usize) -> InlineRows {
         InlineRows::from_sorted(&self.row_ids[self.range(key_index)])
     }
 
     #[inline]
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.n_keys
     }
 }
@@ -212,14 +229,14 @@ impl SmallColumnIndex {
 /// Allocation-free exact probing for an inline residual and a multi-column
 /// key. Tuple residuals are only used for exact probes, so scanning at most
 /// eight rows is cheaper and simpler than constructing a packed trie node.
-struct SmallExactProbe<'ctx> {
+pub(super) struct SmallExactProbe<'ctx> {
     rows: Option<InlineRows>,
     columns: ColumnIds,
     table: WrappedTableRef<'ctx>,
 }
 
 impl<'ctx> SmallExactProbe<'ctx> {
-    fn new(
+    pub(super) fn new(
         table: WrappedTableRef<'ctx>,
         rows: InlineRows,
         columns: ColumnIds,
@@ -247,7 +264,7 @@ impl<'ctx> SmallExactProbe<'ctx> {
         }
     }
 
-    fn get<'rows, 'exec>(
+    pub(super) fn get<'rows, 'exec>(
         &self,
         key: &[Value],
         keep_rows: bool,
@@ -277,7 +294,11 @@ impl<'ctx> SmallExactProbe<'ctx> {
         })
     }
 
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.rows.map_or(0, |rows| rows.len())
     }
 }
+
+#[cfg(test)]
+#[path = "residual_index_tests.rs"]
+mod tests;
