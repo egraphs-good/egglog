@@ -64,7 +64,7 @@ use crate::{
     table_spec::Constraint,
 };
 
-use super::{ActionId, AtomId, ColumnId, SubAtom, VarInfo, Variable};
+use super::{ActionId, AtomId, ColumnId, ColumnIds, SubAtom, VarInfo, Variable};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScanSpec {
@@ -146,13 +146,13 @@ pub(crate) enum JoinStage {
         cover: ScanSpec,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
-        to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        to_intersect: Vec<(ScanSpec, ColumnIds)>,
     },
     FusedIntersectMat {
         cover: MatId,
         mode: MatScanMode,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
-        to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        to_intersect: Vec<(ScanSpec, ColumnIds)>,
     },
 }
 
@@ -910,7 +910,7 @@ fn plan_single_bag(
                     .enumerate()
                     .map(|(j, var)| (ColumnId::from_usize(j), *var))
                     .collect();
-                let mut to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)> = vec![];
+                let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
                 for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
                     let vinfo = &bag.vars[*var];
                     for occ in vinfo.occurrences.iter() {
@@ -1202,8 +1202,8 @@ struct StageInfo {
     cover: SubAtom,
     vars: SmallVec<[Variable; 1]>,
     filters: Vec<(
-        SubAtom,                 /* the subatom to index */
-        SmallVec<[ColumnId; 2]>, /* how to build a key for that index from the cover atom */
+        SubAtom,   /* the subatom to index */
+        ColumnIds, /* how to build a key for that index from the cover atom */
     )>,
 }
 
@@ -1469,7 +1469,7 @@ fn get_next_freejoin_stage(
     state: &mut PlanningState,
     ordering: &mut impl Iterator<Item = AtomId>,
 ) -> Option<StageInfo> {
-    let mut scratch_subatom: HashMap<AtomId, SmallVec<[ColumnId; 2]>> = Default::default();
+    let mut scratch_subatom: HashMap<AtomId, ColumnIds> = Default::default();
 
     loop {
         let mut covered = false;
@@ -1506,7 +1506,7 @@ fn get_next_freejoin_stage(
 
         let mut filters = Vec::new();
         for (atom, cols) in scratch_subatom.drain() {
-            let mut form_key = SmallVec::<[ColumnId; 2]>::new();
+            let mut form_key = ColumnIds::new();
             for var_ix in &cols {
                 let var = ctx.atoms[atom].get_var(*var_ix).unwrap();
                 // form_key is an index _into the subatom forming the cover_.

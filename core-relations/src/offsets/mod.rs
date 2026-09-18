@@ -158,7 +158,10 @@ impl SortedOffsetSlice {
     pub(crate) fn binary_search_by_id(&self, target: RowId) -> usize {
         self.binary_search_from(0, target)
     }
-    fn binary_search_from(&self, start: usize, target: RowId) -> usize {
+    /// Return the first index whose offset is at least `target`, searching from
+    /// `start`. The caller must know that every preceding offset is below
+    /// `target`; `start` may equal the slice length.
+    pub(crate) fn binary_search_from(&self, start: usize, target: RowId) -> usize {
         match self.inner()[start..].binary_search(&target) {
             Ok(mut found) => {
                 found += start;

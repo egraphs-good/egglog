@@ -74,7 +74,7 @@ impl From<IndexPosition> for ContinuationPosition {
 /// packed continuation.
 ///
 /// The boxes do not hold trie rows or trie nodes: every initialized
-/// [`OnceLock`] contains the erased address of a [`PackedTrieNode`] allocated
+/// [`OnceLock`] contains the erased address of a [`TrieNode`] allocated
 /// in the query's [`SharedArena`]. This grid is mutable synchronization
 /// metadata owned by the prepared-index sidecar. Keeping it heap-owned avoids
 /// erasing another arena lifetime merely to store the locks and lets Rust drop
@@ -282,7 +282,7 @@ impl PreparedIndexSlot {
     /// The returned projection is borrowed from this execution's retained state.
     fn get_or_init_root_projection(
         &self,
-        root: &TrieNode,
+        root: &TrieRoot,
         column: ColumnId,
         slow_constraints: &[Constraint],
         build: impl FnOnce() -> RootProjection,
