@@ -401,3 +401,29 @@ fn map_rebuild_collapse_proof_mode() {
         )
         .unwrap();
 }
+
+/// Sequence-backed Set dependencies propagate through another Set. The outer
+/// container must be revisited when rebuilding changes an inner identity.
+#[test]
+fn nested_set_rebuild_term_only() {
+    let mut egraph = EGraph::new_with_term_encoding();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (sort MathSet (Set Math))
+            (sort NestedSet (Set MathSet))
+            (constructor Holds (NestedSet) Math)
+            (Holds (set-of (set-of (A))))
+            (Holds (set-of (set-of (B))))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (set-of (set-of (A))))
+                      (Holds (set-of (set-of (B))))))
+            "#,
+        )
+        .unwrap();
+}
