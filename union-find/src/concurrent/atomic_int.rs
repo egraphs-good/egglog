@@ -11,8 +11,14 @@ pub trait AtomicInt: Default + Send + Sync + 'static {
     fn from_usize(value: usize) -> Self;
     fn as_usize(value: Self::Underlying) -> usize;
     fn load(&self) -> Self::Underlying;
+    fn load_relaxed(&self) -> Self::Underlying;
     fn store(&self, value: Self::Underlying);
     fn cas(
+        &self,
+        current: Self::Underlying,
+        new: Self::Underlying,
+    ) -> Result<Self::Underlying, Self::Underlying>;
+    fn cas_relaxed(
         &self,
         current: Self::Underlying,
         new: Self::Underlying,
@@ -30,11 +36,17 @@ impl AtomicInt for AtomicU32 {
     fn load(&self) -> u32 {
         self.load(LOAD_ORDERING)
     }
+    fn load_relaxed(&self) -> u32 {
+        self.load(Ordering::Relaxed)
+    }
     fn store(&self, value: u32) {
         self.store(value, STORE_ORDERING);
     }
     fn cas(&self, current: u32, new: u32) -> Result<u32, u32> {
         self.compare_exchange(current, new, CAS_SUCCESS_ORDERING, CAS_FAILURE_ORDERING)
+    }
+    fn cas_relaxed(&self, current: u32, new: u32) -> Result<u32, u32> {
+        self.compare_exchange(current, new, Ordering::Relaxed, Ordering::Relaxed)
     }
 }
 
@@ -49,11 +61,17 @@ impl AtomicInt for AtomicU64 {
     fn load(&self) -> u64 {
         self.load(LOAD_ORDERING)
     }
+    fn load_relaxed(&self) -> u64 {
+        self.load(Ordering::Relaxed)
+    }
     fn store(&self, value: u64) {
         self.store(value, STORE_ORDERING);
     }
     fn cas(&self, current: u64, new: u64) -> Result<u64, u64> {
         self.compare_exchange(current, new, CAS_SUCCESS_ORDERING, CAS_FAILURE_ORDERING)
+    }
+    fn cas_relaxed(&self, current: u64, new: u64) -> Result<u64, u64> {
+        self.compare_exchange(current, new, Ordering::Relaxed, Ordering::Relaxed)
     }
 }
 impl AtomicInt for AtomicUsize {
@@ -69,19 +87,26 @@ impl AtomicInt for AtomicUsize {
     fn load(&self) -> usize {
         self.load(LOAD_ORDERING)
     }
+    fn load_relaxed(&self) -> usize {
+        self.load(Ordering::Relaxed)
+    }
     fn store(&self, value: usize) {
         self.store(value, STORE_ORDERING);
     }
     fn cas(&self, current: usize, new: usize) -> Result<usize, usize> {
         self.compare_exchange(current, new, CAS_SUCCESS_ORDERING, CAS_FAILURE_ORDERING)
     }
+    fn cas_relaxed(&self, current: usize, new: usize) -> Result<usize, usize> {
+        self.compare_exchange(current, new, Ordering::Relaxed, Ordering::Relaxed)
+    }
 }
 
 /*
 
-We could do the following, but we don't have good reason to believe it is
-correct, or preserves the linearizability guarantees of the baseline
-data-structure.
+We could do the following for the growable concurrent data structure, but we
+don't have good reason to believe it is correct, or preserves the
+linearizability guarantees of the baseline data-structure. The fixed-capacity
+scoped view has a narrower contract and a separate relaxed-ordering argument.
 
 Still, code like this is helpful in microbenchmarks to measure the overhead of
 memory barriers for the code. We've observed 5-10% overhead on an M1 Ultra CPU
