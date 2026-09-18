@@ -8,6 +8,8 @@ before-proofs.egg
 bignum.egg
 bool.egg
 complex-merge-prim.egg
+container-before-table-rebuild.egg
+container-dirty-after-table-rebuild.egg
 container-fail.egg
 container-rebuild.egg
 cyk.egg
