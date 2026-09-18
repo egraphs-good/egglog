@@ -1,4 +1,5 @@
 use super::*;
+use crate::free_join::Variable;
 use crate::free_join::probe::CatalogContinuation;
 use std::{mem, sync::Barrier};
 
@@ -75,4 +76,19 @@ fn direct_root_continuation_rejects_different_successors() {
     cache.prepare(ChildShape::Direct, 1, |_| 1);
     let _ = cache.slots(AccessId::new(0));
     let _ = cache.slots(AccessId::new(1));
+}
+
+#[test]
+fn cover_only_stages_skip_prepared_index_state() {
+    let stages = JoinStages {
+        instrs: Arc::new(vec![JoinStage::Intersect {
+            var: Variable::from_usize(0),
+            scans: SmallVec::new(),
+        }]),
+    };
+    let atoms = Arc::new(DenseIdMap::new());
+    assert!(matches!(
+        PreparedJoinIndexes::new(&Database::new(), &atoms, &stages),
+        PreparedJoinIndexes::NoIndexes
+    ));
 }
