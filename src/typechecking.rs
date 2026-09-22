@@ -115,6 +115,12 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// Whether the declaration originated from a relation, independently of
+    /// its name or generated output sort. Its physical subtype is Constructor.
+    /// Preserved by ordinary execution, cloning, and scopes. Reconstructed
+    /// desugared text and proof instrumentation describe physical constructors
+    /// rather than retaining the original relation declaration.
+    pub is_relation: bool,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
 }
@@ -123,6 +129,7 @@ impl PartialEq for FuncType {
     fn eq(&self, other: &Self) -> bool {
         if self.name == other.name
             && self.subtype == other.subtype
+            && self.is_relation == other.is_relation
             && self.output.name() == other.output.name()
         {
             if self.input.len() != other.input.len() {
@@ -146,6 +153,7 @@ impl Hash for FuncType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.subtype.hash(state);
+        self.is_relation.hash(state);
         self.output.name().hash(state);
         for inp in &self.input {
             inp.name().hash(state);
@@ -754,6 +762,7 @@ impl TypeInfo {
         Ok(FuncType {
             name: func.name.clone(),
             subtype: func.subtype,
+            is_relation: func.is_relation,
             input,
             output: output.clone(),
         })
@@ -808,6 +817,7 @@ impl TypeInfo {
         Ok(ResolvedFunctionDecl {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
+            is_relation: fdecl.is_relation,
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
                 // Merge expressions run as part of action-side table updates:

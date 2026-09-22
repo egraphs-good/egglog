@@ -1327,6 +1327,9 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// Whether this declaration originated from a relation. Relations still
+    /// execute as constructors of their generated non-unionable equality sort.
+    pub is_relation: bool,
     /// The schema as written. The resolved signature lives in `TypeInfo`,
     /// keyed by `name`.
     pub schema: Schema,
@@ -1396,6 +1399,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Custom,
+            is_relation: false,
             schema,
             merge,
             cost: None,
@@ -1419,6 +1423,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
+            is_relation: false,
             schema,
             merge: None,
             cost,
@@ -1443,6 +1448,7 @@ where
         GenericFunctionDecl {
             name: self.name,
             subtype: self.subtype,
+            is_relation: self.is_relation,
             schema: self.schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,

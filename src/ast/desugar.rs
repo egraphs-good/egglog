@@ -443,17 +443,20 @@ fn desugar_relation(
             proof_constructors: None,
             unionable: false,
         },
-        NCommand::Function(FunctionDecl::constructor(
-            span,
-            name,
-            Schema {
-                input: inputs,
-                output: fresh_sort,
-            },
-            None,
-            false,
-            false,
-        )),
+        NCommand::Function(FunctionDecl {
+            is_relation: true,
+            ..FunctionDecl::constructor(
+                span,
+                name,
+                Schema {
+                    input: inputs,
+                    output: fresh_sort,
+                },
+                None,
+                false,
+                false,
+            )
+        }),
     ]
 }
 

@@ -796,6 +796,7 @@ impl EGraph {
             Some(func_type) => {
                 debug_assert!(
                     func_type.subtype == decl.subtype
+                        && func_type.is_relation == decl.is_relation
                         && func_type.input.len() == decl.schema.input.len()
                         && func_type
                             .input
@@ -819,6 +820,7 @@ impl EGraph {
                 let func_type = Arc::new(FuncType {
                     name: decl.name.clone(),
                     subtype: decl.subtype,
+                    is_relation: decl.is_relation,
                     input: decl
                         .schema
                         .input
@@ -2015,6 +2017,11 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// Returns true if term encoding is enabled, including proof-generation mode.
+    pub fn is_term_encoding_enabled(&self) -> bool {
+        self.proof_state.original_typechecking.is_some()
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
@@ -2273,6 +2280,16 @@ impl EGraph {
     /// This method assumes `x` belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
+    }
+
+    /// Returns the current canonical equality ID, or the unchanged value for
+    /// a base or container sort. This does not evaluate expressions, insert
+    /// rows, or recursively rebuild container contents.
+    ///
+    /// `sort` and `value` must belong to this e-graph, with `value` of that sort.
+    pub fn canonical_value(&self, sort: &ArcSort, value: Value) -> Value {
+        self.backend
+            .get_canon_repr(value, sort.column_ty(&self.backend))
     }
 
     /// Convert from a Rust type to an egglog value.
