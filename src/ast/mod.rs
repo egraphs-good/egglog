@@ -19,11 +19,14 @@ pub use egglog_ast::span::{RustSpan, Span};
 use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// A container sort's rebuild-primitive names, carried on its `(sort …)` as the
 /// `:internal-container-rebuild` annotation. Everything else needed to register
 /// the primitives is recovered from `proof_state` at register time.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ContainerRebuildSpec {
     /// The value-rebuild primitive.
     pub internal_rebuild_prim: String,
@@ -44,7 +47,8 @@ impl Display for ContainerRebuildSpec {
 /// The program-global proof constructor names, recorded on the `Proof` sort as
 /// the `:internal-proof-names` annotation (the `Proof` datatype name is the
 /// sort's own name).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProofConstructorNames {
     pub congr: String,
     pub trans: String,
@@ -378,7 +382,8 @@ where
 pub type Schedule = GenericSchedule<String, String>;
 pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum GenericSchedule<Head, Leaf> {
     Saturate(Span, Box<GenericSchedule<Head, Leaf>>),
     Repeat(Span, usize, Box<GenericSchedule<Head, Leaf>>),
@@ -553,7 +558,8 @@ pub type ResolvedCommand = GenericCommand<ResolvedCall, ResolvedVar>;
 
 pub type Subsume = bool;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum Subdatatypes {
     Variants(Vec<Variant>),
     NewSort(String, Vec<Expr>),
@@ -562,7 +568,7 @@ pub enum Subdatatypes {
 /// The mode of printing a function. The default mode prints the function in a user-friendly way and
 /// has an unreliable interface.
 /// The CSV mode prints the function in the CSV format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum PrintFunctionMode {
     Default,
     CSV,
@@ -588,7 +594,8 @@ impl Display for PrintFunctionMode {
 ///
 /// When `--strict-mode` is enabled, violating these conventions is a type error;
 /// otherwise, egglog emits a single warning per program.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum GenericCommand<Head, Leaf>
 where
     Head: Clone + Display,
@@ -1237,7 +1244,8 @@ impl Display for IdentSort {
 pub type RunConfig = GenericRunConfig<String, String>;
 pub(crate) type ResolvedRunConfig = GenericRunConfig<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GenericRunConfig<Head, Leaf> {
     pub ruleset: String,
     pub until: Option<Vec<GenericFact<Head, Leaf>>>,
@@ -1352,6 +1360,9 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// Whether this declaration originated from a relation. Relations still
+    /// execute as constructors of their generated non-unionable equality sort.
+    pub is_relation: bool,
     /// The schema as written. The resolved signature lives in `TypeInfo`,
     /// keyed by `name`.
     pub schema: Schema,
@@ -1370,7 +1381,8 @@ where
     pub term_constructor: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Variant {
     pub span: Span,
     pub name: String,
@@ -1392,7 +1404,8 @@ impl Display for Variant {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Schema {
     pub input: Vec<String>,
     pub output: String,
@@ -1421,6 +1434,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Custom,
+            is_relation: false,
             schema,
             merge,
             cost: None,
@@ -1444,6 +1458,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
+            is_relation: false,
             schema,
             merge: None,
             cost,
@@ -1468,6 +1483,7 @@ where
         GenericFunctionDecl {
             name: self.name,
             subtype: self.subtype,
+            is_relation: self.is_relation,
             schema: self.schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
@@ -1578,7 +1594,8 @@ pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
 pub type Rewrite = GenericRewrite<String, String>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GenericRewrite<Head, Leaf> {
     pub span: Span,
     pub lhs: GenericExpr<Head, Leaf>,

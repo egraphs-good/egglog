@@ -2,19 +2,33 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use ordered_float::OrderedFloat;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::span::Span;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(
+    Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum Literal {
-    Int(i64),
-    Float(OrderedFloat<f64>),
+    Int(
+        #[serde(with = "integer_literal")]
+        #[schemars(with = "String", regex(pattern = "^-?(0|[1-9][0-9]*)$"))]
+        i64,
+    ),
+    Float(
+        #[serde(with = "float_literal")]
+        #[schemars(with = "String", regex(pattern = "^[0-9a-f]{16}$"))]
+        OrderedFloat<f64>,
+    ),
     String(String),
     Bool(bool),
     Unit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum GenericExpr<Head, Leaf> {
     Var(Span, Leaf),
     Call(Span, Head, Vec<GenericExpr<Head, Leaf>>),
@@ -31,18 +45,20 @@ pub enum GenericExpr<Head, Leaf> {
 /// ```text
 /// (fail (check (!= 1 1)))
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum GenericFact<Head, Leaf> {
     Eq(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Fact(GenericExpr<Head, Leaf>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct GenericActions<Head: Clone + Display, Leaf: Clone + PartialEq + Eq + Display + Hash>(
     pub Vec<GenericAction<Head, Leaf>>,
 );
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum GenericAction<Head, Leaf>
 where
     Head: Clone + Display,
@@ -82,7 +98,7 @@ where
 
 /// How a rule is evaluated. The three modes are mutually exclusive, so they
 /// share one field on [`GenericRule`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum RuleEvalMode {
     /// Default: seminaive (delta) evaluation with restrictive `Pure`/`Write`
     /// primitive contexts (no database reads in the RHS).
@@ -104,7 +120,8 @@ impl RuleEvalMode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
@@ -130,7 +147,7 @@ where
 }
 
 /// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum Change {
     /// `delete` this entry from a function.
     /// Be wary! Only delete entries that are guaranteed to be not useful.
@@ -138,4 +155,53 @@ pub enum Change {
     /// `subsume` this entry so that it cannot be queried or extracted, but still can be checked.
     /// Note that this is currently forbidden for functions with custom merges.
     Subsume,
+}
+
+// JSON numbers cannot represent every i64 in all consumers. The tagged string
+// representation also keeps integer literals distinct from floating literals.
+mod integer_literal {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let value: i64 = text.parse().map_err(D::Error::custom)?;
+        if value.to_string() != text {
+            return Err(D::Error::custom("expected a canonical decimal i64 string"));
+        }
+        Ok(value)
+    }
+}
+
+// Serializing the bits preserves signed zero, infinities, and NaN payloads.
+mod float_literal {
+    use ordered_float::OrderedFloat;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(
+        value: &OrderedFloat<f64>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format!("{:016x}", value.0.to_bits()))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<OrderedFloat<f64>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text.len() != 16
+            || !text
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(D::Error::custom(
+                "expected 16 lowercase hexadecimal f64 bits",
+            ));
+        }
+        let bits = u64::from_str_radix(&text, 16).map_err(D::Error::custom)?;
+        Ok(OrderedFloat(f64::from_bits(bits)))
+    }
 }

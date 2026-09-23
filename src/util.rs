@@ -62,6 +62,11 @@ impl SymbolGen {
     pub fn is_reserved(&self, symbol: &str) -> bool {
         !self.reserved_string.is_empty() && symbol.starts_with(&self.reserved_string)
     }
+
+    /// Prevent future fresh symbols from colliding with an imported name.
+    pub fn reserve(&mut self, symbol: &str) -> bool {
+        self.minted.insert(symbol.to_owned())
+    }
 }
 
 /// This trait lets us statically dispatch between `fresh` methods for generic structs.

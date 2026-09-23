@@ -9,6 +9,7 @@ mod core;
 mod exec_state;
 pub mod extract;
 pub mod prelude;
+pub mod program;
 mod proofs;
 
 pub mod scheduler;
@@ -331,6 +332,8 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    command_record: Option<program::CommandRecord>,
+    recording_active: bool,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -428,6 +431,8 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            command_record: None,
+            recording_active: false,
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
@@ -741,6 +746,10 @@ impl EGraph {
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
+                // History describes the session, including commands in scopes
+                // that have since been popped. EGraph clones keep independent logs.
+                std::mem::swap(&mut self.command_record, &mut e.command_record);
+                std::mem::swap(&mut self.recording_active, &mut e.recording_active);
                 *self = *e;
                 Ok(())
             }
@@ -819,6 +828,7 @@ impl EGraph {
             Some(func_type) => {
                 debug_assert!(
                     func_type.subtype == decl.subtype
+                        && func_type.is_relation == decl.is_relation
                         && func_type.input.len() == decl.schema.input.len()
                         && func_type
                             .input
@@ -842,6 +852,7 @@ impl EGraph {
                 let func_type = Arc::new(FuncType {
                     name: decl.name.clone(),
                     subtype: decl.subtype,
+                    is_relation: decl.is_relation,
                     input: decl
                         .schema
                         .input
@@ -2050,6 +2061,11 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// Returns true for term encoding, including proof-generation mode.
+    pub fn is_term_encoding_enabled(&self) -> bool {
+        self.proof_state.original_typechecking.is_some()
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
@@ -2214,8 +2230,124 @@ impl EGraph {
     /// recovery rebuild leaves the database canonical and reusable. Rust panics
     /// in extension code unwind normally instead of becoming [`enum@Error`] values.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
+        if self.command_record.is_some() && !self.recording_active {
+            return self.run_recorded_program(program, None);
+        }
         let res = self.process_program_internal(program, true)?;
         Ok(res.outputs)
+    }
+
+    // Own the outermost-recording boundary for ordinary commands and frontends
+    // that report errors through a host-language side channel.
+    fn run_recorded_program(
+        &mut self,
+        program: Vec<Command>,
+        mut command_error: Option<&mut dyn FnMut() -> Option<String>>,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        self.recording_active = true;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut outputs = Vec::new();
+            for command in program {
+                let index = self.command_record.as_mut().map(|record| {
+                    let index = record.entries.len();
+                    record.entries.push(program::RecordedCommand {
+                        command: command.clone(),
+                        outcome: program::CommandOutcome::Pending,
+                    });
+                    index
+                });
+                let result = self.process_program_internal(vec![command], true);
+                // Observe once after the native command. A host error can
+                // accompany a native no-match/success and must not alter native
+                // batch continuation or the returned native result.
+                let host_error = if self.command_record.is_some() {
+                    command_error.as_mut().and_then(|observe| observe())
+                } else {
+                    None
+                };
+                if let Some(record) = &mut self.command_record
+                    && let Some(entry) = index.and_then(|index| record.entries.get_mut(index))
+                {
+                    entry.outcome = match (&result, host_error) {
+                        (Ok(_), None) => program::CommandOutcome::Success,
+                        (Ok(_), Some(message)) => program::CommandOutcome::Failure { message },
+                        (Err(error), host_error) => program::CommandOutcome::Failure {
+                            message: match host_error {
+                                Some(host_error) => format!("{error}; host error: {host_error}"),
+                                None => error.to_string(),
+                            },
+                        },
+                    };
+                }
+                outputs.extend(result?.outputs);
+            }
+            Ok(outputs)
+        }));
+        // Restore suppression even if an extension or observer unwinds. The
+        // interrupted entry remains Pending and the original panic is rethrown.
+        self.recording_active = false;
+        match result {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+    /// Validate a shared command tree, then use ordinary Egglog execution.
+    /// This retains core typechecking and the engine's partial-effect error semantics.
+    pub fn run_shared_program(
+        &mut self,
+        program: program::Program,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        program.validate()?;
+        self.run_program(program.commands)
+    }
+
+    /// Run a shared program and annotate its active command record with errors
+    /// reported by a host-language side channel. The observer is called once
+    /// after each outermost command, only while recording. It must report only
+    /// new errors; it does not replace native results or stop batch execution.
+    pub fn run_shared_program_with_command_error(
+        &mut self,
+        program: program::Program,
+        mut command_error: impl FnMut() -> Option<String>,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        program.validate()?;
+        if self.command_record.is_some() && !self.recording_active {
+            self.run_recorded_program(program.commands, Some(&mut command_error))
+        } else {
+            self.run_program(program.commands)
+        }
+    }
+
+    /// Start a new command-submission record, replacing any previous record.
+    /// Host setup, direct table updates, and native callbacks are not commands.
+    pub fn start_recording(&mut self) {
+        self.command_record = Some(program::CommandRecord::default());
+        self.recording_active = false;
+    }
+
+    /// Start recording only when no record is active, preserving an existing
+    /// caller's history. Useful for scoped frontend recorders that reject nesting.
+    pub fn try_start_recording(&mut self) -> bool {
+        if self.command_record.is_some() {
+            return false;
+        }
+        self.command_record = Some(program::CommandRecord::default());
+        self.recording_active = false;
+        true
+    }
+
+    /// Disable recording and return its owned command outcomes.
+    pub fn stop_recording(&mut self) -> Option<program::CommandRecord> {
+        self.recording_active = false;
+        self.command_record.take()
+    }
+
+    /// Build a portable attempted-prefix program while keeping recording enabled.
+    pub fn recorded_program(&self) -> Result<Option<program::Program>, program::ProgramError> {
+        self.command_record
+            .as_ref()
+            .map(program::CommandRecord::program)
+            .transpose()
     }
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
@@ -2313,6 +2445,14 @@ impl EGraph {
     /// This method assumes `x` belongs to sort `T`.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
+    }
+
+    /// Return the canonical equality ID, or an unchanged base/container value.
+    /// The sort and value must belong to this e-graph. This does not recursively
+    /// rebuild containers or evaluate expressions.
+    pub fn canonical_value(&self, sort: &ArcSort, value: Value) -> Value {
+        self.backend
+            .get_canon_repr(value, sort.column_ty(&self.backend))
     }
 
     /// Convert from a Rust type to an egglog value.
@@ -2989,6 +3129,8 @@ fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error(transparent)]
+    InvalidProgram(#[from] program::ProgramError),
     #[error(transparent)]
     ParseError(#[from] ParseError),
     #[error(transparent)]

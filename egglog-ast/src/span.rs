@@ -1,31 +1,59 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", deny_unknown_fields)]
 pub enum Span {
     Panic,
     Egglog(Arc<EgglogSpan>),
     Rust(Arc<RustSpan>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EgglogSpan {
     pub file: Arc<SrcFile>,
     pub i: usize,
     pub j: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RustSpan {
-    pub file: &'static str,
+    pub file: Cow<'static, str>,
     pub line: u32,
     pub column: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SrcFile {
     pub name: Option<String>,
     pub contents: String,
+}
+
+impl<'de> Deserialize<'de> for EgglogSpan {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            file: Arc<SrcFile>,
+            i: usize,
+            j: usize,
+        }
+        let Fields { file, i, j } = Fields::deserialize(deserializer)?;
+        if i > j
+            || j > file.contents.len()
+            || !file.contents.is_char_boundary(i)
+            || !file.contents.is_char_boundary(j)
+        {
+            return Err(serde::de::Error::custom("invalid UTF-8 source span range"));
+        }
+        Ok(Self { file, i, j })
+    }
 }
 
 impl SrcFile {
@@ -66,7 +94,7 @@ impl Debug for Span {
 impl Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Span::Panic => panic!("Span::Panic in impl Display"),
+            Span::Panic => write!(f, "At unknown source"),
             Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
             Span::Egglog(span) => {
                 let (start_line, start_col) = span.file.get_location(span.i);

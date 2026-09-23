@@ -62,6 +62,10 @@ egglog = "3.0.0"
 
 See also the [Python binding](https://github.com/egraphs-good/egglog-python) for using `egglog` in Python.
 
+The [shared program guide](docs/shared-program.md) covers structural program
+construction, JSON/schema interchange, checked source export, and command
+recording, including the `shared_program` example utility.
+
 Egglog can also be compiled to WebAssembly, see [./wasm-example](./wasm-example) for more information.
 
 ## Development

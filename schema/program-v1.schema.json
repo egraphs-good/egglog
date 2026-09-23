@@ -1,0 +1,1974 @@
+{
+  "$defs": {
+    "Change": {
+      "description": "Change a function entry.",
+      "oneOf": [
+        {
+          "const": "Delete",
+          "description": "`delete` this entry from a function.\nBe wary! Only delete entries that are guaranteed to be not useful.",
+          "type": "string"
+        },
+        {
+          "const": "Subsume",
+          "description": "`subsume` this entry so that it cannot be queried or extracted, but still can be checked.\nNote that this is currently forbidden for functions with custom merges.",
+          "type": "string"
+        }
+      ]
+    },
+    "ContainerRebuildSpec": {
+      "additionalProperties": false,
+      "description": "A container sort's rebuild-primitive names, carried on its `(sort …)` as the\n`:internal-container-rebuild` annotation. Everything else needed to register\nthe primitives is recovered from `proof_state` at register time.",
+      "properties": {
+        "internal_rebuild_prim": {
+          "description": "The value-rebuild primitive.",
+          "type": "string"
+        },
+        "internal_rebuild_proof_prim": {
+          "description": "The proof-producing rebuild primitive; `None` in term-only mode.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "internal_rebuild_prim"
+      ],
+      "type": "object"
+    },
+    "EgglogSpan": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/SrcFile"
+        },
+        "i": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "j": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "i",
+        "j"
+      ],
+      "type": "object"
+    },
+    "GenericAction": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Bind a variable to a particular datatype or primitive.\nAt the top level (in a [`Command::Action`]), this defines a global variable.\nIn a [`Command::Rule`], this defines a local variable in the actions.",
+          "properties": {
+            "type": {
+              "const": "Let",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`set` a function to a particular result.\n`set` should not be used on datatypes-\ninstead, use `union`.",
+          "properties": {
+            "type": {
+              "const": "Set",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericExpr"
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.",
+          "properties": {
+            "type": {
+              "const": "Change",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/Change"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericExpr"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`union` two datatypes, making them equal\nin the implicit, global equality relation\nof egglog.\nAll rules match modulo this equality relation.\n\nExample:\n```text\n(datatype Math (Num i64))\n(union (Num 1) (Num 2)); Define that Num 1 and Num 2 are equivalent\n(extract (Num 1)); Extracts Num 1\n(extract (Num 2)); Extracts Num 1\n```",
+          "properties": {
+            "type": {
+              "const": "Union",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Panic",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Expr",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GenericActions": {
+      "items": {
+        "$ref": "#/$defs/GenericAction"
+      },
+      "type": "array"
+    },
+    "GenericCommand": {
+      "description": "A [`Command`] is the top-level construct in egglog.\nIt includes defining rules, declaring functions,\nadding to tables, and running rules (via a [`Schedule`]).\n\n# Binding naming convention\nBindings introduced by commands fall into two categories:\n- **Global bindings** must start with [`$`](crate::GLOBAL_NAME_PREFIX).\n- **Non-global bindings** must *not* start with [`$`](crate::GLOBAL_NAME_PREFIX).\n\nWhen `--strict-mode` is enabled, violating these conventions is a type error;\notherwise, egglog emits a single warning per program.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Create a new user-defined sort, which can then\nbe used in new [`Command::Function`] declarations.\nThe [`Command::Datatype`] command desugars directly to this command, with one [`Command::Function`]\nper constructor.\nThe main use of this command (as opposed to using [`Command::Datatype`]) is for forward-declaring a sort for mutually-recursive datatypes.\n\nIt can also be used to create\na container sort.\nFor example, here's how to make a sort for vectors\nof some user-defined sort `Math`:\n```text\n(sort MathVec (Vec Math))\n```\n\nNow `MathVec` can be used as an input or output sort.",
+          "properties": {
+            "type": {
+              "const": "Sort",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "container_rebuild": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ContainerRebuildSpec"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For container sorts under the term/proof encoding: the spec for the\ncontainer's rebuild primitives (see [`ContainerRebuildSpec`]), carried\nas the `:internal-container-rebuild` annotation."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "presort_and_args": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "$ref": "#/$defs/GenericExpr"
+                      },
+                      "type": "array"
+                    }
+                  ],
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "proof_constructors": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ProofConstructorNames"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The global proof constructor names (see [`ProofConstructorNames`]),\nrecorded once on the `Proof` sort as `:internal-proof-names`."
+                },
+                "proof_func": {
+                  "description": "The name of the proof function for this sort.\nSet by proof desugaring to record where proofs are stored for this sort.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                },
+                "uf": {
+                  "description": "The union-find `(constructor, optional function-index)` table names\nfor this sort (see [`GenericNCommand::Sort`]).",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  ],
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "unionable": {
+                  "description": "Whether values of this sort can be unioned.\nDefaults to true for user-defined sorts.\nSet to false for relations and term tables that should not allow union.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "span",
+                "name",
+                "unionable"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Egglog supports three types of functions\n\nA constructor models an egg-style user-defined datatype\nIt can only be defined through the `datatype`/`datatype*` command\nor the `constructor` command\n\nA relation models a datalog-style mathematical relation\nIt can only be defined through the `relation` command\n\nA custom function is a dictionary\nIt can only be defined through the `function` command\n\nThe `datatype` command declares a user-defined datatype.\nDatatypes can be unioned with [`Action::Union`] either\nat the top level or in the actions of a rule.\nThis makes them equal in the implicit, global equality relation.\n\nExample:\n```text\n(datatype Math\n  (Num i64)\n  (Var String)\n  (Add Math Math)\n  (Mul Math Math))\n```\n\ndefines a simple `Math` datatype with variants for numbers, named variables, addition and multiplication.\n\nDatatypes desugar directly to a [`Command::Sort`] and a [`Command::Constructor`] for each constructor.\nThe code above becomes:\n```text\n(sort Math)\n(constructor Num (i64) Math)\n(constructor Var (String) Math)\n(constructor Add (Math Math) Math)\n(constructor Mul (Math Math) Math)\n\nDatatypes are also known as algebraic data types, tagged unions and sum types.",
+          "properties": {
+            "type": {
+              "const": "Datatype",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                },
+                "variants": {
+                  "items": {
+                    "$ref": "#/$defs/Variant"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "span",
+                "name",
+                "variants"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Datatypes",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "datatypes": {
+                  "items": {
+                    "maxItems": 3,
+                    "minItems": 3,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/Span"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/Subdatatypes"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                }
+              },
+              "required": [
+                "span",
+                "datatypes"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The `constructor` command defines a new constructor for a user-defined datatype\nExample:\n```text\n(constructor Add (i64 i64) Math)\n```\n\nA constructor can be `:unextractable`, in which case extraction skip this constructor entirely.\n```text\n(constructor UnextractableNode (i64) Math :unextractable)\n```\n\nA constructor can also have a `cost` for extraction, which is used in the cost model for extraction. It defaults to 1 if not specified.\n```text\n(constructor ExpensiveNode (i64) Math :cost 10)\n```",
+          "properties": {
+            "type": {
+              "const": "Constructor",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "cost": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "hidden": {
+                  "description": "Internal-hidden constructors are excluded from print-size output and extraction.\nUsed for internal tables generated by proof production.",
+                  "type": "boolean"
+                },
+                "let_binding": {
+                  "description": "Internal-let constructors are let bindings, excluded from print-size output.\nUsed for global let bindings that are converted to constructors.",
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "schema": {
+                  "$ref": "#/$defs/Schema"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                },
+                "term_constructor": {
+                  "description": "Internal-only metadata for proof-encoding view tables.\nParsed user syntax only supports `:internal-term-constructor` on `function`.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "unextractable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "span",
+                "name",
+                "schema",
+                "unextractable",
+                "hidden",
+                "let_binding"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The `relation` command declares a named relation\nExample:\n```text\n(relation path (i64 i64))\n(relation edge (i64 i64))\n```",
+          "properties": {
+            "type": {
+              "const": "Relation",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "inputs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                }
+              },
+              "required": [
+                "span",
+                "name",
+                "inputs"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The `function` command declare an egglog custom function, which is a database table with a\na functional dependency (also called a primary key) on its inputs to one output.\n\n```text\n(function <name:Ident> <schema:Schema> <cost:Cost>\n       (:on_merge <List<Action>>)?\n       (:merge <Expr>)?)\n```\nA function can have a `cost` for extraction.\n\nFinally, it can have a `merge` and `on_merge`, which are triggered when\nthe function dependency is violated.\nIn this case, the merge expression determines which of the two outputs\nfor the same input is used.\nThe `on_merge` actions are run after the merge expression is evaluated.\n\nNote that the `:merge` expression must be monotonic\nfor the behavior of the egglog program to be consistent and defined.\nIn other words, the merge function must define a lattice on the output of the function.\nIf values are merged in different orders, they should still result in the same output.\nIf the merge expression is not monotonic, the behavior can vary as\nactions may be applied more than once with different results.\n\n```text\n(function LowerBound (Math) i64 :merge (max old new))\n```\n\nSpecifically, a custom function can also have an EqSort output type:\n\n```text\n(function Add (i64 i64) Math)\n```\n\nAll functions can be `set`\nwith [`Action::Set`].\n\nOutput of a function, if being the EqSort type, can be unioned with [`Action::Union`]\nwith another datatype of the same `sort`.",
+          "properties": {
+            "type": {
+              "const": "Function",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "hidden": {
+                  "type": "boolean"
+                },
+                "let_binding": {
+                  "type": "boolean"
+                },
+                "merge": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/GenericExpr"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "schema": {
+                  "$ref": "#/$defs/Schema"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                },
+                "term_constructor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "unextractable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "span",
+                "name",
+                "schema",
+                "hidden",
+                "let_binding",
+                "unextractable"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Using the `ruleset` command, defines a new\nruleset that can be added to in [`Command::Rule`]s.\nRulesets are used to group rules together\nso that they can be run together in a [`Schedule`].\n\nExample:\nRuleset allows users to define a ruleset- a set of rules\n\n```text\n(ruleset myrules)\n(rule ((edge x y))\n      ((path x y))\n      :ruleset myrules)\n(run myrules 2)\n```",
+          "properties": {
+            "type": {
+              "const": "AddRuleset",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Using the `combined-ruleset` command, construct another ruleset\nwhich runs all the rules in the given rulesets.\nThis is useful for running multiple rulesets together.\nThe combined ruleset also inherits any rules added to the individual rulesets\nafter the combined ruleset is declared.\n\nExample:\n```text\n(ruleset myrules1)\n(rule ((edge x y))\n      ((path x y))\n     :ruleset myrules1)\n(ruleset myrules2)\n(rule ((path x y) (edge y z))\n      ((path x z))\n      :ruleset myrules2)\n(combined-ruleset myrules-combined myrules1 myrules2)\n```",
+          "properties": {
+            "type": {
+              "const": "UnstableCombinedRuleset",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "```text\n(rule <body:List<Fact>> <head:List<Action>>)\n```\n\ndefines an egglog rule.\nThe rule matches a list of facts with respect to\nthe global database, and runs the list of actions\nfor each match.\nThe matches are done *modulo equality*, meaning\nequal datatypes in the database are considered\nequal.\n\nExample:\n```text\n(rule ((edge x y))\n      ((path x y)))\n\n(rule ((path x y) (edge y z))\n      ((path x z)))\n```",
+          "properties": {
+            "type": {
+              "const": "Rule",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/GenericRule"
+                }
+              },
+              "required": [
+                "rule"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`rewrite` is syntactic sugar for a specific form of `rule`\nwhich simply unions the left and right hand sides.\n\nExample:\n```text\n(rewrite (Add a b)\n         (Add b a))\n```\n\nDesugars to:\n```text\n(rule ((= lhs (Add a b)))\n      ((union lhs (Add b a))))\n```\n\nAdditionally, additional facts can be specified\nusing a `:when` clause.\nFor example, the same rule can be run only\nwhen `a` is zero:\n\n```text\n(rewrite (Add a b)\n         (Add b a)\n         :when ((= a (Num 0)))\n```\n\nAdd the `:subsume` flag to cause the left hand side to be subsumed after matching, which means it can\nno longer be matched in a rule, but can still be checked against (See [`Change`] for more details.)\n\n```text\n(rewrite (Mul a 2) (bitshift-left a 1) :subsume)\n```\n\nDesugars to:\n```text\n(rule ((= lhs (Mul a 2)))\n      ((union lhs (bitshift-left a 1))\n       (subsume (Mul a 2))))\n```",
+          "properties": {
+            "type": {
+              "const": "Rewrite",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/GenericRewrite"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Similar to [`Command::Rewrite`], but\ngenerates two rules, one for each direction.\n\nExample:\n```text\n(bi-rewrite (Mul (Var x) (Num 0))\n            (Var x))\n```\n\nBecomes:\n```text\n(rule ((= lhs (Mul (Var x) (Num 0))))\n      ((union lhs (Var x))))\n(rule ((= lhs (Var x)))\n      ((union lhs (Mul (Var x) (Num 0)))))\n```",
+          "properties": {
+            "type": {
+              "const": "BiRewrite",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/GenericRewrite"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Perform an [`Action`] on the global database\n(see documentation for [`Action`] for more details).\nExample:\n```text\n(let xplusone (Add (Var \"x\") (Num 1)))\n```",
+          "properties": {
+            "type": {
+              "const": "Action",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/GenericAction"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`extract` a datatype from the egraph, choosing\nthe smallest representative.\nBy default, each constructor costs 1 to extract\n(common subexpressions are not shared in the cost\nmodel).",
+          "properties": {
+            "type": {
+              "const": "Extract",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Runs a [`Schedule`], which specifies\nrulesets and the number of times to run them.\n\nExample:\n```text\n(run-schedule\n    (saturate my-ruleset-1)\n    (run my-ruleset-2 4))\n```\n\nRuns `my-ruleset-1` until saturation,\nthen runs `my-ruleset-2` four times.\n\nSee [`Schedule`] for more details.",
+          "properties": {
+            "type": {
+              "const": "RunSchedule",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/GenericSchedule"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Print runtime statistics about rules\nand rulesets so far.",
+          "properties": {
+            "type": {
+              "const": "PrintOverallStatistics",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The `check` command checks that the given facts\nmatch at least once in the current database.\nThe list of facts is matched in the same way a [`Command::Rule`] is matched.\n\nExample:\n\n```text\n(check (= (+ 1 2) 3))\n(check (<= 0 3) (>= 3 0))\n(fail (check (= 1 2)))\n```\n\nprints\n\n```text\n[INFO ] Checked.\n[INFO ] Checked.\n[ERROR] Check failed\n[INFO ] Command failed as expected.\n```",
+          "properties": {
+            "type": {
+              "const": "Check",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericFact"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Prove",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericFact"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "ProveExists",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Print out rows of a given function, extracting each of the elements of the function.\nExample:\n\n```text\n(print-function Add 20)\n```\nprints the first 20 rows of the `Add` function.\n\n```text\n(print-function Add)\n```\nprints all rows of the `Add` function.\n\n```text\n(print-function Add :file \"add.csv\")\n```\nprints all rows of the `Add` function to a CSV file.",
+          "properties": {
+            "type": {
+              "const": "PrintFunction",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 5,
+              "minItems": 5,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/PrintFunctionMode"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Print out the number of rows in a function or all functions.",
+          "properties": {
+            "type": {
+              "const": "PrintSize",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Input a CSV file directly into a function.",
+          "properties": {
+            "type": {
+              "const": "Input",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                }
+              },
+              "required": [
+                "span",
+                "name",
+                "file"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Extract and output a set of expressions to a file.",
+          "properties": {
+            "type": {
+              "const": "Output",
+              "type": "string"
+            },
+            "value": {
+              "additionalProperties": false,
+              "properties": {
+                "exprs": {
+                  "items": {
+                    "$ref": "#/$defs/GenericExpr"
+                  },
+                  "type": "array"
+                },
+                "file": {
+                  "type": "string"
+                },
+                "span": {
+                  "$ref": "#/$defs/Span"
+                }
+              },
+              "required": [
+                "span",
+                "file",
+                "exprs"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`push` the current egraph `n` times so that it is saved.\nLater, the current database and rules can be restored using `pop`.",
+          "properties": {
+            "type": {
+              "const": "Push",
+              "type": "string"
+            },
+            "value": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`pop` the current egraph, restoring the previous one.\nThe argument specifies how many egraphs to pop.",
+          "properties": {
+            "type": {
+              "const": "Pop",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Assert that a command fails with an error.\n\nThis catches an egglog error but does not roll back effects completed\nbefore it. If recovery from a rule-action error rebuilds successfully,\nlater commands see a canonical partial state. A Rust panic in extension\ncode unwinds normally and is not caught.",
+          "properties": {
+            "type": {
+              "const": "Fail",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericCommand"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Include another egglog file directly as text and run it.",
+          "properties": {
+            "type": {
+              "const": "Include",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User-defined command.",
+          "properties": {
+            "type": {
+              "const": "UserDefined",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericExpr"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GenericExpr": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Var",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Call",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericExpr"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Lit",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/Literal"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GenericFact": {
+      "description": "Facts are the left-hand side of a [`Command::Rule`].\nThey represent a part of a database query.\nFacts can be expressions or equality constraints between expressions.\n\nNote that primitives such as  `!=` are partial.\nWhen two things are equal, it returns nothing and the query does not match.\nFor example, the following egglog code runs:\n```text\n(fail (check (!= 1 1)))\n```",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Eq",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                },
+                {
+                  "$ref": "#/$defs/GenericExpr"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Fact",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/GenericExpr"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GenericRewrite": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/GenericFact"
+          },
+          "type": "array"
+        },
+        "lhs": {
+          "$ref": "#/$defs/GenericExpr"
+        },
+        "name": {
+          "type": "string"
+        },
+        "rhs": {
+          "$ref": "#/$defs/GenericExpr"
+        },
+        "span": {
+          "$ref": "#/$defs/Span"
+        }
+      },
+      "required": [
+        "span",
+        "lhs",
+        "rhs",
+        "conditions",
+        "name"
+      ],
+      "type": "object"
+    },
+    "GenericRule": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "items": {
+            "$ref": "#/$defs/GenericFact"
+          },
+          "type": "array"
+        },
+        "eval_mode": {
+          "$ref": "#/$defs/RuleEvalMode",
+          "description": "How this rule is evaluated; set by `:naive` / `:unsafe-seminaive`."
+        },
+        "head": {
+          "$ref": "#/$defs/GenericActions"
+        },
+        "include_subsumed": {
+          "description": "If `true`, table atoms in this rule match subsumed rows as well as\nlive rows. This is intended for internal maintenance rules, not\nordinary user rewrites.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "A globally unique name for this rule in the EGraph.",
+          "type": "string"
+        },
+        "no_decomp": {
+          "description": "If `true`, this rule skips tree-decomposition during query\nplanning and evaluate rules as a single-bag (without decomposing\nit into smaller queries). Set via the `:no-decomp` rule option.",
+          "type": "boolean"
+        },
+        "ruleset": {
+          "description": "The ruleset this rule belongs to. Defaults to `\"\"`.",
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/Span"
+        }
+      },
+      "required": [
+        "span",
+        "head",
+        "body",
+        "name",
+        "ruleset",
+        "eval_mode",
+        "no_decomp",
+        "include_subsumed"
+      ],
+      "type": "object"
+    },
+    "GenericRunConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "ruleset": {
+          "type": "string"
+        },
+        "until": {
+          "items": {
+            "$ref": "#/$defs/GenericFact"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ruleset"
+      ],
+      "type": "object"
+    },
+    "GenericSchedule": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Saturate",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericSchedule"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Repeat",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/GenericSchedule"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Run",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "$ref": "#/$defs/GenericRunConfig"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Sequence",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Span"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericSchedule"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Literal": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Int",
+              "type": "string"
+            },
+            "value": {
+              "pattern": "^-?(0|[1-9][0-9]*)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Float",
+              "type": "string"
+            },
+            "value": {
+              "pattern": "^[0-9a-f]{16}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "String",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Bool",
+              "type": "string"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PrintFunctionMode": {
+      "description": "The mode of printing a function. The default mode prints the function in a user-friendly way and\nhas an unreliable interface.\nThe CSV mode prints the function in the CSV format.",
+      "enum": [
+        "Default",
+        "CSV"
+      ],
+      "type": "string"
+    },
+    "ProgramFormat": {
+      "enum": [
+        "egglog-program-v1"
+      ],
+      "type": "string"
+    },
+    "ProofConstructorNames": {
+      "additionalProperties": false,
+      "description": "The program-global proof constructor names, recorded on the `Proof` sort as\nthe `:internal-proof-names` annotation (the `Proof` datatype name is the\nsort's own name).",
+      "properties": {
+        "congr": {
+          "type": "string"
+        },
+        "normalize": {
+          "type": "string"
+        },
+        "sym": {
+          "type": "string"
+        },
+        "trans": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "congr",
+        "trans",
+        "sym",
+        "normalize"
+      ],
+      "type": "object"
+    },
+    "RuleEvalMode": {
+      "description": "How a rule is evaluated. The three modes are mutually exclusive, so they\nshare one field on [`GenericRule`].",
+      "oneOf": [
+        {
+          "const": "Seminaive",
+          "description": "Default: seminaive (delta) evaluation with restrictive `Pure`/`Write`\nprimitive contexts (no database reads in the RHS).",
+          "type": "string"
+        },
+        {
+          "const": "Naive",
+          "description": "`:naive`: match the whole database every iteration, with permissive\n`Read`/`Full` contexts so the RHS may read the database.",
+          "type": "string"
+        },
+        {
+          "const": "UnsafeSeminaive",
+          "description": "`:unsafe-seminaive`: like `:naive`'s `Read`/`Full` contexts (the RHS may\nread the database) but keeps delta evaluation. **Unsafe**: an RHS read\nobserves the database mid-iteration and isn't re-evaluated if it changes.",
+          "type": "string"
+        }
+      ]
+    },
+    "RustSpan": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    },
+    "Schema": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "type": "object"
+    },
+    "Span": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Panic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Egglog",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EgglogSpan"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Rust",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/RustSpan"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SrcFile": {
+      "additionalProperties": false,
+      "properties": {
+        "contents": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "contents"
+      ],
+      "type": "object"
+    },
+    "Subdatatypes": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "Variants",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "$ref": "#/$defs/Variant"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "NewSort",
+              "type": "string"
+            },
+            "value": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/GenericExpr"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Variant": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/Span"
+        },
+        "types": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unextractable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "span",
+        "name",
+        "types",
+        "unextractable"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "commands": {
+      "items": {
+        "$ref": "#/$defs/GenericCommand"
+      },
+      "type": "array"
+    },
+    "format": {
+      "$ref": "#/$defs/ProgramFormat"
+    }
+  },
+  "required": [
+    "format",
+    "commands"
+  ],
+  "title": "Program",
+  "type": "object"
+}

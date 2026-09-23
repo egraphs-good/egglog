@@ -11,7 +11,7 @@ macro_rules! span {
     () => {{
         use $crate::ast::{RustSpan, Span};
         Span::Rust(std::sync::Arc::new(RustSpan {
-            file: file!(),
+            file: file!().into(),
             line: line!(),
             column: column!(),
         }))
