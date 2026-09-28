@@ -1779,16 +1779,31 @@ impl CoalescedInsertBatch {
 
 /// Mix a row's cached fingerprint for the temporary coalescing table.
 ///
-/// Folding higher bits into the low bits lets rows that share a destination
-/// bucket use different temporary buckets. For example, fingerprints `0` and
-/// `1 << 17` have identical low 17 bits; after mixing, the latter is
-/// `(1 << 17) | 1`, so even their lowest bucket bit differs. The cached
-/// fingerprint itself stays unchanged for probing the destination table.
+/// `CoalescedInsertBatch::by_key` merges repeated keys within a batch before
+/// they reach the destination table. Reusing the cached fingerprint avoids
+/// hashing each row's key columns again, but both tables select their initial
+/// buckets from the hash's low bits. If batching groups rows by those bits,
+/// distinct keys can crowd the same temporary buckets and lengthen probes.
+///
+/// This was the motivation in the former cache-partitioned mutation buffers:
+/// bits 0..11 selected a bucket within a destination cache window, and bits
+/// 11..17 selected a partition of windows to process together for locality.
+/// Every row in a partition therefore shared bits 11..17. Using those hashes
+/// directly in the smaller coalescing table restricted its initial buckets
+/// wherever its bucket mask overlapped the fixed bits. Shifting by 17 and
+/// XORing folds bits above that partition selector into the low bucket bits,
+/// allowing the temporary table to spread those keys across more buckets.
+/// For example, fingerprints `0` and `1 << 17` have identical low 17 bits;
+/// after mixing, the latter is `(1 << 17) | 1`, so their lowest bit differs.
+///
+/// Current mutation buffers group rows by physical shard, without that cache
+/// partitioning. The mixer remains as a cheap bucket-distribution heuristic;
+/// whether it helps with the current buffers needs separate measurement.
+/// The shift is consequently not a buffer-layout requirement. Only the
+/// temporary lookup hash changes: the cached fingerprint stays unchanged for
+/// destination-table probes, and actual key comparisons establish equality.
 #[inline]
 fn coalesced_hash(hash: CompactHash) -> u64 {
-    // The shift originated with the former partitioned buffer's 11 cache-window
-    // bits plus 6 partition bits. It is now just a mixing choice, not a layout
-    // requirement: key comparisons, not this shift, establish row equality.
     const MIX_SHIFT: u32 = 17;
     let probe_hash = hash.probe().raw();
     probe_hash ^ probe_hash.wrapping_shr(MIX_SHIFT)
