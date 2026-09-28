@@ -29,7 +29,12 @@ mod tests;
 
 type UnionFind = crate::union_find::UnionFind<Value>;
 
+/// Batches and timestamp groups of this size or smaller stay serial.
+const PARALLEL_UNION_THRESHOLD_ROWS: usize = 16 * 1024;
+/// Default task size for runs with enough rows to keep all workers busy.
 const PARALLEL_UNION_CHUNK_ROWS: usize = 16 * 1024;
+/// Finer task size for runs with fewer than 16K rows per worker.
+const SMALL_PARALLEL_UNION_CHUNK_ROWS: usize = 2 * 1024;
 
 #[derive(Clone, Copy)]
 struct UnionChunk {
@@ -471,7 +476,7 @@ impl Table for DisplacedTable {
             total_rows += buffer.len();
             buffers.push(buffer);
         }
-        if total_rows <= PARALLEL_UNION_CHUNK_ROWS {
+        if total_rows <= PARALLEL_UNION_THRESHOLD_ROWS {
             for buffer in &buffers {
                 for row in buffer.iter() {
                     self.changed |= self.insert_impl(row).is_some();
@@ -486,7 +491,7 @@ impl Table for DisplacedTable {
         // within one timestamp is intentionally unconstrained, but a later
         // timestamp cannot race an earlier one.
         for group in groups {
-            if group.rows <= PARALLEL_UNION_CHUNK_ROWS {
+            if group.rows <= PARALLEL_UNION_THRESHOLD_ROWS {
                 for chunk in &chunks[group.chunks] {
                     for row_index in chunk.start..chunk.end {
                         let row = buffers[chunk.buffer].get_row(RowId::from_usize(row_index));
@@ -672,11 +677,20 @@ impl DisplacedTable {
                 groups.last_mut().unwrap()
             }
         };
-        for start in (start..end).step_by(PARALLEL_UNION_CHUNK_ROWS) {
+        // Subdivide modest runs so more workers can participate. Larger runs
+        // keep coarse chunks to amortize scheduling overhead. The serial
+        // admission threshold is independent of this task-size choice.
+        let chunk_rows =
+            if end - start < PARALLEL_UNION_CHUNK_ROWS * parallel::current_num_threads() {
+                SMALL_PARALLEL_UNION_CHUNK_ROWS
+            } else {
+                PARALLEL_UNION_CHUNK_ROWS
+            };
+        for start in (start..end).step_by(chunk_rows) {
             chunks.push(UnionChunk {
                 buffer,
                 start,
-                end: (start + PARALLEL_UNION_CHUNK_ROWS).min(end),
+                end: (start + chunk_rows).min(end),
             });
         }
         group.chunks.end = chunks.len();
