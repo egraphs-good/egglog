@@ -299,6 +299,9 @@ impl Clone for SortedWritesTable {
 struct Buffer {
     pending_rows: DenseIdMap<ShardId, HashedRowBuffer>,
     pending_removals: DenseIdMap<ShardId, HashedRowBuffer>,
+    /// Removals whose row ID was already found during rebuilding, grouped by
+    /// physical shard. Carrying the compact hash and row ID avoids a second
+    /// key lookup; deletion still checks the row ID so a newer row survives.
     pending_known_removals: DenseIdMap<ShardId, Vec<KnownRemoval>>,
     state: Weak<PendingState>,
     n_cols: u32,
@@ -674,6 +677,10 @@ impl SortedWritesTable {
     /// Create a new [`SortedWritesTable`] with the given number of keys,
     /// columns, and an optional sort column.
     ///
+    /// `sort_by: None` supports unordered writes and disables sorted-column
+    /// offsets. The egglog frontend uses a timestamp sort column, but direct
+    /// core-relations clients need not have a timestamp or preserve its order.
+    ///
     /// The `merge_fn` is used to evaluate conflicts when more than one row is
     /// inserted with the same primary key. The old and new proposed values are
     /// passed as the second and third arguments, respectively, with the
@@ -919,8 +926,8 @@ impl SortedWritesTable {
             let mut changed = false;
             // Flush after a bounded number of staged physical rows.
             macro_rules! flush_insert_batch {
-                    () => {{
-                        if !staged.is_empty() {
+                () => {{
+                    if !staged.is_empty() {
                         // Phase 2: Write the staged rows to the row writer. This only
                         // works due to the `ParallelRowBufWriter` machinery.
                         let (start_row, stale) = staged.write_output(&row_writer);
@@ -1017,9 +1024,9 @@ impl SortedWritesTable {
                             cur_row = cur_row.inc();
                         }
                         staged.clear();
-                        }
-                    }};
-                }
+                    }
+                }};
+            }
             // Phase 1: process all incoming updates:
             // * Coalesce rows with the same key in a bounded temporary table.
             // * Copy the staged rows to the shared row buffer in one
@@ -1271,6 +1278,11 @@ impl SortedWritesTable {
 
     /// Compact an unsorted table by walking its live hash entries rather than
     /// scanning the row store, which may be mostly stale.
+    ///
+    /// Timestamp sorting is a frontend convention, not a table invariant:
+    /// [`Self::new`] also supports `sort_by: None`, used by direct table clients
+    /// and the table-mutation benchmarks. That mode needs this compaction path
+    /// without attempting to construct sorted-column offsets.
     ///
     /// Every live row has exactly one entry in exactly one hash shard. Shard
     /// lengths therefore give both the live-row count and a cheap histogram
@@ -1669,38 +1681,38 @@ impl OrderingChecker for SortChecker {
 /// merge outputs.
 struct CoalescedInsertBatch {
     n_keys: usize,
-    hash: Pooled<HashTable<TableEntry>>,
+    by_key: Pooled<HashTable<TableEntry>>,
     rows: RowBuffer,
-    hashes: Vec<CompactHash>,
+    row_hashes: Vec<CompactHash>,
     n_stale: usize,
     scratch: Pooled<Vec<Value>>,
 }
 
 impl CoalescedInsertBatch {
     fn rows_hashed(&self) -> impl Iterator<Item = (CompactHash, &[Value])> {
-        debug_assert_eq!(self.hashes.len(), self.rows.len());
-        self.hashes.iter().copied().zip(self.rows.iter())
+        debug_assert_eq!(self.row_hashes.len(), self.rows.len());
+        self.row_hashes.iter().copied().zip(self.rows.iter())
     }
 
     fn new(n_keys: usize, n_cols: usize, capacity: usize) -> Self {
         let mut res = with_pool_set(|ps| CoalescedInsertBatch {
             n_keys,
-            hash: ps.get(),
+            by_key: ps.get(),
             rows: RowBuffer::new(n_cols),
-            hashes: Vec::with_capacity(capacity),
+            row_hashes: Vec::with_capacity(capacity),
             n_stale: 0,
             scratch: ps.get(),
         });
-        res.hash
+        res.by_key
             .reserve(capacity, |entry| coalesced_hash(entry.hash));
         res.rows.reserve(capacity);
         res
     }
 
     fn clear(&mut self) {
-        self.hash.clear();
+        self.by_key.clear();
         self.rows.clear();
-        self.hashes.clear();
+        self.row_hashes.clear();
         self.n_stale = 0;
     }
 
@@ -1722,9 +1734,9 @@ impl CoalescedInsertBatch {
             return;
         }
 
-        debug_assert_eq!(self.hashes.len(), self.rows.len());
+        debug_assert_eq!(self.row_hashes.len(), self.rows.len());
         use hashbrown::hash_table::Entry;
-        let entry = self.hash.entry(
+        let entry = self.by_key.entry(
             coalesced_hash(hash),
             |entry| {
                 entry.hash == hash
@@ -1742,7 +1754,7 @@ impl CoalescedInsertBatch {
                         "merge functions must preserve table keys"
                     );
                     let new = self.rows.add_row(&self.scratch);
-                    self.hashes.push(hash);
+                    self.row_hashes.push(hash);
                     self.rows.set_stale(occupied.get().row);
                     self.n_stale += 1;
                     occupied.get_mut().row = new;
@@ -1751,24 +1763,33 @@ impl CoalescedInsertBatch {
             }
             Entry::Vacant(vacant) => {
                 let next = self.rows.add_row(row);
-                self.hashes.push(hash);
+                self.row_hashes.push(hash);
                 vacant.insert(TableEntry { hash, row: next });
             }
         }
-        debug_assert_eq!(self.hashes.len(), self.rows.len());
+        debug_assert_eq!(self.row_hashes.len(), self.rows.len());
     }
 
     /// Append all physical rows, returning the first RowId and stale count.
     fn write_output(&self, output: &ParallelRowBufWriter) -> (RowId, usize) {
-        debug_assert_eq!(self.hashes.len(), self.rows.len());
+        debug_assert_eq!(self.row_hashes.len(), self.rows.len());
         (output.append_contents(&self.rows), self.n_stale)
     }
 }
 
+/// Mix a row's cached fingerprint for the temporary coalescing table.
+///
+/// Folding higher bits into the low bits lets rows that share a destination
+/// bucket use different temporary buckets. For example, fingerprints `0` and
+/// `1 << 17` have identical low 17 bits; after mixing, the latter is
+/// `(1 << 17) | 1`, so even their lowest bucket bit differs. The cached
+/// fingerprint itself stays unchanged for probing the destination table.
 #[inline]
 fn coalesced_hash(hash: CompactHash) -> u64 {
-    // Mix the compact probe before using it in the temporary coalescing table
-    // so its fixed bucket/tag fields do not restrict the usable buckets.
-    let hash = hash.probe().raw();
-    hash ^ hash.wrapping_shr(17)
+    // The shift originated with the former partitioned buffer's 11 cache-window
+    // bits plus 6 partition bits. It is now just a mixing choice, not a layout
+    // requirement: key comparisons, not this shift, establish row equality.
+    const MIX_SHIFT: u32 = 17;
+    let probe_hash = hash.probe().raw();
+    probe_hash ^ probe_hash.wrapping_shr(MIX_SHIFT)
 }
