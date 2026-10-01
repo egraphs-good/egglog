@@ -51,7 +51,8 @@ use super::{
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
-        PreparedIndexRef, PreparedJoinIndexes, PreparedPlanIndexes, columns_are_cacheable,
+        PreparedIndexRef, PreparedJoinIndexes, PreparedPlanIndexes, StageMask,
+        columns_are_cacheable,
     },
     probe::{
         AtomRows, LazyArenaHandle, PackedProbe, ProbeIndex, ProbeRequest, Prober,
@@ -1030,7 +1031,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// disjoint ordinal ranges of the already-built scalar index, avoiding a
     /// scan-and-project handoff copy. Tiny leaders stay on the existing path.
     #[allow(clippy::too_many_arguments)]
-    fn top_index_partitions<'rows>(
+    fn top_index_partitions<'rows, M: StageMask>(
         &self,
         stages: &JoinStages,
         stage_index: usize,
@@ -1056,8 +1057,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let stage_prepared = prepared.stage(stage_index);
         debug_assert_eq!(scans.len(), stage_prepared.len());
         let remaining_after_current = prepared
-            .all_stage_mask()
-            .map(|remaining| remaining & !(1u64 << stage_index));
+            .all_stage_mask::<M>()
+            .map(|remaining| remaining & !M::stage_bit(stage_index));
 
         let mut leader = 0;
         let mut leader_size = usize::MAX;
@@ -1115,7 +1116,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// join. Cached scalar intersections use physical index shards, while
     /// fused intersections use ordinal ranges of their cover subset. Later
     /// stages are deliberately not promoted.
-    fn select_top_partitions<'rows>(
+    fn select_top_partitions<'rows, M: StageMask>(
         &self,
         stages: &JoinStages,
         prepared: &'rows PreparedJoinIndexes,
@@ -1134,7 +1135,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let workers = crate::parallel::current_num_threads();
         let stage = &stages.instrs[stage_index];
         match stage {
-            JoinStage::Intersect { .. } => self.top_index_partitions(
+            JoinStage::Intersect { .. } => self.top_index_partitions::<M>(
                 stages,
                 stage_index,
                 prepared,
@@ -1162,12 +1163,57 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     ///
     /// This provides execution-local dynamic variable ordering while leaving
     /// the cached plan immutable.
+    ///
+    /// The [`StageMask`] width is chosen here, once per plan.
     fn run_join_stages<
         'plan,
         'rows,
         'scope,
         A: NumericId + 'scope,
         BUF: ActionBuffer<'scope, 'exec, A>,
+    >(
+        &self,
+        stages: &'plan JoinStages,
+        prepared: &'rows PreparedJoinIndexes,
+        atoms: &'plan Arc<DenseIdMap<AtomId, Atom>>,
+        action: A,
+        binding_info: &mut BindingInfo<'rows, 'exec>,
+        action_buf: &mut BUF,
+    ) where
+        'a: 'scope,
+        'state: 'scope,
+        'exec: 'rows,
+        'rows: 'scope,
+        'plan: 'scope,
+    {
+        if prepared.uses_wide_stage_mask() {
+            self.run_join_stages_with::<_, _, u128>(
+                stages,
+                prepared,
+                atoms,
+                action,
+                binding_info,
+                action_buf,
+            )
+        } else {
+            self.run_join_stages_with::<_, _, u64>(
+                stages,
+                prepared,
+                atoms,
+                action,
+                binding_info,
+                action_buf,
+            )
+        }
+    }
+
+    fn run_join_stages_with<
+        'plan,
+        'rows,
+        'scope,
+        A: NumericId + 'scope,
+        BUF: ActionBuffer<'scope, 'exec, A>,
+        M: StageMask,
     >(
         &self,
         stages: &'plan JoinStages,
@@ -1194,7 +1240,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
         sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
-        let all_stages = prepared.all_stage_mask();
+        let all_stages = prepared.all_stage_mask::<M>();
+        debug_assert!(
+            all_stages.is_some()
+                || (prepared.tail_masks::<u64>().is_none()
+                    && prepared.tail_masks::<u128>().is_none()),
+            "the join must run at the width its tail masks were prepared at"
+        );
 
         // Schedule each coarse top partition as a global job and run its
         // complete subtree inline: `recur_global_serial` supplies a serial
@@ -1205,7 +1257,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         if !stages.instrs.is_empty()
             && action_buf.supports_global_partition()
             && let Some(partitions) =
-                self.select_top_partitions(stages, prepared, atoms, &order, binding_info)
+                self.select_top_partitions::<M>(stages, prepared, atoms, &order, binding_info)
         {
             let mut updates = FrameUpdates::with_capacity(0);
             for partition in partitions {
@@ -1292,13 +1344,21 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     ///   it; the action buffer determines whether later work can run in parallel.
     /// - `remaining_stages` is a bit set of logical stages in the unexecuted
     ///   suffix. It enables constant-time child-shape and value-liveness checks;
-    ///   plans with more than 64 stages use `None` and scan the suffix instead.
+    ///   plans with more than `M::BITS` stages use `None` and scan the suffix
+    ///   instead.
     /// - `binding_info` owns the partial scalar and factorized bindings, current
     ///   row subsets for each atom, and branch-local materializations.
     /// - `action_buf` receives complete bindings and controls whether recursive
     ///   work is run inline or divided into parallel morsels.
     #[allow(clippy::too_many_arguments)]
-    fn run_plan<'plan, 'rows, 'scope, A: NumericId + 'scope, BUF: ActionBuffer<'scope, 'exec, A>>(
+    fn run_plan<
+        'plan,
+        'rows,
+        'scope,
+        A: NumericId + 'scope,
+        BUF: ActionBuffer<'scope, 'exec, A>,
+        M: StageMask,
+    >(
         &self,
         stages: &'plan JoinStages,
         prepared: &'rows PreparedJoinIndexes,
@@ -1308,7 +1368,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         leaf_scans: &mut LeafScans,
         cur: usize,
         top_partition: Option<TopLevelPartition>,
-        remaining_stages: Option<u64>,
+        remaining_stages: Option<M>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
         action_buf: &mut BUF,
     ) where
@@ -1324,11 +1384,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
 
         #[cfg(debug_assertions)]
         if let Some(remaining_stages) = remaining_stages {
-            let suffix = (cur..instr_order.len()).fold(0u64, |mask, position| {
-                mask | (1u64 << instr_order.get(position))
-            });
             debug_assert_eq!(
-                remaining_stages, suffix,
+                remaining_stages,
+                super::join_tail::suffix_stage_mask::<M>(instr_order, cur),
                 "the remaining-stage mask must describe the current physical suffix"
             );
         }
@@ -1359,10 +1417,10 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let stage = &stages.instrs[stage_index];
         let prepared_indexes = prepared.stage(stage_index);
         let remaining_after_current = remaining_stages.map(|remaining| {
-            let stage_bit = 1u64 << stage_index;
+            let stage_bit = M::stage_bit(stage_index);
             debug_assert_ne!(
                 remaining & stage_bit,
-                0,
+                M::EMPTY,
                 "the current stage must still be present in the remaining-stage mask"
             );
             remaining & !stage_bit
