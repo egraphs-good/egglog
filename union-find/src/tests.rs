@@ -1,4 +1,5 @@
 use crate::numeric_id::{NumericId, define_id};
+use std::thread;
 
 use crate::UnionFind;
 
@@ -37,4 +38,26 @@ fn basic_uf() {
             .chain(ids2.iter())
             .all(|&id| uf.find(id) == target)
     );
+}
+
+#[test]
+fn serial_union_find_supports_scoped_atomic_updates() {
+    let mut uf = UnionFind::<Value>::default();
+    let n = 10_000;
+    uf.with_atomic_access(v(n), |access| {
+        thread::scope(|scope| {
+            for thread_id in 0..8 {
+                scope.spawn(move || {
+                    for i in (thread_id + 1..n).step_by(8) {
+                        access.union(v(i - 1), v(i));
+                    }
+                });
+            }
+        });
+    });
+
+    for i in 0..n {
+        assert_eq!(uf.find_naive(v(i)), v(0));
+    }
+    assert_eq!(uf.find_naive(v(n + 1)), v(n + 1));
 }

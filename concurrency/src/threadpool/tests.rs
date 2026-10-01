@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -13,7 +13,10 @@ use crate::{
     without_current_pool,
 };
 
-use super::{MAX_INLINE_SCOPE_HELP_DEPTH, is_background_worker_thread};
+use super::{
+    MAX_INLINE_SCOPE_HELP_DEPTH, ThreadPoolState, ThreadPoolStatePtr, WorkerContext,
+    is_background_worker_thread,
+};
 
 #[test]
 fn scope_runs_spawned_work_and_waits() {
@@ -29,6 +32,213 @@ fn scope_runs_spawned_work_and_waits() {
     });
 
     assert_eq!(counter.load(Ordering::Relaxed), 128);
+}
+
+#[test]
+fn spawn_remains_a_global_queue_compatibility_alias() {
+    let pool = ThreadPool::new(1);
+    pool.reset_scheduler_metrics();
+
+    pool.scope(|scope| scope.spawn(|_| {}));
+
+    let metrics = pool.scheduler_metrics();
+    assert_eq!(metrics.global_pushes, 1);
+    assert_eq!(metrics.global_pops, 1);
+    assert_eq!(metrics.local_pushes, 0);
+    assert_eq!(metrics.local_pops, 0);
+}
+
+#[test]
+fn spawn_local_from_root_falls_back_to_global_queue() {
+    let pool = ThreadPool::new(1);
+    pool.reset_scheduler_metrics();
+
+    pool.scope(|scope| scope.spawn_local(|_| {}));
+
+    let metrics = pool.scheduler_metrics();
+    assert_eq!(metrics.global_pushes, 1);
+    assert_eq!(metrics.global_pops, 1);
+    assert_eq!(metrics.local_pushes, 0);
+}
+
+#[test]
+fn owner_runs_local_work_depth_first_before_global_work() {
+    let pool = ThreadPool::new(1);
+    let first_started = Notification::new();
+    let release_first = Notification::new();
+    let order = Mutex::new(Vec::new());
+
+    pool.scope(|scope| {
+        scope.spawn_global(|scope| {
+            order.lock().unwrap().push("parent");
+            first_started.notify();
+            release_first.wait();
+            scope.spawn_local(|_| order.lock().unwrap().push("local-oldest"));
+            scope.spawn_local(|_| order.lock().unwrap().push("local-newest"));
+        });
+
+        first_started.wait();
+        scope.spawn_global(|_| order.lock().unwrap().push("global"));
+        release_first.notify();
+    });
+
+    assert_eq!(
+        order.into_inner().unwrap(),
+        ["parent", "local-newest", "local-oldest", "global"]
+    );
+    let metrics = pool.scheduler_metrics();
+    assert_eq!(metrics.local_pushes, 2);
+    assert_eq!(metrics.local_pops, 2);
+    assert_eq!(metrics.donated_jobs, 0);
+}
+
+#[test]
+fn nested_scope_help_takes_local_work_before_global_work() {
+    let pool = ThreadPool::new(1);
+    let parent_started = Notification::new();
+    let release_parent = Notification::new();
+    let order = Mutex::new(Vec::new());
+
+    pool.scope(|scope| {
+        scope.spawn_global(|_| {
+            order.lock().unwrap().push("parent-start");
+            parent_started.notify();
+            release_parent.wait();
+
+            threadpool_scope(|nested| {
+                nested.spawn_local(|_| order.lock().unwrap().push("nested-local"));
+            });
+            order.lock().unwrap().push("parent-after-nested");
+        });
+
+        parent_started.wait();
+        scope.spawn_global(|_| order.lock().unwrap().push("global"));
+        release_parent.notify();
+    });
+
+    assert_eq!(
+        order.into_inner().unwrap(),
+        [
+            "parent-start",
+            "nested-local",
+            "parent-after-nested",
+            "global"
+        ]
+    );
+}
+
+#[test]
+fn donation_moves_half_of_the_oldest_local_jobs() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 1);
+    let worker = WorkerContext::new(ThreadPoolStatePtr::new(&state), 0);
+    let order = Arc::new(Mutex::new(Vec::new()));
+
+    // Build the queue directly so one donation decision observes all six jobs.
+    // This isolates deque-end and half-transfer policy from worker timing.
+    unsafe {
+        let queue = &mut *worker.local.get();
+        for value in 0..6 {
+            let order = order.clone();
+            queue.push_back(Box::new(move || order.lock().unwrap().push(value)));
+        }
+    }
+    state
+        .instrumentation
+        .stalled_workers
+        .store(1, Ordering::Release);
+
+    worker.donate_half_if_stalled(&state);
+    state
+        .instrumentation
+        .stalled_workers
+        .store(0, Ordering::Release);
+
+    for _ in 0..3 {
+        state.try_recv_global().unwrap()();
+    }
+    while let Some(job) = worker.pop_local(&state) {
+        job();
+    }
+
+    assert_eq!(*order.lock().unwrap(), [0, 1, 2, 5, 4, 3]);
+    let metrics = state.instrumentation.snapshot();
+    assert_eq!(metrics.donated_jobs, 3);
+    assert_eq!(metrics.global_pushes, 3);
+    assert_eq!(metrics.global_pops, 3);
+    assert_eq!(metrics.local_pops, 3);
+}
+
+#[test]
+fn stalled_worker_signal_causes_public_local_work_to_be_donated() {
+    let pool = ThreadPool::new(2);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while pool.scheduler_metrics().stalled_workers != 2 {
+        assert!(Instant::now() < deadline, "workers did not become stalled");
+        thread::yield_now();
+    }
+    pool.reset_scheduler_metrics();
+
+    pool.scope(|scope| {
+        scope.spawn_global(|scope| {
+            for _ in 0..16 {
+                scope.spawn_local(|_| {});
+            }
+        });
+    });
+
+    let metrics = pool.scheduler_metrics();
+    assert_eq!(metrics.local_pushes, 16);
+    assert!(metrics.donated_jobs > 0);
+    assert_eq!(
+        metrics.local_pushes,
+        metrics.local_pops + metrics.donated_jobs
+    );
+    assert_eq!(metrics.global_pushes, 1 + metrics.donated_jobs);
+    assert_eq!(metrics.global_pushes, metrics.global_pops);
+    assert!(metrics.max_local_queue_depth >= 2);
+}
+
+#[test]
+fn stalled_time_snapshots_include_stalls_in_progress() {
+    let pool = ThreadPool::new(2);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while pool.scheduler_metrics().stalled_workers != 2 {
+        assert!(Instant::now() < deadline, "workers did not become stalled");
+        thread::yield_now();
+    }
+
+    let before = pool.scheduler_metrics();
+    thread::sleep(Duration::from_millis(2));
+    let delta = pool.scheduler_metrics().delta_since(before);
+    assert!(delta.stalled_time >= Duration::from_millis(2));
+    assert_eq!(delta.stalled_workers, 2);
+
+    pool.reset_scheduler_metrics();
+    let after_reset = pool.scheduler_metrics();
+    thread::sleep(Duration::from_millis(2));
+    let reset_delta = pool.scheduler_metrics().delta_since(after_reset);
+    assert!(reset_delta.stalled_time >= Duration::from_millis(2));
+}
+
+#[test]
+fn panic_from_local_work_is_propagated_after_the_scope_drains() {
+    let pool = ThreadPool::new(1);
+    let sibling_completed = AtomicBool::new(false);
+
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        pool.scope(|scope| {
+            scope.spawn_global(|scope| {
+                scope.spawn_local(|_| sibling_completed.store(true, Ordering::Release));
+                // Local jobs are LIFO, so the panic runs first. Its job wrapper
+                // must record the panic and let the worker drain the sibling.
+                scope.spawn_local(|_| panic!("local worker panic"));
+            });
+        });
+    }));
+
+    assert!(result.is_err());
+    assert!(sibling_completed.load(Ordering::Acquire));
 }
 
 #[test]
@@ -378,6 +588,28 @@ fn install_sets_and_restores_current_pool() {
 }
 
 #[test]
+fn spawn_local_does_not_use_a_different_pools_worker_queue() {
+    let outer = ThreadPool::new(1);
+    let inner = ThreadPool::new(1);
+    let completed = AtomicBool::new(false);
+    inner.reset_scheduler_metrics();
+
+    outer.scope(|scope| {
+        scope.spawn_global(|_| {
+            inner.scope(|scope| {
+                scope.spawn_local(|_| completed.store(true, Ordering::Release));
+            });
+        });
+    });
+
+    assert!(completed.load(Ordering::Acquire));
+    let metrics = inner.scheduler_metrics();
+    assert_eq!(metrics.local_pushes, 0);
+    assert_eq!(metrics.global_pushes, 1);
+    assert_eq!(metrics.global_pops, 1);
+}
+
+#[test]
 fn without_current_pool_clears_and_restores_current_pool() {
     let pool = ThreadPool::new(2);
 
@@ -600,4 +832,32 @@ fn deeply_nested_background_waits_fall_back_to_backup_worker() {
     assert_eq!(completed.load(Ordering::Acquire), 1);
     assert!(pool.state.backup_workers_spawned() >= 1);
     assert_eq!(pool.state.backup_workers_live(), 0);
+}
+
+#[test]
+fn deeply_nested_local_work_is_donated_to_backup_worker() {
+    fn recurse(depth: usize, completed: &AtomicUsize) {
+        if depth == 0 {
+            completed.fetch_add(1, Ordering::Release);
+            return;
+        }
+
+        threadpool_scope(|scope| {
+            scope.spawn_local(move |_| recurse(depth - 1, completed));
+        });
+    }
+
+    let pool = ThreadPool::new(1);
+    let completed = AtomicUsize::new(0);
+
+    pool.scope(|scope| {
+        scope.spawn_global(|_| {
+            recurse(MAX_INLINE_SCOPE_HELP_DEPTH + 8, &completed);
+        });
+    });
+
+    assert_eq!(completed.load(Ordering::Acquire), 1);
+    assert!(pool.state.backup_workers_spawned() >= 1);
+    assert_eq!(pool.state.backup_workers_live(), 0);
+    assert!(pool.scheduler_metrics().donated_jobs >= 1);
 }

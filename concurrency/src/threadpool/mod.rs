@@ -1,12 +1,15 @@
-//! A small scoped thread pool backed by a shared crossbeam channel.
+//! A small scoped thread pool with global and worker-local work queues.
 //!
 //! [`ThreadPool`] owns a fixed set of primary worker threads. Each worker
-//! receives boxed `'static` jobs from a shared channel and exits when the
-//! channel is closed. A primary worker that blocks waiting for nested scoped
-//! work helps drain queued jobs until that nested scope completes, so the pool
-//! does not lose a worker while work it needs may still be queued. [`Scope`]
-//! provides the safe scoped API on top of those `'static` jobs by erasing task
-//! lifetimes when work is sent to the channel, then waiting for all work in the
+//! owns a private deque in addition to receiving boxed `'static` jobs from a
+//! shared channel. Local work is pushed and popped at the back, giving the
+//! owner depth-first execution; when another worker is stalled, half of the
+//! oldest local work is donated from the front to the shared queue. A primary
+//! worker that blocks waiting for nested scoped work helps drain its local
+//! deque first and then the shared queue until that nested scope completes, so
+//! the pool does not lose a worker while work it needs may still be queued.
+//! [`Scope`] provides the safe scoped API on top of those `'static` jobs by
+//! erasing task lifetimes when work is queued, then waiting for all work in the
 //! scope before returning to the caller.
 //!
 //! The root callback runs on the caller thread, and spawned callbacks run on
@@ -95,22 +98,22 @@
 
 use std::{
     any::Any,
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
+    collections::VecDeque,
     marker::PhantomData,
     mem,
     panic::{self, AssertUnwindSafe},
     ptr::{self, NonNull},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-
 use crossbeam::channel::{Receiver, Sender, bounded, select_biased, unbounded};
+use crossbeam::utils::CachePadded;
 
 const EXPECTED_SHIFT: u32 = 32;
 const COMPLETED_MASK: u64 = u32::MAX as u64;
@@ -124,8 +127,67 @@ type PanicPayload = Box<dyn Any + Send + 'static>;
 
 thread_local! {
     static CURRENT_POOL: Cell<*const ThreadPoolState> = const { Cell::new(ptr::null()) };
+    static CURRENT_WORKER: Cell<*const WorkerContext> = const { Cell::new(ptr::null()) };
     static IS_BACKGROUND_WORKER: Cell<bool> = const { Cell::new(false) };
     static INLINE_SCOPE_HELP_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// A cumulative snapshot of a thread pool's scheduler instrumentation.
+///
+/// Counter fields and `stalled_time` are cumulative since the pool was created
+/// or [`ThreadPool::reset_scheduler_metrics`] was called. Queue-depth fields
+/// are high-water marks over that same period. `stalled_workers` is a gauge at
+/// the instant of the snapshot rather than a cumulative value.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SchedulerMetrics {
+    /// Jobs pushed onto the shared global queue, including donations.
+    pub global_pushes: u64,
+    /// Jobs popped from the shared global queue.
+    pub global_pops: u64,
+    /// Jobs successfully pushed onto worker-private queues.
+    pub local_pushes: u64,
+    /// Jobs popped by their owning worker from a private queue.
+    pub local_pops: u64,
+    /// Jobs moved from private queues to the global queue.
+    pub donated_jobs: u64,
+    /// Aggregate wall-clock time for which primary workers were stalled.
+    ///
+    /// This includes the elapsed portion of stalls that are still in progress
+    /// when the snapshot is taken, which makes before/after snapshots useful
+    /// even when the pool is idle at both endpoints.
+    pub stalled_time: Duration,
+    /// Number of primary workers currently waiting for global work.
+    pub stalled_workers: usize,
+    /// Largest number of jobs observed in any one worker-private queue.
+    pub max_local_queue_depth: usize,
+    /// Largest number of jobs observed in the global queue.
+    pub max_global_queue_depth: usize,
+}
+
+impl SchedulerMetrics {
+    /// Return the cumulative counter and stalled-time difference from `earlier`.
+    ///
+    /// Queue high-water marks cannot in general be subtracted. The returned
+    /// value therefore retains the later snapshot's high-water marks and its
+    /// current `stalled_workers` gauge. Call
+    /// [`ThreadPool::reset_scheduler_metrics`] immediately before an isolated
+    /// measurement when interval-specific queue high-water marks are needed.
+    pub fn delta_since(self, earlier: Self) -> Self {
+        Self {
+            global_pushes: self.global_pushes.saturating_sub(earlier.global_pushes),
+            global_pops: self.global_pops.saturating_sub(earlier.global_pops),
+            local_pushes: self.local_pushes.saturating_sub(earlier.local_pushes),
+            local_pops: self.local_pops.saturating_sub(earlier.local_pops),
+            donated_jobs: self.donated_jobs.saturating_sub(earlier.donated_jobs),
+            stalled_time: self
+                .stalled_time
+                .checked_sub(earlier.stalled_time)
+                .unwrap_or_default(),
+            stalled_workers: self.stalled_workers,
+            max_local_queue_depth: self.max_local_queue_depth,
+            max_global_queue_depth: self.max_global_queue_depth,
+        }
+    }
 }
 
 /// Return the number of threads in the currently installed thread pool.
@@ -222,11 +284,11 @@ where
     })
 }
 
-/// A thread pool using a single shared work queue.
+/// A thread pool with a shared queue and a private deque per primary worker.
 ///
 /// The pool owns a fixed number of primary workers. A primary worker that
-/// blocks waiting for nested scoped work helps drain the shared queue until the
-/// nested scope completes.
+/// blocks waiting for nested scoped work helps drain its private deque before
+/// the shared queue until the nested scope completes.
 ///
 /// # Examples
 ///
@@ -268,7 +330,7 @@ impl ThreadPool {
         let state = Box::new(ThreadPoolState::new(sender, receiver.clone(), thread_count));
         let state_ptr = ThreadPoolStatePtr::new(&state);
         let workers = (0..thread_count)
-            .map(|_| spawn_worker(receiver.clone(), state_ptr))
+            .map(|worker_id| spawn_worker(receiver.clone(), state_ptr, worker_id))
             .collect();
 
         Self { state, workers }
@@ -286,6 +348,26 @@ impl ThreadPool {
     /// ```
     pub fn thread_count(&self) -> usize {
         self.state.thread_count()
+    }
+
+    /// Return a cumulative snapshot of scheduler instrumentation.
+    ///
+    /// A snapshot includes the elapsed portion of stalls that are still active
+    /// at the instant it is taken. Consequently, subtracting a before snapshot
+    /// from an after snapshot with [`SchedulerMetrics::delta_since`] does not
+    /// attribute idle time before the first snapshot to the measured interval.
+    pub fn scheduler_metrics(&self) -> SchedulerMetrics {
+        self.state.instrumentation.snapshot()
+    }
+
+    /// Reset cumulative scheduler instrumentation and queue high-water marks.
+    ///
+    /// Active worker stalls are split at the reset instant, so idle time before
+    /// the reset is not charged to later snapshots. For meaningful queue
+    /// high-water marks, call this while no callbacks are running or being
+    /// scheduled; this method does not pause the pool.
+    pub fn reset_scheduler_metrics(&self) {
+        self.state.instrumentation.reset()
     }
 
     /// Run `f` with this thread pool installed as the current pool.
@@ -396,10 +478,228 @@ impl Drop for ThreadPool {
     }
 }
 
+#[derive(Default)]
+struct StallTimerState {
+    completed: Duration,
+    started: Option<Instant>,
+}
+
+struct WorkerInstrumentation {
+    local_pushes: AtomicU64,
+    local_pops: AtomicU64,
+    donated_jobs: AtomicU64,
+    max_local_queue_depth: AtomicUsize,
+    stall_timer: Mutex<StallTimerState>,
+}
+
+impl WorkerInstrumentation {
+    fn new() -> Self {
+        Self {
+            local_pushes: AtomicU64::new(0),
+            local_pops: AtomicU64::new(0),
+            donated_jobs: AtomicU64::new(0),
+            max_local_queue_depth: AtomicUsize::new(0),
+            stall_timer: Mutex::new(StallTimerState::default()),
+        }
+    }
+}
+
+struct SchedulerInstrumentation {
+    global_pushes: AtomicU64,
+    global_pops: AtomicU64,
+    stalled_workers: AtomicUsize,
+    workers: Vec<CachePadded<WorkerInstrumentation>>,
+    global_queue_depth: AtomicUsize,
+    max_global_queue_depth: AtomicUsize,
+}
+
+impl SchedulerInstrumentation {
+    fn new(thread_count: usize) -> Self {
+        Self {
+            global_pushes: AtomicU64::new(0),
+            global_pops: AtomicU64::new(0),
+            stalled_workers: AtomicUsize::new(0),
+            workers: (0..thread_count)
+                .map(|_| CachePadded::new(WorkerInstrumentation::new()))
+                .collect(),
+            global_queue_depth: AtomicUsize::new(0),
+            max_global_queue_depth: AtomicUsize::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> SchedulerMetrics {
+        let now = Instant::now();
+        let stalled_time = self
+            .workers
+            .iter()
+            .map(|worker| {
+                let timer = worker
+                    .stall_timer
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                timer.completed.saturating_add(
+                    timer
+                        .started
+                        .map_or(Duration::ZERO, |started| now.duration_since(started)),
+                )
+            })
+            .fold(Duration::ZERO, Duration::saturating_add);
+        let local_pushes = self
+            .workers
+            .iter()
+            .map(|worker| worker.local_pushes.load(Ordering::Relaxed))
+            .sum();
+        let local_pops = self
+            .workers
+            .iter()
+            .map(|worker| worker.local_pops.load(Ordering::Relaxed))
+            .sum();
+        let donated_jobs = self
+            .workers
+            .iter()
+            .map(|worker| worker.donated_jobs.load(Ordering::Relaxed))
+            .sum();
+        let max_local_queue_depth = self
+            .workers
+            .iter()
+            .map(|worker| worker.max_local_queue_depth.load(Ordering::Relaxed))
+            .max()
+            .unwrap_or(0);
+
+        SchedulerMetrics {
+            global_pushes: self.global_pushes.load(Ordering::Relaxed),
+            global_pops: self.global_pops.load(Ordering::Relaxed),
+            local_pushes,
+            local_pops,
+            donated_jobs,
+            stalled_time,
+            stalled_workers: self.stalled_workers.load(Ordering::Acquire),
+            max_local_queue_depth,
+            max_global_queue_depth: self.max_global_queue_depth.load(Ordering::Relaxed),
+        }
+    }
+
+    fn reset(&self) {
+        let now = Instant::now();
+        for worker in &self.workers {
+            let mut timer = worker
+                .stall_timer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            timer.completed = Duration::ZERO;
+            if timer.started.is_some() {
+                timer.started = Some(now);
+            }
+            drop(timer);
+
+            worker.local_pushes.store(0, Ordering::Relaxed);
+            worker.local_pops.store(0, Ordering::Relaxed);
+            worker.donated_jobs.store(0, Ordering::Relaxed);
+            worker.max_local_queue_depth.store(0, Ordering::Relaxed);
+        }
+
+        self.global_pushes.store(0, Ordering::Relaxed);
+        self.global_pops.store(0, Ordering::Relaxed);
+        self.max_global_queue_depth.store(
+            self.global_queue_depth.load(Ordering::Acquire),
+            Ordering::Relaxed,
+        );
+    }
+
+    fn record_global_push(&self) {
+        self.global_pushes.fetch_add(1, Ordering::Relaxed);
+        let depth = self.global_queue_depth.fetch_add(1, Ordering::AcqRel) + 1;
+        self.max_global_queue_depth
+            .fetch_max(depth, Ordering::Relaxed);
+    }
+
+    fn cancel_global_push(&self) {
+        self.global_pushes.fetch_sub(1, Ordering::Relaxed);
+        self.global_queue_depth.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn record_global_pop(&self) {
+        self.global_pops.fetch_add(1, Ordering::Relaxed);
+        self.global_queue_depth.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn record_local_push(&self, worker_id: usize, depth: usize) {
+        let worker = &self.workers[worker_id];
+        worker.local_pushes.fetch_add(1, Ordering::Relaxed);
+        worker
+            .max_local_queue_depth
+            .fetch_max(depth, Ordering::Relaxed);
+    }
+
+    fn record_local_pop(&self, worker_id: usize) {
+        self.workers[worker_id]
+            .local_pops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_donation(&self, worker_id: usize, jobs: usize) {
+        self.workers[worker_id]
+            .donated_jobs
+            .fetch_add(jobs as u64, Ordering::Relaxed);
+    }
+
+    fn has_stalled_workers(&self) -> bool {
+        self.stalled_workers.load(Ordering::Acquire) != 0
+    }
+
+    fn begin_stall(&self, worker_id: usize) {
+        let mut timer = self.workers[worker_id]
+            .stall_timer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        debug_assert!(timer.started.is_none());
+        timer.started = Some(Instant::now());
+        drop(timer);
+        self.stalled_workers.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn end_stall(&self, worker_id: usize) {
+        let now = Instant::now();
+        let mut timer = self.workers[worker_id]
+            .stall_timer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let started = timer
+            .started
+            .take()
+            .expect("primary worker ended a stall it did not begin");
+        timer.completed += now.duration_since(started);
+        drop(timer);
+        self.stalled_workers.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct StalledWorkerGuard<'pool> {
+    instrumentation: &'pool SchedulerInstrumentation,
+    worker_id: usize,
+}
+
+impl<'pool> StalledWorkerGuard<'pool> {
+    fn new(instrumentation: &'pool SchedulerInstrumentation, worker_id: usize) -> Self {
+        instrumentation.begin_stall(worker_id);
+        Self {
+            instrumentation,
+            worker_id,
+        }
+    }
+}
+
+impl Drop for StalledWorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.instrumentation.end_stall(self.worker_id);
+    }
+}
+
 struct ThreadPoolState {
     sender: Option<Sender<Job>>,
     receiver: Receiver<Job>,
     thread_count: usize,
+    instrumentation: SchedulerInstrumentation,
     #[cfg(test)]
     backup_workers_spawned: AtomicUsize,
     #[cfg(test)]
@@ -412,6 +712,7 @@ impl ThreadPoolState {
             sender: Some(sender),
             receiver,
             thread_count,
+            instrumentation: SchedulerInstrumentation::new(thread_count),
             #[cfg(test)]
             backup_workers_spawned: AtomicUsize::new(0),
             #[cfg(test)]
@@ -421,6 +722,38 @@ impl ThreadPoolState {
 
     fn thread_count(&self) -> usize {
         self.thread_count
+    }
+
+    fn enqueue_global(&self, job: Job) {
+        let Some(sender) = self.sender.as_ref() else {
+            job();
+            return;
+        };
+
+        self.instrumentation.record_global_push();
+        if let Err(error) = sender.send(job) {
+            self.instrumentation.cancel_global_push();
+            error.0();
+        }
+    }
+
+    fn try_recv_global(&self) -> Result<Job, crossbeam::channel::TryRecvError> {
+        let result = self.receiver.try_recv();
+        if result.is_ok() {
+            self.instrumentation.record_global_pop();
+        }
+        result
+    }
+
+    fn recv_global(&self, worker_id: usize) -> Result<Job, crossbeam::channel::RecvError> {
+        let result = {
+            let _stalled = StalledWorkerGuard::new(&self.instrumentation, worker_id);
+            self.receiver.recv()
+        };
+        if result.is_ok() {
+            self.instrumentation.record_global_pop();
+        }
+        result
     }
 
     fn scope<'scope, F, R>(&self, f: F) -> R
@@ -450,12 +783,15 @@ impl ThreadPoolState {
         }
 
         let Some(_guard) = InlineScopeHelpGuard::try_enter() else {
+            let worker_id = current_worker_id(self);
+            donate_all_from_current_worker(self);
             let _backup = BackupWorker::spawn(self);
+            let _stalled = worker_id
+                .map(|worker_id| StalledWorkerGuard::new(&self.instrumentation, worker_id));
             receive_scope_completion(done);
             return;
         };
 
-        let receiver = self.receiver.clone();
         loop {
             match done.try_recv() {
                 Ok(()) => break,
@@ -465,7 +801,12 @@ impl ThreadPoolState {
                 }
             }
 
-            match receiver.try_recv() {
+            if let Some(job) = pop_current_worker_local(self) {
+                job();
+                continue;
+            }
+
+            match self.try_recv_global() {
                 Ok(job) => {
                     job();
                     continue;
@@ -477,13 +818,31 @@ impl ThreadPoolState {
                 }
             }
 
-            select_biased! {
-                recv(done) -> message => {
+            enum WaitEvent {
+                Scope(Result<(), crossbeam::channel::RecvError>),
+                Global(Result<Job, crossbeam::channel::RecvError>),
+            }
+
+            let worker_id = current_worker_id(self);
+            let event = {
+                let _stalled = worker_id
+                    .map(|worker_id| StalledWorkerGuard::new(&self.instrumentation, worker_id));
+                select_biased! {
+                    recv(done) -> message => WaitEvent::Scope(message),
+                    recv(self.receiver) -> message => WaitEvent::Global(message),
+                }
+            };
+
+            match event {
+                WaitEvent::Scope(message) => {
                     expect_scope_completion(message);
                     break;
                 }
-                recv(receiver) -> message => match message {
-                    Ok(job) => job(),
+                WaitEvent::Global(message) => match message {
+                    Ok(job) => {
+                        self.instrumentation.record_global_pop();
+                        job();
+                    }
                     Err(_) => {
                         receive_scope_completion(done);
                         break;
@@ -529,6 +888,161 @@ unsafe impl Send for ThreadPoolStatePtr {}
 // uses internally synchronized channel and atomic operations. The pointed-to
 // boxed state remains alive until all worker threads have been joined.
 unsafe impl Sync for ThreadPoolStatePtr {}
+
+/// State owned and accessed exclusively by one primary worker thread.
+///
+/// The deque uses interior mutability so no Rust borrow of the queue is held
+/// while a job is running. Jobs may recursively call `spawn_local`, which then
+/// reaches the same deque through `CURRENT_WORKER` on that thread.
+struct WorkerContext {
+    pool: ThreadPoolStatePtr,
+    worker_id: usize,
+    local: UnsafeCell<VecDeque<Job>>,
+}
+
+impl WorkerContext {
+    fn new(pool: ThreadPoolStatePtr, worker_id: usize) -> Self {
+        Self {
+            pool,
+            worker_id,
+            local: UnsafeCell::new(VecDeque::new()),
+        }
+    }
+
+    fn belongs_to(&self, pool: &ThreadPoolState) -> bool {
+        ptr::eq(self.pool.0, pool)
+    }
+
+    fn push_local(&self, pool: &ThreadPoolState, job: Job) {
+        // SAFETY: a `WorkerContext` is installed only on its owning worker and
+        // `CURRENT_WORKER` is never made available to another thread.
+        let depth = unsafe {
+            let queue = &mut *self.local.get();
+            queue.push_back(job);
+            queue.len()
+        };
+        pool.instrumentation
+            .record_local_push(self.worker_id, depth);
+        self.donate_half_if_stalled(pool);
+    }
+
+    fn pop_local(&self, pool: &ThreadPoolState) -> Option<Job> {
+        self.donate_half_if_stalled(pool);
+        // The owner takes the newest work, retaining depth-first locality.
+        // SAFETY: see `push_local`.
+        let job = unsafe { (&mut *self.local.get()).pop_back() };
+        if job.is_some() {
+            pool.instrumentation.record_local_pop(self.worker_id);
+        }
+        job
+    }
+
+    fn donate_half_if_stalled(&self, pool: &ThreadPoolState) {
+        if !pool.instrumentation.has_stalled_workers() {
+            return;
+        }
+
+        // Donation takes the opposite end from the owner: the oldest siblings
+        // have the weakest connection to the owner's current depth-first path.
+        // SAFETY: see `push_local`.
+        let donated = unsafe {
+            let queue = &mut *self.local.get();
+            let count = queue.len() / 2;
+            queue.drain(..count).collect::<Vec<_>>()
+        };
+        self.publish_donation(pool, donated);
+    }
+
+    fn donate_all(&self, pool: &ThreadPoolState) {
+        // The inline-help depth escape hatch blocks this worker and starts a
+        // backup consumer. Publish everything so private work remains live.
+        // SAFETY: see `push_local`.
+        let donated = unsafe { (&mut *self.local.get()).drain(..).collect::<Vec<_>>() };
+        self.publish_donation(pool, donated);
+    }
+
+    fn publish_donation(&self, pool: &ThreadPoolState, donated: Vec<Job>) {
+        if donated.is_empty() {
+            return;
+        }
+
+        pool.instrumentation
+            .record_donation(self.worker_id, donated.len());
+        for job in donated {
+            pool.enqueue_global(job);
+        }
+    }
+}
+
+fn install_worker_context<F, R>(worker: &WorkerContext, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    CURRENT_WORKER.with(|current| {
+        let previous = current.replace(worker);
+        let _guard = CurrentWorkerGuard { current, previous };
+        f()
+    })
+}
+
+struct CurrentWorkerGuard<'a> {
+    current: &'a Cell<*const WorkerContext>,
+    previous: *const WorkerContext,
+}
+
+impl Drop for CurrentWorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.current.set(self.previous);
+    }
+}
+
+fn with_current_worker<F, R>(f: F) -> R
+where
+    F: FnOnce(Option<&WorkerContext>) -> R,
+{
+    CURRENT_WORKER.with(|current| {
+        let worker = current.get();
+        // SAFETY: the pointer is installed from a live `WorkerContext` on this
+        // same thread and is restored before that context is dropped.
+        f(unsafe { worker.as_ref() })
+    })
+}
+
+fn current_worker_id(pool: &ThreadPoolState) -> Option<usize> {
+    with_current_worker(|worker| {
+        worker
+            .filter(|worker| worker.belongs_to(pool))
+            .map(|worker| worker.worker_id)
+    })
+}
+
+fn push_current_worker_local(pool: &ThreadPoolState, job: Job) -> Result<(), Job> {
+    with_current_worker(
+        |worker| match worker.filter(|worker| worker.belongs_to(pool)) {
+            Some(worker) => {
+                worker.push_local(pool, job);
+                Ok(())
+            }
+            None => Err(job),
+        },
+    )
+}
+
+fn pop_current_worker_local(pool: &ThreadPoolState) -> Option<Job> {
+    with_current_worker(|worker| {
+        worker
+            .filter(|worker| worker.belongs_to(pool))
+            .and_then(|worker| worker.pop_local(pool))
+    })
+}
+
+fn donate_all_from_current_worker(pool: &ThreadPoolState) {
+    with_current_worker(|worker| {
+        if let Some(worker) = worker.filter(|worker| worker.belongs_to(pool)) {
+            worker.donate_all(pool);
+        }
+    });
+}
 
 fn install_pool<F, R>(pool: &ThreadPoolState, f: F) -> R
 where
@@ -648,7 +1162,6 @@ where
 /// assert_eq!(counter.load(Ordering::Relaxed), 1);
 /// ```
 pub struct Scope<'scope> {
-    sender: Sender<Job>,
     pool: ThreadPoolStatePtr,
     state: ScopeState,
     _scope: PhantomData<fn(&'scope ()) -> &'scope ()>,
@@ -657,18 +1170,18 @@ pub struct Scope<'scope> {
 impl<'scope> Scope<'scope> {
     fn new(pool: &ThreadPoolState) -> Self {
         Self {
-            sender: pool.sender.as_ref().unwrap().clone(),
             pool: ThreadPoolStatePtr::new(pool),
             state: ScopeState::new(),
             _scope: PhantomData,
         }
     }
 
-    /// Spawn a callback onto the pool.
+    /// Spawn a callback onto the pool's global queue.
     ///
     /// The callback receives the current scope and may add nested work. It may
     /// borrow values with the scope lifetime. The scope waits for the callback
-    /// before returning, so those borrows cannot outlive their owners.
+    /// before returning, so those borrows cannot outlive their owners. This is
+    /// retained as a compatibility alias for [`Scope::spawn_global`].
     ///
     /// # Examples
     ///
@@ -691,6 +1204,46 @@ impl<'scope> Scope<'scope> {
     /// assert_eq!(counter.load(Ordering::Relaxed), 2);
     /// ```
     pub fn spawn<F>(&self, f: F)
+    where
+        F: FnOnce(&Scope<'scope>) + Send + 'scope,
+    {
+        self.spawn_global(f);
+    }
+
+    /// Spawn a callback onto the pool's global queue.
+    ///
+    /// Global work is visible to every worker immediately and is appropriate
+    /// for coarse top-level partitioning.
+    pub fn spawn_global<F>(&self, f: F)
+    where
+        F: FnOnce(&Scope<'scope>) + Send + 'scope,
+    {
+        let job = self.prepare_job(f);
+        // SAFETY: this scope was created from a live pool, and the pool cannot
+        // be dropped while its borrowed `scope` call is active.
+        unsafe { self.pool.as_ref() }.enqueue_global(job);
+    }
+
+    /// Spawn a callback onto the current worker's private deque.
+    ///
+    /// The owning worker executes local jobs depth-first before consulting the
+    /// global queue. When another worker is stalled, half of the oldest local
+    /// jobs are donated to the global queue. Calls made outside a primary
+    /// worker of this same pool—including calls from the root callback and
+    /// from a worker of a nested, different pool—fall back to the global queue.
+    pub fn spawn_local<F>(&self, f: F)
+    where
+        F: FnOnce(&Scope<'scope>) + Send + 'scope,
+    {
+        let job = self.prepare_job(f);
+        // SAFETY: see `spawn_global`.
+        let pool = unsafe { self.pool.as_ref() };
+        if let Err(job) = push_current_worker_local(pool, job) {
+            pool.enqueue_global(job);
+        }
+    }
+
+    fn prepare_job<F>(&self, f: F) -> Job
     where
         F: FnOnce(&Scope<'scope>) + Send + 'scope,
     {
@@ -717,7 +1270,7 @@ impl<'scope> Scope<'scope> {
         // SAFETY: every erased job records completion in the scope state, and
         // `Scope::complete_root_and_wait` waits for all expected completions
         // before `ThreadPool::scope` returns.
-        enqueue(&self.sender, unsafe { erase_job_lifetime(job) });
+        unsafe { erase_job_lifetime(job) }
     }
 
     fn complete_root_and_wait(&self) {
@@ -898,7 +1451,10 @@ impl BackupWorker {
                         select_biased! {
                             recv(shutdown_receiver) -> _ => break,
                             recv(receiver) -> message => match message {
-                                Ok(job) => job(),
+                                Ok(job) => {
+                                    pool.instrumentation.record_global_pop();
+                                    job();
+                                }
                                 Err(_) => break,
                             },
                         }
@@ -947,28 +1503,43 @@ impl Drop for BackupWorkerLiveGuard<'_> {
     }
 }
 
-fn spawn_worker(receiver: Receiver<Job>, pool: ThreadPoolStatePtr) -> JoinHandle<()> {
+fn spawn_worker(
+    receiver: Receiver<Job>,
+    pool: ThreadPoolStatePtr,
+    worker_id: usize,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         // SAFETY: each worker is joined before the boxed pool state is dropped.
         let pool = unsafe { pool.as_ref() };
+        let worker = WorkerContext::new(ThreadPoolStatePtr::new(pool), worker_id);
         install_pool(pool, || {
-            install_background_worker(|| {
-                for job in receiver {
-                    job();
-                }
+            install_worker_context(&worker, || {
+                install_background_worker(|| {
+                    loop {
+                        if let Some(job) = worker.pop_local(pool) {
+                            job();
+                            continue;
+                        }
+
+                        match receiver.try_recv() {
+                            Ok(job) => {
+                                pool.instrumentation.record_global_pop();
+                                job();
+                                continue;
+                            }
+                            Err(crossbeam::channel::TryRecvError::Empty) => {}
+                            Err(crossbeam::channel::TryRecvError::Disconnected) => break,
+                        }
+
+                        let Ok(job) = pool.recv_global(worker_id) else {
+                            break;
+                        };
+                        job();
+                    }
+                })
             });
         });
     })
-}
-
-fn enqueue(sender: &Sender<Job>, job: Job) {
-    match sender.send(job) {
-        Ok(()) => {}
-        Err(error) => {
-            let job = error.0;
-            job();
-        }
-    }
 }
 
 fn completed(value: u64) -> u32 {

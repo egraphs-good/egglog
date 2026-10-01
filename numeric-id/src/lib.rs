@@ -22,6 +22,22 @@ pub trait NumericId: Copy + Clone + PartialEq + Eq + PartialOrd + Ord + Hash + S
     }
 }
 
+/// A [`NumericId`] whose in-memory representation may be accessed atomically.
+///
+/// # Safety
+///
+/// The ID must have the same size, byte representation, and set of valid bit
+/// patterns as both `Self::Rep` and `Self::Atomic`. (The atomic type may require
+/// stricter alignment; code creating an atomic view must check that separately.)
+/// It must therefore be sound to reinterpret a sufficiently aligned initialized
+/// slice of IDs as a slice of atomic integers, provided that atomic and
+/// non-atomic accesses do not overlap.
+pub unsafe trait AtomicNumericId: NumericId {}
+
+// SAFETY: `usize` and `AtomicUsize` have the same size, byte representation,
+// and valid bit patterns.
+unsafe impl AtomicNumericId for usize {}
+
 impl NumericId for usize {
     type Rep = usize;
     type Atomic = std::sync::atomic::AtomicUsize;
@@ -448,6 +464,7 @@ macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt, pretty $pretty_name:expr) => { define_id!($v $name, $repr, "", pretty $pretty_name); };
     ($v:vis $name:ident, $repr:tt, $doc:tt, pretty $pretty_name:tt) => {
         #[derive(Copy, Clone)]
+        #[repr(transparent)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,
@@ -515,6 +532,10 @@ macro_rules! define_id {
                 self.rep
             }
         }
+
+        // SAFETY: this ID is `repr(transparent)` over its integer
+        // representation, and `Atomic` is the corresponding atomic integer.
+        unsafe impl $crate::AtomicNumericId for $name {}
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {

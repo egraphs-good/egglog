@@ -9,10 +9,13 @@ use egglog_reports::ReportLevel;
 use crate::numeric_id::NumericId;
 
 use crate::{
-    PlanStrategy,
+    PlanStrategy, Subset,
     action::WriteVal,
     common::Value,
-    free_join::{CounterId, Database, TableId},
+    free_join::{
+        CounterId, Database, TableId,
+        plan::{JoinStage, Plan},
+    },
     make_external_func,
     query::RuleSetBuilder,
     table::SortedWritesTable,
@@ -36,6 +39,124 @@ fn run_serial_and_parallel(f: impl Fn() + Send + Sync) {
             pool.install(&f);
         }
     }
+}
+
+fn add_set_table(db: &mut Database, arity: usize) -> TableId {
+    db.add_table(
+        SortedWritesTable::new(
+            arity,
+            arity,
+            None,
+            vec![],
+            Box::new(|_, old, new, _| {
+                assert_eq!(old, new, "set-table keys contain the complete row");
+                false
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    )
+}
+
+fn table_rows(db: &Database, table: TableId) -> Vec<Vec<Value>> {
+    let table = db.get_table(table);
+    let mut rows = table
+        .scan(table.all().as_ref())
+        .iter()
+        .map(|(_, row)| row.to_vec())
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn reservable_counter_recycles_execution_state_tails() {
+    let mut db = Database::new();
+    let counter = db.add_reservable_counter(4);
+
+    let first = db.with_execution_state(None, |state| {
+        [state.inc_counter(counter), state.inc_counter(counter)]
+    });
+    assert_eq!(first, [0, 1]);
+    assert_eq!(db.read_counter(counter), 4);
+
+    let second = db.with_execution_state(None, |state| {
+        [
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+        ]
+    });
+    assert_eq!(second, [2, 3, 4]);
+    assert_eq!(db.read_counter(counter), 8);
+
+    let third = db.with_execution_state(None, |state| {
+        [
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+            state.inc_counter(counter),
+        ]
+    });
+    assert_eq!(third, [5, 6, 7]);
+    assert_eq!(db.read_counter(counter), 8);
+}
+
+#[test]
+fn ordinary_counter_remains_exact_in_execution_state() {
+    let mut db = Database::new();
+    let counter = db.add_counter();
+
+    db.with_execution_state(None, |state| {
+        assert_eq!(state.inc_counter(counter), 0);
+        assert_eq!(state.read_counter(counter), 1);
+        assert_eq!(state.inc_counter(counter), 1);
+        assert_eq!(state.read_counter(counter), 2);
+    });
+    assert_eq!(db.read_counter(counter), 2);
+}
+
+#[test]
+fn reservable_counter_is_unique_across_execution_states() {
+    const THREADS: usize = 8;
+    const IDS_PER_THREAD: usize = 1_000;
+
+    let mut db = Database::new();
+    let counter = db.add_reservable_counter(64);
+    let mut ids = std::thread::scope(|scope| {
+        let handles = (0..THREADS)
+            .map(|_| {
+                let db = &db;
+                scope.spawn(move || {
+                    db.with_execution_state(None, |state| {
+                        (0..IDS_PER_THREAD)
+                            .map(|_| state.inc_counter(counter))
+                            .collect::<Vec<_>>()
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+
+    assert_eq!(ids.len(), THREADS * IDS_PER_THREAD);
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), THREADS * IDS_PER_THREAD);
+    let high_water = db.read_counter(counter);
+    assert!(high_water >= ids.len());
+
+    let recycled = db.with_execution_state(None, |state| {
+        (ids.len()..high_water)
+            .map(|_| state.inc_counter(counter))
+            .collect::<Vec<_>>()
+    });
+    ids.extend(recycled);
+    ids.sort_unstable();
+    assert_eq!(ids, (0..high_water).collect::<Vec<_>>());
+    assert_eq!(db.read_counter(counter), high_water);
 }
 
 #[test]
@@ -211,6 +332,1968 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let mut got = Vec::from_iter(vals.iter().map(|(_, row)| row.to_vec()));
     got.sort();
     assert_eq!(expected, got);
+}
+
+#[test]
+fn prepared_plan_indexes_refresh_across_runs_and_clear() {
+    let mut db = Database::default();
+    let make_table = |arity| {
+        SortedWritesTable::new(
+            arity,
+            arity,
+            None,
+            vec![],
+            Box::new(|_, old, new, _| {
+                assert_eq!(old, new, "test tables have unique keys");
+                false
+            }),
+        )
+    };
+    let driver = db.add_table(make_table(2), iter::empty(), iter::empty());
+    let target = db.add_table(make_table(3), iter::empty(), iter::empty());
+    let allowed = db.add_table(make_table(1), iter::empty(), iter::empty());
+    let output = db.add_table(make_table(1), iter::empty(), iter::empty());
+
+    const KEYS: usize = 4;
+    const VALUES_PER_KEY: usize = 32;
+    let populate_inputs = |db: &Database, value_base: usize| {
+        {
+            let mut buf = db.new_buffer(target);
+            for x in 0..KEYS {
+                for z in 0..VALUES_PER_KEY {
+                    buf.stage_insert(&[v(x), v(10_000 + x), v(value_base + x * 100 + z)]);
+                }
+            }
+        }
+        {
+            let mut buf = db.new_buffer(allowed);
+            for x in 0..KEYS {
+                for z in 0..VALUES_PER_KEY {
+                    buf.stage_insert(&[v(value_base + x * 100 + z)]);
+                }
+            }
+        }
+    };
+
+    {
+        let mut buf = db.new_buffer(driver);
+        for x in 0..KEYS {
+            buf.stage_insert(&[v(x), v(10_000 + x)]);
+        }
+    }
+    populate_inputs(&db, 20_000);
+    db.merge_all();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::PureSize);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
+    query.add_atom(driver, &[x.into(), y.into()], &[]).unwrap();
+    query
+        .add_atom(target, &[x.into(), y.into(), z.into()], &[])
+        .unwrap();
+    query.add_atom(allowed, &[z.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[z.into()]).unwrap();
+    rule.build_with_description("prepared-index-lifecycle");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert!(
+        plan.stages.instrs.iter().any(|stage| matches!(
+            stage,
+            JoinStage::FusedIntersect { to_intersect, .. }
+                if to_intersect
+                    .iter()
+                    .any(|(scan, _)| scan.to_index.vars.len() > 1)
+        )),
+        "test must exercise a prepared tuple index"
+    );
+    assert!(
+        plan.stages
+            .instrs
+            .iter()
+            .any(|stage| matches!(stage, JoinStage::Intersect { scans, .. } if !scans.is_empty())),
+        "test must exercise a prepared column index"
+    );
+
+    let planned_tuple_lookups = plan
+        .stages
+        .instrs
+        .iter()
+        .map(|stage| match stage {
+            JoinStage::Intersect { .. } => 0,
+            JoinStage::FusedIntersect { to_intersect, .. }
+            | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                .iter()
+                .filter(|(scan, _)| {
+                    plan.atoms[scan.to_index.atom].table == target && scan.to_index.vars.len() != 1
+                })
+                .count(),
+        })
+        .sum::<usize>();
+    let planned_allowed_column_lookups = plan
+        .stages
+        .instrs
+        .iter()
+        .map(|stage| match stage {
+            JoinStage::Intersect { scans, .. } => scans
+                .iter()
+                .filter(|scan| plan.atoms[scan.atom].table == allowed)
+                .count(),
+            JoinStage::FusedIntersect { to_intersect, .. }
+            | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                .iter()
+                .filter(|(scan, _)| {
+                    plan.atoms[scan.to_index.atom].table == allowed && scan.to_index.vars.len() == 1
+                })
+                .count(),
+        })
+        .sum::<usize>();
+    assert!(planned_tuple_lookups > 0);
+    assert!(planned_allowed_column_lookups > 0);
+
+    let expected = KEYS * VALUES_PER_KEY;
+    let tuple_lookups_before = db.get_table_info(target).indexes.get_or_insert_calls();
+    let allowed_column_lookups_before = db
+        .get_table_info(allowed)
+        .column_indexes
+        .get_or_insert_calls();
+    let first = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(first.num_matches("prepared-index-lifecycle"), expected);
+    assert_eq!(db.get_table(output).len(), expected);
+    assert_eq!(
+        db.get_table_info(target).indexes.get_or_insert_calls() - tuple_lookups_before,
+        planned_tuple_lookups,
+        "tuple-index catalog access must be plan-static, not recursion-static"
+    );
+    assert_eq!(
+        db.get_table_info(allowed)
+            .column_indexes
+            .get_or_insert_calls()
+            - allowed_column_lookups_before,
+        planned_allowed_column_lookups,
+        "column-index catalog access must be plan-static, not recursion-static"
+    );
+
+    // Reusing the same logical plan must not retain catalog Arcs across the
+    // merge at the end of the previous run.
+    let second = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(second.num_matches("prepared-index-lifecycle"), expected);
+    assert_eq!(db.get_table(output).len(), expected);
+
+    db.clear_table(target);
+    db.clear_table(allowed);
+    db.clear_table(output);
+    populate_inputs(&db, 40_000);
+    db.merge_all();
+
+    // Clearing bumps the table generation, so every prepared global index must
+    // be refreshed before its borrowed reference is exposed to execution.
+    let after_clear = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        after_clear.num_matches("prepared-index-lifecycle"),
+        expected
+    );
+    let output_table = db.get_table(output);
+    let output_rows = output_table.scan(output_table.all().as_ref());
+    assert_eq!(output_rows.len(), expected);
+    assert!(output_rows.iter().all(|(_, row)| row[0].index() >= 40_000));
+}
+
+#[test]
+fn prepared_plan_indexes_preserve_uncacheable_columns() {
+    let mut db = Database::default();
+    let displaced = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+    let make_table = || {
+        SortedWritesTable::new(
+            1,
+            1,
+            None,
+            vec![],
+            Box::new(|_, old, new, _| {
+                assert_eq!(old, new);
+                false
+            }),
+        )
+    };
+    let representatives = db.add_table(make_table(), iter::empty(), iter::empty());
+    let output = db.add_table(make_table(), iter::empty(), iter::empty());
+    {
+        let mut buf = db.new_buffer(displaced);
+        buf.stage_insert(&[v(0), v(10), v(0)]);
+    }
+    db.merge_all();
+    let displaced_table = db.get_table(displaced);
+    let displaced_rows = displaced_table.scan(displaced_table.all().as_ref());
+    let displaced_row = displaced_rows.iter().next().unwrap().1;
+    let displaced_key = displaced_row[0];
+    let canonical = displaced_row[1];
+    let displaced_timestamp = displaced_row[2];
+    {
+        let mut buf = db.new_buffer(representatives);
+        buf.stage_insert(&[canonical]);
+    }
+    db.merge_all();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    let representative = query.new_var_named("representative");
+    query
+        .add_atom(
+            displaced,
+            &[
+                displaced_key.into(),
+                representative.into(),
+                displaced_timestamp.into(),
+            ],
+            &[],
+        )
+        .unwrap();
+    query
+        .add_atom(representatives, &[representative.into()], &[])
+        .unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[representative.into()]).unwrap();
+    rule.build_with_description("uncacheable-prepared-index");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert!(plan.stages.instrs.iter().any(|stage| matches!(
+        stage,
+        JoinStage::Intersect { scans, .. }
+            if scans.iter().any(|scan| {
+                plan.atoms[scan.atom].table == displaced && scan.column == ColumnId::new(1)
+            })
+    )));
+
+    let catalog_calls_before = db
+        .get_table_info(displaced)
+        .column_indexes
+        .get_or_insert_calls();
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(report.num_matches("uncacheable-prepared-index"), 1);
+    assert_eq!(
+        db.get_table_info(displaced)
+            .column_indexes
+            .get_or_insert_calls(),
+        catalog_calls_before,
+        "preparation must not create a global index for a dynamic column"
+    );
+    assert_eq!(db.get_table(output).len(), 1);
+}
+
+#[test]
+fn packed_uncacheable_root_matches_oracle() {
+    run_serial_and_parallel(packed_uncacheable_root_matches_oracle_inner);
+}
+
+fn packed_uncacheable_root_matches_oracle_inner() {
+    let mut db = Database::default();
+    let displaced = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+    let representatives = add_set_table(&mut db, 1);
+    let output = add_set_table(&mut db, 1);
+
+    {
+        let mut buf = db.new_buffer(displaced);
+        for i in 0..19 {
+            buf.stage_insert(&[v(i), v(10_000 + i), v(i)]);
+        }
+    }
+    db.merge_all();
+
+    // The representative is computed dynamically by DisplacedTable, so derive
+    // the oracle from its logical rows rather than assuming a union-find tie
+    // break. Column 1 is explicitly uncacheable in the table specification.
+    let displaced_rows = table_rows(&db, displaced);
+    assert_eq!(displaced_rows.len(), 19);
+    let mut expected = displaced_rows.iter().map(|row| row[1]).collect::<Vec<_>>();
+    expected.sort();
+    expected.dedup();
+    {
+        let mut buf = db.new_buffer(representatives);
+        for representative in &expected {
+            buf.stage_insert(&[*representative]);
+        }
+        buf.stage_insert(&[v(999_999)]);
+    }
+    db.merge_all();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    // Make representative the first variable. The other two variables are
+    // existential and need no stage once this atom has been visited.
+    let representative = query.new_var_named("representative");
+    let displaced_key = query.new_var_named("displaced-key");
+    let timestamp = query.new_var_named("timestamp");
+    query
+        .add_atom(
+            displaced,
+            &[
+                displaced_key.into(),
+                representative.into(),
+                timestamp.into(),
+            ],
+            &[],
+        )
+        .unwrap();
+    query
+        .add_atom(representatives, &[representative.into()], &[])
+        .unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[representative.into()]).unwrap();
+    rule.build_with_description("packed-uncacheable-root");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert_eq!(plan.stages.instrs.len(), 1);
+    assert!(matches!(
+        &plan.stages.instrs[0],
+        JoinStage::Intersect { scans, .. }
+            if scans.iter().any(|scan| {
+                scan.atom.index() < plan.atoms.n_ids()
+                    && plan.atoms[scan.atom].table == displaced
+                    && scan.column == ColumnId::new(1)
+                    && scan.cs.is_empty()
+            })
+    ));
+
+    let catalog_calls = db
+        .get_table_info(displaced)
+        .column_indexes
+        .get_or_insert_calls();
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        report.num_matches("packed-uncacheable-root"),
+        expected.len()
+    );
+    assert_eq!(
+        db.get_table_info(displaced)
+            .column_indexes
+            .get_or_insert_calls(),
+        catalog_calls,
+        "an uncacheable root must use the execution-scoped packed index"
+    );
+    assert_eq!(
+        table_rows(&db, output),
+        expected
+            .into_iter()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn packed_three_column_exact_probe_matches_oracle() {
+    run_serial_and_parallel(packed_three_column_exact_probe_matches_oracle_inner);
+}
+
+fn packed_three_column_exact_probe_matches_oracle_inner() {
+    let mut db = Database::default();
+    let driver = add_set_table(&mut db, 3);
+    let facts = add_set_table(&mut db, 4);
+    let output = add_set_table(&mut db, 4);
+    let mut expected = Vec::new();
+
+    {
+        let mut driver_buf = db.new_buffer(driver);
+        let mut facts_buf = db.new_buffer(facts);
+        for i in 0..7 {
+            let key = [v(i), v(100 + 2 * i), v(200 + 3 * i)];
+            driver_buf.stage_insert(&key);
+
+            // This row has the exact key but fails the slow row constraint.
+            facts_buf.stage_insert(&[key[0], key[1], key[2], v(10 + i)]);
+            for j in 0..4 {
+                let row = vec![key[0], key[1], key[2], v(1_000 + 10 * i + j)];
+                facts_buf.stage_insert(&row);
+                expected.push(row);
+            }
+            // This row passes the constraint but fails the exact probe.
+            facts_buf.stage_insert(&[key[0], v(50_000 + i), key[2], v(60_000 + i)]);
+        }
+    }
+    db.merge_all();
+    expected.sort();
+
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(3),
+        val: v(500),
+    };
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::PureSize);
+    query.set_no_decomp(true);
+    let a = query.new_var_named("a");
+    let b = query.new_var_named("b");
+    let c = query.new_var_named("c");
+    let payload = query.new_var_named("payload");
+    query
+        .add_atom(driver, &[a.into(), b.into(), c.into()], &[])
+        .unwrap();
+    query
+        .add_atom(
+            facts,
+            &[a.into(), b.into(), c.into(), payload.into()],
+            &[slow],
+        )
+        .unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[a.into(), b.into(), c.into(), payload.into()])
+        .unwrap();
+    rule.build_with_description("packed-three-column-probe");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    let exact_probe = plan.stages.instrs.iter().find_map(|stage| match stage {
+        JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.iter().find(|(scan, _)| {
+            plan.atoms[scan.to_index.atom].table == facts && scan.to_index.vars.len() == 3
+        }),
+        JoinStage::Intersect { .. } | JoinStage::FusedIntersectMat { .. } => None,
+    });
+    let Some((scan, key_columns)) = exact_probe else {
+        panic!("the smaller driver must produce a three-column exact facts probe")
+    };
+    assert_eq!(key_columns.len(), 3);
+    assert!(!scan.constraints.is_empty());
+    assert!(
+        plan.stages.instrs.iter().any(|stage| matches!(
+            stage,
+            JoinStage::FusedIntersect { cover, bind, .. }
+                if plan.atoms[cover.to_index.atom].table == facts
+                    && bind.iter().any(|(column, var)| {
+                        *column == ColumnId::new(3) && *var == payload
+                    })
+        )),
+        "the exact packed cursor must continue to the scalar payload level"
+    );
+
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        report.num_matches("packed-three-column-probe"),
+        expected.len()
+    );
+    assert_eq!(table_rows(&db, output), expected);
+}
+
+#[test]
+fn inline_multi_column_exact_probe_matches_oracle() {
+    run_serial_and_parallel(inline_multi_column_exact_probe_matches_oracle_inner);
+}
+
+fn inline_multi_column_exact_probe_matches_oracle_inner() {
+    let mut db = Database::default();
+    let x_gate = add_set_table(&mut db, 1);
+    let driver = add_set_table(&mut db, 3);
+    let facts = db.add_table(
+        SortedWritesTable::new(
+            2,
+            4,
+            None,
+            vec![],
+            Box::new(|_, old, new, out| {
+                if old == new {
+                    false
+                } else {
+                    out.extend_from_slice(new);
+                    true
+                }
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    );
+    let dead_output = add_set_table(&mut db, 3);
+    let live_output = add_set_table(&mut db, 4);
+
+    // This x starts with three physical facts. Updating the first fact leaves
+    // one stale predecessor and one live replacement, so the complete physical
+    // facts root still fits in SmallColumnIndex. Its scalar x intersection must
+    // hand an InlineRows residual to the later multi-column exact probe.
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        for x in 0..1 {
+            facts_buf.stage_insert(&[v(x), v(10 + x), v(600 + x), v(600 + x)]);
+            // This row is live but fails the slow payload constraint.
+            facts_buf.stage_insert(&[v(x), v(20 + x), v(10), v(10)]);
+            // This row passes the constraint but is absent from the driver.
+            facts_buf.stage_insert(&[v(x), v(30 + x), v(3_000), v(3_000)]);
+        }
+    }
+    db.merge_all();
+
+    let mut expected_dead = Vec::new();
+    let mut expected_live = Vec::new();
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        let mut gate_buf = db.new_buffer(x_gate);
+        let mut driver_buf = db.new_buffer(driver);
+        for x in 0..1 {
+            let y = v(10 + x);
+            let new_z = v(1_000 + x);
+            gate_buf.stage_insert(&[v(x)]);
+            driver_buf.stage_insert(&[v(x), y, new_z]);
+
+            // Same (x, y) key: this makes the old-z row stale without changing
+            // the col(2) == col(3) invariant used by the dead/existential query.
+            facts_buf.stage_insert(&[v(x), y, new_z, new_z]);
+            expected_dead.push(vec![v(x), y, new_z]);
+            expected_live.push(vec![v(x), y, new_z, new_z]);
+        }
+    }
+    db.merge_all();
+    expected_dead.sort();
+    expected_live.sort();
+    assert_eq!(db.get_table(facts).all().size(), 4);
+    assert!(db.get_table(facts).has_stale_rows());
+
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(3),
+        val: v(500),
+    };
+    let mut rsb = db.new_rule_set();
+
+    {
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::PureSize);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("dead-x");
+        let y = query.new_var_named("dead-y");
+        let z = query.new_var_named("dead-z");
+        query.add_atom(x_gate, &[x.into()], &[]).unwrap();
+        query
+            .add_atom(driver, &[x.into(), y.into(), z.into()], &[])
+            .unwrap();
+        query
+            .add_atom(
+                facts,
+                &[x.into(), y.into(), z.into(), z.into()],
+                std::slice::from_ref(&slow),
+            )
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(dead_output, &[x.into(), y.into(), z.into()])
+            .unwrap();
+        rule.build_with_description("inline-exact-dead");
+    }
+
+    {
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::PureSize);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("live-x");
+        let y = query.new_var_named("live-y");
+        let z = query.new_var_named("live-z");
+        let payload = query.new_var_named("live-payload");
+        query.add_atom(x_gate, &[x.into()], &[]).unwrap();
+        query
+            .add_atom(driver, &[x.into(), y.into(), z.into()], &[])
+            .unwrap();
+        query
+            .add_atom(
+                facts,
+                &[x.into(), y.into(), z.into(), payload.into()],
+                std::slice::from_ref(&slow),
+            )
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(live_output, &[x.into(), y.into(), z.into(), payload.into()])
+            .unwrap();
+        rule.build_with_description("inline-exact-live");
+    }
+
+    let rules = rsb.build();
+    for (description, expect_live_tail) in
+        [("inline-exact-dead", false), ("inline-exact-live", true)]
+    {
+        let (plan, _, _) = rules
+            .plans
+            .values()
+            .find(|(_, candidate, _)| candidate.as_ref() == description)
+            .expect("missing inline exact-probe plan");
+        let Plan::SinglePlan(plan) = plan else {
+            panic!("set_no_decomp must produce a single plan")
+        };
+
+        let scalar_position = plan
+            .stages
+            .instrs
+            .iter()
+            .position(|stage| {
+                matches!(
+                    stage,
+                    JoinStage::Intersect { scans, .. }
+                        if scans.iter().any(|scan| {
+                            plan.atoms[scan.atom].table == facts
+                                && scan.column == ColumnId::new(0)
+                        })
+                )
+            })
+            .expect("the facts atom must first be reduced by a scalar x scan");
+        let (exact_position, exact_atom) = plan
+            .stages
+            .instrs
+            .iter()
+            .enumerate()
+            .find_map(|(position, stage)| match stage {
+                JoinStage::FusedIntersect {
+                    cover,
+                    to_intersect,
+                    ..
+                } if plan.atoms[cover.to_index.atom].table == driver => to_intersect
+                    .iter()
+                    .find(|(scan, _)| {
+                        plan.atoms[scan.to_index.atom].table == facts
+                            && scan.to_index.vars.len() >= 2
+                    })
+                    .map(|(scan, _)| (position, scan.to_index.atom)),
+                JoinStage::Intersect { .. }
+                | JoinStage::FusedIntersect { .. }
+                | JoinStage::FusedIntersectMat { .. } => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the driver must perform a multi-column exact facts probe: {:#?}",
+                    plan.stages.instrs
+                )
+            });
+        assert!(scalar_position < exact_position);
+
+        let facts_live_after_exact = plan.stages.instrs[exact_position + 1..]
+            .iter()
+            .any(|stage| match stage {
+                JoinStage::Intersect { scans, .. } => {
+                    scans.iter().any(|scan| scan.atom == exact_atom)
+                }
+                JoinStage::FusedIntersect {
+                    cover,
+                    to_intersect,
+                    ..
+                } => {
+                    cover.to_index.atom == exact_atom
+                        || to_intersect
+                            .iter()
+                            .any(|(scan, _)| scan.to_index.atom == exact_atom)
+                }
+                JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                    .iter()
+                    .any(|(scan, _)| scan.to_index.atom == exact_atom),
+            });
+        assert_eq!(facts_live_after_exact, expect_live_tail);
+    }
+
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(report.num_matches("inline-exact-dead"), expected_dead.len());
+    assert_eq!(report.num_matches("inline-exact-live"), expected_live.len());
+    assert_eq!(table_rows(&db, dead_output), expected_dead);
+    assert_eq!(table_rows(&db, live_output), expected_live);
+}
+
+#[test]
+fn packed_root_filters_slow_constraints_before_grouping() {
+    run_serial_and_parallel(packed_root_filters_slow_constraints_before_grouping_inner);
+}
+
+fn packed_root_filters_slow_constraints_before_grouping_inner() {
+    let mut db = Database::default();
+    let candidates = add_set_table(&mut db, 2);
+    let gate = add_set_table(&mut db, 1);
+    let output = add_set_table(&mut db, 1);
+    let mut input = Vec::new();
+
+    {
+        let mut candidates_buf = db.new_buffer(candidates);
+        let mut gate_buf = db.new_buffer(gate);
+        for x in 0..15 {
+            gate_buf.stage_insert(&[v(x)]);
+            let payloads: &[usize] = match x % 3 {
+                0 => &[10, 20],
+                1 => &[10, 70],
+                _ => &[60, 80],
+            };
+            for payload in payloads {
+                candidates_buf.stage_insert(&[v(x), v(*payload)]);
+                input.push((x, *payload));
+            }
+        }
+        gate_buf.stage_insert(&[v(999_999)]);
+    }
+    db.merge_all();
+
+    let mut expected = input
+        .iter()
+        .filter(|(_, payload)| *payload > 50)
+        .map(|(x, _)| vec![v(*x)])
+        .collect::<Vec<_>>();
+    expected.sort();
+    expected.dedup();
+
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(1),
+        val: v(50),
+    };
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    let payload = query.new_var_named("payload");
+    query
+        .add_atom(candidates, &[x.into(), payload.into()], &[slow])
+        .unwrap();
+    query.add_atom(gate, &[x.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[x.into()]).unwrap();
+    rule.build_with_description("packed-slow-filter-before-group");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert!(
+        plan.stages.instrs.iter().any(|stage| matches!(
+            stage,
+            JoinStage::Intersect { scans, .. }
+                if scans.iter().any(|scan| {
+                    plan.atoms[scan.atom].table == candidates
+                        && scan.column == ColumnId::new(0)
+                        && !scan.cs.is_empty()
+                })
+        )),
+        "the slow constraint must be carried into the packed root scan"
+    );
+
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        report.num_matches("packed-slow-filter-before-group"),
+        expected.len()
+    );
+    assert_eq!(table_rows(&db, output), expected);
+}
+
+#[test]
+fn shared_root_indexes_are_single_flight_and_execution_scoped() {
+    run_serial_and_parallel(shared_root_indexes_are_single_flight_and_execution_scoped_inner);
+}
+
+fn shared_root_indexes_are_single_flight_and_execution_scoped_inner() {
+    let mut db = Database::default();
+    let facts = db.add_table(
+        SortedWritesTable::new(
+            1,
+            2,
+            None,
+            vec![],
+            Box::new(|_, old, new, out| {
+                if old == new {
+                    false
+                } else {
+                    out.extend_from_slice(new);
+                    true
+                }
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    );
+    let gate = add_set_table(&mut db, 1);
+    let output_a = add_set_table(&mut db, 2);
+    let output_b = add_set_table(&mut db, 2);
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        let mut gate_buf = db.new_buffer(gate);
+        for x in 0..32 {
+            facts_buf.stage_insert(&[v(x), v(100 + x)]);
+            gate_buf.stage_insert(&[v(x)]);
+        }
+    }
+    db.merge_all();
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        facts_buf.stage_insert(&[v(0), v(1_000)]);
+    }
+    db.merge_all();
+    assert!(db.get_table(facts).has_stale_rows());
+
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(1),
+        val: v(50),
+    };
+    let mut rsb = db.new_rule_set();
+    for (description, output) in [
+        ("shared-root-index-a", output_a),
+        ("shared-root-index-b", output_b),
+    ] {
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("x");
+        let payload = query.new_var_named("payload");
+        query
+            .add_atom(
+                facts,
+                &[x.into(), payload.into()],
+                std::slice::from_ref(&slow),
+            )
+            .unwrap();
+        query.add_atom(gate, &[x.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into(), payload.into()]).unwrap();
+        rule.build_with_description(description);
+    }
+    let rules = rsb.build();
+
+    let expected_first = (0..32)
+        .map(|x| vec![v(x), v(if x == 0 { 1_000 } else { 100 + x })])
+        .collect::<Vec<_>>();
+    let first = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    for description in ["shared-root-index-a", "shared-root-index-b"] {
+        assert_eq!(first.num_matches(description), expected_first.len());
+    }
+    assert_eq!(table_rows(&db, output_a), expected_first);
+    assert_eq!(table_rows(&db, output_b), expected_first);
+
+    db.clear_table(output_a);
+    db.clear_table(output_b);
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        facts_buf.stage_insert(&[v(0), v(2_000)]);
+    }
+    db.merge_all();
+
+    let expected_second = (0..32)
+        .map(|x| vec![v(x), v(if x == 0 { 2_000 } else { 100 + x })])
+        .collect::<Vec<_>>();
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(table_rows(&db, output_a), expected_second);
+    assert_eq!(table_rows(&db, output_b), expected_second);
+}
+
+#[test]
+fn terminal_shared_root_index_is_probed_without_packed_nodes() {
+    run_serial_and_parallel(terminal_shared_root_index_is_probed_without_packed_nodes_inner);
+}
+
+fn terminal_shared_root_index_is_probed_without_packed_nodes_inner() {
+    terminal_shared_root_index_fixture(v(31), 32..128);
+}
+
+#[test]
+fn empty_terminal_shared_root_index_is_probed_without_packed_nodes() {
+    run_serial_and_parallel(empty_terminal_shared_root_index_is_probed_without_packed_nodes_inner);
+}
+
+fn empty_terminal_shared_root_index_is_probed_without_packed_nodes_inner() {
+    terminal_shared_root_index_fixture(v(1_000), 0..0);
+}
+
+fn terminal_shared_root_index_fixture(minimum: Value, expected_values: Range<usize>) {
+    let mut db = Database::default();
+    let facts = add_set_table(&mut db, 1);
+    let gate = add_set_table(&mut db, 1);
+    let output_a = add_set_table(&mut db, 1);
+    let output_b = add_set_table(&mut db, 1);
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        let mut gate_buf = db.new_buffer(gate);
+        for x in 0..128 {
+            facts_buf.stage_insert(&[v(x)]);
+            gate_buf.stage_insert(&[v(x)]);
+        }
+    }
+    db.merge_all();
+
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(0),
+        val: minimum,
+    };
+    let mut rsb = db.new_rule_set();
+    for (description, output) in [
+        ("terminal-shared-root-index-a", output_a),
+        ("terminal-shared-root-index-b", output_b),
+    ] {
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("x");
+        query
+            .add_atom(facts, &[x.into()], std::slice::from_ref(&slow))
+            .unwrap();
+        query.add_atom(gate, &[x.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into()]).unwrap();
+        rule.build_with_description(description);
+    }
+    let rules = rsb.build();
+
+    for (plan, _, _) in rules.plans.values() {
+        let Plan::SinglePlan(plan) = plan else {
+            panic!("set_no_decomp must produce a single plan")
+        };
+        assert_eq!(
+            plan.stages.instrs.len(),
+            1,
+            "the fixture must isolate a terminal root probe"
+        );
+        let JoinStage::Intersect { scans, .. } = &plan.stages.instrs[0] else {
+            panic!("the terminal root probe must be an intersect stage")
+        };
+        assert_eq!(scans.len(), 2);
+        assert!(
+            scans
+                .iter()
+                .any(|scan| { plan.atoms[scan.atom].table == facts && !scan.cs.is_empty() }),
+            "the slow constraint must prevent a persistent catalog probe"
+        );
+    }
+
+    let expected = expected_values.map(|x| vec![v(x)]).collect::<Vec<_>>();
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    for description in [
+        "terminal-shared-root-index-a",
+        "terminal-shared-root-index-b",
+    ] {
+        assert_eq!(report.num_matches(description), expected.len());
+    }
+    assert_eq!(table_rows(&db, output_a), expected);
+    assert_eq!(table_rows(&db, output_b), expected);
+}
+
+#[test]
+fn packed_root_scan_omits_stale_rows_without_a_slow_constraint() {
+    run_serial_and_parallel(packed_root_scan_omits_stale_rows_without_a_slow_constraint_inner);
+}
+
+fn packed_root_scan_omits_stale_rows_without_a_slow_constraint_inner() {
+    let mut db = Database::default();
+    let facts = db.add_table(
+        SortedWritesTable::new(
+            1,
+            2,
+            None,
+            vec![],
+            Box::new(|_, old, new, out| {
+                if old == new {
+                    false
+                } else {
+                    out.extend_from_slice(new);
+                    true
+                }
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    );
+    let gate = add_set_table(&mut db, 1);
+    let output = add_set_table(&mut db, 2);
+
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        for x in 0..32 {
+            facts_buf.stage_insert(&[v(x), v(100 + x)]);
+        }
+    }
+    db.merge_all();
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        facts_buf.stage_insert(&[v(0), v(1_000)]);
+    }
+    {
+        let mut gate_buf = db.new_buffer(gate);
+        for x in 0..1_024 {
+            gate_buf.stage_insert(&[v(x)]);
+        }
+    }
+    db.merge_all();
+    assert!(db.get_table(facts).has_stale_rows());
+    assert_eq!(db.get_table(facts).all().size(), 33);
+
+    let mut expected = (1..32).map(|x| vec![v(x), v(100 + x)]).collect::<Vec<_>>();
+    expected.push(vec![v(0), v(1_000)]);
+    expected.sort();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    let payload = query.new_var_named("payload");
+    query
+        .add_atom(facts, &[x.into(), payload.into()], &[])
+        .unwrap();
+    query.add_atom(gate, &[x.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[x.into(), payload.into()]).unwrap();
+    rule.build_with_description("packed-root-stale-scan");
+
+    let rules = rsb.build();
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(report.num_matches("packed-root-stale-scan"), expected.len());
+    assert_eq!(table_rows(&db, output), expected);
+}
+
+#[test]
+fn small_live_residuals_stay_inline_and_filter_stale_rows() {
+    run_serial_and_parallel(small_live_residuals_stay_inline_and_filter_stale_rows_inner);
+}
+
+fn small_live_residuals_stay_inline_and_filter_stale_rows_inner() {
+    let mut db = Database::default();
+    let facts = db.add_table(
+        SortedWritesTable::new(
+            2,
+            3,
+            None,
+            vec![],
+            Box::new(|_, old, new, out| {
+                if old == new {
+                    false
+                } else {
+                    out.extend_from_slice(new);
+                    true
+                }
+            }),
+        ),
+        iter::empty(),
+        iter::empty(),
+    );
+    let x_gate = add_set_table(&mut db, 1);
+    let y_gate = add_set_table(&mut db, 1);
+    let z_gate = add_set_table(&mut db, 1);
+    let output = add_set_table(&mut db, 3);
+    let parallel_trigger = add_set_table(&mut db, 1);
+
+    // Every physical residual, including the stale predecessor left behind by
+    // the overwrite, fits in the eight-row inline path.
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        facts_buf.stage_insert(&[v(0), v(10), v(20)]);
+        facts_buf.stage_insert(&[v(0), v(11), v(40)]);
+        facts_buf.stage_insert(&[v(1), v(12), v(130)]);
+        facts_buf.stage_insert(&[v(1), v(13), v(30)]);
+    }
+    {
+        // Keep this query's own residuals tiny while making its 32-thread test
+        // run exceed the database-level parallel cutoff. This forces InlineRows
+        // through ScopedActionBuffer's spawned FrameUpdates instead of testing
+        // only the serial InPlaceActionBuffer path.
+        let mut buf = db.new_buffer(parallel_trigger);
+        for i in 0..10_001 {
+            buf.stage_insert(&[v(100_000 + i)]);
+        }
+    }
+    db.merge_all();
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        // Replaces (0, 10, 20), making that physical row stale.
+        facts_buf.stage_insert(&[v(0), v(10), v(120)]);
+    }
+    {
+        let mut buf = db.new_buffer(x_gate);
+        buf.stage_insert(&[v(0)]);
+        buf.stage_insert(&[v(1)]);
+    }
+    {
+        let mut buf = db.new_buffer(y_gate);
+        for y in 10..14 {
+            buf.stage_insert(&[v(y)]);
+        }
+    }
+    {
+        let mut buf = db.new_buffer(z_gate);
+        for z in [20, 30, 40, 120, 130] {
+            buf.stage_insert(&[v(z)]);
+        }
+    }
+    db.merge_all();
+
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
+    query
+        .add_atom(
+            facts,
+            &[x.into(), y.into(), z.into()],
+            &[Constraint::GtConst {
+                col: ColumnId::new(2),
+                val: v(50),
+            }],
+        )
+        .unwrap();
+    query.add_atom(x_gate, &[x.into()], &[]).unwrap();
+    query.add_atom(y_gate, &[y.into()], &[]).unwrap();
+    query.add_atom(z_gate, &[z.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[x.into(), y.into(), z.into()])
+        .unwrap();
+    rule.build_with_description("inline-small-residuals");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    let fact_scalar_scans = plan
+        .stages
+        .instrs
+        .iter()
+        .filter_map(|stage| match stage {
+            JoinStage::Intersect { scans, .. } => Some(scans),
+            JoinStage::FusedIntersect { .. } | JoinStage::FusedIntersectMat { .. } => None,
+        })
+        .flatten()
+        .filter(|scan| plan.atoms[scan.atom].table == facts)
+        .count();
+    assert!(
+        fact_scalar_scans >= 2,
+        "the facts atom must remain live across nested scalar probes"
+    );
+
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(report.num_matches("inline-small-residuals"), 2);
+    assert_eq!(
+        table_rows(&db, output),
+        vec![vec![v(0), v(10), v(120)], vec![v(1), v(12), v(130)]]
+    );
+}
+
+#[test]
+fn packed_execution_references_do_not_cross_rule_set_runs() {
+    run_serial_and_parallel(packed_execution_references_do_not_cross_rule_set_runs_inner);
+}
+
+fn packed_execution_references_do_not_cross_rule_set_runs_inner() {
+    let mut db = Database::default();
+    let driver = add_set_table(&mut db, 2);
+    let facts = add_set_table(&mut db, 3);
+    let output = add_set_table(&mut db, 2);
+    let mut expected = Vec::new();
+
+    {
+        let mut driver_buf = db.new_buffer(driver);
+        let mut facts_buf = db.new_buffer(facts);
+        for x in 0..5 {
+            driver_buf.stage_insert(&[v(x), v(100 + x)]);
+            facts_buf.stage_insert(&[v(x), v(100 + x), v(10 + x)]);
+            let result = vec![v(x), v(1_000 + x)];
+            facts_buf.stage_insert(&[v(x), v(100 + x), result[1]]);
+            expected.push(result);
+        }
+    }
+    db.merge_all();
+    expected.sort();
+
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(2),
+        val: v(500),
+    };
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::PureSize);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let result = query.new_var_named("result");
+    query.add_atom(driver, &[x.into(), y.into()], &[]).unwrap();
+    query
+        .add_atom(facts, &[x.into(), y.into(), result.into()], &[slow])
+        .unwrap();
+    let mut rule = query.build();
+    rule.insert(output, &[x.into(), result.into()]).unwrap();
+    rule.build_with_description("packed-two-runs");
+    let rules = rsb.build();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert!(plan.stages.instrs.iter().any(|stage| matches!(
+        stage,
+        JoinStage::FusedIntersect { to_intersect, .. }
+            if to_intersect.iter().any(|(scan, _)| {
+                plan.atoms[scan.to_index.atom].table == facts
+                    && scan.to_index.vars.len() == 2
+                    && !scan.constraints.is_empty()
+            })
+    )));
+
+    let first = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(first.num_matches("packed-two-runs"), expected.len());
+    assert_eq!(table_rows(&db, output), expected);
+
+    // Reuse exactly the same immutable rule set after changing a packed input.
+    // The first run's arena and prepared continuation slots have been dropped;
+    // the second run must rebuild every execution-scoped reference.
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        for x in 0..5 {
+            let result = vec![v(x), v(2_000 + x)];
+            facts_buf.stage_insert(&[v(x), v(100 + x), result[1]]);
+            expected.push(result);
+        }
+        facts_buf.stage_insert(&[v(999), v(999), v(9_999)]);
+    }
+    db.merge_all();
+    expected.sort();
+
+    let second = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(second.num_matches("packed-two-runs"), expected.len());
+    assert!(second.changed);
+    assert_eq!(table_rows(&db, output), expected);
+}
+
+#[test]
+fn packed_dvo_switches_successor_families_and_matches_oracle() {
+    run_serial_and_parallel(packed_dvo_switches_successor_families_and_matches_oracle_inner);
+}
+
+fn packed_dvo_switches_successor_families_and_matches_oracle_inner() {
+    const X_KEYS: usize = 64;
+    const DOMAIN: usize = 35;
+    const ROWS_PER_FIRST_KEY: usize = 9;
+    const MIN_SUCCESSOR_CARDINALITY: usize = 33;
+
+    let mut db = Database::default();
+    let facts = add_set_table(&mut db, 4);
+    let a_gate = add_set_table(&mut db, 2);
+    let b_gate = add_set_table(&mut db, 2);
+    let c_gate = add_set_table(&mut db, 2);
+    let output_a = add_set_table(&mut db, 4);
+    let output_b = add_set_table(&mut db, 4);
+    let mut expected = Vec::new();
+
+    // At the root, b is globally the smallest successor and is therefore the
+    // fixed plan's second stage. After x has refined all four atoms, even x
+    // groups prefer a (33 < 34 < 35), while odd groups prefer b
+    // (33 < 34 < 35). Every candidate is strictly larger than the executor's
+    // cur=1 DVO threshold of 32.
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        let mut a_buf = db.new_buffer(a_gate);
+        let mut b_buf = db.new_buffer(b_gate);
+        let mut c_buf = db.new_buffer(c_gate);
+        for x in 0..X_KEYS {
+            let (a_len, b_len, c_len) = if x % 2 == 0 {
+                (33, 34, 35)
+            } else {
+                (35, 33, 34)
+            };
+            assert!(
+                [a_len, b_len, c_len]
+                    .into_iter()
+                    .all(|len| len >= MIN_SUCCESSOR_CARDINALITY)
+            );
+
+            for i in 0..a_len {
+                a_buf.stage_insert(&[v(x), v(100_000 + x * DOMAIN + i)]);
+            }
+            for i in 0..b_len {
+                b_buf.stage_insert(&[v(x), v(200_000 + x * DOMAIN + i)]);
+            }
+            for i in 0..c_len {
+                c_buf.stage_insert(&[v(x), v(300_000 + x * DOMAIN + i)]);
+            }
+
+            // Nine rows under every a and every b keep the next residual just
+            // above SMALL_RESIDUAL. The second successor therefore exercises
+            // the arena-backed Dynamic child-family publication rather than
+            // the stack-owned small-index path.
+            for a_index in 0..DOMAIN {
+                for offset in 0..ROWS_PER_FIRST_KEY {
+                    let b_index = (a_index + offset) % DOMAIN;
+                    let c_index = (a_index + 2 * offset) % DOMAIN;
+                    let row = vec![
+                        v(x),
+                        v(100_000 + x * DOMAIN + a_index),
+                        v(200_000 + x * DOMAIN + b_index),
+                        v(300_000 + x * DOMAIN + c_index),
+                    ];
+                    facts_buf.stage_insert(&row);
+                    if a_index < a_len && b_index < b_len && c_index < c_len {
+                        expected.push(row);
+                    }
+                }
+            }
+        }
+    }
+    db.merge_all();
+    expected.sort();
+
+    // The always-true slow constraint prevents a persistent catalog probe for
+    // `facts`. Two otherwise identical plans then share one final root index,
+    // while retaining separate dynamic continuation families below it.
+    let slow = Constraint::GtConst {
+        col: ColumnId::new(3),
+        val: v(0),
+    };
+    let mut rsb = db.new_rule_set();
+    let mut first_vars = None;
+    for (description, output) in [
+        ("packed-dynamic-dvo-a", output_a),
+        ("packed-dynamic-dvo-b", output_b),
+    ] {
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("x");
+        let a = query.new_var_named("a");
+        let b = query.new_var_named("b");
+        let c = query.new_var_named("c");
+        first_vars.get_or_insert((x, a, b, c));
+        query
+            .add_atom(
+                facts,
+                &[x.into(), a.into(), b.into(), c.into()],
+                std::slice::from_ref(&slow),
+            )
+            .unwrap();
+        query.add_atom(a_gate, &[x.into(), a.into()], &[]).unwrap();
+        query.add_atom(b_gate, &[x.into(), b.into()], &[]).unwrap();
+        query.add_atom(c_gate, &[x.into(), c.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into(), a.into(), b.into(), c.into()])
+            .unwrap();
+        rule.build_with_description(description);
+    }
+    let rules = rsb.build();
+    let (x, a, b, c) = first_vars.unwrap();
+
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        panic!("set_no_decomp must produce a single plan")
+    };
+    assert_eq!(plan.stages.instrs.len(), 4);
+    for (var, column) in [(x, 0), (a, 1), (b, 2), (c, 3)] {
+        let stage = plan.stages.instrs.iter().find(|stage| {
+            matches!(stage, JoinStage::Intersect { var: stage_var, .. } if *stage_var == var)
+        });
+        let Some(JoinStage::Intersect { scans, .. }) = stage else {
+            panic!("expected one scalar intersection stage for every variable")
+        };
+        assert!(scans.iter().any(|scan| {
+            plan.atoms[scan.atom].table == facts && scan.column == ColumnId::new(column)
+        }));
+    }
+
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    for description in ["packed-dynamic-dvo-a", "packed-dynamic-dvo-b"] {
+        assert_eq!(report.num_matches(description), expected.len());
+    }
+    assert_eq!(table_rows(&db, output_a), expected);
+    assert_eq!(table_rows(&db, output_b), expected);
+}
+
+#[test]
+fn gj_top_index_shards_preserve_count_and_materialization() {
+    gj_top_index_shards_preserve_count_and_materialization_inner();
+}
+
+fn gj_top_index_shards_preserve_count_and_materialization_inner() {
+    let pool = egglog_concurrency::ThreadPool::new(4);
+    pool.install(|| {
+        let mut db = Database::default();
+        let make_table = || {
+            SortedWritesTable::new(
+                2,
+                2,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "test tables have unique keys");
+                    false
+                }),
+            )
+        };
+        let left = db.add_table(make_table(), iter::empty(), iter::empty());
+        let right = db.add_table(make_table(), iter::empty(), iter::empty());
+        let output = db.add_table(
+            SortedWritesTable::new(
+                2,
+                2,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "materialized pairs are unique");
+                    false
+                }),
+            ),
+            iter::empty(),
+            iter::empty(),
+        );
+
+        const KEYS: usize = 513;
+        const DEGREE: usize = 17;
+        {
+            let mut buf = db.new_buffer(left);
+            for x in 0..KEYS {
+                for y in 0..DEGREE {
+                    buf.stage_insert(&[v(x), v(100_000 + x * DEGREE + y)]);
+                }
+            }
+        }
+        {
+            let mut buf = db.new_buffer(right);
+            for x in 0..KEYS {
+                for z in 0..DEGREE {
+                    buf.stage_insert(&[v(x), v(200_000 + x * DEGREE + z)]);
+                }
+            }
+        }
+        db.merge_all();
+
+        let mut rsb = RuleSetBuilder::new(&mut db);
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        let x = query.new_var_named("x");
+        let y = query.new_var_named("y");
+        let z = query.new_var_named("z");
+        query.add_atom(left, &[x.into(), y.into()], &[]).unwrap();
+        query.add_atom(right, &[x.into(), z.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[y.into(), z.into()]).unwrap();
+        rule.build_with_description("sharded-gj");
+        let rules = rsb.build();
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        let scheduler = pool.scheduler_metrics();
+        // The root rule job plus one job for each of the cached index's
+        // 2 * worker-count shards.  Merge work may add more global jobs.
+        assert!(
+            scheduler.global_pushes >= 9,
+            "top index sharding did not activate: {scheduler:?}"
+        );
+        assert_eq!(
+            scheduler.local_pushes, 0,
+            "the fixed scheduler policy should keep each shard subtree serial"
+        );
+        let expected = KEYS * DEGREE * DEGREE;
+        assert_eq!(report.num_matches("sharded-gj"), expected);
+
+        let table = db.get_table(output);
+        let materialized = table.scan(table.all().as_ref());
+        assert_eq!(materialized.len(), expected);
+        for (_, row) in materialized.iter() {
+            let y = row[0].index() - 100_000;
+            let z = row[1].index() - 200_000;
+            assert_eq!(y / DEGREE, z / DEGREE);
+        }
+    });
+}
+
+#[test]
+fn gj_filtered_top_index_ranges_preserve_count_and_materialization() {
+    let serial = gj_filtered_top_index_range_fixture(1);
+    let parallel = gj_filtered_top_index_range_fixture(4);
+    assert_eq!(parallel.0, serial.0, "parallel match count changed");
+    assert_eq!(parallel.1, serial.1, "parallel actions changed");
+    assert!(
+        parallel.2 > 4,
+        "filtered top-index ranges did not enqueue global work"
+    );
+    assert_eq!(
+        parallel.3, 0,
+        "filtered top-index range subtrees must stay serial"
+    );
+}
+
+/// Return `(matches, materialized rows, global pushes, local pushes)`.
+///
+/// The filtered left input is deliberately smaller than half of its table.
+/// It therefore builds the normal execution-scoped packed scalar index rather
+/// than using the persistent whole-table catalog. Coarse search jobs must
+/// borrow disjoint key ranges from that index without rescanning the table.
+fn gj_filtered_top_index_range_fixture(num_threads: usize) -> (usize, Vec<Vec<Value>>, u64, u64) {
+    let pool = egglog_concurrency::ThreadPool::new(num_threads);
+    pool.install(|| {
+        let mut db = Database::default();
+        let left = db.add_table(
+            SortedWritesTable::new(
+                3,
+                3,
+                Some(ColumnId::new(2)),
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "left rows are unique");
+                    false
+                }),
+            ),
+            iter::empty(),
+            iter::empty(),
+        );
+        let right = add_set_table(&mut db, 2);
+        let output = add_set_table(&mut db, 2);
+
+        const ROWS: usize = 12_001;
+        const NEW_START: usize = 9_001;
+        {
+            let mut left_buf = db.new_buffer(left);
+            let mut right_buf = db.new_buffer(right);
+            for key in 0..NEW_START {
+                left_buf.stage_insert(&[v(key), v(100_000 + key), v(0)]);
+                right_buf.stage_insert(&[v(key), v(200_000 + key)]);
+            }
+        }
+        db.merge_all();
+        {
+            let mut left_buf = db.new_buffer(left);
+            let mut right_buf = db.new_buffer(right);
+            for key in NEW_START..ROWS {
+                left_buf.stage_insert(&[v(key), v(100_000 + key), v(1)]);
+                right_buf.stage_insert(&[v(key), v(200_000 + key)]);
+            }
+        }
+        db.merge_all();
+
+        let recent = Constraint::GeConst {
+            col: ColumnId::new(2),
+            val: v(1),
+        };
+        let mut rsb = db.new_rule_set();
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let key = query.new_var_named("key");
+        let left_value = query.new_var_named("left-value");
+        let timestamp = query.new_var_named("timestamp");
+        let right_value = query.new_var_named("right-value");
+        query
+            .add_atom(
+                left,
+                &[key.into(), left_value.into(), timestamp.into()],
+                std::slice::from_ref(&recent),
+            )
+            .unwrap();
+        query
+            .add_atom(right, &[key.into(), right_value.into()], &[])
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[left_value.into(), right_value.into()])
+            .unwrap();
+        rule.build_with_description("filtered-index-range-gj");
+        let rules = rsb.build();
+
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::SinglePlan(plan) = plan else {
+            panic!("set_no_decomp must produce a single plan")
+        };
+        assert!(matches!(
+            &plan.stages.instrs[0],
+            JoinStage::Intersect { scans, .. } if scans.len() == 2
+        ));
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        let scheduler = pool.scheduler_metrics();
+        let expected = ROWS - NEW_START;
+        assert_eq!(report.num_matches("filtered-index-range-gj"), expected);
+        let rows = table_rows(&db, output);
+        assert_eq!(rows.len(), expected);
+        (
+            report.num_matches("filtered-index-range-gj"),
+            rows,
+            scheduler.global_pushes,
+            scheduler.local_pushes,
+        )
+    })
+}
+
+#[test]
+fn fused_cover_partitions_preserve_matches_and_actions() {
+    let serial = fused_cover_partition_fixture(1, false);
+    let parallel = fused_cover_partition_fixture(4, false);
+    assert_eq!(parallel.0, serial.0, "parallel match count changed");
+    assert_eq!(parallel.1, serial.1, "parallel actions changed");
+    assert!(
+        parallel.2 > 4,
+        "coarse fused-cover partitioning did not enqueue global work"
+    );
+    assert_eq!(
+        parallel.3, 0,
+        "coarse fused-cover subtrees must stay serial"
+    );
+}
+
+#[test]
+fn fused_cover_partitions_preserve_seminaive_subset() {
+    let serial = fused_cover_partition_fixture(1, true);
+    let parallel = fused_cover_partition_fixture(4, true);
+    assert_eq!(parallel.0, serial.0, "parallel match count changed");
+    assert_eq!(parallel.1, serial.1, "parallel actions changed");
+    assert!(
+        parallel.2 > 4,
+        "filtered fused cover did not enqueue global work"
+    );
+    assert_eq!(
+        parallel.3, 0,
+        "filtered fused-cover subtrees must stay serial"
+    );
+}
+
+/// Return `(matches, materialized rows, global pushes, local pushes)`.
+///
+/// The timestamp-filtered case models a seminaive root: its cover is a dense
+/// suffix with a nonzero origin rather than the table's whole-row subset.
+fn fused_cover_partition_fixture(
+    num_threads: usize,
+    timestamp_filtered: bool,
+) -> (usize, Vec<Vec<Value>>, u64, u64) {
+    let pool = egglog_concurrency::ThreadPool::new(num_threads);
+    pool.install(|| {
+        let mut db = Database::default();
+        let facts = db.add_table(
+            SortedWritesTable::new(
+                3,
+                3,
+                Some(ColumnId::new(2)),
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "facts are unique");
+                    false
+                }),
+            ),
+            iter::empty(),
+            iter::empty(),
+        );
+        let gate = add_set_table(&mut db, 1);
+        let output = add_set_table(&mut db, 3);
+
+        const FACT_ROWS: usize = 12_001;
+        const ZERO_TIMESTAMP_ROWS: usize = 4_001;
+        const GATE_ROWS: usize = 16_001;
+        {
+            let mut facts_buf = db.new_buffer(facts);
+            for i in 0..ZERO_TIMESTAMP_ROWS {
+                facts_buf.stage_insert(&[v(i), v(100_000 + i), v(0)]);
+            }
+        }
+        {
+            let mut gate_buf = db.new_buffer(gate);
+            for i in 0..GATE_ROWS {
+                gate_buf.stage_insert(&[v(i)]);
+            }
+        }
+        db.merge_all();
+        {
+            let mut facts_buf = db.new_buffer(facts);
+            for i in ZERO_TIMESTAMP_ROWS..FACT_ROWS {
+                facts_buf.stage_insert(&[v(i), v(100_000 + i), v(1)]);
+            }
+        }
+        db.merge_all();
+
+        let timestamp = Constraint::GeConst {
+            col: ColumnId::new(2),
+            val: v(1),
+        };
+        let mut rsb = db.new_rule_set();
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::PureSize);
+        query.set_no_decomp(true);
+        let key = query.new_var_named("key");
+        let payload = query.new_var_named("payload");
+        let ts = query.new_var_named("timestamp");
+        let facts_atom = query
+            .add_atom(
+                facts,
+                &[key.into(), payload.into(), ts.into()],
+                timestamp_filtered.then_some(&timestamp),
+            )
+            .unwrap();
+        query.add_atom(gate, &[key.into()], &[]).unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[key.into(), payload.into(), ts.into()])
+            .unwrap();
+        rule.build_with_description("coarse-fused-cover");
+        let rules = rsb.build();
+
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::SinglePlan(plan) = plan else {
+            panic!("set_no_decomp must produce a single plan")
+        };
+        assert_eq!(plan.stages.instrs.len(), 1);
+        assert!(matches!(
+            &plan.stages.instrs[0],
+            JoinStage::FusedIntersect {
+                cover,
+                to_intersect,
+                ..
+            } if cover.to_index.atom == facts_atom && !to_intersect.is_empty()
+        ));
+        let expected = if timestamp_filtered {
+            FACT_ROWS - ZERO_TIMESTAMP_ROWS
+        } else {
+            FACT_ROWS
+        };
+        if timestamp_filtered {
+            let cover_header = plan
+                .header
+                .iter()
+                .find(|header| header.atom == facts_atom)
+                .unwrap();
+            assert_eq!(cover_header.subset.size(), expected);
+            let Subset::Dense(range) = &cover_header.subset else {
+                panic!("sorted timestamp filter must produce a dense suffix")
+            };
+            assert!(
+                range.start.index() > 0,
+                "the seminaive fixture must exercise a nonzero subset origin"
+            );
+        } else {
+            assert!(
+                plan.header.iter().all(|header| header.atom != facts_atom),
+                "an unconstrained cover should use the whole table"
+            );
+        }
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        let scheduler = pool.scheduler_metrics();
+        assert_eq!(report.num_matches("coarse-fused-cover"), expected);
+        let rows = table_rows(&db, output);
+        assert_eq!(rows.len(), expected);
+        (
+            report.num_matches("coarse-fused-cover"),
+            rows,
+            scheduler.global_pushes,
+            scheduler.local_pushes,
+        )
+    })
+}
+
+#[test]
+fn gj_small_top_fallback_uses_local_queue() {
+    let pool = egglog_concurrency::ThreadPool::new(4);
+    pool.install(|| {
+        let mut db = Database::default();
+        let make_table = || {
+            SortedWritesTable::new(
+                3,
+                3,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "test tables have unique keys");
+                    false
+                }),
+            )
+        };
+        let left = db.add_table(make_table(), iter::empty(), iter::empty());
+        let right = db.add_table(make_table(), iter::empty(), iter::empty());
+        let output = db.add_table(make_table(), iter::empty(), iter::empty());
+
+        // The sorted top variable has only two keys and is therefore too small
+        // for coarse index-shard partitioning, while the database is large
+        // enough to enable parallel rule execution.
+        const ROWS: usize = 8192;
+        for table in [left, right] {
+            let mut buf = db.new_buffer(table);
+            for i in 0..ROWS {
+                buf.stage_insert(&[v(i % 2), v(10_000 + i), v(20_000 + i)]);
+            }
+        }
+        db.merge_all();
+
+        let mut rsb = RuleSetBuilder::new(&mut db);
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        query.set_no_decomp(true);
+        let x = query.new_var_named("x");
+        let y = query.new_var_named("y");
+        let z = query.new_var_named("z");
+        query
+            .add_atom(left, &[x.into(), y.into(), z.into()], &[])
+            .unwrap();
+        query
+            .add_atom(right, &[x.into(), y.into(), z.into()], &[])
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into(), y.into(), z.into()])
+            .unwrap();
+        rule.build_with_description("local-fallback-gj");
+        let rules = rsb.build();
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        let scheduler = pool.scheduler_metrics();
+        assert!(
+            scheduler.local_pushes > 0,
+            "small-top fallback did not use worker-local tasks: {scheduler:?}"
+        );
+        assert_eq!(
+            scheduler.local_pushes,
+            scheduler.local_pops + scheduler.donated_jobs,
+            "every local task must run on its owner or be donated"
+        );
+        assert_eq!(report.num_matches("local-fallback-gj"), ROWS);
+
+        let table = db.get_table(output);
+        let materialized = table.scan(table.all().as_ref());
+        assert_eq!(materialized.len(), ROWS);
+        for (_, row) in materialized.iter() {
+            let i = row[2].index() - 20_000;
+            assert_eq!(row[0].index(), i % 2);
+            assert_eq!(row[1].index() - 10_000, i);
+        }
+    });
+}
+
+#[test]
+fn gj_decomposed_small_top_materialization_uses_local_queue() {
+    let pool = egglog_concurrency::ThreadPool::new(4);
+    pool.install(|| {
+        let mut db = Database::default();
+        let make_table = |arity| {
+            SortedWritesTable::new(
+                arity,
+                arity,
+                None,
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new, "test tables have unique keys");
+                    false
+                }),
+            )
+        };
+        let left_xa = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let left_ab = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let left_bx = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let right_xc = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let right_cd = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let right_dx = db.add_table(make_table(2), iter::empty(), iter::empty());
+        let output = db.add_table(make_table(5), iter::empty(), iter::empty());
+
+        // Two cyclic bags joined through x force a decomposed plan. The left
+        // bag is large, but x has only two keys, so its materialization block
+        // must use recursive fallback work instead of top-index sharding.
+        const X_KEYS: usize = 2;
+        const LEFT_ROWS_PER_KEY: usize = 4096;
+        for x in 0..X_KEYS {
+            let mut xa = db.new_buffer(left_xa);
+            let mut ab = db.new_buffer(left_ab);
+            let mut bx = db.new_buffer(left_bx);
+            for i in 0..LEFT_ROWS_PER_KEY {
+                let a = 10_000 + x * LEFT_ROWS_PER_KEY + i;
+                let b = 20_000 + x * LEFT_ROWS_PER_KEY + i;
+                xa.stage_insert(&[v(x), v(a)]);
+                ab.stage_insert(&[v(a), v(b)]);
+                bx.stage_insert(&[v(b), v(x)]);
+            }
+        }
+        {
+            let mut xc = db.new_buffer(right_xc);
+            let mut cd = db.new_buffer(right_cd);
+            let mut dx = db.new_buffer(right_dx);
+            for x in 0..X_KEYS {
+                let c = 100_000 + x;
+                let d = 200_000 + x;
+                xc.stage_insert(&[v(x), v(c)]);
+                cd.stage_insert(&[v(c), v(d)]);
+                dx.stage_insert(&[v(d), v(x)]);
+            }
+        }
+        db.merge_all();
+
+        let mut rsb = RuleSetBuilder::new(&mut db);
+        let mut query = rsb.new_rule();
+        query.set_plan_strategy(PlanStrategy::Gj);
+        let x = query.new_var_named("x");
+        let a = query.new_var_named("a");
+        let b = query.new_var_named("b");
+        let c = query.new_var_named("c");
+        let d = query.new_var_named("d");
+        query.add_atom(left_xa, &[x.into(), a.into()], &[]).unwrap();
+        query.add_atom(left_ab, &[a.into(), b.into()], &[]).unwrap();
+        query.add_atom(left_bx, &[b.into(), x.into()], &[]).unwrap();
+        query
+            .add_atom(right_xc, &[x.into(), c.into()], &[])
+            .unwrap();
+        query
+            .add_atom(right_cd, &[c.into(), d.into()], &[])
+            .unwrap();
+        query
+            .add_atom(right_dx, &[d.into(), x.into()], &[])
+            .unwrap();
+        let mut rule = query.build();
+        rule.insert(output, &[x.into(), a.into(), b.into(), c.into(), d.into()])
+            .unwrap();
+        rule.build_with_description("local-materialization-fallback-gj");
+        let rules = rsb.build();
+
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::DecomposedPlan(plan) = plan else {
+            panic!("the two cyclic bags must produce a decomposed plan")
+        };
+        assert!(plan.stages.blocks.len() >= 2);
+        let first_materialization = &plan.stages.blocks[0].0;
+        assert!(first_materialization.instrs.len() >= 3);
+        let Some(JoinStage::Intersect { var, scans }) = first_materialization.instrs.first() else {
+            panic!("the first materialization block must start by intersecting x")
+        };
+        assert_eq!(*var, x);
+        assert!(
+            scans.iter().any(|scan| {
+                let table = plan.atoms[scan.atom].table;
+                table == right_xc || table == right_dx
+            }),
+            "the top x intersection must include a two-row index, making coarse sharding ineligible"
+        );
+
+        pool.reset_scheduler_metrics();
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        let scheduler = pool.scheduler_metrics();
+        assert!(
+            scheduler.local_pushes > 0,
+            "small-top materialization fallback did not use worker-local tasks: {scheduler:?}"
+        );
+        assert_eq!(
+            scheduler.local_pushes,
+            scheduler.local_pops + scheduler.donated_jobs,
+            "every local task must run on its owner or be donated"
+        );
+
+        let expected = X_KEYS * LEFT_ROWS_PER_KEY;
+        assert_eq!(
+            report.num_matches("local-materialization-fallback-gj"),
+            expected
+        );
+        let table = db.get_table(output);
+        let materialized = table.scan(table.all().as_ref());
+        assert_eq!(materialized.len(), expected);
+        for (_, row) in materialized.iter() {
+            let x = row[0].index();
+            let i = row[1].index() - 10_000 - x * LEFT_ROWS_PER_KEY;
+            assert!(x < X_KEYS);
+            assert!(i < LEFT_ROWS_PER_KEY);
+            assert_eq!(row[2].index(), 20_000 + x * LEFT_ROWS_PER_KEY + i);
+            assert_eq!(row[3].index(), 100_000 + x);
+            assert_eq!(row[4].index(), 200_000 + x);
+        }
+    });
 }
 
 #[test]

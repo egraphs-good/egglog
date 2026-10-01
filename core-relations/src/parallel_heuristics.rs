@@ -8,11 +8,16 @@ use std::sync::OnceLock;
 const DEFAULT_DB_LEVEL_OP_CUTOFF: usize = 10_000;
 const DEFAULT_INDEX_CONSTRUCTION_CUTOFF: usize = 400_000;
 const DEFAULT_REBUILD_CUTOFF: usize = 400_000;
+const DEFAULT_INCREMENTAL_REBUILD_CUTOFF: usize = 16 * 1024;
 const DEFAULT_INTRA_CONTAINER_CUTOFF: usize = 10_000;
 const DEFAULT_INTER_CONTAINER_CUTOFF: usize = 8;
 const DEFAULT_TABLE_OP_CUTOFF: usize = 400_000;
 const DEFAULT_FREE_JOIN_FORK_DEPTH: usize = 2;
 const DEFAULT_ACTION_BATCH_SIZE: usize = 8 * 1024;
+
+/// Minimum number of top-index leader keys required per worker before coarse
+/// generic-join partitioning is worthwhile.
+pub(crate) const MIN_TOP_INDEX_KEYS_PER_WORKER: usize = 16;
 
 static CUTOFFS: OnceLock<Cutoffs> = OnceLock::new();
 
@@ -20,6 +25,7 @@ struct Cutoffs {
     db_level_op: usize,
     index_construction: usize,
     rebuild: usize,
+    incremental_rebuild: usize,
     intra_container: usize,
     inter_container: usize,
     table_op: usize,
@@ -44,6 +50,13 @@ pub(crate) fn parallelize_rebuild(table_size: usize) -> bool {
     should_parallelize(table_size, cutoffs().rebuild)
 }
 
+/// Whether to process the dirty-id scan of an incremental table rebuild in
+/// parallel. Incremental rebuilds reuse coarse worker-local state and need a
+/// much lower cutoff than full rebuilds to amortize dispatch.
+pub(crate) fn parallelize_incremental_rebuild(dirty_ids: usize) -> bool {
+    should_parallelize(dirty_ids, cutoffs().incremental_rebuild)
+}
+
 /// Whether or not to perform an operation for a given container memo table.
 pub(crate) fn parallelize_intra_container_op(num_containers: usize) -> bool {
     should_parallelize(num_containers, cutoffs().intra_container)
@@ -63,6 +76,20 @@ pub(crate) fn parallelize_table_op(table_size: usize) -> bool {
 /// Number of top free-join frames that may fork recursive drain work.
 pub(crate) fn free_join_fork_depth() -> usize {
     cutoffs().free_join_fork_depth
+}
+
+/// Whether a top free-join index has enough work and shard coverage to partition.
+/// Requires multiple workers, enough leader keys per worker, and at least one
+/// nonempty shard per worker.
+pub(crate) fn top_index_shape_is_eligible(
+    workers: usize,
+    leader_keys: usize,
+    nonempty_shards: usize,
+    min_keys_per_worker: usize,
+) -> bool {
+    workers > 1
+        && leader_keys >= min_keys_per_worker.saturating_mul(workers)
+        && nonempty_shards >= workers
 }
 
 /// Number of action bindings to batch before dispatching a scoped worker task.
@@ -85,6 +112,10 @@ fn cutoffs() -> &'static Cutoffs {
             DEFAULT_INDEX_CONSTRUCTION_CUTOFF,
         ),
         rebuild: cutoff("EGGLOG_PARALLEL_REBUILD_CUTOFF", DEFAULT_REBUILD_CUTOFF),
+        incremental_rebuild: cutoff(
+            "EGGLOG_PARALLEL_INCREMENTAL_REBUILD_CUTOFF",
+            DEFAULT_INCREMENTAL_REBUILD_CUTOFF,
+        ),
         intra_container: cutoff(
             "EGGLOG_PARALLEL_INTRA_CONTAINER_CUTOFF",
             DEFAULT_INTRA_CONTAINER_CUTOFF,
@@ -111,4 +142,18 @@ fn cutoff(name: &str, default: usize) -> usize {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_index_shape_is_eligible;
+
+    #[test]
+    fn top_index_partitioning_rejects_serial_tiny_and_skewed_shapes() {
+        assert!(!top_index_shape_is_eligible(1, 10_000, 8, 64));
+        assert!(!top_index_shape_is_eligible(4, 255, 8, 64));
+        assert!(!top_index_shape_is_eligible(4, 10_000, 3, 64));
+        assert!(top_index_shape_is_eligible(4, 256, 4, 64));
+        assert!(top_index_shape_is_eligible(4, 40, 4, 10));
+    }
 }
