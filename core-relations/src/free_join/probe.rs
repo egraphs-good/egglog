@@ -232,8 +232,11 @@ pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// the scan has additional constraints.
     ProjectedRoot(RootProjectionProbe<'ctx, 'rows, 'exec>),
     /// An inline scalar index for a source containing at most
-    /// [`super::residual_index::SMALL_RESIDUAL`] rows. It supports both exact lookup and enumeration
-    /// without constructing a general packed trie.
+    /// [`super::residual_index::SMALL_RESIDUAL`] rows and no publication slot
+    /// (a root, dense singleton, inline residual, or terminal catalog match).
+    /// It supports both exact lookup and enumeration without constructing a
+    /// general packed trie. Tiny sources with a slot use a packed node
+    /// instead, since the slot lets later probes reuse it.
     SmallColumn(SmallColumnIndex),
     /// An exact-only multi-column probe over an inline residual. Join stages
     /// select it when the source is already [`AtomRows::Inline`]; it scans those

@@ -925,7 +925,19 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             && !info.table.has_stale_rows()
             && whole_table.size() / 2 < source.size();
 
-        let ix = if cols.len() == 1 && source.size() <= SMALL_RESIDUAL {
+        // A tiny source is cheaper to index on the stack than as a packed
+        // node, unless it has a publication slot: the same packed cursor or
+        // continuation key is typically probed many times per run, so the
+        // packed node built once is reused from the slot.
+        let has_slot = matches!(
+            &source,
+            AtomRows::Packed(_)
+                | AtomRows::Catalog {
+                    continuation: Some(_),
+                    ..
+                }
+        );
+        let ix = if cols.len() == 1 && source.size() <= SMALL_RESIDUAL && !has_slot {
             ProbeIndex::SmallColumn(SmallColumnIndex::new(
                 info.table.as_ref(),
                 source.subset(),
