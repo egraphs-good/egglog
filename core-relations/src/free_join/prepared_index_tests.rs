@@ -26,7 +26,7 @@ fn root_continuation_cache_reuses_direct_and_dynamic_slots() {
     direct.prepare(ChildShape::Direct, shard_lens.len(), |shard| {
         shard_lens[shard]
     });
-    assert_eq!(direct.slots(AccessId::new(0)).len(), 3);
+    assert_eq!(direct.slots(0).len(), 3);
 
     let dynamic = RootContinuationCache::default();
     dynamic.prepare(
@@ -43,7 +43,7 @@ fn root_continuation_cache_reuses_direct_and_dynamic_slots() {
             let barrier = &barrier;
             handles.push(scope.spawn(move || {
                 barrier.wait();
-                dynamic.slots(AccessId::new(1)).as_ptr() as usize
+                dynamic.slots(1).as_ptr() as usize
             }));
         }
         let addresses = handles
@@ -53,10 +53,7 @@ fn root_continuation_cache_reuses_direct_and_dynamic_slots() {
         assert!(addresses.windows(2).all(|pair| pair[0] == pair[1]));
     });
 
-    assert!(!std::ptr::eq(
-        dynamic.slots(AccessId::new(1)),
-        dynamic.slots(AccessId::new(2)),
-    ));
+    assert!(!std::ptr::eq(dynamic.slots(1), dynamic.slots(2)));
 }
 
 #[cfg(debug_assertions)]
@@ -74,18 +71,16 @@ fn root_continuation_prepare_revalidates_initialized_shape() {
 fn direct_root_continuation_rejects_different_successors() {
     let cache = RootContinuationCache::default();
     cache.prepare(ChildShape::Direct, 1, |_| 1);
-    let _ = cache.slots(AccessId::new(0));
-    let _ = cache.slots(AccessId::new(1));
+    let _ = cache.slots(0);
+    let _ = cache.slots(1);
 }
 
 #[test]
 fn cover_only_stages_skip_prepared_index_state() {
-    let stages = JoinStages {
-        instrs: Arc::new(vec![JoinStage::Intersect {
-            var: Variable::from_usize(0),
-            scans: SmallVec::new(),
-        }]),
-    };
+    let stages = JoinStages::new(vec![JoinStage::Intersect {
+        var: Variable::from_usize(0),
+        scans: SmallVec::new(),
+    }]);
     let atoms = Arc::new(DenseIdMap::new());
     assert!(matches!(
         PreparedJoinIndexes::new(&Database::new(), &atoms, &stages),

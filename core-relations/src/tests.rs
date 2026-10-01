@@ -3412,3 +3412,128 @@ fn external_context_reaches_external_functions() {
 
     assert_eq!(*seen.lock().unwrap(), vec![Some(7), None, None]);
 }
+
+#[test]
+fn shared_continuations_are_reused_across_plans() {
+    run_serial_and_parallel(|| {
+        shared_continuations_fixture(None);
+        shared_continuations_fixture(Some(Constraint::GtConst {
+            col: ColumnId::new(2),
+            val: v(200),
+        }));
+    });
+}
+
+/// Join `facts(a, b, c)` with a gate on `(a, b)` or on `(a, c)`. Every rule
+/// shares the `facts` root and its first-level index on `a`; the `b` rules
+/// also share the packed index on `b` below each `a`, while the `c` rule
+/// continues the same rows under a different successor family. Without
+/// `slow`, the first level is a persistent catalog index; with it, a shared
+/// root projection.
+fn shared_continuations_fixture(slow: Option<Constraint>) {
+    const KEYS: usize = 40;
+    let mut db = Database::default();
+    let facts = add_set_table(&mut db, 3);
+    let left = add_set_table(&mut db, 2);
+    let right = add_set_table(&mut db, 2);
+    let outputs = (0..3)
+        .map(|_| add_set_table(&mut db, 3))
+        .collect::<Vec<_>>();
+    {
+        let mut facts_buf = db.new_buffer(facts);
+        let mut left_buf = db.new_buffer(left);
+        let mut right_buf = db.new_buffer(right);
+        for a in 0..KEYS {
+            // Enough rows per key that the second level is a packed node
+            // rather than a small residual index.
+            for b in 100..108 {
+                for c in 200..204 {
+                    facts_buf.stage_insert(&[v(a), v(b), v(c)]);
+                }
+            }
+            left_buf.stage_insert(&[v(a), v(100)]);
+            if a % 2 == 0 {
+                right_buf.stage_insert(&[v(a), v(202)]);
+            }
+        }
+    }
+    db.merge_all();
+
+    // (description, gate, gate column of `facts`, output)
+    let rules_b = ("shared-continuation-b", left, 1, outputs[0]);
+    let rules_c = ("shared-continuation-c", right, 2, outputs[1]);
+    let rules_d = ("shared-continuation-d", left, 1, outputs[2]);
+    let build = |db: &mut Database, rules: &[(&str, TableId, usize, TableId)]| {
+        let mut rsb = db.new_rule_set();
+        for &(description, gate, gate_column, output) in rules {
+            let mut query = rsb.new_rule();
+            query.set_plan_strategy(PlanStrategy::Gj);
+            query.set_no_decomp(true);
+            let a = query.new_var_named("a");
+            let b = query.new_var_named("b");
+            let c = query.new_var_named("c");
+            let vars = [a, b, c];
+            query
+                .add_atom(facts, &[a.into(), b.into(), c.into()], slow.as_slice())
+                .unwrap();
+            query
+                .add_atom(gate, &[a.into(), vars[gate_column].into()], &[])
+                .unwrap();
+            let mut rule = query.build();
+            rule.insert(output, &[a.into(), b.into(), c.into()])
+                .unwrap();
+            rule.build_with_description(description);
+        }
+        rsb.build()
+    };
+    let serial = crate::parallel::current_num_threads() == 1;
+    let builds_before = crate::free_join::packed_trie::packed_node_builds();
+    let two_rules = build(&mut db, &[rules_b, rules_c]);
+    db.run_rule_set(&two_rules, ReportLevel::TimeOnly, None);
+    let builds_two = crate::free_join::packed_trie::packed_node_builds() - builds_before;
+    for output in &outputs {
+        db.clear_table(*output);
+    }
+    let three_rules = build(&mut db, &[rules_b, rules_c, rules_d]);
+    let report = db.run_rule_set(&three_rules, ReportLevel::TimeOnly, None);
+    let builds_three =
+        crate::free_join::packed_trie::packed_node_builds() - builds_before - builds_two;
+    if serial {
+        assert!(builds_two > 0, "the fixture must build packed nodes");
+        assert_eq!(
+            builds_three, builds_two,
+            "a plan identical to an earlier one must reuse every shared packed node"
+        );
+    }
+
+    let keeps = |c: usize| slow.is_none() || c > 200;
+    let mut expected_b = Vec::new();
+    let mut expected_c = Vec::new();
+    for a in 0..KEYS {
+        for c in (200..204).filter(|&c| keeps(c)) {
+            expected_b.push(vec![v(a), v(100), v(c)]);
+        }
+        if a % 2 == 0 {
+            for b in 100..108 {
+                expected_c.push(vec![v(a), v(b), v(202)]);
+            }
+        }
+    }
+    expected_b.sort();
+    expected_c.sort();
+    assert_eq!(
+        report.num_matches("shared-continuation-b"),
+        expected_b.len()
+    );
+    assert_eq!(
+        report.num_matches("shared-continuation-c"),
+        expected_c.len()
+    );
+    assert_eq!(
+        report.num_matches("shared-continuation-d"),
+        expected_b.len()
+    );
+    assert_eq!(table_rows(&db, outputs[0]), expected_b);
+    assert_eq!(table_rows(&db, outputs[1]), expected_c);
+    assert_eq!(table_rows(&db, outputs[2]), expected_b);
+}

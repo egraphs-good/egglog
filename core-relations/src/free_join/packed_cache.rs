@@ -1,4 +1,11 @@
-//! Root subsets and scalar projections shared across plans in one execution.
+//! Trie state shared across the plans of one rule-set execution.
+//!
+//! Plans that constrain the same table with the same fast constraints share
+//! one [`TrieRoot`]. Everything built below a shared root is shared as well:
+//! its scalar projections, the continuation grids of its persistent catalog
+//! indexes, and every packed descendant node. Descendants are published under
+//! table-wide [`FamilyId`]s, so two plans that reach the same rows and index
+//! the same next column with the same constraints build that index once.
 
 use std::sync::{
     Arc, OnceLock,
@@ -15,7 +22,7 @@ use crate::{
     table_spec::{ColumnId, Constraint},
 };
 
-use super::{AtomId, TableId, plan::Plan};
+use super::{AtomId, ColumnIds, TableId, plan::Plan, prepared_index::RootContinuationCache};
 
 /// Canonical identity of the rows available at one atom's trie root: the
 /// atom's table together with the sorted conjunction of its fast (header)
@@ -36,6 +43,24 @@ define_id!(
     "an execution-local id for a canonical set of fast trie-root constraints"
 );
 
+define_id!(
+    pub(crate) FamilyId,
+    u32,
+    r#"Identity of one way to index the rows below a shared trie node of a
+table: the next column together with the sorted slow constraints applied
+before projecting it.
+
+Two plans that descend from the same shared node with the same family build
+the same child index, so the child is published once per family. Family ids
+are dense per table and are interned by the table when a plan is built, so a
+run sees a fixed family count (see `TableInfo::shared_child_shape`)."#
+);
+
+/// The families of every column of one indexed access: `[0]` indexes the
+/// first column after applying the scan's constraints, and `[i]` indexes
+/// column `i` of the same rows.
+pub(crate) type AccessFamilies = SmallVec<[FamilyId; 4]>;
+
 /// Key for a shared trie root: the table plus an interned id for its fast
 /// (header) constraints.
 ///
@@ -43,6 +68,15 @@ define_id!(
 /// the root subset. Plans with the same fast constraints can share this root
 /// even when their remaining slow constraints differ.
 type RootKey = (TableId, HeaderConstraintId);
+
+/// The canonical key of a [`FamilyId`]: a column and sorted constraints.
+pub(crate) type SuccessorSig = (ColumnId, SmallVec<[Constraint; 2]>);
+
+pub(crate) fn canonical_constraints(constraints: &[Constraint]) -> SmallVec<[Constraint; 2]> {
+    let mut canonical: SmallVec<[Constraint; 2]> = constraints.iter().cloned().collect();
+    canonical.sort_unstable();
+    canonical
+}
 
 /// One round-local root projection can be reused by plans that share the same
 /// root subset. Slow constraints are part of the key because they are applied
@@ -128,13 +162,22 @@ impl RootProjection {
     }
 }
 
-pub(super) type RootProjectionSlot = Arc<OnceLock<RootProjection>>;
+/// A shared root projection together with the continuation grid that
+/// publishes the shared packed index below each of its keys.
+#[derive(Default)]
+pub(super) struct RootProjectionEntry {
+    pub(super) projection: OnceLock<RootProjection>,
+    pub(super) continuations: RootContinuationCache,
+}
+
+pub(super) type RootProjectionSlot = Arc<RootProjectionEntry>;
 type RootProjectionMap = DashMap<RootProjectionKey, RootProjectionSlot>;
+type CatalogContinuationMap = DashMap<ColumnIds, Arc<RootContinuationCache>>;
 
 /// A cache of trie roots shared across all plans within a single
 /// `run_rule_set` call. Two plans that constrain the same table with the same
-/// fast constraints share the owning root subset. Plan-execution packed
-/// descendants remain separate.
+/// fast constraints share the owning root subset and every index built below
+/// it; see [`FamilyId`] for how descendants are identified.
 ///
 /// Only roots that more than one plan actually uses are shared (`shared`), so
 /// single-use roots stay per-plan and keep the pool-recycling behavior of the
@@ -142,13 +185,13 @@ type RootProjectionMap = DashMap<RootProjectionKey, RootProjectionSlot>;
 ///
 /// The `DashMap`s are setup caches rather than per-row probe structures. A plan
 /// consults `roots` once while initializing each reused atom root; a single-use
-/// root bypasses the cache completely. Likewise, the projection map is consulted
-/// only when a prepared access first acquires a projection slot. That slot is
-/// retained in `PreparedIndexState`, and the hot recursive probe path reads the
-/// resulting immutable arrays directly. Contention is therefore limited to
-/// single-flight construction when plans initialize the same root or projection
-/// concurrently. Tables are frozen during a run, so each key continues to denote
-/// the same subset after publication.
+/// root bypasses the cache completely. Likewise, the projection and
+/// continuation maps are consulted only when a prepared access first acquires
+/// its slot. That slot is retained in `PreparedIndexState`, and the hot
+/// recursive probe path reads the resulting immutable arrays directly.
+/// Contention is therefore limited to single-flight construction when plans
+/// initialize the same root or index concurrently. Tables are frozen during a
+/// run, so each key continues to denote the same subset after publication.
 #[derive(Default)]
 pub(super) struct TrieCache {
     pub(super) roots: DashMap<RootKey, Arc<TrieRoot>>,
@@ -171,8 +214,7 @@ impl TrieCache {
         if fast.is_empty() {
             return HeaderConstraintId::new_const(0);
         }
-        let mut sig: SmallVec<[Constraint; 2]> = SmallVec::from_iter(fast.iter().cloned());
-        sig.sort_unstable();
+        let sig = canonical_constraints(fast);
         match self.header_ids.entry(sig) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
@@ -223,27 +265,36 @@ impl TrieCache {
     /// shards per `run_rule_set`, which dwarfs the sharing savings on smaller
     /// runs. Serial runs get a single shard.
     pub(super) fn with_shared(shared: HashSet<RootSignature>) -> TrieCache {
-        // DashMap requires at least 2 shards; that is plenty for serial runs and
-        // still far below the default (4 * num_cpus).
-        let shards = crate::parallel::current_num_threads()
-            .next_power_of_two()
-            .max(2);
         TrieCache {
-            roots: DashMap::with_hasher_and_shard_amount(Default::default(), shards),
-            header_ids: DashMap::with_hasher_and_shard_amount(Default::default(), shards),
+            roots: DashMap::with_hasher_and_shard_amount(Default::default(), dashmap_shards()),
+            header_ids: DashMap::with_hasher_and_shard_amount(Default::default(), dashmap_shards()),
             next_header_id: AtomicUsize::new(0),
             shared,
         }
     }
 }
 
+/// DashMap requires at least 2 shards; that is plenty for serial runs and
+/// still far below the default (4 * num_cpus).
+fn dashmap_shards() -> usize {
+    crate::parallel::current_num_threads()
+        .next_power_of_two()
+        .max(2)
+}
+
+/// Lazily created maps that publish shared indexes below a shared root.
+#[derive(Default)]
+struct SharedRootIndexes {
+    projections: OnceLock<RootProjectionMap>,
+    catalog_continuations: OnceLock<CatalogContinuationMap>,
+}
+
 /// Owning root subset for an atom. Lower trie levels are execution-scoped
-/// packed nodes rather than persistent `TrieRoot`s.
+/// packed nodes; below a shared root they are shared across plans.
 pub(crate) struct TrieRoot {
     pub(super) subset: Subset,
-    /// Shared roots lazily cache sorted top-level projections across plans.
-    /// Child publication remains query-local in the packed arena.
-    root_projections: Option<OnceLock<RootProjectionMap>>,
+    /// Present only for roots shared across plans.
+    shared: Option<SharedRootIndexes>,
 }
 
 impl std::fmt::Debug for TrieRoot {
@@ -258,14 +309,14 @@ impl TrieRoot {
     pub(super) fn new(subset: Subset) -> Self {
         Self {
             subset,
-            root_projections: None,
+            shared: None,
         }
     }
 
     pub(super) fn new_shared(subset: Subset) -> Self {
         Self {
             subset,
-            root_projections: Some(OnceLock::new()),
+            shared: Some(SharedRootIndexes::default()),
         }
     }
 
@@ -279,24 +330,41 @@ impl TrieRoot {
         column: ColumnId,
         constraints: &[Constraint],
     ) -> Option<RootProjectionSlot> {
-        let projections = self.root_projections.as_ref()?.get_or_init(|| {
-            let shards = crate::parallel::current_num_threads()
-                .next_power_of_two()
-                .max(2);
-            DashMap::with_hasher_and_shard_amount(Default::default(), shards)
+        let projections = self.shared.as_ref()?.projections.get_or_init(|| {
+            DashMap::with_hasher_and_shard_amount(Default::default(), dashmap_shards())
         });
-        let mut canonical: SmallVec<[Constraint; 2]> = constraints.iter().cloned().collect();
-        canonical.sort_unstable();
         let key = RootProjectionKey {
             column,
-            constraints: canonical,
+            constraints: canonical_constraints(constraints),
         };
         Some(match projections.entry(key) {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
-                let slot = Arc::new(OnceLock::new());
+                let slot = Arc::new(RootProjectionEntry {
+                    projection: OnceLock::new(),
+                    continuations: RootContinuationCache::shared(),
+                });
                 entry.insert(slot.clone());
                 slot
+            }
+        })
+    }
+
+    /// Find the shared continuation grid for the persistent catalog index over
+    /// `columns`, whose key positions identify this root's rows for every plan.
+    pub(super) fn catalog_continuations(
+        &self,
+        columns: &[ColumnId],
+    ) -> Option<Arc<RootContinuationCache>> {
+        let continuations = self.shared.as_ref()?.catalog_continuations.get_or_init(|| {
+            DashMap::with_hasher_and_shard_amount(Default::default(), dashmap_shards())
+        });
+        Some(match continuations.entry(ColumnIds::from_slice(columns)) {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                let cache = Arc::new(RootContinuationCache::shared());
+                entry.insert(cache.clone());
+                cache
             }
         })
     }
