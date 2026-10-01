@@ -9,7 +9,11 @@
 //! plan. Preparation does not build the indexes; `execute.rs` acquires their
 //! handles lazily when an access first needs them.
 
-use std::sync::{Arc, OnceLock};
+use std::{
+    fmt,
+    ops::{BitAnd, BitOr, BitOrAssign, Not},
+    sync::{Arc, OnceLock},
+};
 
 use smallvec::SmallVec;
 
@@ -423,46 +427,144 @@ pub(super) fn columns_are_cacheable(info: &TableInfo, cols: &[ColumnId]) -> bool
     })
 }
 
-#[derive(Clone, Copy, Default)]
-struct PreparedAtomUse {
-    /// Stages that read or refine this atom, including cover-only accesses.
-    touched_stages: u64,
-    /// Stages containing exactly one indexed access to this atom.
-    one_index_access_stages: u64,
-    /// Stages containing multiple indexed accesses to this atom.
-    multiple_index_access_stages: u64,
+/// Bit set of logical stage indexes, used to track the unexecuted suffix of a
+/// free-join plan. Join execution is monomorphized per width so plans that fit
+/// in 64 bits keep single-word masks on the hot path.
+pub(super) trait StageMask:
+    Copy
+    + Eq
+    + fmt::Debug
+    + Send
+    + Sync
+    + 'static
+    + BitAnd<Output = Self>
+    + BitOr<Output = Self>
+    + BitOrAssign
+    + Not<Output = Self>
+{
+    const BITS: u32;
+    const EMPTY: Self;
+    fn stage_bit(stage: usize) -> Self;
+    fn count_ones(self) -> u32;
+    /// The tail masks prepared at this width, if the plan was prepared at it.
+    fn tail_masks(width: &PreparedTailMaskWidth) -> Option<&PreparedTailMasks<Self>>;
 }
 
-/// Order-independent tail metadata for plans small enough to represent their
-/// remaining stages in one word. DVO only permutes stages within the fixed
-/// barrier phases, so successor shape depends on the remaining set, not its
-/// current permutation.
-pub(super) struct PreparedTailMasks {
-    /// Per-atom stage classifications used to decide whether rows must survive
-    /// and whether the next packed child has a direct or dynamic shape.
-    atom_uses: DenseIdMap<AtomId, PreparedAtomUse>,
-    /// Ordered reorder phases. Reorderable stages share a mask; every cover or
-    /// materialization barrier occupies a singleton mask so DVO cannot move an
-    /// access across it.
-    phase_masks: SmallVec<[u64; 4]>,
-    /// Initial remaining-stage mask for join-tail execution.
-    all_stages: u64,
+macro_rules! impl_stage_mask {
+    ($ty:ty, $variant:ident) => {
+        impl StageMask for $ty {
+            const BITS: u32 = <$ty>::BITS;
+            const EMPTY: Self = 0;
+            fn stage_bit(stage: usize) -> Self {
+                1 << stage
+            }
+            fn count_ones(self) -> u32 {
+                <$ty>::count_ones(self)
+            }
+            fn tail_masks(width: &PreparedTailMaskWidth) -> Option<&PreparedTailMasks<Self>> {
+                match width {
+                    PreparedTailMaskWidth::$variant(masks) => Some(masks),
+                    _ => None,
+                }
+            }
+        }
+    };
 }
 
-impl PreparedTailMasks {
+impl_stage_mask!(u64, Narrow);
+impl_stage_mask!(u128, Wide);
+
+/// Tail masks prepared at the narrowest [`StageMask`] width that fits the plan.
+pub(super) enum PreparedTailMaskWidth {
+    /// The plan has more than 128 stages; callers scan the suffix instead.
+    None,
+    Narrow(PreparedTailMasks<u64>),
+    Wide(PreparedTailMasks<u128>),
+}
+
+impl PreparedTailMaskWidth {
     pub(super) fn new(
         stages: &[JoinStage],
         prepared_stages: &[SmallVec<[PreparedIndexSlot; 4]>],
         atom_capacity: usize,
-    ) -> Option<Self> {
-        if stages.len() > u64::BITS as usize {
-            return None;
+    ) -> Self {
+        if stages.len() <= u64::BITS as usize {
+            Self::Narrow(PreparedTailMasks::new(
+                stages,
+                prepared_stages,
+                atom_capacity,
+            ))
+        } else if stages.len() <= u128::BITS as usize {
+            Self::Wide(PreparedTailMasks::new(
+                stages,
+                prepared_stages,
+                atom_capacity,
+            ))
+        } else {
+            log::debug!(
+                "free-join plan with {} stages exceeds the {}-stage limit of prepared tail \
+                 masks; join-tail metadata will be computed by scanning the remaining stages",
+                stages.len(),
+                u128::BITS
+            );
+            Self::None
         }
-        let mut atom_uses: DenseIdMap<AtomId, PreparedAtomUse> =
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PreparedAtomUse<M> {
+    /// Stages that read or refine this atom, including cover-only accesses.
+    touched_stages: M,
+    /// Stages containing exactly one indexed access to this atom.
+    one_index_access_stages: M,
+    /// Stages containing multiple indexed accesses to this atom.
+    multiple_index_access_stages: M,
+}
+
+impl<M: StageMask> Default for PreparedAtomUse<M> {
+    fn default() -> Self {
+        Self {
+            touched_stages: M::EMPTY,
+            one_index_access_stages: M::EMPTY,
+            multiple_index_access_stages: M::EMPTY,
+        }
+    }
+}
+
+/// Order-independent tail metadata for plans small enough to represent their
+/// remaining stages in one `M`. DVO only permutes stages within the fixed
+/// barrier phases, so successor shape depends on the remaining set, not its
+/// current permutation.
+pub(super) struct PreparedTailMasks<M> {
+    /// Per-atom stage classifications used to decide whether rows must survive
+    /// and whether the next packed child has a direct or dynamic shape.
+    atom_uses: DenseIdMap<AtomId, PreparedAtomUse<M>>,
+    /// Ordered reorder phases. Reorderable stages share a mask; every cover or
+    /// materialization barrier occupies a singleton mask so DVO cannot move an
+    /// access across it.
+    phase_masks: SmallVec<[M; 4]>,
+    /// Initial remaining-stage mask for join-tail execution.
+    all_stages: M,
+}
+
+impl<M: StageMask> PreparedTailMasks<M> {
+    pub(super) fn new(
+        stages: &[JoinStage],
+        prepared_stages: &[SmallVec<[PreparedIndexSlot; 4]>],
+        atom_capacity: usize,
+    ) -> Self {
+        assert!(
+            stages.len() <= M::BITS as usize,
+            "prepared tail masks cannot represent {} stages in {} bits",
+            stages.len(),
+            M::BITS
+        );
+        let mut atom_uses: DenseIdMap<AtomId, PreparedAtomUse<M>> =
             DenseIdMap::with_capacity(atom_capacity);
         for (stage_index, (stage, prepared_stage)) in stages.iter().zip(prepared_stages).enumerate()
         {
-            let stage_bit = 1u64 << stage_index;
+            let stage_bit = M::stage_bit(stage_index);
             for_each_stage_atom(stage, |atom| {
                 atom_uses.get_or_default(atom).touched_stages |= stage_bit;
             });
@@ -488,43 +590,41 @@ impl PreparedTailMasks {
             }
         }
 
-        let mut phase_masks = SmallVec::<[u64; 4]>::new();
-        let mut reorderable_phase = 0u64;
+        let mut phase_masks = SmallVec::<[M; 4]>::new();
+        let mut reorderable_phase = M::EMPTY;
+        let mut all_stages = M::EMPTY;
         for (stage_index, stage) in stages.iter().enumerate() {
-            let stage_bit = 1u64 << stage_index;
+            let stage_bit = M::stage_bit(stage_index);
+            all_stages |= stage_bit;
             if is_reorder_barrier(stage) {
-                if reorderable_phase != 0 {
+                if reorderable_phase != M::EMPTY {
                     phase_masks.push(reorderable_phase);
-                    reorderable_phase = 0;
+                    reorderable_phase = M::EMPTY;
                 }
                 phase_masks.push(stage_bit);
             } else {
                 reorderable_phase |= stage_bit;
             }
         }
-        if reorderable_phase != 0 {
+        if reorderable_phase != M::EMPTY {
             phase_masks.push(reorderable_phase);
         }
 
-        Some(Self {
+        Self {
             atom_uses,
             phase_masks,
-            all_stages: if stages.len() == u64::BITS as usize {
-                u64::MAX
-            } else {
-                (1u64 << stages.len()) - 1
-            },
-        })
+            all_stages,
+        }
     }
 
     pub(super) fn atom_tail_use(
         &self,
         atom: AtomId,
-        remaining_stages: u64,
+        remaining_stages: M,
         families: usize,
     ) -> AtomTailUse {
         let use_ = self.atom_uses.get(atom).copied().unwrap_or_default();
-        if remaining_stages & use_.touched_stages == 0 {
+        if remaining_stages & use_.touched_stages == M::EMPTY {
             return AtomTailUse {
                 keep_rows: false,
                 child_shape: ChildShape::Leaf,
@@ -533,15 +633,15 @@ impl PreparedTailMasks {
 
         for &phase in &self.phase_masks {
             let live = remaining_stages & phase;
-            if live & use_.touched_stages == 0 {
+            if live & use_.touched_stages == M::EMPTY {
                 continue;
             }
             let single_accesses = live & use_.one_index_access_stages;
-            let multiple_accesses =
-                live & use_.multiple_index_access_stages != 0 || single_accesses.count_ones() > 1;
+            let multiple_accesses = live & use_.multiple_index_access_stages != M::EMPTY
+                || single_accesses.count_ones() > 1;
             let child_shape = if multiple_accesses {
                 ChildShape::Dynamic { families }
-            } else if single_accesses != 0 {
+            } else if single_accesses != M::EMPTY {
                 ChildShape::Direct
             } else {
                 ChildShape::Leaf
@@ -570,7 +670,7 @@ pub(super) enum PreparedJoinIndexes {
         stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
         states: Box<[PreparedIndexState]>,
         access_counts: DenseIdMap<AtomId, usize>,
-        tail_masks: Option<PreparedTailMasks>,
+        tail_masks: PreparedTailMaskWidth,
     },
 }
 
@@ -651,7 +751,8 @@ impl PreparedJoinIndexes {
             }
             prepared_stages.push(handles);
         }
-        let tail_masks = PreparedTailMasks::new(&stages.instrs, &prepared_stages, atoms.n_ids());
+        let tail_masks =
+            PreparedTailMaskWidth::new(&stages.instrs, &prepared_stages, atoms.n_ids());
         Self::Indexed {
             stages: prepared_stages.into_boxed_slice(),
             states: states.into_boxed_slice(),
@@ -687,14 +788,26 @@ impl PreparedJoinIndexes {
         }
     }
 
-    pub(super) fn all_stage_mask(&self) -> Option<u64> {
-        self.tail_masks().map(|masks| masks.all_stages)
+    /// Whether the plan needs 128-bit stage masks; callers choose the width to
+    /// run the join at from this.
+    pub(super) fn uses_wide_stage_mask(&self) -> bool {
+        matches!(
+            self,
+            Self::Indexed {
+                tail_masks: PreparedTailMaskWidth::Wide(_),
+                ..
+            }
+        )
     }
 
-    pub(super) fn tail_masks(&self) -> Option<&PreparedTailMasks> {
+    pub(super) fn all_stage_mask<M: StageMask>(&self) -> Option<M> {
+        self.tail_masks::<M>().map(|masks| masks.all_stages)
+    }
+
+    pub(super) fn tail_masks<M: StageMask>(&self) -> Option<&PreparedTailMasks<M>> {
         match self {
             Self::NoIndexes => None,
-            Self::Indexed { tail_masks, .. } => tail_masks.as_ref(),
+            Self::Indexed { tail_masks, .. } => M::tail_masks(tail_masks),
         }
     }
 }
