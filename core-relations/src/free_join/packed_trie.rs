@@ -384,12 +384,8 @@ impl<'exec> TrieNode<'exec> {
         scratch: &mut Vec<(Value, RowId)>,
     ) -> &'exec Self {
         scratch.clear();
-        scratch.reserve(subset.size());
-        table.for_each_col(subset, column, &mut |row_id, value| {
-            scratch.push((value, row_id));
-        });
-        // A SubsetRef is RowId-ordered, and for_each_col preserves that scan
-        // order. The repository's value-stable radix sort therefore produces
+        table.collect_col_pairs(subset, column, scratch);
+        // A SubsetRef is RowId-ordered, and the scan preserves that order. The repository's value-stable radix sort therefore produces
         // full (Value, RowId) order without a separate RowId pass. A scalar
         // projection has exactly one pair per input row, so retaining every
         // pair (rather than deduplicating) preserves the subset exactly. Keep
