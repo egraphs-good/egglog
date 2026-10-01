@@ -1,5 +1,4 @@
 use super::*;
-use std::fmt::Write;
 
 #[test]
 fn scheduler_matches_full_scans_across_cutoff_and_scan_orders() {
@@ -8,51 +7,34 @@ fn scheduler_matches_full_scans_across_cutoff_and_scan_orders() {
             let mut program = String::from("(datatype S0 (Seed i64 :cost 1))\n");
             for i in 1..=depth {
                 let child = i - 1;
-                writeln!(
-                    program,
+                program += &format!(
                     "(datatype S{i} (Step{i} S{child} :cost 1)
-                        (Pair{i} S{child} S{child} :cost 0)
-                        (Fallback{i} i64 :cost 30) (Loop{i} S{i} :cost 0))"
-                )
-                .unwrap();
+                    (Pair{i} S{child} S{child} :cost 0)
+                    (Fallback{i} i64 :cost 30) (Loop{i} S{i} :cost 0))"
+                );
             }
-            // Cross the backend's 32-row scan buffer at the preparation boundary.
+            // Cross the 32-row scan buffer at the preparation boundary.
             let lanes = if depth == 4 { 35 } else { 2 };
             for lane in 0..lanes {
-                writeln!(program, "(let n{lane}_0 (Seed {lane}))").unwrap();
+                program += &format!("(let n{lane}_0 (Seed {lane}))");
                 for i in 1..=depth {
                     let child = i - 1;
-                    writeln!(
-                        program,
-                        "(let n{lane}_{i} (Step{i} n{lane}_{child}))
+                    program += &format!("(let n{lane}_{i} (Step{i} n{lane}_{child}))
                         (union n{lane}_{i} (Pair{i} n{lane}_{child} n{lane}_{child}))
-                        (union n{lane}_{i} (Fallback{i} {lane}))
-                        (union n{lane}_{i} (Loop{i} n{lane}_{i}))"
-                    )
-                    .unwrap();
+                        (union n{lane}_{i} (Fallback{i} {lane})) (union n{lane}_{i} (Loop{i} n{lane}_{i}))");
                 }
             }
-            // A seeded mutual cycle improves when the delayed chain reaches B.
-            writeln!(
-                program,
+            // A delayed improvement reaches a seeded cycle; vectors cover constant/empty/duplicate leaves.
+            program += &format!(
                 "(sort A) (sort B)
-                (constructor Expensive () A :cost 100)
-                (constructor FromB (B) A :cost 0)
-                (constructor FromA (A) B :cost 0)
-                (constructor Improve (S{depth}) B :cost 0)
+                (constructor Expensive () A :cost 100) (constructor FromB (B) A :cost 0)
+                (constructor FromA (A) B :cost 0) (constructor Improve (S{depth}) B :cost 0)
                 (let a (Expensive)) (let b (FromA a))
-                (union a (FromB b)) (union b (Improve n0_{depth}))"
-            )
-            .unwrap();
-            writeln!(
-                program,
-                "(sort Values (Vec i64)) (sort Eqs (Vec S0))
-                (constructor Constants (Values) S{depth})
-                (constructor Vector (Eqs) S{depth})
-                (Constants (vec-of 1 2)) (Vector (vec-of))
-                (Vector (vec-of n0_0 n1_0))"
-            )
-            .unwrap();
+                (union a (FromB b)) (union b (Improve n0_{depth}))
+                (sort Values (Vec i64)) (sort Eqs (Vec S0))
+                (constructor Constants (Values) S{depth}) (constructor Vector (Eqs) S{depth})
+                (Constants (vec-of 1 2)) (Vector (vec-of)) (Vector (vec-of n0_0 n1_0))"
+            );
             let mut egraph = EGraph::new(threads);
             egraph.parse_and_run_program(None, &program).unwrap();
             for order in 0..5 {
@@ -83,13 +65,10 @@ fn assert_matches_full_scans<C: Cost + std::fmt::Debug>(
     egraph: &EGraph,
     mut extractor: TreeExtractor<'_, C>,
 ) {
-    let scheduled = (
-        extractor.costs.clone(),
-        extractor.topo_rnk_cnt,
-        extractor.parent_edge.clone(),
-    );
-    // Replay full ordered scans on the same immutable tables. Comparing
-    // ranks and producers also detects changes hidden by equal costs.
+    let state =
+        |ex: &TreeExtractor<'_, C>| (ex.costs.clone(), ex.topo_rnk_cnt, ex.parent_edge.clone());
+    let scheduled = state(&extractor);
+    // Equal costs alone would miss changes to chronological ranks and producers.
     extractor.costs.values_mut().for_each(HashMap::clear);
     extractor.parent_edge.values_mut().for_each(HashMap::clear);
     extractor.topo_rnk_cnt = 0;
@@ -104,14 +83,7 @@ fn assert_matches_full_scans<C: Cost + std::fmt::Debug>(
         .collect();
     while extractor.ordered_full_sweep(egraph, &funcs) {}
     extractor.save_best_parent_edges(egraph, &funcs);
-    assert_eq!(
-        scheduled,
-        (
-            extractor.costs,
-            extractor.topo_rnk_cnt,
-            extractor.parent_edge,
-        )
-    );
+    assert_eq!(scheduled, state(&extractor));
 }
 
 #[test]
@@ -157,8 +129,7 @@ fn scheduler_preserves_convergent_self_improvements() {
     let (sort, value) = egraph.eval_expr(&expr).unwrap();
     let extractor =
         TreeExtractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), &egraph, HalvingCost);
-    // Half strictly improves its own class across scheduled sweeps. Finish
-    // becomes available before halving reaches zero, supplying an acyclic term.
+    // Finish provides an acyclic producer after scheduled self-improvements.
     let mut dag = TermDag::default();
     let best = extractor
         .extract_best_with_sort(&mut dag, value, sort)
