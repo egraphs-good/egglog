@@ -632,6 +632,16 @@ impl Table for SortedWritesTable {
         Subset::Sparse(vec)
     }
 
+    fn contains_match(&self, subset: SubsetRef, cs: &[Constraint]) -> bool {
+        // `eval` rejects stale rows, so this is a short-circuiting
+        // `refine_ref(subset, cs, true).is_empty()`.
+        match subset {
+            SubsetRef::Dense(range) => (range.start.index()..range.end.index())
+                .any(|row| self.eval(cs, RowId::from_usize(row))),
+            SubsetRef::Sparse(rows) => rows.iter().any(|row| self.eval(cs, row)),
+        }
+    }
+
     fn new_buffer(&self) -> Box<dyn MutationBuffer> {
         Box::new(self.new_table_buffer())
     }

@@ -55,8 +55,8 @@ use super::{
         columns_are_cacheable,
     },
     probe::{
-        AtomRows, Descent, LazyArenaHandle, PackedProbe, ProbeIndex, ProbeRequest, Prober,
-        RootProjectionProbe, SortedScalarProbe, seek_sorted_key,
+        AtomRows, CatalogFilter, Descent, LazyArenaHandle, PackedProbe, ProbeIndex, ProbeRequest,
+        Prober, RootProjectionProbe, SortedScalarProbe, seek_sorted_key,
     },
     residual_index::{SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
     with_pool_set,
@@ -678,12 +678,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// `constraints`. `shared` marks a node published to every plan of the run.
     ///
     /// `subset_may_contain_stale_rows` describes the source subset, not the
-    /// resulting node. Physical root and dense ranges can contain tombstoned
-    /// row ids, whereas catalog indexes and packed child subsets already
-    /// contain only live rows. When constraints require materializing a
-    /// filtered subset, potentially stale inputs are refined to live rows
-    /// first. With no constraints, the table scan used by
-    /// `TrieNode::build_from_subset` already skips stale rows.
+    /// resulting node. Physical root ranges, dense ranges, and persistent
+    /// catalog groups can contain tombstoned row ids, whereas packed child
+    /// subsets and filtered residuals already contain only live rows. When
+    /// constraints require materializing a filtered subset, potentially stale
+    /// inputs are refined to live rows first. With no constraints, the table
+    /// scan used by `TrieNode::build_from_subset` already skips stale rows.
     #[allow(clippy::too_many_arguments)]
     fn build_packed_node(
         &self,
@@ -806,6 +806,15 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
         };
         match rows {
+            AtomRows::Root(root) if !root.is_plan_root() => self.build_packed_node(
+                table,
+                root.subset.as_ref(),
+                false,
+                constraints,
+                column,
+                child_shape,
+                false,
+            ),
             AtomRows::Root(root) => {
                 let address = *prepared.state.packed_root.get_or_init(|| {
                     self.build_packed_node(
@@ -837,7 +846,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     self.build_packed_node(
                         table,
                         *subset,
-                        false,
+                        true,
                         constraints,
                         column,
                         child_shape,
@@ -884,7 +893,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         &'ctx self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
-        request: ProbeRequest<'_, 'rows>,
+        request: ProbeRequest<'ctx, 'rows>,
     ) -> Prober<'ctx, 'rows, 'exec>
     where
         'exec: 'rows,
@@ -915,15 +924,19 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             },
             _ => None,
         };
-        // Cached probes borrow their row groups without filtering stale rows
-        // or slow constraints. Even an existence-only match must prove that
-        // at least one valid row remains, so reject either source of invalid
-        // candidates here and let the filtered index paths handle them.
+        // Catalog groups can hold stale rows and ignore this scan's slow
+        // constraints; `CatalogFilter` checks both per match. Filtering for
+        // stale rows keeps the borrowed group and its continuation slot, but a
+        // constrained match is materialized per frame and cannot publish into
+        // the shared continuation grid, which is keyed by columns only. Below
+        // a shared root, a constrained scan therefore keeps the shared root
+        // projection, whose grid is keyed by those constraints.
+        let constrained_shared_root =
+            !constraints.is_empty() && matches!(&source, AtomRows::Root(root) if root.is_shared());
         let can_use_catalog = root_range.is_some()
             && all_cacheable
-            && constraints.is_empty()
-            && !info.table.has_stale_rows()
-            && whole_table.size() / 2 < source.size();
+            && whole_table.size() / 2 < source.size()
+            && !constrained_shared_root;
 
         // A tiny source is cheaper to index on the stack than as a packed
         // node, unless it has a publication slot: the same packed cursor or
@@ -971,6 +984,11 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 Some(continuations) => (continuations, shared_child_shape),
                 None => (&prepared.state.root_continuations, terminal_child_shape),
             };
+            let filter = CatalogFilter {
+                table: info.table.as_ref(),
+                constraints,
+                check_live: info.table.has_stale_rows(),
+            };
             if cols.len() == 1 {
                 let index = prepared.column_index(info, cols[0]);
                 if terminal_child_shape != ChildShape::Leaf {
@@ -983,6 +1001,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     table: index,
                     continuations,
                     child_shape: terminal_child_shape,
+                    filter,
                 }
             } else {
                 let index = prepared.tuple_index(info, cols.as_slice());
@@ -996,6 +1015,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     table: index,
                     continuations,
                     child_shape: terminal_child_shape,
+                    filter,
                 }
             }
         } else {

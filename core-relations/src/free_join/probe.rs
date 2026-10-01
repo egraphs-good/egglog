@@ -13,7 +13,7 @@ use crate::{
     common::Value,
     hash_index::{ColumnIndex, Index, IndexPosition, TupleIndex},
     numeric_id::NumericId,
-    offsets::{OffsetRange, RowId, SubsetRef},
+    offsets::{OffsetRange, RowId, Subset, SubsetRef},
     table_spec::{Constraint, WrappedTableRef},
 };
 
@@ -24,7 +24,7 @@ use super::{
     packed_trie::{ChildShape, PackedCursor, TrieNode},
     plan::{ScanSpec, SingleScanSpec},
     prepared_index::{ContinuationPosition, PreparedIndexRef, RootContinuationCache},
-    residual_index::{InlineRows, SmallColumnIndex, SmallExactProbe},
+    residual_index::{InlineRows, SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
 };
 
 /// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
@@ -126,10 +126,14 @@ pub(super) struct CatalogContinuation<'rows> {
 /// borrows a first-level group from either a prepared persistent index or a
 /// shared round-local root index and carries its continuation slot. Every
 /// lower cursor is just a packed node plus a key ordinal. Dense singletons
-/// come from cover scans and are packed lazily if the atom is probed again.
+/// come from cover scans and are packed lazily if the atom is probed again, as
+/// are residual roots left by a constrained catalog match.
 #[derive(Clone)]
 pub(super) enum AtomRows<'rows, 'exec> {
+    /// The atom's plan root, or a frame-local residual root (see [`TrieRoot`]).
     Root(Arc<TrieRoot>),
+    /// A persistent index group. It may still contain stale rows; every
+    /// consumer of retained rows skips them.
     Catalog {
         subset: SubsetRef<'rows>,
         continuation: Option<CatalogContinuation<'rows>>,
@@ -165,6 +169,17 @@ where
             Self::Packed(_) => "packed",
             Self::Inline(_) => "inline",
             Self::Dense(_) => "dense",
+        }
+    }
+
+    /// Wrap the live rows left after filtering a borrowed group.
+    pub(super) fn from_owned(subset: Subset) -> Self {
+        match subset {
+            Subset::Dense(range) => Self::Dense(range),
+            Subset::Sparse(rows) if rows.slice().inner().len() <= SMALL_RESIDUAL => {
+                Self::Inline(InlineRows::from_sorted(rows.slice().inner()))
+            }
+            subset => Self::Root(Arc::new(TrieRoot::new_residual(subset))),
         }
     }
 
@@ -204,20 +219,82 @@ impl<'rows, 'exec> From<Arc<TrieRoot>> for AtomRows<'rows, 'exec> {
     }
 }
 
+/// The row-level checks a persistent index group must still pass.
+///
+/// Persistent indexes group physical rows, so a group can hold tombstoned rows
+/// and ignores the scan's slow constraints. A plan applies slow constraints
+/// exactly once, at this scan, so a constrained match materializes the rows
+/// that survive. Stale rows only need excluding from existence-only matches:
+/// every consumer of retained rows skips them.
+#[derive(Clone, Copy)]
+pub(super) struct CatalogFilter<'ctx> {
+    pub(super) table: WrappedTableRef<'ctx>,
+    pub(super) constraints: &'ctx [Constraint],
+    /// Whether the table currently holds stale rows.
+    pub(super) check_live: bool,
+}
+
+impl CatalogFilter<'_> {
+    /// Turn a borrowed index group into a probe match, or `None` when no live
+    /// row satisfies the constraints.
+    #[inline]
+    fn resolve<'rows, 'exec>(
+        &self,
+        subset: SubsetRef<'rows>,
+        keep_rows: bool,
+        continuation: Option<CatalogContinuation<'rows>>,
+    ) -> Option<ProbeMatch<'rows, 'exec>> {
+        if self.constraints.is_empty() {
+            if keep_rows {
+                return Some(ProbeMatch::Rows(AtomRows::Catalog {
+                    subset,
+                    continuation,
+                }));
+            }
+            if !self.check_live {
+                return Some(ProbeMatch::Present);
+            }
+        }
+        self.resolve_slow(subset, keep_rows)
+    }
+
+    /// Check the group row by row.
+    // Out of line: inlining this into `get_subset` measurably slowed the
+    // common unfiltered probe.
+    #[inline(never)]
+    fn resolve_slow<'rows, 'exec>(
+        &self,
+        subset: SubsetRef<'rows>,
+        keep_rows: bool,
+    ) -> Option<ProbeMatch<'rows, 'exec>> {
+        if !keep_rows {
+            return self
+                .table
+                .contains_match(subset, self.constraints)
+                .then_some(ProbeMatch::Present);
+        }
+        let filtered = self
+            .table
+            .refine_ref(subset, self.constraints, self.check_live);
+        (filtered.size() != 0).then(|| ProbeMatch::Rows(AtomRows::from_owned(filtered)))
+    }
+}
+
 /// Physical strategies available for looking up or enumerating the current
 /// rows of one atom. `JoinState::get_index` chooses one variant for each
 /// logical scan based on the source subset, requested columns, and whether a
 /// reusable table index is valid.
 pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// A persistent, fully refreshed multi-column table index. This is used for
-    /// a large dense root with cacheable columns, no additional constraints,
-    /// and no stale rows. `intersect_outer` clips results when the root is a
-    /// dense subrange rather than the whole table.
+    /// a large dense root with cacheable columns. `intersect_outer` clips
+    /// results when the root is a dense subrange rather than the whole table,
+    /// and `filter` applies the checks the stored groups cannot encode.
     CachedTuple {
         intersect_outer: Option<OffsetRange>,
         table: &'rows Index<TupleIndex>,
         continuations: &'rows RootContinuationCache,
         child_shape: ChildShape,
+        filter: CatalogFilter<'ctx>,
     },
     /// The single-column counterpart of [`Self::CachedTuple`], selected under
     /// the same catalog-index conditions.
@@ -226,11 +303,11 @@ pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
         table: &'rows Index<ColumnIndex>,
         continuations: &'rows RootContinuationCache,
         child_shape: ChildShape,
+        filter: CatalogFilter<'ctx>,
     },
     /// A first-column index shared by plans that start from the same filtered
     /// root subset. This is used when a shared root exists but the persistent
-    /// catalog fast path is invalid, for example because the root is sparse or
-    /// the scan has additional constraints.
+    /// catalog fast path is invalid, for example because the root is sparse.
     ProjectedRoot(RootProjectionProbe<'ctx, 'rows, 'exec>),
     /// An inline scalar index for a source containing at most
     /// [`super::residual_index::SMALL_RESIDUAL`] rows and no publication slot
@@ -639,48 +716,19 @@ where
         }
     }
 
-    fn catalog_match(
-        position: IndexPosition,
-        subset: SubsetRef<'rows>,
-        continuations: &'rows RootContinuationCache,
-        keep_rows: bool,
-        child_shape: ChildShape,
-    ) -> ProbeMatch<'rows, 'exec> {
-        if keep_rows {
-            ProbeMatch::Rows(AtomRows::Catalog {
-                subset,
-                continuation: (child_shape != ChildShape::Leaf).then_some(CatalogContinuation {
-                    cache: continuations,
-                    position: position.into(),
-                }),
-            })
-        } else {
-            ProbeMatch::Present
-        }
-    }
-
-    /// Return the result of a persistent catalog lookup when this access cannot
-    /// need another indexed column of the same atom.
-    ///
     /// A nonterminal catalog result retains its [`IndexPosition`] so a later
     /// access can use the corresponding continuation slot to publish a packed
-    /// child index. Here the planned child shape is a leaf, or the caller only
-    /// needs to know whether a match exists, so that position would never be
-    /// used. If `keep_rows` is true, the leaf's subset is still preserved for a
-    /// later cover or materialization barrier; it is stored with no
-    /// continuation. Otherwise the result is reduced to `Present` immediately.
-    fn terminal_catalog_match(
-        subset: SubsetRef<'rows>,
-        keep_rows: bool,
-    ) -> ProbeMatch<'rows, 'exec> {
-        if keep_rows {
-            ProbeMatch::Rows(AtomRows::Catalog {
-                subset,
-                continuation: None,
-            })
-        } else {
-            ProbeMatch::Present
-        }
+    /// child index. A leaf never needs that slot: its rows only feed a later
+    /// cover or materialization barrier.
+    fn catalog_continuation(
+        continuations: &'rows RootContinuationCache,
+        position: IndexPosition,
+        child_shape: ChildShape,
+    ) -> Option<CatalogContinuation<'rows>> {
+        (child_shape != ChildShape::Leaf).then_some(CatalogContinuation {
+            cache: continuations,
+            position: position.into(),
+        })
     }
 
     pub(super) fn get_subset(&self, key: &[Value]) -> Option<ProbeMatch<'rows, 'exec>> {
@@ -690,6 +738,7 @@ where
                 table,
                 continuations,
                 child_shape,
+                filter,
             } => {
                 let table: &'rows Index<TupleIndex> = table;
                 if *child_shape == ChildShape::Leaf || !self.keep_rows {
@@ -700,7 +749,7 @@ where
                     } else {
                         subset
                     };
-                    return Some(Self::terminal_catalog_match(subset, self.keep_rows));
+                    return filter.resolve(subset, self.keep_rows, None);
                 }
                 let (position, subset) = table.get_subset_positioned(key)?;
                 let subset = if let Some(range) = intersect_outer {
@@ -708,19 +757,18 @@ where
                 } else {
                     subset
                 };
-                Some(Self::catalog_match(
-                    position,
+                filter.resolve(
                     subset,
-                    continuations,
                     self.keep_rows,
-                    *child_shape,
-                ))
+                    Self::catalog_continuation(continuations, position, *child_shape),
+                )
             }
             ProbeIndex::CachedColumn {
                 intersect_outer,
                 table,
                 continuations,
                 child_shape,
+                filter,
             } => {
                 debug_assert_eq!(key.len(), 1);
                 let table: &'rows Index<ColumnIndex> = table;
@@ -732,7 +780,7 @@ where
                     } else {
                         subset
                     };
-                    return Some(Self::terminal_catalog_match(subset, self.keep_rows));
+                    return filter.resolve(subset, self.keep_rows, None);
                 }
                 let (position, subset) = table.get_subset_positioned(&key[0])?;
                 let subset = if let Some(range) = intersect_outer {
@@ -740,13 +788,11 @@ where
                 } else {
                     subset
                 };
-                Some(Self::catalog_match(
-                    position,
+                filter.resolve(
                     subset,
-                    continuations,
                     self.keep_rows,
-                    *child_shape,
-                ))
+                    Self::catalog_continuation(continuations, position, *child_shape),
+                )
             }
             ProbeIndex::ProjectedRoot(projected) => projected
                 .get(key)
@@ -822,6 +868,7 @@ where
                 table,
                 continuations,
                 child_shape,
+                filter,
             } => {
                 let table: &'rows Index<TupleIndex> = table;
                 table.for_each_positioned(|position, key, subset| {
@@ -833,16 +880,13 @@ where
                     } else {
                         subset
                     };
-                    f(
-                        key,
-                        Self::catalog_match(
-                            position,
-                            subset,
-                            continuations,
-                            self.keep_rows,
-                            *child_shape,
-                        ),
-                    );
+                    if let Some(found) = filter.resolve(
+                        subset,
+                        self.keep_rows,
+                        Self::catalog_continuation(continuations, position, *child_shape),
+                    ) {
+                        f(key, found);
+                    }
                 });
             }
             ProbeIndex::CachedColumn {
@@ -850,6 +894,7 @@ where
                 table,
                 continuations,
                 child_shape,
+                filter,
             } => {
                 let table: &'rows Index<ColumnIndex> = table;
                 table.for_each_positioned(|position, value, subset| {
@@ -861,16 +906,13 @@ where
                     } else {
                         subset
                     };
-                    f(
-                        &[*value],
-                        Self::catalog_match(
-                            position,
-                            subset,
-                            continuations,
-                            self.keep_rows,
-                            *child_shape,
-                        ),
-                    );
+                    if let Some(found) = filter.resolve(
+                        subset,
+                        self.keep_rows,
+                        Self::catalog_continuation(continuations, position, *child_shape),
+                    ) {
+                        f(&[*value], found);
+                    }
                 });
             }
             ProbeIndex::ProjectedRoot(projected) => projected.for_each(&mut |key, rows| {
@@ -906,6 +948,7 @@ where
                 table,
                 continuations,
                 child_shape,
+                filter,
             } => {
                 let table: &'rows Index<TupleIndex> = table;
                 table.for_each_shard_positioned(shard, |position, key, subset| {
@@ -917,16 +960,13 @@ where
                     } else {
                         subset
                     };
-                    f(
-                        key,
-                        Self::catalog_match(
-                            position,
-                            subset,
-                            continuations,
-                            self.keep_rows,
-                            *child_shape,
-                        ),
-                    );
+                    if let Some(found) = filter.resolve(
+                        subset,
+                        self.keep_rows,
+                        Self::catalog_continuation(continuations, position, *child_shape),
+                    ) {
+                        f(key, found);
+                    }
                 });
             }
             ProbeIndex::CachedColumn {
@@ -934,6 +974,7 @@ where
                 table,
                 continuations,
                 child_shape,
+                filter,
             } => {
                 let table: &'rows Index<ColumnIndex> = table;
                 table.for_each_shard_positioned(shard, |position, value, subset| {
@@ -945,16 +986,13 @@ where
                     } else {
                         subset
                     };
-                    f(
-                        &[*value],
-                        Self::catalog_match(
-                            position,
-                            subset,
-                            continuations,
-                            self.keep_rows,
-                            *child_shape,
-                        ),
-                    );
+                    if let Some(found) = filter.resolve(
+                        subset,
+                        self.keep_rows,
+                        Self::catalog_continuation(continuations, position, *child_shape),
+                    ) {
+                        f(&[*value], found);
+                    }
                 });
             }
             ProbeIndex::ProjectedRoot(..)
