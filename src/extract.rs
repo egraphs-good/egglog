@@ -300,12 +300,53 @@ struct FuncData<'a> {
     func: &'a Function,
     /// The function whose `:cost` prices this table (a view table's term constructor).
     cost_func: &'a Function,
-    /// Row width in `rows`; 0 iff the table had no (non-subsumed) rows.
+    /// Row width in `rows`: the function's inputs plus its output column.
     arity: usize,
     output_idx: usize,
     output_sort_id: usize,
     child_kinds: Vec<ChildKind>,
     rows: Vec<Value>,
+}
+
+/// Dirty rows are visited in sweep order.
+struct DirtyRows {
+    words: Vec<u64>,
+    count: usize,
+}
+
+impl DirtyRows {
+    fn full(len: usize) -> Self {
+        let mut words = vec![u64::MAX; len.div_ceil(64)];
+        if let Some(last) = words.last_mut() {
+            *last >>= len.div_ceil(64) * 64 - len; // clear the padding bits
+        }
+        Self { words, count: len }
+    }
+
+    fn insert(&mut self, row: usize) {
+        let bit = 1 << (row % 64);
+        let word = &mut self.words[row / 64];
+        if *word & bit == 0 {
+            *word |= bit;
+            self.count += 1;
+        }
+    }
+
+    fn pop_from(&mut self, cursor: usize) -> Option<usize> {
+        if self.count == 0 {
+            return None;
+        }
+        let mut wi = cursor / 64;
+        let mut pending = *self.words.get(wi)? & (u64::MAX << (cursor % 64));
+        while pending == 0 {
+            wi += 1;
+            pending = *self.words.get(wi)?;
+        }
+        let bit = pending.trailing_zeros() as usize;
+        self.words[wi] &= !(1 << bit);
+        self.count -= 1;
+        Some(wi * 64 + bit)
+    }
 }
 
 impl<'g, C: Cost> TreeExtractor<'g, C> {
@@ -590,11 +631,9 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         }
                     })
                     .collect();
-                let mut arity = 0;
                 let mut rows = Vec::new();
                 egraph.backend.for_each(func.backend_id, |row| {
                     if !row.subsumed {
-                        arity = row.vals.len();
                         rows.extend_from_slice(row.vals);
                     }
                 });
@@ -606,7 +645,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         .as_ref()
                         .and_then(|name| egraph.functions.get(name))
                         .unwrap_or(func),
-                    arity,
+                    arity: func.func_type.input.len() + 1,
                     output_idx: func.extraction_output_index(),
                     output_sort_id: self.sort_ids[func.extraction_output_sort().name()],
                     child_kinds,
@@ -619,9 +658,6 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         // as an eq child, directly or inside a container child.
         let mut child_index: HashMap<(usize, Value), Vec<(u32, u32)>> = Default::default();
         for (fi, f) in func_data.iter().enumerate() {
-            if f.rows.is_empty() {
-                continue;
-            }
             for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
                 for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
                     let mut register = |sid: usize, v: Value| {
@@ -647,43 +683,26 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         // (re)visited. Rows are swept in the same (function, row) order as the
         // naive pass loop, so the update trace — and hence topo ranks and
         // extracted terms — is unchanged.
-        let mut dirty: Vec<Vec<bool>> = func_data
+        let mut dirty: Vec<DirtyRows> = func_data
             .iter()
-            .map(|f| {
-                vec![
-                    true;
-                    if f.arity == 0 {
-                        0
-                    } else {
-                        f.rows.len() / f.arity
-                    }
-                ]
-            })
+            .map(|f| DirtyRows::full(f.rows.len() / f.arity))
             .collect();
-        let mut dirty_count: Vec<usize> = dirty.iter().map(|d| d.len()).collect();
 
         let mut ch_costs: Vec<C> = Vec::new();
         loop {
             let mut any = false;
             for (fi, f) in func_data.iter().enumerate() {
-                if dirty_count[fi] == 0 {
+                if dirty[fi].count == 0 {
                     continue;
                 }
                 any = true;
                 // Marks set at or behind the sweep cursor (including a row
                 // re-marking itself) stay for the next sweep; marks ahead of it
                 // are picked up in this one, matching the naive pass exactly.
-                let n_rows = dirty[fi].len();
-                let mut ri = 0;
-                while ri < n_rows {
-                    if !dirty[fi][ri] {
-                        ri += 1;
-                        continue;
-                    }
-                    dirty[fi][ri] = false;
-                    dirty_count[fi] -= 1;
+                let mut cursor = 0;
+                while let Some(ri) = dirty[fi].pop_from(cursor) {
+                    cursor = ri + 1;
                     let row = &f.rows[ri * f.arity..(ri + 1) * f.arity];
-                    ri += 1;
                     let Some(new_cost) = self.row_cost(egraph, f, row, &mut ch_costs) else {
                         continue;
                     };
@@ -711,10 +730,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         if let Some(readers) = child_index.get(&(f.output_sort_id, target)) {
                             for &(dfi, dri) in readers {
                                 let (dfi, dri) = (dfi as usize, dri as usize);
-                                if !dirty[dfi][dri] {
-                                    dirty[dfi][dri] = true;
-                                    dirty_count[dfi] += 1;
-                                }
+                                dirty[dfi].insert(dri);
                             }
                         }
                     }
@@ -726,16 +742,13 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
 
         // Free the scheduler's state before the parent edges allocate.
-        drop((child_index, dirty, dirty_count));
+        drop((child_index, dirty));
 
         // Save the edges for reconstruction
         for (parents, costs) in self.parent_edge.iter_mut().zip(&self.costs) {
             parents.reserve(costs.len());
         }
         for (fi, f) in func_data.into_iter().enumerate() {
-            if f.rows.is_empty() {
-                continue;
-            }
             for row in f.rows.chunks_exact(f.arity) {
                 let target = row[f.output_idx];
                 let Some(best_cost) = self.costs[f.output_sort_id].get(&target) else {
@@ -1195,5 +1208,46 @@ impl EGraph {
         self.backend.for_each_while(func.backend_id, extract_row);
 
         Ok((inputs, output, termdag))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DirtyRows;
+
+    #[test]
+    fn dirty_rows_have_no_padding_rows() {
+        for len in [0, 1, 63, 64, 65, 127, 128, 129] {
+            let mut rows = DirtyRows::full(len);
+            for row in 0..len {
+                assert_eq!(rows.pop_from(row), Some(row));
+            }
+            assert_eq!(rows.pop_from(len), None);
+            assert_eq!(rows.pop_from(0), None);
+            assert_eq!(rows.count, 0);
+        }
+    }
+
+    #[test]
+    fn dirty_rows_defer_marks_behind_the_cursor() {
+        let mut rows = DirtyRows::full(130);
+        for row in 0..130 {
+            assert_eq!(rows.pop_from(row), Some(row));
+        }
+        rows.insert(63);
+        rows.insert(129);
+        rows.insert(129);
+        assert_eq!(rows.count, 2);
+        assert_eq!(rows.pop_from(0), Some(63));
+        rows.insert(0);
+        rows.insert(63);
+        rows.insert(64);
+        assert_eq!(rows.pop_from(64), Some(64));
+        assert_eq!(rows.pop_from(65), Some(129));
+        assert_eq!(rows.pop_from(130), None);
+        assert_eq!(rows.count, 2);
+        assert_eq!(rows.pop_from(0), Some(0));
+        assert_eq!(rows.pop_from(1), Some(63));
+        assert_eq!(rows.count, 0);
     }
 }
