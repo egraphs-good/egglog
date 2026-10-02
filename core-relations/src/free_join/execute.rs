@@ -1472,7 +1472,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 action,
                 &mut binding_info.bindings,
                 &binding_info.binding_sets,
-                self.exec_state,
+                &self.exec_state,
             );
             return;
         }
@@ -1596,7 +1596,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     action,
                                     &mut binding_info.bindings,
                                     &binding_info.binding_sets,
-                                    self.exec_state,
+                                    &self.exec_state,
                                 );
                             } else {
                                 self.run_plan(
@@ -2418,7 +2418,7 @@ where
         action: A,
         bindings: &mut DenseIdMap<Variable, Value>,
         binding_sets: &BindingSet,
-        exec_state: ExecutionStateSeed<'scope, '_>,
+        exec_state: &ExecutionStateSeed<'scope, '_>,
     ) {
         expand_binding_sets(self, action, bindings, binding_sets, 0, exec_state);
     }
@@ -2846,7 +2846,7 @@ fn expand_binding_sets<'scope, 'exec, A: NumericId, BUF: ActionBuffer<'scope, 'e
     bindings: &mut DenseIdMap<Variable, Value>,
     binding_sets: &BindingSet,
     idx: usize,
-    exec_state: ExecutionStateSeed<'scope, '_>,
+    exec_state: &ExecutionStateSeed<'scope, '_>,
 ) where
     'exec: 'scope,
 {
