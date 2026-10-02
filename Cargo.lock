@@ -472,6 +472,7 @@ dependencies = [
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",
+ "egraph-comparison",
  "egraph-serialize",
  "enum-map",
  "env_logger",
