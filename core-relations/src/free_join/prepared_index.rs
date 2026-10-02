@@ -189,6 +189,7 @@ impl RootContinuationCache {
             .collect()
     }
 
+    #[inline]
     pub(super) fn prepare(
         &self,
         child_shape: ChildShape,
@@ -255,6 +256,7 @@ impl RootContinuationCache {
         }
     }
 
+    #[inline]
     pub(super) fn slot(&self, position: ContinuationPosition, family: usize) -> &OnceLock<usize> {
         let slots = self.slots(family);
         &slots[position.shard as usize][position.slot as usize]
@@ -390,6 +392,7 @@ impl<'a> PreparedIndexRef<'a> {
     /// `Arc` clone. `info` and `column` must identify the same logical access
     /// on every call; the returned borrow is tied to this execution's state.
     /// Panics if this access was not prepared for a column catalog index.
+    #[inline]
     pub(super) fn column_index(self, info: &TableInfo, column: ColumnId) -> &'a Index<ColumnIndex> {
         debug_assert_eq!(self.kind, PreparedIndexKind::Column);
         let PreparedRootIndex::Column(index) = self.state.root.get_or_init(|| {
@@ -409,6 +412,7 @@ impl<'a> PreparedIndexRef<'a> {
     /// `Arc` clone. `info` and the ordered `columns` must identify the same
     /// logical access on every call; the borrow is tied to this execution's
     /// state. Panics if this access was not prepared for a tuple catalog index.
+    #[inline]
     pub(super) fn tuple_index(
         self,
         info: &TableInfo,
@@ -430,6 +434,7 @@ impl<'a> PreparedIndexRef<'a> {
     /// Retain the shared continuation grid of the persistent catalog index
     /// over `columns` below the shared `root`, or `None` if the root is not
     /// shared. `root` and `columns` must identify the same index on every call.
+    #[inline]
     pub(super) fn shared_catalog_continuations(
         self,
         root: &OwnedAtomRows,
@@ -840,6 +845,7 @@ impl<'plan> PreparedJoinIndexes<'plan> {
         }
     }
 
+    #[inline(always)]
     pub(super) fn resolve<'a>(&'a self, slot: &PreparedIndexSlot) -> PreparedIndexRef<'a> {
         let Self::Indexed {
             states, families, ..

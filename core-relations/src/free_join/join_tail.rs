@@ -317,16 +317,19 @@ where
         self.subsets.insert(atom, rows);
     }
 
+    #[inline]
     pub(super) fn insert_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
         self.subsets.insert(atom, node.into());
     }
 
     /// Probers returned from `JoinState::get_index` will move atom-related state out of the
     /// [`BindingInfo`]. Once the caller is done using a prober, this method moves it back.
+    #[inline]
     pub(super) fn move_back(&mut self, atom: AtomId, prober: Prober<'_, 'rows, 'exec>) {
         self.subsets.insert(atom, prober.source);
     }
 
+    #[inline]
     pub(super) fn move_back_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
         self.subsets.insert(atom, node.into());
     }
@@ -335,6 +338,7 @@ where
         self.subsets[atom].is_empty()
     }
 
+    #[inline]
     pub(super) fn unwrap_val(&mut self, atom: AtomId) -> AtomRows<'rows, 'exec> {
         self.subsets.unwrap_val(atom)
     }

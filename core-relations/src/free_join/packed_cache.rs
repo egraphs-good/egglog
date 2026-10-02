@@ -72,6 +72,7 @@ type RootKey = (TableId, HeaderConstraintId);
 /// The canonical key of a [`FamilyId`]: a column and sorted constraints.
 pub(crate) type SuccessorSig = (ColumnId, SmallVec<[Constraint; 2]>);
 
+#[inline]
 pub(crate) fn canonical_constraints(constraints: &[Constraint]) -> SmallVec<[Constraint; 2]> {
     let mut canonical: SmallVec<[Constraint; 2]> = constraints.iter().cloned().collect();
     canonical.sort_unstable();
@@ -119,6 +120,7 @@ impl TrieCache {
     /// the interning map entirely. [`RootKey`] carries the table separately;
     /// identical constraint sets may therefore reuse an id across tables
     /// without making the roots alias.
+    #[inline]
     pub(super) fn header_id(&self, fast: &[Constraint]) -> HeaderConstraintId {
         if fast.is_empty() {
             return HeaderConstraintId::new_const(0);
