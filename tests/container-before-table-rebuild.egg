@@ -1,4 +1,4 @@
-;; A sequence-backed container table must rebuild before an ordinary table
+;; A container table must rebuild before an ordinary table
 ;; whose keys and values both refer to the affected e-classes. Otherwise the
 ;; two `image` rows collide while their Vec values are still distinct, and the
 ;; `:no-merge` function reports an illegal merge.

@@ -24,61 +24,9 @@ use crate::{
 };
 
 use super::{
-    ClosureRebuilder, ContainerBackend, ContainerRebuildSummary, ContainerValue, ContainerValueId,
+    ClosureRebuilder, ContainerRebuildSummary, ContainerValue, ContainerValueId,
     DynamicContainerEnv, MergeFn, incremental_rebuild,
 };
-
-/// A container with a canonical flat sequence representation.
-///
-/// The default rebuild path is intentionally the slow compatibility path: it
-/// deserializes the sequence, invokes [`ContainerValue::rebuild_contents`],
-/// and serializes the result. Implementations may override
-/// [`SequenceContainerValue::rebuild_sequence`] to transform the flat values
-/// directly.
-pub trait SequenceContainerValue: ContainerValue {
-    /// Append the canonical serialized key to `out`.
-    fn encode_sequence(&self, base_values: &BaseValues, out: &mut Vec<Value>);
-
-    /// Reconstruct the Rust container used by slow primitives and external
-    /// APIs.
-    fn decode_sequence(sequence: &[Value], base_values: &BaseValues) -> Self;
-
-    /// Return the fast primitive view of the serialized key.
-    ///
-    /// Metadata used only to distinguish container modes belongs outside this
-    /// slice. Most containers return their contained values directly; compact
-    /// encodings may return an encoded payload and override
-    /// [`SequenceContainerValue::visit_sequence_values`] for dependency
-    /// discovery.
-    fn sequence_values(sequence: &[Value]) -> &[Value];
-
-    /// Visit semantic child values used for transitive dirty-container
-    /// discovery. The default visits the fast primitive view directly.
-    fn visit_sequence_values(sequence: &[Value], visitor: &mut dyn FnMut(Value)) {
-        for value in Self::sequence_values(sequence) {
-            visitor(*value);
-        }
-    }
-
-    /// Rebuild a serialized key into the initially empty `out` buffer.
-    ///
-    /// Returning `false` requires leaving `out` empty. The default implements
-    /// the slow deserialize/rebuild/serialize round trip.
-    fn rebuild_sequence(
-        sequence: &[Value],
-        base_values: &BaseValues,
-        rebuilder: &dyn ValueRebuilder,
-        out: &mut Vec<Value>,
-    ) -> bool {
-        let mut container = Self::decode_sequence(sequence, base_values);
-        if container.rebuild_contents(rebuilder) {
-            container.encode_sequence(base_values, out);
-            true
-        } else {
-            false
-        }
-    }
-}
 
 #[derive(Clone)]
 struct SequenceCodec<C> {
@@ -90,7 +38,7 @@ struct SequenceCodec<C> {
     marker: PhantomData<fn() -> C>,
 }
 
-impl<C: SequenceContainerValue> SequenceCodec<C> {
+impl<C: ContainerValue> SequenceCodec<C> {
     fn new(base_values: BaseValues) -> Self {
         Self {
             base_values,
@@ -154,7 +102,7 @@ pub(super) struct SequenceContainerEnv<C: ContainerValue> {
     codec: SequenceCodec<C>,
 }
 
-impl<C: SequenceContainerValue> SequenceContainerEnv<C> {
+impl<C: ContainerValue> SequenceContainerEnv<C> {
     pub(super) fn new(
         id: ContainerValueId,
         merge: Box<dyn MergeFn>,
@@ -367,22 +315,6 @@ impl<C: ContainerValue> DynamicContainerEnv for SequenceContainerEnv<C> {
         self
     }
 
-    fn backend(&self) -> ContainerBackend {
-        ContainerBackend::Sequence
-    }
-
-    fn len(&self) -> usize {
-        self.table.len()
-    }
-
-    fn maintenance_table(&self) -> Option<&dyn MaintenanceTable> {
-        Some(self)
-    }
-
-    fn maintenance_table_mut(&mut self) -> Option<&mut dyn MaintenanceTable> {
-        Some(self)
-    }
-
     fn apply_rebuild(
         &mut self,
         table: &crate::WrappedTable,
@@ -486,22 +418,12 @@ mod tests {
         table_spec::WrappedTableRef,
     };
 
-    use super::{DynamicContainerEnv, SequenceContainerEnv, SequenceContainerValue};
+    use super::{DynamicContainerEnv, SequenceContainerEnv};
 
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     struct TestSequence(Vec<Value>);
 
     impl ContainerValue for TestSequence {
-        fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-            rebuilder.rebuild_slice(&mut self.0)
-        }
-
-        fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-            self.0.iter().copied()
-        }
-    }
-
-    impl SequenceContainerValue for TestSequence {
         fn encode_sequence(&self, _base_values: &crate::BaseValues, out: &mut Vec<Value>) {
             out.extend_from_slice(&self.0);
         }

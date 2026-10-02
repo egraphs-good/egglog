@@ -88,24 +88,6 @@ fn multiset_term_children(termdag: &TermDag, term: TermId) -> Option<Vec<TermId>
 }
 
 impl ContainerValue for MultiSetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
-        // If the contents are an eq-sort then we want to rebuild
-        if self.do_rebuild {
-            let mut xs: Vec<_> = self.data.iter().copied().collect();
-            let changed = rebuilder.rebuild_slice(&mut xs);
-            self.data = xs.into_iter().collect();
-            changed
-        // if the contents are just a primitive then don't need to do anything.
-        } else {
-            false
-        }
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.data.iter().copied()
-    }
-}
-
-impl SequenceContainerValue for MultiSetContainer {
     fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         assert!(
             i64::try_from(self.data.len()).is_ok(),
@@ -285,10 +267,6 @@ impl ContainerSort for MultiSetSort {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_sequence_container_ty::<MultiSetContainer>();
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {

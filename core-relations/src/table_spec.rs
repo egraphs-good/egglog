@@ -100,8 +100,8 @@ pub enum Constraint {
 }
 
 /// Remap individual values (e.g. to their union-find leaders) — the value-level
-/// half of rebuilding, enough to rebuild a single container's contents (see
-/// [`crate::ContainerValue::rebuild_contents`]).
+/// half of rebuilding, enough to rebuild a serialized container key (see
+/// [`crate::ContainerValue::rebuild_sequence`]).
 pub trait ValueRebuilder: Send + Sync {
     /// Rebuild a single value.
     fn rebuild_val(&self, val: Value) -> Value;
