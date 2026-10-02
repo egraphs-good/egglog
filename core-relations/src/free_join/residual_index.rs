@@ -297,7 +297,7 @@ impl<'ctx> SmallExactProbe<'ctx> {
         debug_assert!(next.is_none());
         let matched = sink.matches.into_inline()?;
         Some(if keep_rows {
-            ProbeMatch::Rows(AtomRows::Inline(matched))
+            ProbeMatch::Rows(AtomRows::inline(matched))
         } else {
             ProbeMatch::Present
         })

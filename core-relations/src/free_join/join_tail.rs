@@ -311,8 +311,8 @@ where
     /// Initializes the atom-related metadata in the [`BindingInfo`].    
     pub(super) fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
         let rows = match subset {
-            Subset::Dense(range) => AtomRows::Dense(range),
-            subset => AtomRows::Root(Arc::new(TrieRoot::new(subset))),
+            Subset::Dense(range) => AtomRows::dense(range),
+            subset => AtomRows::root(Arc::new(TrieRoot::new(subset))),
         };
         self.subsets.insert(atom, rows);
     }

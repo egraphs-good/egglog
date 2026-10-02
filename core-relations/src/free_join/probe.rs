@@ -128,7 +128,7 @@ pub(super) struct CatalogContinuation<'rows> {
 /// come from cover scans and are packed lazily if the atom is probed again, as
 /// are residual roots left by a constrained catalog match.
 #[derive(Clone)]
-pub(super) enum AtomRows<'rows, 'exec> {
+pub(super) enum AtomRowsKind<'rows, 'exec> {
     /// The atom's plan root, or a frame-local residual root (see [`TrieRoot`]).
     Root(Arc<TrieRoot>),
     /// A persistent index group. It may still contain stale rows; every
@@ -143,6 +143,17 @@ pub(super) enum AtomRows<'rows, 'exec> {
     /// arena storage.
     Inline(InlineRows),
     Dense(OffsetRange),
+}
+
+/// Keep the row count beside the cursor, as the old owning subsets did.
+/// DVO compares cardinalities repeatedly; resolving packed boundaries or
+/// redispatching the storage representation on every comparison adds work.
+/// Rows are immutable during a ruleset run, and constructors establish this
+/// count before a handle enters the bindings or an update buffer.
+#[derive(Clone)]
+pub(super) struct AtomRows<'rows, 'exec> {
+    kind: AtomRowsKind<'rows, 'exec>,
+    cardinality: usize,
 }
 
 impl std::fmt::Debug for AtomRows<'_, '_> {
@@ -162,40 +173,79 @@ where
     /// output. The underlying row sets may be large, so diagnostics report only
     /// this label and their cardinality rather than formatting their contents.
     fn kind_name(&self) -> &'static str {
-        match self {
-            Self::Root(_) => "root",
-            Self::Catalog { .. } => "catalog",
-            Self::Packed(_) => "packed",
-            Self::Inline(_) => "inline",
-            Self::Dense(_) => "dense",
+        match &self.kind {
+            AtomRowsKind::Root(_) => "root",
+            AtomRowsKind::Catalog { .. } => "catalog",
+            AtomRowsKind::Packed(_) => "packed",
+            AtomRowsKind::Inline(_) => "inline",
+            AtomRowsKind::Dense(_) => "dense",
         }
     }
 
     /// Wrap the live rows left after filtering a borrowed group.
     pub(super) fn from_owned(subset: Subset) -> Self {
         match subset {
-            Subset::Dense(range) => Self::Dense(range),
+            Subset::Dense(range) => Self::dense(range),
             Subset::Sparse(rows) if rows.slice().inner().len() <= SMALL_RESIDUAL => {
-                Self::Inline(InlineRows::from_sorted(rows.slice().inner()))
+                Self::inline(InlineRows::from_sorted(rows.slice().inner()))
             }
-            subset => Self::Root(Arc::new(TrieRoot::new_residual(subset))),
+            subset => Self::root(Arc::new(TrieRoot::new_residual(subset))),
         }
     }
 
     pub(super) fn subset(&self) -> SubsetRef<'_> {
-        match self {
-            Self::Root(root) => root.subset.as_ref(),
-            Self::Catalog { subset, .. } => *subset,
-            Self::Packed(cursor) => cursor.subset(),
-            Self::Inline(rows) => rows.subset(),
-            Self::Dense(range) => SubsetRef::Dense(*range),
+        match &self.kind {
+            AtomRowsKind::Root(root) => root.subset.as_ref(),
+            AtomRowsKind::Catalog { subset, .. } => *subset,
+            AtomRowsKind::Packed(cursor) => cursor.subset(),
+            AtomRowsKind::Inline(rows) => rows.subset(),
+            AtomRowsKind::Dense(range) => SubsetRef::Dense(*range),
         }
     }
 
+    #[inline]
     pub(super) fn size(&self) -> usize {
-        match self {
-            Self::Packed(cursor) => cursor.size(),
-            _ => self.subset().size(),
+        self.cardinality
+    }
+
+    pub(super) fn kind(&self) -> &AtomRowsKind<'rows, 'exec> {
+        &self.kind
+    }
+
+    pub(super) fn root(root: Arc<TrieRoot>) -> Self {
+        Self {
+            cardinality: root.subset.size(),
+            kind: AtomRowsKind::Root(root),
+        }
+    }
+    pub(super) fn packed(cursor: PackedCursor<'rows, 'exec>) -> Self {
+        Self {
+            cardinality: cursor.size(),
+            kind: AtomRowsKind::Packed(cursor),
+        }
+    }
+    pub(super) fn inline(rows: InlineRows) -> Self {
+        Self {
+            cardinality: rows.len(),
+            kind: AtomRowsKind::Inline(rows),
+        }
+    }
+    pub(super) fn dense(range: OffsetRange) -> Self {
+        Self {
+            cardinality: range.size(),
+            kind: AtomRowsKind::Dense(range),
+        }
+    }
+    pub(super) fn catalog(
+        subset: SubsetRef<'rows>,
+        continuation: Option<CatalogContinuation<'rows>>,
+    ) -> Self {
+        Self {
+            cardinality: subset.size(),
+            kind: AtomRowsKind::Catalog {
+                subset,
+                continuation,
+            },
         }
     }
 
@@ -205,7 +255,7 @@ where
 
     #[cfg(test)]
     pub(super) fn root_arc(&self) -> &Arc<TrieRoot> {
-        let Self::Root(root) = self else {
+        let AtomRowsKind::Root(root) = &self.kind else {
             panic!("expected root rows")
         };
         root
@@ -214,7 +264,7 @@ where
 
 impl<'rows, 'exec> From<Arc<TrieRoot>> for AtomRows<'rows, 'exec> {
     fn from(root: Arc<TrieRoot>) -> Self {
-        Self::Root(root)
+        Self::root(root)
     }
 }
 
@@ -245,10 +295,7 @@ impl CatalogFilter<'_> {
     ) -> Option<ProbeMatch<'rows, 'exec>> {
         if self.constraints.is_empty() {
             if keep_rows {
-                return Some(ProbeMatch::Rows(AtomRows::Catalog {
-                    subset,
-                    continuation,
-                }));
+                return Some(ProbeMatch::Rows(AtomRows::catalog(subset, continuation)));
             }
             if !self.check_live {
                 return Some(ProbeMatch::Present);
@@ -474,15 +521,13 @@ where
 
     fn scalar_rows(&self, key_index: usize) -> AtomRows<'rows, 'exec> {
         debug_assert_eq!(self.columns.len(), 1);
-        AtomRows::Catalog {
-            subset: self.first.subset_at(key_index),
-            continuation: (self.terminal_child_shape != ChildShape::Leaf).then_some(
-                CatalogContinuation {
-                    cache: self.continuations,
-                    position: ContinuationPosition::unsharded(key_index),
-                },
-            ),
-        }
+        AtomRows::catalog(
+            self.first.subset_at(key_index),
+            (self.terminal_child_shape != ChildShape::Leaf).then_some(CatalogContinuation {
+                cache: self.continuations,
+                position: ContinuationPosition::unsharded(key_index),
+            }),
+        )
     }
 
     fn first_child(&self, key_index: usize) -> &'exec TrieNode<'exec> {
@@ -533,7 +578,7 @@ where
                 );
             }
         }
-        terminal.map(AtomRows::Packed)
+        terminal.map(AtomRows::packed)
     }
 
     fn for_each_packed(
@@ -547,7 +592,7 @@ where
             key.push(value);
             let cursor = PackedCursor::new(node, key_index);
             if depth + 1 == self.columns.len() {
-                f(key, AtomRows::Packed(cursor));
+                f(key, AtomRows::packed(cursor));
             } else {
                 let (family, child_shape) = self.descent().child(depth, self.columns.len());
                 let child = cursor.child_index(
@@ -602,7 +647,7 @@ where
                 );
             }
         }
-        terminal.map(AtomRows::Packed)
+        terminal.map(AtomRows::packed)
     }
 
     fn for_each_recur(
@@ -616,7 +661,7 @@ where
             key.push(value);
             let cursor = PackedCursor::new(node, key_index);
             if depth + 1 == self.columns.len() {
-                f(key, AtomRows::Packed(cursor));
+                f(key, AtomRows::packed(cursor));
             } else {
                 let (family, child_shape) = self.descent.child(depth, self.columns.len());
                 let child = cursor.child_index(
@@ -801,7 +846,7 @@ where
                 };
                 let key_index = index.find(*value)?;
                 Some(if self.keep_rows {
-                    ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                    ProbeMatch::Rows(AtomRows::inline(index.rows_at(key_index)))
                 } else {
                     ProbeMatch::Present
                 })
@@ -840,13 +885,13 @@ where
             }
             ProbeIndex::SmallColumn(index) => {
                 if self.keep_rows {
-                    ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                    ProbeMatch::Rows(AtomRows::inline(index.rows_at(key_index)))
                 } else {
                     ProbeMatch::Present
                 }
             }
             ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
-                let rows = AtomRows::Packed(PackedCursor::new(packed.first, key_index));
+                let rows = AtomRows::packed(PackedCursor::new(packed.first, key_index));
                 Self::keep_or_discard(rows, self.keep_rows)
             }
             ProbeIndex::CachedTuple { .. }
@@ -919,7 +964,7 @@ where
             ProbeIndex::SmallColumn(index) => {
                 for key_index in 0..index.n_keys {
                     let rows = if self.keep_rows {
-                        ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                        ProbeMatch::Rows(AtomRows::inline(index.rows_at(key_index)))
                     } else {
                         ProbeMatch::Present
                     };
@@ -1032,7 +1077,7 @@ where
                 assert!(end <= index.n_keys);
                 for key_index in start..end {
                     let rows = if self.keep_rows {
-                        ProbeMatch::Rows(AtomRows::Inline(index.rows_at(key_index)))
+                        ProbeMatch::Rows(AtomRows::inline(index.rows_at(key_index)))
                     } else {
                         ProbeMatch::Present
                     };
@@ -1044,7 +1089,7 @@ where
                 let values = packed.first.values();
                 assert!(end <= values.len());
                 for key_index in start..end {
-                    let rows = AtomRows::Packed(PackedCursor::new(packed.first, key_index));
+                    let rows = AtomRows::packed(PackedCursor::new(packed.first, key_index));
                     f(
                         &values[key_index..key_index + 1],
                         Self::keep_or_discard(rows, self.keep_rows),

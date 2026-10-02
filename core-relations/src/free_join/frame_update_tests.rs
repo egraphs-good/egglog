@@ -1,3 +1,4 @@
+use crate::free_join::probe::AtomRowsKind;
 use std::mem::size_of;
 
 use crate::{Value, numeric_id::NumericId, offsets::RowId};
@@ -21,10 +22,10 @@ fn drain_preserves_instruction_order_and_side_buffer_pairing() {
     let var = Variable::from_usize(2);
     let mut updates = FrameUpdates::with_capacity(2);
     updates.push_binding(var, Value::from_usize(7));
-    updates.refine_atom(atom0, AtomRows::Dense(range(1, 3)));
+    updates.refine_atom(atom0, AtomRows::dense(range(1, 3)));
     updates.refine_atom_dense(atom1, range(4, 5));
     updates.finish_frame();
-    updates.refine_atom(atom1, AtomRows::Dense(range(8, 13)));
+    updates.refine_atom(atom1, AtomRows::dense(range(8, 13)));
     updates.finish_frame();
 
     let mut decoded = Vec::new();
@@ -32,14 +33,16 @@ fn drain_preserves_instruction_order_and_side_buffer_pairing() {
         UpdateInstr::PushBinding(variable, value) => {
             decoded.push((0, variable.index(), value.index(), 0))
         }
-        UpdateInstr::RefineAtom(atom, AtomRows::Dense(rows)) => {
+        UpdateInstr::RefineAtom(atom, rows) => {
+            let AtomRowsKind::Dense(rows) = rows.kind() else {
+                panic!("expected dense test rows")
+            };
             decoded.push((1, atom.index(), rows.start.index(), rows.end.index()))
         }
         UpdateInstr::RefineAtomDense(atom, rows) => {
             decoded.push((2, atom.index(), rows.start.index(), rows.end.index()))
         }
         UpdateInstr::EndFrame => decoded.push((3, 0, 0, 0)),
-        UpdateInstr::RefineAtom(_, _) => panic!("expected dense test rows"),
     });
 
     assert_eq!(
@@ -56,12 +59,14 @@ fn drain_preserves_instruction_order_and_side_buffer_pairing() {
     assert_eq!(updates.frames(), 0);
 
     // Side-buffer IDs restart after a drain.
-    updates.refine_atom(atom0, AtomRows::Dense(range(21, 22)));
+    updates.refine_atom(atom0, AtomRows::dense(range(21, 22)));
     updates.finish_frame();
     let mut seen = None;
     updates.drain(|update| {
-        if let UpdateInstr::RefineAtom(_, AtomRows::Dense(rows)) = update {
-            seen = Some(rows);
+        if let UpdateInstr::RefineAtom(_, rows) = update
+            && let AtomRowsKind::Dense(rows) = rows.kind()
+        {
+            seen = Some(*rows);
         }
     });
     assert_eq!(seen, Some(range(21, 22)));
@@ -71,20 +76,22 @@ fn drain_preserves_instruction_order_and_side_buffer_pairing() {
 fn rollback_discards_partial_side_payloads_and_rebases_ids() {
     let atom = AtomId::from_usize(0);
     let mut updates = FrameUpdates::with_capacity(2);
-    updates.refine_atom(atom, AtomRows::Dense(range(1, 2)));
+    updates.refine_atom(atom, AtomRows::dense(range(1, 2)));
     updates.finish_frame();
 
-    updates.refine_atom(atom, AtomRows::Dense(range(3, 4)));
-    updates.refine_atom(atom, AtomRows::Dense(range(5, 6)));
+    updates.refine_atom(atom, AtomRows::dense(range(3, 4)));
+    updates.refine_atom(atom, AtomRows::dense(range(5, 6)));
     updates.rollback();
     updates.rollback();
-    updates.refine_atom(atom, AtomRows::Dense(range(7, 8)));
+    updates.refine_atom(atom, AtomRows::dense(range(7, 8)));
     updates.finish_frame();
 
     assert_eq!(updates.frames(), 2);
     let mut starts = Vec::new();
     updates.drain(|update| {
-        if let UpdateInstr::RefineAtom(_, AtomRows::Dense(rows)) = update {
+        if let UpdateInstr::RefineAtom(_, rows) = update
+            && let AtomRowsKind::Dense(rows) = rows.kind()
+        {
             starts.push(rows.start.index());
         }
     });
@@ -95,19 +102,21 @@ fn rollback_discards_partial_side_payloads_and_rebases_ids() {
 fn clear_resets_checkpoints_and_allows_reuse() {
     let atom = AtomId::from_usize(0);
     let mut updates = FrameUpdates::with_capacity(1);
-    updates.refine_atom(atom, AtomRows::Dense(range(1, 2)));
+    updates.refine_atom(atom, AtomRows::dense(range(1, 2)));
     updates.finish_frame();
-    updates.refine_atom(atom, AtomRows::Dense(range(3, 4)));
+    updates.refine_atom(atom, AtomRows::dense(range(3, 4)));
     updates.clear();
     assert_eq!(updates.frames(), 0);
 
-    updates.refine_atom(atom, AtomRows::Dense(range(5, 6)));
+    updates.refine_atom(atom, AtomRows::dense(range(5, 6)));
     updates.rollback();
-    updates.refine_atom(atom, AtomRows::Dense(range(7, 8)));
+    updates.refine_atom(atom, AtomRows::dense(range(7, 8)));
     updates.finish_frame();
     let mut starts = Vec::new();
     updates.drain(|update| {
-        if let UpdateInstr::RefineAtom(_, AtomRows::Dense(rows)) = update {
+        if let UpdateInstr::RefineAtom(_, rows) = update
+            && let AtomRowsKind::Dense(rows) = rows.kind()
+        {
             starts.push(rows.start.index());
         }
     });

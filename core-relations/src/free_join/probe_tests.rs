@@ -1,3 +1,4 @@
+use super::AtomRowsKind;
 use super::*;
 
 #[test]
@@ -180,7 +181,7 @@ mod catalog_filter {
     ) -> Prober<'ctx, 'rows, 'rows> {
         let wrapped = db.get_table(table);
         Prober {
-            source: AtomRows::Dense(OffsetRange::new(
+            source: AtomRows::dense(OffsetRange::new(
                 RowId::new(0),
                 RowId::from_usize(GROUPS * ROWS_PER_GROUP),
             )),
@@ -256,10 +257,13 @@ mod catalog_filter {
 
         // Stale rows are excluded by every consumer of retained rows, so the
         // group is borrowed as is and keeps its continuation slot.
-        let Some(ProbeMatch::Rows(AtomRows::Catalog {
+        let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(0)]) else {
+            panic!("expected borrowed catalog rows")
+        };
+        let AtomRowsKind::Catalog {
             subset,
             continuation,
-        })) = prober.get_subset(&[v(0)])
+        } = rows.kind()
         else {
             panic!("expected borrowed catalog rows")
         };
@@ -291,7 +295,7 @@ mod catalog_filter {
         let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(1)]) else {
             panic!("expected filtered rows")
         };
-        let AtomRows::Root(root) = &rows else {
+        let AtomRowsKind::Root(root) = rows.kind() else {
             panic!("a large filtered group must become a residual root")
         };
         assert!(!root.is_plan_root());
@@ -347,7 +351,7 @@ mod catalog_filter {
         let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(2)]) else {
             panic!("expected filtered rows")
         };
-        assert!(matches!(rows, AtomRows::Inline(_)));
+        assert!(matches!(rows.kind(), AtomRowsKind::Inline(_)));
         assert_eq!(rows_of(&rows).len(), 2);
 
         // Existence-only probes apply the same constraint check.
@@ -391,7 +395,7 @@ mod catalog_filter {
             check_live: wrapped.has_stale_rows(),
         };
         let prober = Prober {
-            source: AtomRows::Dense(OffsetRange::new(
+            source: AtomRows::dense(OffsetRange::new(
                 RowId::new(0),
                 RowId::from_usize(GROUPS * ROWS_PER_GROUP),
             )),

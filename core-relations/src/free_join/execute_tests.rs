@@ -808,3 +808,41 @@ fn filtered_index_ranges_are_complete_disjoint_and_coarse() {
         assert_eq!(expected_start, leader_keys, "ranges must cover every key");
     }
 }
+
+#[test]
+fn row_handle_cardinality_tracks_each_storage_representation() {
+    use crate::{
+        free_join::{
+            packed_trie::{PackedCursor, TrieNode},
+            probe::AtomRows,
+            residual_index::InlineRows,
+        },
+        offsets::{OffsetRange, RowId, SortedOffsetSlice, SubsetRef},
+    };
+    let arena = egglog_concurrency::SharedArena::new();
+    let handle = arena.new_handle();
+    let rows = [RowId::new_const(1), RowId::new_const(3)];
+    // This deliberately has a gap: cardinality counts rows, not the span.
+    let sparse = SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(&rows) });
+    let pairs = [
+        (Value::new_const(0), rows[0]),
+        (Value::new_const(0), rows[1]),
+    ];
+    let packed = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf, false);
+    let range = OffsetRange::new(RowId::new_const(5), RowId::new_const(8));
+    let cases = [
+        AtomRows::root(Arc::new(TrieRoot::new(Subset::Dense(range)))),
+        AtomRows::catalog(sparse, None),
+        AtomRows::packed(PackedCursor::new(packed, 0)),
+        AtomRows::inline(InlineRows::from_sorted(&rows)),
+        AtomRows::dense(range),
+        AtomRows::dense(OffsetRange::new(rows[0], rows[0])),
+    ];
+    for rows in cases {
+        assert_eq!(rows.size(), rows.subset().size());
+        assert_eq!(rows.is_empty(), rows.subset().size() == 0);
+        let clone = rows.clone();
+        drop(rows);
+        assert_eq!(clone.size(), clone.subset().size());
+    }
+}
