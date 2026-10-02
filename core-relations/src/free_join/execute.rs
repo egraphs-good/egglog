@@ -881,30 +881,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
 
         let table_id = atoms[atom].table;
         let info = &self.db.tables[table_id];
-        let shared_child_shape = info.shared_child_shape();
-        let all_cacheable = columns_are_cacheable(info, &cols);
-        let whole_table = info.table.all();
-        let root_range = match source.kind() {
-            AtomRowsKind::Root(root) => match &root.subset {
-                Subset::Dense(range) => Some(*range),
-                Subset::Sparse(_) => None,
-            },
-            _ => None,
-        };
-        // Catalog groups can hold stale rows and ignore this scan's slow
-        // constraints; `CatalogFilter` checks both per match. Filtering for
-        // stale rows keeps the borrowed group and its continuation slot, but a
-        // constrained match is materialized per frame and cannot publish into
-        // the shared continuation grid, which is keyed by columns only. Below
-        // a shared root, a constrained scan therefore keeps the shared root
-        // packed index, whose grid is keyed by those constraints.
-        let constrained_shared_root = !constraints.is_empty()
-            && matches!(source.kind(), AtomRowsKind::Root(root) if root.is_shared());
-        let can_use_catalog = root_range.is_some()
-            && all_cacheable
-            && whole_table.size() / 2 < source.size()
-            && !constrained_shared_root;
-
+        // Match the original executor's ordering: residual probes do not
+        // consult table-wide catalog metadata or obtain the whole-table range.
         // A tiny source is cheaper to index on the stack than as a packed
         // node, unless it has a publication slot: the same packed cursor or
         // continuation key is typically probed many times per run, so the
@@ -917,25 +895,55 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     ..
                 }
         );
-        let ix = if cols.len() == 1 && source.size() <= SMALL_RESIDUAL && !has_slot {
-            ProbeIndex::SmallColumn(SmallColumnIndex::new(
+        if cols.len() == 1 && source.size() <= SMALL_RESIDUAL && !has_slot {
+            let ix = ProbeIndex::SmallColumn(SmallColumnIndex::new(
                 info.table.as_ref(),
                 source.subset(),
                 constraints,
                 cols[0],
-            ))
-        } else if let AtomRowsKind::Inline(rows) = source.kind() {
-            ProbeIndex::SmallExact(SmallExactProbe::new(
+            ));
+            return Prober {
+                source,
+                ix,
+                keep_rows,
+            };
+        }
+        if let AtomRowsKind::Inline(rows) = source.kind() {
+            let ix = ProbeIndex::SmallExact(SmallExactProbe::new(
                 info.table.as_ref(),
                 *rows,
                 cols,
                 constraints,
-            ))
-        } else if can_use_catalog {
-            let range = root_range.expect("catalog eligibility requires a dense root");
-            let needs_intersect =
-                !(whole_table.is_dense() && source.subset().bounds() == whole_table.bounds());
-            let intersect_outer = needs_intersect.then_some(range);
+            ));
+            return Prober {
+                source,
+                ix,
+                keep_rows,
+            };
+        }
+        let shared_child_shape = info.shared_child_shape();
+        // Only a dense root can use a table-wide catalog. Residual packed
+        // cursors already select their continuation index, so do not repeat
+        // whole-table metadata work for them (including tiny cached groups).
+        let catalog_intersection = match source.kind() {
+            AtomRowsKind::Root(root) if constraints.is_empty() || !root.is_shared() => {
+                if let Subset::Dense(range) = &root.subset
+                    && columns_are_cacheable(info, &cols)
+                {
+                    let whole_table = info.table.all();
+                    (whole_table.size() / 2 < source.size()).then(|| {
+                        let needs_intersect = !(whole_table.is_dense()
+                            && root.subset.bounds() == whole_table.bounds());
+                        needs_intersect.then_some(*range)
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        let ix = if let Some(intersect_outer) = catalog_intersection {
             // Below a shared root, the catalog key positions identify the same
             // rows for every plan, so the continuation cache is shared too. A
             // terminal probe never continues, so it skips the lookup.
