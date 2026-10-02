@@ -388,6 +388,10 @@ impl Database {
                 .collect();
         } else {
             rule_reports = HashMap::default();
+            // Serial plans share the worker's scratch and arena handle, as in
+            // the original executor. Bindings and prepared index handles stay
+            // plan-local; packed nodes already live for the entire ruleset.
+            let join_state = JoinState::new(self, exec_state.seed(), trie_cache.clone(), &arena);
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -405,8 +409,6 @@ impl Database {
 
                 let search_and_apply_timer = Instant::now();
                 {
-                    let join_state =
-                        JoinState::new(self, exec_state.seed(), trie_cache.clone(), &arena);
                     let mut binding_info = BindingInfo::default();
                     'eval: {
                         for (id, info) in plan.atoms().iter() {
