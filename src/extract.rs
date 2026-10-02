@@ -15,7 +15,11 @@
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
+use std::ops::Range;
+
+#[cfg(test)]
+mod dependency_tests;
 
 /// A value that can be used to rank extraction candidates.
 pub trait Cost: Clone + Ord {}
@@ -265,20 +269,40 @@ pub struct ExtractedTermVariants<C> {
     pub variants: Vec<Vec<ExtractedTerm<C>>>,
 }
 
-/// Bellman-Ford-like tree extraction with reusable cost preparation.
+/// Dependency-prepared tree extraction with reusable costs.
 ///
 /// The prepared state borrows the e-graph because reconstruction still needs
 /// its sort storage and constructor metadata. This prevents prepared costs from
 /// being used after the e-graph is mutated.
 pub struct TreeExtractor<'g, C: Cost> {
     egraph: &'g EGraph,
-    funcs: Vec<String>,
+    funcs: Vec<&'g Function>,
     cost_model: Box<dyn TreeExtractorCostModel<C> + 'g>,
-    costs: HashMap<String, HashMap<Value, C>>,
+    costs: HashMap<String, HashMap<Value, RankedCost<C>>>,
     topo_rnk_cnt: usize,
-    topo_rnk: HashMap<String, HashMap<Value, usize>>,
-    parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
+    parent_edge: HashMap<String, HashMap<Value, (usize, Vec<Value>)>>,
 }
+
+// A successful relaxation updates the cost and its chronological rank together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RankedCost<C> {
+    cost: C,
+    rank: usize,
+}
+
+struct ExtractionFunction<'g> {
+    func: &'g Function,
+    output_sort_name: &'g str,
+    // The output follows the extracted children, including in view tables.
+    output_index: usize,
+}
+
+struct PreparedHyperedge {
+    function: usize,
+    values: Range<usize>,
+}
+
+type ReverseDependencies = HashMap<String, HashMap<Value, Vec<usize>>>;
 
 impl<'g, C: Cost> TreeExtractor<'g, C> {
     /// Prepares extraction costs for constructors reachable from `rootsorts`.
@@ -301,91 +325,71 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
 
         let mut rootsorts = rootsorts.unwrap_or_default();
 
-        // Built a reverse index from output sort to function head symbols
-        // Only include constructors (not regular functions), and respect the user-facing
-        // hidden and unextractable flags.
-        let mut rev_index: HashMap<String, Vec<String>> = Default::default();
-        for func in egraph.functions.iter() {
-            let unextractable = func.1.decl.unextractable;
-            let hidden = func.1.decl.internal_hidden;
-
-            // Only extract constructors and view tables, which reconstruct as their
-            // term_constructor. Proof extraction uses its own root-directed extractor
-            // and does not need alternate behavior here.
-            if !unextractable
-                && !hidden
-                && (func.1.decl.subtype == FunctionSubtype::Constructor
-                    || func.1.decl.term_constructor.is_some())
+        // Index extractable tables by output sort. View tables reconstruct as
+        // their term_constructor; their e-class is the last input column.
+        let mut rev_index: HashMap<&str, Vec<&Function>> = Default::default();
+        for func in egraph.functions.values() {
+            if !func.decl.unextractable
+                && !func.decl.internal_hidden
+                && (func.decl.subtype == FunctionSubtype::Constructor
+                    || func.decl.term_constructor.is_some())
             {
-                let func_name = func.0.clone();
-                // For view tables (with term_constructor in proof mode), the e-class is the last input column
-                let output_sort_name = func.1.extraction_output_sort().name();
-                if let Some(v) = rev_index.get_mut(output_sort_name) {
-                    v.push(func_name);
-                } else {
-                    rev_index.insert(output_sort_name.to_owned(), vec![func_name]);
-                    if extract_all_sorts {
-                        rootsorts.push(func.1.extraction_output_sort().clone());
-                    }
+                let output_sort = func.extraction_output_sort();
+                let functions = rev_index.entry(output_sort.name()).or_default();
+                if functions.is_empty() && extract_all_sorts {
+                    rootsorts.push(output_sort.clone());
                 }
+                functions.push(func);
             }
         }
 
-        // Do a BFS to find reachable tables
+        // Visit each sort once, retaining its tables in the original BFS order.
+        // Each table belongs to one output sort, so no table deduplication is needed.
         let mut q: VecDeque<ArcSort> = VecDeque::new();
         let mut seen: HashSet<String> = Default::default();
-        for rootsort in rootsorts.iter() {
+        for rootsort in rootsorts {
             if seen.insert(rootsort.name().to_owned()) {
-                q.push_back(rootsort.clone());
+                q.push_back(rootsort);
             }
         }
 
-        let mut funcs_set: HashSet<String> = Default::default();
-        let mut funcs: Vec<String> = Vec::new();
-        while !q.is_empty() {
-            let sort = q.pop_front().unwrap();
+        let mut funcs = Vec::new();
+        while let Some(sort) = q.pop_front() {
             if sort.is_container_sort() {
-                let inner_sorts = sort.inner_sorts();
-                for s in inner_sorts {
+                for s in sort.inner_sorts() {
                     if !seen.contains(s.name()) {
-                        q.push_back(s.clone());
                         seen.insert(s.name().to_owned());
+                        q.push_back(s.clone());
                     }
                 }
             } else if sort.is_eq_sort()
-                && let Some(head_symbols) = rev_index.get(sort.name())
+                && let Some(functions) = rev_index.get(sort.name())
             {
-                for h in head_symbols {
-                    if !funcs_set.contains(h) {
-                        let func = egraph.functions.get(h).unwrap();
-                        // For view tables, children are all but the last input (which is the e-class)
-                        let num_children = func.extraction_num_children();
-                        for ch in func.func_type.input.iter().take(num_children) {
-                            let ch_name = ch.name();
-                            if !seen.contains(ch_name) {
-                                q.push_back(ch.clone());
-                                seen.insert(ch_name.to_owned());
-                            }
+                for &func in functions {
+                    for ch in func
+                        .func_type
+                        .input
+                        .iter()
+                        .take(func.extraction_num_children())
+                    {
+                        if !seen.contains(ch.name()) {
+                            seen.insert(ch.name().to_owned());
+                            q.push_back(ch.clone());
                         }
-                        funcs_set.insert(h.clone());
-                        funcs.push(h.clone());
                     }
+                    funcs.push(func);
                 }
             }
         }
 
         // Initialize the tables to have the reachable entries
-        let mut costs: HashMap<String, HashMap<Value, C>> = Default::default();
-        let mut topo_rnk: HashMap<String, HashMap<Value, usize>> = Default::default();
-        let mut parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>> =
-            Default::default();
+        let mut costs = HashMap::default();
+        let mut parent_edge = HashMap::default();
 
-        for func_name in funcs.iter() {
-            let func = egraph.functions.get(func_name).unwrap();
+        for func in &funcs {
             let output_sort_name = func.extraction_output_sort().name();
             if !costs.contains_key(output_sort_name) {
                 costs.insert(output_sort_name.to_owned(), Default::default());
-                topo_rnk.insert(output_sort_name.to_owned(), Default::default());
                 parent_edge.insert(output_sort_name.to_owned(), Default::default());
             }
         }
@@ -396,12 +400,19 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             cost_model: Box::new(cost_model),
             costs,
             topo_rnk_cnt: 0,
-            topo_rnk,
             parent_edge,
         };
-
-        extractor.bellman_ford(egraph);
-
+        let funcs: Vec<_> = extractor
+            .funcs
+            .iter()
+            .map(|&func| ExtractionFunction {
+                func,
+                output_sort_name: func.extraction_output_sort().name(),
+                output_index: func.extraction_output_index(),
+            })
+            .collect();
+        extractor.dependency_relaxation(egraph, &funcs);
+        extractor.save_best_parent_edges(egraph, &funcs);
         extractor
     }
 
@@ -420,7 +431,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     .total_container_cost(egraph, sort, value, &ch_costs),
             )
         } else if sort.is_eq_sort() {
-            self.costs.get(sort.name())?.get(&value).cloned()
+            Some(self.costs.get(sort.name())?.get(&value)?.cost.clone())
         } else {
             // Primitive
             Some(self.cost_model.base_value_cost(egraph, sort, value))
@@ -468,8 +479,8 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
                 })
         } else if sort.is_eq_sort() {
-            if let Some(t) = self.topo_rnk.get(sort.name()) {
-                *t.get(&value).unwrap_or(&usize::MAX)
+            if let Some(costs) = self.costs.get(sort.name()) {
+                costs.get(&value).map_or(usize::MAX, |entry| entry.rank)
             } else {
                 usize::MAX
             }
@@ -495,108 +506,230 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             })
     }
 
-    /// We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
-    /// [Bellman-Ford](https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm) is a shortest path algorithm.
-    /// The version implemented here computes the shortest path from any node in a set of sources to all the reachable nodes.
-    /// Computing the minimum cost for terms is treated as a shortest path problem on a hypergraph here.
-    /// In this hypergraph, the nodes corresponde to eclasses, the distances are the costs to extract a term of those eclasses,
-    /// and each enode is a hyperedge that goes from the set of children eclasses to the enode's eclass.
-    /// The sources are the eclasses with known costs from the cost model.
-    /// Additionally, to avoid cycles in the extraction even when the cost model can assign an equal cost to a term and its subterm.
-    /// It computes a topological rank for each eclass
-    /// and only allows each eclass to have children of classes of strictly smaller ranks in the extraction.
-    fn bellman_ford(&mut self, egraph: &EGraph) {
-        let mut ensure_fixpoint = false;
+    fn collect_eq_dependencies(
+        egraph: &EGraph,
+        value: Value,
+        sort: &ArcSort,
+        parents: &mut ReverseDependencies,
+        ordinal: usize,
+    ) -> bool {
+        if sort.is_container_sort() {
+            let mut found = false;
+            for (inner_sort, inner_value) in
+                sort.inner_values(egraph.backend.container_values(), value)
+            {
+                found |= Self::collect_eq_dependencies(
+                    egraph,
+                    inner_value,
+                    &inner_sort,
+                    parents,
+                    ordinal,
+                );
+            }
+            found
+        } else if sort.is_eq_sort() {
+            let dependent_edges = parents
+                .entry_ref(sort.name())
+                .or_default()
+                .entry(value)
+                .or_default();
+            // Rows register in ordinal order, so repeated leaves in this row
+            // already have this ordinal at the end of their parent list.
+            if dependent_edges.last() != Some(&ordinal) {
+                dependent_edges.push(ordinal);
+            }
+            true
+        } else {
+            false
+        }
+    }
 
-        let funcs = self.funcs.clone();
+    fn relax_hyperedge(
+        &mut self,
+        egraph: &EGraph,
+        row: &egglog_bridge::ScanEntry,
+        descriptor: &ExtractionFunction<'g>,
+    ) -> bool {
+        let target = row.vals[descriptor.output_index];
+        let Some(new_cost) = self.compute_cost_hyperedge(egraph, row, descriptor.func) else {
+            return false;
+        };
+        let entry = self
+            .costs
+            .get_mut(descriptor.output_sort_name)
+            .unwrap()
+            .entry(target);
+        if let HEntry::Occupied(old) = &entry
+            && new_cost >= old.get().cost
+        {
+            return false;
+        }
+        self.topo_rnk_cnt += 1;
+        entry.insert(RankedCost {
+            cost: new_cost,
+            rank: self.topo_rnk_cnt,
+        });
+        true
+    }
 
-        while !ensure_fixpoint {
-            ensure_fixpoint = true;
+    fn ordered_full_sweep(&mut self, egraph: &EGraph, funcs: &[ExtractionFunction<'g>]) -> bool {
+        let mut updated = false;
+        for descriptor in funcs {
+            egraph.backend.for_each(descriptor.func.backend_id, |row| {
+                if !row.subsumed && self.relax_hyperedge(egraph, &row, descriptor) {
+                    updated = true;
+                }
+            });
+        }
+        updated
+    }
 
-            for func_name in funcs.iter() {
-                let func = egraph.functions.get(func_name).unwrap();
-                let target_sort = func.extraction_output_sort();
-
-                let output_idx = func.extraction_output_index();
-                let relax_hyperedge = |row: egglog_bridge::ScanEntry| {
-                    if !row.subsumed {
-                        let target = &row.vals[output_idx];
-                        let mut updated = false;
-                        if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
-                            match self
-                                .costs
-                                .get_mut(target_sort.name())
-                                .unwrap()
-                                .entry(*target)
-                            {
-                                HEntry::Vacant(e) => {
-                                    updated = true;
-                                    e.insert(new_cost);
-                                }
-                                HEntry::Occupied(mut e) => {
-                                    if new_cost < *(e.get()) {
-                                        updated = true;
-                                        e.insert(new_cost);
-                                    }
-                                }
-                            }
-                        }
-                        // record the chronological order of the updates
-                        // which serves as a topological order that avoids cycles
-                        // even when a term has a cost equal to its subterms
-                        if updated {
-                            ensure_fixpoint = false;
-                            self.topo_rnk_cnt += 1;
-                            self.topo_rnk
-                                .get_mut(target_sort.name())
-                                .unwrap()
-                                .insert(*target, self.topo_rnk_cnt);
-                        }
-                    }
-                };
-
-                egraph.backend.for_each(func.backend_id, relax_hyperedge);
+    fn dependency_relaxation(&mut self, egraph: &EGraph, funcs: &[ExtractionFunction<'g>]) {
+        // Stable costs let us skip rows with unchanged child costs. Keeping all
+        // possible updates in sweep/row order preserves reconstruction ranks.
+        // A small fixed prefix avoids indexing short-convergence workloads and
+        // bounds full-scan overhead independently of dependency depth. The cutoff
+        // affects preparation cost only; either schedule preserves the same ranks.
+        const UNINDEXED_SWEEPS: usize = 3;
+        for _ in 0..UNINDEXED_SWEEPS {
+            if !self.ordered_full_sweep(egraph, funcs) {
+                return;
             }
         }
 
-        // Save the edges for reconstruction
-        for func_name in funcs.iter() {
-            let func = egraph.functions.get(func_name).unwrap();
-            let target_sort = func.extraction_output_sort();
-            let output_idx = func.extraction_output_index();
+        // A confirmation sweep must not pay for an unused dependency index.
+        // Probe without updating costs: if work remains, the prepared sweep
+        // starts from the same state and retains every successful update's order.
+        let pending = funcs.iter().any(|descriptor| {
+            let mut pending = false;
+            egraph
+                .backend
+                .for_each_while(descriptor.func.backend_id, |row| {
+                    pending = !row.subsumed
+                        && self
+                            .compute_cost_hyperedge(egraph, &row, descriptor.func)
+                            .is_some_and(|cost| {
+                                self.costs[descriptor.output_sort_name]
+                                    .get(&row.vals[descriptor.output_index])
+                                    .is_none_or(|old| cost < old.cost)
+                            });
+                    !pending
+                });
+            pending
+        });
+        if !pending {
+            return;
+        }
 
-            let save_best_parent_edge = |row: egglog_bridge::ScanEntry| {
-                if !row.subsumed {
-                    let target = &row.vals[output_idx];
-                    if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
-                        && Some(best_cost.clone())
-                            == self.compute_cost_hyperedge(egraph, &row, func)
-                    {
-                        // one of the possible best parent edges
-                        let target_topo_rnk = *self
-                            .topo_rnk
-                            .get(target_sort.name())
-                            .unwrap()
-                            .get(target)
-                            .unwrap();
-                        if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func) {
-                            // one of the parent edges that avoids cycles
-                            if let HEntry::Vacant(e) = self
-                                .parent_edge
-                                .get_mut(target_sort.name())
-                                .unwrap()
-                                .entry(*target)
-                            {
-                                e.insert((func.decl.name.clone(), row.vals.to_vec()));
-                            }
+        // The final full sweep both relaxes costs and records immutable rows
+        // and their reverse dependencies for subsequent sparse sweeps.
+        // Ordinals rely on immutable function tables retaining their row scan
+        // order: sparse sweeps must replay the full sweep's update chronology.
+        let mut edges = Vec::new();
+        let mut values = Vec::new();
+        let mut parents: ReverseDependencies = Default::default();
+        let mut current = BTreeSet::new();
+        for (function, descriptor) in funcs.iter().enumerate() {
+            let func = descriptor.func;
+            egraph.backend.for_each(func.backend_id, |row| {
+                if row.subsumed {
+                    return;
+                }
+
+                let ordinal = edges.len();
+                let mut has_dependencies = false;
+                for (value, sort) in row
+                    .vals
+                    .iter()
+                    .take(descriptor.output_index)
+                    .zip(&func.func_type.input)
+                {
+                    has_dependencies |=
+                        Self::collect_eq_dependencies(egraph, *value, sort, &mut parents, ordinal);
+                }
+                // Without e-class dependencies the cost was fixed on the first
+                // sweep, so this row can never trigger another improvement.
+                if !has_dependencies {
+                    return;
+                }
+                let start = values.len();
+                values.extend_from_slice(row.vals);
+                edges.push(PreparedHyperedge {
+                    function,
+                    values: start..values.len(),
+                });
+                let target = row.vals[descriptor.output_index];
+                if self.relax_hyperedge(egraph, &row, descriptor)
+                    && let Some(dependent_edges) = parents
+                        .get(descriptor.output_sort_name)
+                        .and_then(|by_value| by_value.get(&target))
+                {
+                    // Registered parents have already been visited, or are this
+                    // row itself. Future rows will be visited by this dense scan.
+                    for &parent in dependent_edges {
+                        current.insert(parent);
+                    }
+                }
+            });
+        }
+        let mut next = BTreeSet::new();
+
+        while !current.is_empty() {
+            while let Some(ordinal) = current.pop_first() {
+                let edge = &edges[ordinal];
+                let descriptor = &funcs[edge.function];
+                let row_values = &values[edge.values.clone()];
+                let target = row_values[descriptor.output_index];
+                let row = egglog_bridge::ScanEntry {
+                    vals: row_values,
+                    subsumed: false,
+                };
+                if self.relax_hyperedge(egraph, &row, descriptor)
+                    && let Some(dependent_edges) = parents
+                        .get(descriptor.output_sort_name)
+                        .and_then(|by_value| by_value.get(&target))
+                {
+                    for &parent in dependent_edges {
+                        // Preserve the original sweep and row order, including
+                        // self-dependencies, to retain chronological ranks.
+                        if parent > ordinal {
+                            current.insert(parent);
+                        } else {
+                            next.insert(parent);
                         }
                     }
                 }
-            };
+            }
 
-            egraph
-                .backend
-                .for_each(func.backend_id, save_best_parent_edge);
+            // The drained current queue becomes the empty next-sweep queue.
+            std::mem::swap(&mut current, &mut next);
+        }
+    }
+
+    fn save_best_parent_edges(&mut self, egraph: &EGraph, funcs: &[ExtractionFunction<'g>]) {
+        for (function, descriptor) in funcs.iter().enumerate() {
+            let func = descriptor.func;
+            egraph.backend.for_each(func.backend_id, |row| {
+                if row.subsumed {
+                    return;
+                }
+                let target = row.vals[descriptor.output_index];
+                let Some(best) = self.costs[descriptor.output_sort_name].get(&target) else {
+                    return;
+                };
+                // Keep the first minimum-cost producer whose children have
+                // strictly earlier ranks, so reconstruction cannot cycle.
+                if Some(best.cost.clone()) != self.compute_cost_hyperedge(egraph, &row, func)
+                    || best.rank <= self.compute_topo_rnk_hyperedge(egraph, &row, func)
+                {
+                    return;
+                }
+                self.parent_edge
+                    .get_mut(descriptor.output_sort_name)
+                    .unwrap()
+                    .entry(target)
+                    .or_insert_with(|| (function, row.vals.to_vec()));
+            });
         }
     }
 
@@ -629,13 +762,13 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 ch_terms,
             )
         } else if sort.is_eq_sort() {
-            let (func_name, hyperedge) = self
+            let (function, hyperedge) = self
                 .parent_edge
                 .get(sort.name())
                 .unwrap()
                 .get(&value)
                 .unwrap();
-            let func = egraph.functions.get(func_name).unwrap();
+            let func = self.funcs[*function];
             let ch_sorts = &func.func_type.input;
 
             let num_children = func.extraction_num_children();
@@ -741,17 +874,11 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
 
             let mut root_variants: Vec<(C, String, Vec<Value>)> = Vec::new();
 
-            for func_name in self.funcs.iter().filter(|func_name| {
-                // Need an eq on sorts - use extraction_output_sort for view table support
-                sort.name()
-                    == egraph
-                        .functions
-                        .get(*func_name)
-                        .unwrap()
-                        .extraction_output_sort()
-                        .name()
-            }) {
-                let func = egraph.functions.get(func_name).unwrap();
+            for &func in self
+                .funcs
+                .iter()
+                .filter(|func| sort.name() == func.extraction_output_sort().name())
+            {
                 let output_idx = func.extraction_output_index();
 
                 let find_root_variants = |row: egglog_bridge::ScanEntry| {
@@ -764,7 +891,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         if *target == canonical_value
                             && let Some(cost) = self.compute_cost_hyperedge(egraph, &row, func)
                         {
-                            root_variants.push((cost, func_name.clone(), row.vals.to_vec()));
+                            root_variants.push((cost, func.name().to_owned(), row.vals.to_vec()));
                         }
                     }
                 };

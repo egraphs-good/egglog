@@ -145,3 +145,73 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
         "Expected (Lit 3), got: {normal_extracted}"
     );
 }
+
+#[test]
+fn extraction_preserves_wide_rows_and_aliases_after_delayed_dependencies() {
+    // Six dependency levels, 33 rows and 18 mixed children cross both scan and arena boundaries.
+    let gate = "(Step5 (Step4 (Step3 (Step2 (Step1 (Seed))))))";
+    let mut program = format!(
+        r#"
+        (datatype Gate0 (Seed :cost 1)) (datatype Gate1 (Step1 Gate0 :cost 1))
+        (datatype Gate2 (Step2 Gate1 :cost 1)) (datatype Gate3 (Step3 Gate2 :cost 1))
+        (datatype Gate4 (Step4 Gate3 :cost 1)) (datatype Gate5 (Step5 Gate4 :cost 1))
+        (let gate {gate})
+        (datatype Child (ChildLeaf Gate5 i64 :cost 1) (Old :cost 100))
+        (datatype Other (OtherLeaf bool :cost 1))
+        (sort Children (Vec Child)) (sort ChildMap (Map Child i64))
+        (datatype Root (Wide Child i64 bool String Children Child String i64 bool
+            ChildMap Other i64 Other Child Children bool String Other :cost 1))
+        (let old (Old))"#
+    );
+    for i in 0..33 {
+        program += &format!("(let child{i} (ChildLeaf gate {i}))");
+    }
+    program += "(union old child0)";
+    let mut expected = Vec::new();
+    let mut extracts = String::new();
+    for i in 0..33 {
+        let next = (i + 1) % 33;
+        let (even, odd, negative, index) = (i % 2 == 0, i % 2 != 0, -(i as i64), i * 101);
+        let children = format!("(vec-of child{i} child{next} child{i})");
+        let row = format!(
+            "(Wide child{i} {i} {even} \"row{i}\" {children} child{next} \"tail{i}\" \
+             {negative} {odd} (map-insert (map-empty) child{i} {i}) \
+             (OtherLeaf {even}) {index} (OtherLeaf {odd}) child{i} \
+             {children} {even} \"end{i}\" (OtherLeaf {even}))"
+        );
+        program += &format!("(let wide{i} {row})");
+        extracts += &format!("(extract wide{i}) (extract wide{i} 2)");
+        let term = row
+            .replace(
+                &format!("child{next}"),
+                &format!("(ChildLeaf {gate} {next})"),
+            )
+            .replace(&format!("child{i}"), &format!("(ChildLeaf {gate} {i})"))
+            .replace("map-insert (map-empty)", "map-of");
+        expected.extend([(Some(97), vec![term.clone()]), (None, vec![term])]);
+    }
+    program += &format!("{extracts}(extract old)");
+    expected.push((Some(8), vec![format!("(ChildLeaf {gate} 0)")]));
+    for mut graph in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ] {
+        let actual: Vec<_> = graph
+            .parse_and_run_program(None, &program)
+            .unwrap()
+            .into_iter()
+            .filter_map(|output| match output {
+                CommandOutput::ExtractBest(dag, cost, term) => {
+                    Some((Some(cost), vec![dag.to_string(term)]))
+                }
+                CommandOutput::ExtractVariants(dag, terms) => {
+                    Some((None, terms.into_iter().map(|t| dag.to_string(t)).collect()))
+                }
+                CommandOutput::RunSchedule(_) => None,
+                other => panic!("unexpected extraction output: {other:?}"),
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}

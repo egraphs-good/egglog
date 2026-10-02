@@ -837,6 +837,179 @@ fn tree_extractor_reuses_costs_for_multiple_values() {
     assert_eq!(termdag.to_string(leaf.term), "(Leaf 9)");
 }
 
+// Root-first preparation crosses the three-sweep cutoff.
+const EXTRACTION_DEPENDENCY_CHAIN: &str = "
+    (datatype Gate0 (Seed :cost 1)) (datatype Gate1 (Step1 Gate0 :cost 1))
+    (datatype Gate2 (Step2 Gate1 :cost 1)) (datatype Gate3 (Step3 Gate2 :cost 1))
+    (datatype Gate4 (Step4 Gate3 :cost 1)) (datatype Gate5 (Step5 Gate4 :cost 1))
+    (let gate (Step5 (Step4 (Step3 (Step2 (Step1 (Seed)))))))";
+const IMPROVED_CHILD: &str = "(Improve (Step5 (Step4 (Step3 (Step2 (Step1 (Seed)))))))";
+
+fn dependency_graph<const N: usize>(
+    program: &str,
+    roots: [&str; N],
+) -> (EGraph, [(ArcSort, Value); N]) {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(None, &format!("{EXTRACTION_DEPENDENCY_CHAIN}{program}"))
+        .unwrap();
+    let roots = roots.map(|name| {
+        let expr = graph.parser.get_expr_from_string(None, name).unwrap();
+        graph.eval_expr(&expr).unwrap()
+    });
+    (graph, roots)
+}
+
+fn best_tree(
+    ex: &TreeExtractor<'_, DefaultCost>,
+    (sort, value): &(ArcSort, Value),
+) -> Option<(DefaultCost, String)> {
+    let mut dag = TermDag::default();
+    ex.extract_best_with_sort(&mut dag, *value, sort.clone())
+        .map(|t| (t.cost, dag.to_string(t.term)))
+}
+
+fn tree_variants(
+    ex: &TreeExtractor<'_, DefaultCost>,
+    (sort, value): &(ArcSort, Value),
+) -> Vec<(DefaultCost, String)> {
+    let mut dag = TermDag::default();
+    ex.extract_variants_with_sort(&mut dag, *value, 4, sort.clone())
+        .into_iter()
+        .map(|t| (t.cost, dag.to_string(t.term)))
+        .collect()
+}
+
+#[test]
+fn tree_extractor_preserves_tied_parent_after_delayed_child_improvement() {
+    let (graph, [child, root, unavailable, blocked]) = dependency_graph(
+        "(datatype Child (Slow :cost 9) (Improve Gate5 :cost 0)
+            (Cycle Child :cost 0) (Missing :unextractable))
+        (datatype Root (Wrap Child) (Base))
+        (let child (Slow)) (union child (Improve gate)) (union child (Cycle child))
+        (let root (Wrap child)) (union root (Base))
+        (let unavailable (Missing)) (union unavailable (Cycle unavailable))
+        (let blocked (Wrap unavailable))",
+        ["child", "root", "unavailable", "blocked"],
+    );
+    let max = DefaultCost::MAX;
+    let ex = TreeExtractor::compute_costs_from_rootsorts(
+        Some(vec![child.0.clone(), root.0.clone()]),
+        &graph,
+        TreeCostModelFromDag(AdditiveCostModel { node_cost: max }),
+    );
+    assert_eq!(best_tree(&ex, &child), Some((6, IMPROVED_CHILD.into())));
+    // Child's later rank disqualifies Wrap despite its unchanged saturated cost.
+    assert_eq!(best_tree(&ex, &root), Some((max, "(Base)".into())));
+    assert_eq!(
+        tree_variants(&ex, &root),
+        vec![
+            (max, "(Base)".into()),
+            (max, format!("(Wrap {IMPROVED_CHILD})"))
+        ]
+    );
+    for root in [unavailable, blocked] {
+        assert_eq!(best_tree(&ex, &root), None);
+        assert!(tree_variants(&ex, &root).is_empty());
+    }
+}
+
+#[test]
+fn tree_extractor_signed_cost_matches_reconstructed_tree() {
+    fn weight(name: &str) -> i64 {
+        match name {
+            "Seed" => -9,
+            "Slow" => 40,
+            "Improve" => -2,
+            "Cycle" => 0,
+            "Pair" => -1,
+            "Base" => 20,
+            _ => 1,
+        }
+    }
+    struct SignedCost;
+    impl DagCostModel<num::BigInt> for SignedCost {
+        fn base_value_cost(&self, _: &EGraph, _: &ArcSort, _: Value) -> num::BigInt {
+            0.into()
+        }
+        fn enode_cost(&self, _: &EGraph, f: &Function, _: &Enode<'_>) -> num::BigInt {
+            weight(f.name()).into()
+        }
+    }
+    fn cost(dag: &TermDag, id: TermId) -> i64 {
+        let Term::App(name, children) = dag.get(id) else {
+            panic!("expected a constructor")
+        };
+        // Count each occurrence, including shared subtrees.
+        weight(name) + children.iter().map(|&id| cost(dag, id)).sum::<i64>()
+    }
+    let (graph, [(sort, value)]) = dependency_graph(
+        "(datatype Child (Slow) (Improve Gate5) (Cycle Child))
+        (datatype Root (Pair Child Child) (Base))
+        (let child (Slow)) (union child (Improve gate)) (union child (Cycle child))
+        (let root (Pair child child)) (union root (Base))",
+        ["root"],
+    );
+    let ex = TreeExtractor::compute_costs_from_rootsorts(
+        Some(vec![sort.clone()]),
+        &graph,
+        TreeCostModelFromDag(SignedCost),
+    );
+    let mut dag = TermDag::default();
+    let best = ex
+        .extract_best_with_sort(&mut dag, value, sort.clone())
+        .unwrap();
+    let variants = ex.extract_variants_with_sort(&mut dag, value, 4, sort);
+    assert_eq!(
+        dag.to_string(best.term),
+        format!("(Pair {IMPROVED_CHILD} {IMPROVED_CHILD})")
+    );
+    assert_eq!(best.cost, (-13).into());
+    assert_eq!(
+        variants.iter().map(|t| t.cost.clone()).collect::<Vec<_>>(),
+        vec![(-13).into(), 20.into()]
+    );
+    for t in variants.iter().chain(std::iter::once(&best)) {
+        assert_eq!(t.cost, cost(&dag, t.term).into());
+    }
+}
+
+#[test]
+fn tree_extractor_reschedules_nested_map_keys_with_captured_functions() {
+    let (graph, [root, good, bad, bad_map]) = dependency_graph(
+        r#"(datatype Captured (Slow :cost 17) (Improve Gate5 :cost 0)
+            (Fixed :cost 2) (Missing :unextractable) (Target Captured Captured i64))
+        (sort Closure (UnstableFn (i64) Captured)) (sort Closures (Vec Closure))
+        (sort NestedClosures (Vec Closures)) (sort ClosureMap (Map NestedClosures i64))
+        (datatype Root (Hold ClosureMap :cost 1) (Base :cost 50))
+        (let captured (Slow)) (union captured (Improve gate))
+        (let good (unstable-fn "Target" captured (Fixed)))
+        (let bad (unstable-fn "Target" captured (Missing)))
+        (let good-map (map-insert (map-empty) (vec-of (vec-of good good)) 7))
+        (let bad-map (map-insert (map-empty) (vec-of (vec-of bad)) 7))
+        (let root (Hold good-map)) (union root (Hold bad-map)) (union root (Base))"#,
+        ["root", "good", "bad", "bad-map"],
+    );
+    // Captured equality values are absent from the advertised container signature.
+    assert!(!good.0.is_eq_container_sort());
+    let ex = TreeExtractor::compute_costs_from_rootsorts(
+        Some(vec![root.0.clone()]),
+        &graph,
+        DEFAULT_COST_MODEL,
+    );
+    let closure = format!(r#"(unstable-fn "Target" {IMPROVED_CHILD} (Fixed))"#);
+    let expected = format!("(Hold (map-of (vec-of (vec-of {closure} {closure})) 7))");
+    assert_eq!(best_tree(&ex, &root), Some((18, expected.clone())));
+    assert_eq!(
+        tree_variants(&ex, &root),
+        vec![(18, expected), (50, "(Base)".into())]
+    );
+    assert_eq!(best_tree(&ex, &good), Some((8, closure)));
+    for root in [bad, bad_map] {
+        assert_eq!(best_tree(&ex, &root), None);
+    }
+}
+
 #[test]
 fn tree_extractor_supports_reachable_sorts_and_zero_variants() {
     let mut egraph = EGraph::default();
@@ -933,6 +1106,7 @@ fn tree_extractor_supports_reachable_sorts_and_zero_variants() {
 #[test]
 fn extract_best_returns_none_for_unextractable_roots() {
     let mut egraph = EGraph::default();
+    egraph.ensure_no_reserved_symbols(false);
     egraph
         .parse_and_run_program(
             None,
@@ -940,29 +1114,22 @@ fn extract_best_returns_none_for_unextractable_roots() {
             (datatype Math)
             (constructor visible () Math)
             (constructor hidden () Math :unextractable)
+            (constructor internal () Math :internal-hidden)
             "#,
         )
         .unwrap();
 
-    let visible = egraph
-        .parser
-        .get_expr_from_string(None, "(visible)")
-        .unwrap();
-    let hidden = egraph
-        .parser
-        .get_expr_from_string(None, "(hidden)")
-        .unwrap();
-    let (sort, visible) = egraph.eval_expr(&visible).unwrap();
-    let (_, hidden) = egraph.eval_expr(&hidden).unwrap();
+    let roots = ["(visible)", "(hidden)", "(internal)"].map(|name| {
+        let expr = egraph.parser.get_expr_from_string(None, name).unwrap();
+        egraph.eval_expr(&expr).unwrap()
+    });
+    let extracted = egraph.extract_best(roots.into()).unwrap();
 
-    let extracted = egraph
-        .extract_best(vec![(sort.clone(), visible), (sort, hidden)])
-        .unwrap();
-
-    assert_eq!(extracted.terms.len(), 2);
+    assert_eq!(extracted.terms.len(), 3);
     let visible_root = extracted.terms[0].as_ref().unwrap();
     assert_eq!(extracted.termdag.to_string(visible_root.term), "(visible)");
     assert!(extracted.terms[1].is_none());
+    assert!(extracted.terms[2].is_none());
 }
 
 #[test]
