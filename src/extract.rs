@@ -280,7 +280,7 @@ pub struct TreeExtractor<'g, C: Cost> {
     costs: Vec<HashMap<Value, C>>,
     topo_rnk_cnt: usize,
     topo_rnk: Vec<HashMap<Value, usize>>,
-    parent_edge: Vec<HashMap<Value, (String, Vec<Value>)>>,
+    parent_edge: Vec<HashMap<Value, (usize, Vec<Value>)>>,
 }
 
 /// How extraction treats one child column of a function, resolved once so the
@@ -296,8 +296,10 @@ enum ChildKind {
 /// Per-function data for [`TreeExtractor::bellman_ford`]: resolved schema facts
 /// plus a flat materialized copy of the table's non-subsumed rows, so each
 /// relaxation pass iterates memory instead of re-scanning the table.
-struct FuncData {
-    name: String,
+struct FuncData<'a> {
+    func: &'a Function,
+    /// The function whose `:cost` prices this table (a view table's term constructor).
+    cost_func: &'a Function,
     /// Row width in `rows`; 0 iff the table had no (non-subsumed) rows.
     arity: usize,
     output_idx: usize,
@@ -508,7 +510,6 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
     fn row_cost(
         &self,
         egraph: &EGraph,
-        func: &Function,
         f: &FuncData,
         row: &[Value],
         ch_costs: &mut Vec<C>,
@@ -524,20 +525,14 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             ch_costs.push(cost);
         }
         let enode = Enode {
-            name: func.extraction_term_name(),
+            name: f.func.extraction_term_name(),
             children: &row[..f.output_idx],
             eclass: row[f.output_idx],
             subsumed: false,
         };
-        let cost_func = func
-            .decl
-            .term_constructor
-            .as_ref()
-            .and_then(|name| egraph.functions.get(name))
-            .unwrap_or(func);
         Some(
             self.cost_model
-                .total_enode_cost(egraph, cost_func, &enode, ch_costs),
+                .total_enode_cost(egraph, f.cost_func, &enode, ch_costs),
         )
     }
 
@@ -604,7 +599,13 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     }
                 });
                 FuncData {
-                    name: func_name.clone(),
+                    func,
+                    cost_func: func
+                        .decl
+                        .term_constructor
+                        .as_ref()
+                        .and_then(|name| egraph.functions.get(name))
+                        .unwrap_or(func),
                     arity,
                     output_idx: func.extraction_output_index(),
                     output_sort_id: self.sort_ids[func.extraction_output_sort().name()],
@@ -669,7 +670,6 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     continue;
                 }
                 any = true;
-                let func = egraph.functions.get(&f.name).unwrap();
                 // Marks set at or behind the sweep cursor (including a row
                 // re-marking itself) stay for the next sweep; marks ahead of it
                 // are picked up in this one, matching the naive pass exactly.
@@ -684,7 +684,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     dirty_count[fi] -= 1;
                     let row = &f.rows[ri * f.arity..(ri + 1) * f.arity];
                     ri += 1;
-                    let Some(new_cost) = self.row_cost(egraph, func, f, row, &mut ch_costs) else {
+                    let Some(new_cost) = self.row_cost(egraph, f, row, &mut ch_costs) else {
                         continue;
                     };
                     let target = row[f.output_idx];
@@ -726,17 +726,16 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
 
         // Save the edges for reconstruction
-        for f in &func_data {
+        for (fi, f) in func_data.iter().enumerate() {
             if f.rows.is_empty() {
                 continue;
             }
-            let func = egraph.functions.get(&f.name).unwrap();
             for row in f.rows.chunks_exact(f.arity) {
                 let target = row[f.output_idx];
                 let Some(best_cost) = self.costs[f.output_sort_id].get(&target) else {
                     continue;
                 };
-                if Some(best_cost.clone()) != self.row_cost(egraph, func, f, row, &mut ch_costs) {
+                if Some(best_cost.clone()) != self.row_cost(egraph, f, row, &mut ch_costs) {
                     continue;
                 }
                 // one of the possible best parent edges
@@ -763,7 +762,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 if target_topo_rnk > edge_topo_rnk {
                     // one of the parent edges that avoids cycles
                     if let HEntry::Vacant(e) = self.parent_edge[f.output_sort_id].entry(target) {
-                        e.insert((func.decl.name.clone(), row.to_vec()));
+                        e.insert((fi, row.to_vec()));
                     }
                 }
             }
@@ -799,10 +798,10 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 ch_terms,
             )
         } else if sort.is_eq_sort() {
-            let (func_name, hyperedge) = self.parent_edge[self.sort_ids[sort.name()]]
+            let (function, hyperedge) = self.parent_edge[self.sort_ids[sort.name()]]
                 .get(&value)
                 .unwrap();
-            let func = egraph.functions.get(func_name).unwrap();
+            let func = egraph.functions.get(&self.funcs[*function]).unwrap();
             let ch_sorts = &func.func_type.input;
 
             let num_children = func.extraction_num_children();
