@@ -121,7 +121,7 @@ fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
     };
     // Execution addresses and retained catalog handles must never enter the
     // shared plan layout, even when plans differ only in seminaive headers.
-    assert!(states.iter().all(|state| state.packed_root.get().is_none()));
+    assert!(states.iter().all(|state| state.root.get().is_none()));
     assert_eq!(first.resolve(&first.stage(0)[0]).packed_root(|| 123), 123);
     let next = PreparedJoinIndexes::new(&db, &plan.atoms, &cloned_stages);
     let PreparedJoinIndexes::Indexed {
@@ -133,7 +133,7 @@ fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
         unreachable!()
     };
     assert!(std::ptr::eq(*layout, *next_layout));
-    assert!(next_states[0].packed_root.get().is_none());
+    assert!(next_states[0].root.get().is_none());
     assert!(!std::ptr::eq(states.as_ptr(), next_states.as_ptr()));
     drop(first);
     drop(next);

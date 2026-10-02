@@ -380,7 +380,7 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
     let tail_masks = PreparedTailMaskWidth::new(stages, &prepared_stages, access_counts.n_ids());
     PreparedJoinLayout {
         stages: prepared_stages,
-        kinds: states.into_boxed_slice(),
+        state_count: states.len(),
         access_counts,
         tail_masks,
     }

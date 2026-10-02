@@ -290,43 +290,25 @@ define_id!(
 /// execution. `Uncacheable` records that this access must use a round-local
 /// packed index instead. All initialized handles are dropped before
 /// `merge_all` resets the database's indexes.
-enum PreparedIndexCache {
-    Tuple(OnceLock<HashIndex>),
-    Column(OnceLock<HashColumnIndex>),
-    Uncacheable,
+enum PreparedRootIndex {
+    Tuple(HashIndex),
+    Column(HashColumnIndex),
+    Packed(usize),
 }
 
-/// Execution-local mutable state for one prepared index access. Keeping these
-/// large cache objects out of the stage `SmallVec`s leaves their inline entries
-/// as compact, copyable descriptors.
+/// An access has one plan root and chooses one index representation for it.
+/// Descendant cursors use their own packed slots. Continuations below that
+/// root are either shared with other plans or owned by this access.
 pub(super) struct PreparedIndexState {
-    /// Persistent tuple/column index handle, acquired only if execution chooses
-    /// the catalog path for this access.
-    cache: PreparedIndexCache,
-    /// Plan-local per-root-key publication slots for packed indexes that
-    /// continue this access on another column of the same atom. Used below
-    /// roots that are not shared across plans.
-    pub(super) root_continuations: RootContinuationCache,
-    /// Shared [`RootContinuationCache`] of the catalog index this access probes
-    /// below a shared root. The retained `Arc` keeps it alive for the whole query.
-    shared_continuations: OnceLock<Arc<RootContinuationCache>>,
-    /// Erased arena address of the packed root for this logical scan.
-    /// This remains the fallback for roots that are not shared across plans.
-    pub(super) packed_root: OnceLock<usize>,
+    root: OnceLock<PreparedRootIndex>,
+    continuations: OnceLock<Arc<RootContinuationCache>>,
 }
 
 impl PreparedIndexState {
-    pub(super) fn new(kind: PreparedIndexKind) -> Self {
-        let cache = match kind {
-            PreparedIndexKind::Tuple => PreparedIndexCache::Tuple(OnceLock::new()),
-            PreparedIndexKind::Column => PreparedIndexCache::Column(OnceLock::new()),
-            PreparedIndexKind::Uncacheable => PreparedIndexCache::Uncacheable,
-        };
+    pub(super) fn new() -> Self {
         Self {
-            cache,
-            root_continuations: RootContinuationCache::default(),
-            shared_continuations: OnceLock::new(),
-            packed_root: OnceLock::new(),
+            root: OnceLock::new(),
+            continuations: OnceLock::new(),
         }
     }
 }
@@ -385,11 +367,20 @@ pub(super) struct PreparedIndexRef<'a> {
 
 impl<'a> PreparedIndexRef<'a> {
     pub(super) fn packed_root(self, build: impl FnOnce() -> usize) -> usize {
-        *self.state.packed_root.get_or_init(build)
+        let PreparedRootIndex::Packed(address) = self
+            .state
+            .root
+            .get_or_init(|| PreparedRootIndex::Packed(build()))
+        else {
+            unreachable!("a root cannot change its index representation during execution")
+        };
+        *address
     }
 
     pub(super) fn local_continuations(self) -> &'a RootContinuationCache {
-        &self.state.root_continuations
+        self.state
+            .continuations
+            .get_or_init(|| Arc::new(RootContinuationCache::default()))
     }
 
     /// Acquire this access's single-column catalog index on first use.
@@ -401,11 +392,12 @@ impl<'a> PreparedIndexRef<'a> {
     /// Panics if this access was not prepared for a column catalog index.
     pub(super) fn column_index(self, info: &TableInfo, column: ColumnId) -> &'a Index<ColumnIndex> {
         debug_assert_eq!(self.kind, PreparedIndexKind::Column);
-        let PreparedIndexCache::Column(index) = &self.state.cache else {
-            unreachable!("single-column scan must have a prepared column index")
+        let PreparedRootIndex::Column(index) = self.state.root.get_or_init(|| {
+            PreparedRootIndex::Column(get_column_index_from_tableinfo(info, column))
+        }) else {
+            unreachable!("a root cannot change its index representation during execution")
         };
         index
-            .get_or_init(|| get_column_index_from_tableinfo(info, column))
             .get()
             .expect("prepared column index must already be refreshed")
     }
@@ -423,11 +415,14 @@ impl<'a> PreparedIndexRef<'a> {
         columns: &[ColumnId],
     ) -> &'a Index<TupleIndex> {
         debug_assert_eq!(self.kind, PreparedIndexKind::Tuple);
-        let PreparedIndexCache::Tuple(index) = &self.state.cache else {
-            unreachable!("multi-column scan must have a prepared tuple index")
+        let PreparedRootIndex::Tuple(index) = self
+            .state
+            .root
+            .get_or_init(|| PreparedRootIndex::Tuple(get_index_from_tableinfo(info, columns)))
+        else {
+            unreachable!("a root cannot change its index representation during execution")
         };
         index
-            .get_or_init(|| get_index_from_tableinfo(info, columns))
             .get()
             .expect("prepared tuple index must already be refreshed")
     }
@@ -440,11 +435,14 @@ impl<'a> PreparedIndexRef<'a> {
         root: &OwnedAtomRows,
         columns: &[ColumnId],
     ) -> Option<&'a RootContinuationCache> {
-        if let Some(cache) = self.state.shared_continuations.get() {
+        if !root.is_shared() {
+            return None;
+        }
+        if let Some(cache) = self.state.continuations.get() {
             return Some(cache);
         }
         let candidate = root.catalog_continuations(columns)?;
-        Some(self.state.shared_continuations.get_or_init(|| candidate))
+        Some(self.state.continuations.get_or_init(|| candidate))
     }
 }
 
@@ -712,7 +710,7 @@ pub(super) enum PreparedJoinIndexes<'plan> {
 #[derive(Debug)]
 pub(super) struct PreparedJoinLayout {
     pub(super) stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
-    pub(super) kinds: Box<[PreparedIndexKind]>,
+    pub(super) state_count: usize,
     pub(super) access_counts: DenseIdMap<AtomId, usize>,
     pub(super) tail_masks: PreparedTailMaskWidth,
 }
@@ -731,14 +729,14 @@ impl PreparedJoinLayout {
         if index_count == 0 {
             return Self {
                 stages: Box::new([]),
-                kinds: Box::new([]),
+                state_count: 0,
                 access_counts: DenseIdMap::new(),
                 tail_masks: PreparedTailMaskWidth::None,
             };
         }
 
         let mut access_counts = DenseIdMap::with_capacity(atoms.n_ids());
-        let mut kinds = Vec::with_capacity(index_count);
+        let mut state_count = 0;
         let mut prepared_stages = Vec::with_capacity(stages.instrs.len());
         // Slots are assigned in `for_each_indexed_access` order, which is also
         // the order of `stages.families`.
@@ -756,8 +754,8 @@ impl PreparedJoinLayout {
                 } else {
                     PreparedIndexKind::Tuple
                 };
-                let state_id = PreparedIndexStateId::from_usize(kinds.len());
-                kinds.push(kind);
+                let state_id = PreparedIndexStateId::from_usize(state_count);
+                state_count += 1;
                 PreparedIndexSlot::new(kind, access, state_id)
             };
             match stage {
@@ -781,7 +779,7 @@ impl PreparedJoinLayout {
             PreparedTailMaskWidth::new(&stages.instrs, &prepared_stages, atoms.n_ids());
         Self {
             stages: prepared_stages.into_boxed_slice(),
-            kinds: kinds.into_boxed_slice(),
+            state_count,
             access_counts,
             tail_masks,
         }
@@ -796,7 +794,7 @@ impl<'plan> PreparedJoinIndexes<'plan> {
     ) -> Self {
         let layout = stages.prepared_layout.get_or_init(|| {
             let layout = PreparedJoinLayout::new(db, atoms, stages);
-            (!layout.kinds.is_empty()).then(|| Box::new(layout))
+            (layout.state_count != 0).then(|| Box::new(layout))
         });
         match layout {
             Some(layout) => Self::from_layout(layout, &stages.families),
@@ -808,15 +806,13 @@ impl<'plan> PreparedJoinIndexes<'plan> {
         layout: &'plan PreparedJoinLayout,
         families: &'plan [AccessFamilies],
     ) -> Self {
-        if layout.kinds.is_empty() {
+        if layout.state_count == 0 {
             return Self::NoIndexes;
         }
         Self::Indexed {
             layout,
-            states: layout
-                .kinds
-                .iter()
-                .map(|&kind| PreparedIndexState::new(kind))
+            states: std::iter::repeat_with(PreparedIndexState::new)
+                .take(layout.state_count)
                 .collect(),
             families,
         }
