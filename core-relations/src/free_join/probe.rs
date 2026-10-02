@@ -367,6 +367,9 @@ pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// The general fallback: an arena-allocated packed trie over an arbitrary
     /// source subset, with lower column indexes constructed lazily.
     Packed(PackedProbe<'ctx, 'rows, 'exec>),
+    /// The original scalar index needs only its immutable key/row arrays.
+    /// Tuple descent state belongs only to accesses projecting several columns.
+    PackedColumn(&'rows TrieNode<'exec>),
 }
 
 /// Borrowed, ordered scalar keys used by merge and galloping intersections.
@@ -704,6 +707,16 @@ where
                 })
             }
             ProbeIndex::SmallExact(exact) => exact.get(key, self.keep_rows),
+            ProbeIndex::PackedColumn(node) => {
+                let [value] = key else {
+                    return None;
+                };
+                let ordinal = node.find(*value)?;
+                Some(Self::keep_or_discard(
+                    AtomRows::packed(PackedCursor::new(node, ordinal)),
+                    self.keep_rows,
+                ))
+            }
             ProbeIndex::Packed(packed) => packed
                 .get(key)
                 .map(|rows| Self::keep_or_discard(rows, self.keep_rows)),
@@ -714,9 +727,7 @@ where
     pub(super) fn sorted_scalar_probe(&self) -> Option<SortedScalarProbe<'_, 'exec>> {
         match &self.ix {
             ProbeIndex::SmallColumn(index) => Some(SortedScalarProbe::Small(index)),
-            ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
-                Some(SortedScalarProbe::Packed(packed.first))
-            }
+            ProbeIndex::PackedColumn(node) => Some(SortedScalarProbe::Packed(node)),
             ProbeIndex::CachedTuple { .. }
             | ProbeIndex::CachedColumn { .. }
             | ProbeIndex::SmallExact(..)
@@ -735,8 +746,8 @@ where
                     ProbeMatch::Present
                 }
             }
-            ProbeIndex::Packed(packed) if packed.columns.len() == 1 => {
-                let rows = AtomRows::packed(PackedCursor::new(packed.first, key_index));
+            ProbeIndex::PackedColumn(node) => {
+                let rows = AtomRows::packed(PackedCursor::new(node, key_index));
                 Self::keep_or_discard(rows, self.keep_rows)
             }
             ProbeIndex::CachedTuple { .. }
@@ -815,6 +826,15 @@ where
             ProbeIndex::SmallExact(..) => {
                 unreachable!("small multi-column residuals are exact-probe only")
             }
+            ProbeIndex::PackedColumn(node) => {
+                for (ordinal, value) in node.values().iter().enumerate() {
+                    let rows = AtomRows::packed(PackedCursor::new(node, ordinal));
+                    f(
+                        std::slice::from_ref(value),
+                        Self::keep_or_discard(rows, self.keep_rows),
+                    );
+                }
+            }
             ProbeIndex::Packed(packed) => packed.for_each(&mut |key, rows| {
                 f(key, Self::keep_or_discard(rows, self.keep_rows));
             }),
@@ -879,7 +899,10 @@ where
                     }
                 });
             }
-            ProbeIndex::SmallColumn(..) | ProbeIndex::SmallExact(..) | ProbeIndex::Packed(..) => {
+            ProbeIndex::SmallColumn(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..)
+            | ProbeIndex::PackedColumn(..) => {
                 unreachable!("only persistent root indexes expose physical shards")
             }
         }
@@ -911,12 +934,11 @@ where
                     f(&index.keys[key_index..key_index + 1], rows);
                 }
             }
-            ProbeIndex::Packed(packed) => {
-                debug_assert_eq!(packed.columns.len(), 1);
-                let values = packed.first.values();
+            ProbeIndex::PackedColumn(node) => {
+                let values = node.values();
                 assert!(end <= values.len());
                 for key_index in start..end {
-                    let rows = AtomRows::packed(PackedCursor::new(packed.first, key_index));
+                    let rows = AtomRows::packed(PackedCursor::new(node, key_index));
                     f(
                         &values[key_index..key_index + 1],
                         Self::keep_or_discard(rows, self.keep_rows),
@@ -926,7 +948,7 @@ where
             ProbeIndex::CachedTuple { .. } | ProbeIndex::CachedColumn { .. } => {
                 unreachable!("persistent indexes use physical shard partitions")
             }
-            ProbeIndex::SmallExact(..) => {
+            ProbeIndex::SmallExact(..) | ProbeIndex::Packed(..) => {
                 unreachable!("a scalar intersection cannot use an exact tuple probe")
             }
         }
@@ -936,9 +958,10 @@ where
         match &self.ix {
             ProbeIndex::CachedTuple { table, .. } => Some(table.shard_count()),
             ProbeIndex::CachedColumn { table, .. } => Some(table.shard_count()),
-            ProbeIndex::SmallColumn(..) | ProbeIndex::SmallExact(..) | ProbeIndex::Packed(..) => {
-                None
-            }
+            ProbeIndex::SmallColumn(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..)
+            | ProbeIndex::PackedColumn(..) => None,
         }
     }
 
@@ -946,9 +969,10 @@ where
         match &self.ix {
             ProbeIndex::CachedTuple { table, .. } => Some(table.shard_len(shard)),
             ProbeIndex::CachedColumn { table, .. } => Some(table.shard_len(shard)),
-            ProbeIndex::SmallColumn(..) | ProbeIndex::SmallExact(..) | ProbeIndex::Packed(..) => {
-                None
-            }
+            ProbeIndex::SmallColumn(..)
+            | ProbeIndex::SmallExact(..)
+            | ProbeIndex::Packed(..)
+            | ProbeIndex::PackedColumn(..) => None,
         }
     }
 
@@ -961,6 +985,7 @@ where
             // Intersect stages are scalar. Tuple-packed probers are used only
             // for exact probes, so the first-level count is sufficient here.
             ProbeIndex::Packed(packed) => packed.first.values().len(),
+            ProbeIndex::PackedColumn(node) => node.values().len(),
         }
     }
 }

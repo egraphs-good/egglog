@@ -1012,24 +1012,28 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 shared_child_shape,
                 prepared,
             );
-            let descent = if first.is_shared() {
-                Descent::Shared {
-                    child_shape: shared_child_shape,
-                    families: prepared.families,
-                }
+            if cols.len() == 1 {
+                ProbeIndex::PackedColumn(first)
             } else {
-                Descent::Local {
-                    terminal_child_shape,
-                }
-            };
-            ProbeIndex::Packed(PackedProbe {
-                first,
-                columns: cols,
-                table: info.table.as_ref(),
-                handle: &self.handle,
-                scratch: &self.packed_scratch,
-                descent,
-            })
+                let descent = if first.is_shared() {
+                    Descent::Shared {
+                        child_shape: shared_child_shape,
+                        families: prepared.families,
+                    }
+                } else {
+                    Descent::Local {
+                        terminal_child_shape,
+                    }
+                };
+                ProbeIndex::Packed(PackedProbe {
+                    first,
+                    columns: cols,
+                    table: info.table.as_ref(),
+                    handle: &self.handle,
+                    scratch: &self.packed_scratch,
+                    descent,
+                })
+            }
         };
         Prober {
             source,
