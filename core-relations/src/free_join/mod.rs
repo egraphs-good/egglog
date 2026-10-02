@@ -1051,7 +1051,7 @@ impl Database {
                 );
                 families.push(access);
             });
-            stages.families = families.into();
+            stages.set_families(families.into());
         });
         plan
     }

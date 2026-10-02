@@ -181,7 +181,7 @@ pub(super) fn atom_tail_use<M: StageMask>(
     let Some((masks, remaining_stages)) = prepared.tail_masks::<M>().zip(remaining_stages) else {
         return scan_atom_tail_use(atom, stages, prepared, instr_order, resume_pos);
     };
-    let result = masks.atom_tail_use(atom, remaining_stages, prepared.access_count(atom));
+    let result = masks.atom_tail_use(atom, remaining_stages);
     #[cfg(debug_assertions)]
     debug_assert_eq!(
         result,
@@ -311,22 +311,25 @@ where
     /// Initializes the atom-related metadata in the [`BindingInfo`].    
     pub(super) fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
         let rows = match subset {
-            Subset::Dense(range) => AtomRows::Dense(range),
-            subset => AtomRows::Root(Arc::new(TrieRoot::new(subset))),
+            Subset::Dense(range) => AtomRows::dense(range),
+            subset => AtomRows::root(Arc::new(TrieRoot::new(subset))),
         };
         self.subsets.insert(atom, rows);
     }
 
+    #[inline]
     pub(super) fn insert_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
         self.subsets.insert(atom, node.into());
     }
 
     /// Probers returned from `JoinState::get_index` will move atom-related state out of the
     /// [`BindingInfo`]. Once the caller is done using a prober, this method moves it back.
+    #[inline]
     pub(super) fn move_back(&mut self, atom: AtomId, prober: Prober<'_, 'rows, 'exec>) {
         self.subsets.insert(atom, prober.source);
     }
 
+    #[inline]
     pub(super) fn move_back_node(&mut self, atom: AtomId, node: impl Into<AtomRows<'rows, 'exec>>) {
         self.subsets.insert(atom, node.into());
     }
@@ -335,6 +338,7 @@ where
         self.subsets[atom].is_empty()
     }
 
+    #[inline]
     pub(super) fn unwrap_val(&mut self, atom: AtomId) -> AtomRows<'rows, 'exec> {
         self.subsets.unwrap_val(atom)
     }

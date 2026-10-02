@@ -44,7 +44,11 @@
 //! reduce the number of passes over the data. A `JoinHeader` is prepended to each plan to apply constant constraints and
 //! pre-filter the driving relation before the main join loop begins.
 //!
-use std::{collections::BTreeMap, iter, mem, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    iter, mem,
+    sync::{Arc, OnceLock},
+};
 
 use crate::{
     TableId,
@@ -268,21 +272,50 @@ pub(crate) struct SinglePlan {
     pub actions: ActionId,
 }
 
+/// Instructions and immutable index analysis shared by cached-plan clones.
+/// Seminaive variants change their headers, not this program.
 #[derive(Debug, Clone)]
-pub(crate) struct JoinStages {
-    pub instrs: Arc<Vec<JoinStage>>,
-    /// The successor families of each indexed access, in the order
-    /// [`Self::for_each_indexed_access`] visits them. Assigned by
-    /// `Database::plan_query`; empty until then.
-    pub families: Arc<[AccessFamilies]>,
+pub(crate) struct JoinStages(Arc<JoinStageData>);
+
+#[derive(Debug)]
+pub(crate) struct JoinStageData {
+    pub instrs: Vec<JoinStage>,
+    /// Successor families in `for_each_indexed_access` order, assigned before
+    /// the plan is shared. They remain fixed across executions.
+    pub families: Box<[AccessFamilies]>,
+    /// Analyze only blocks that execute, then reuse their immutable layout.
+    /// Catalog handles and arena addresses belong to each execution instead.
+    pub(super) prepared_layout: OnceLock<Option<Box<super::prepared_index::PreparedJoinLayout>>>,
+}
+
+impl std::ops::Deref for JoinStages {
+    type Target = JoinStageData;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl JoinStages {
-    pub(crate) fn new(instrs: Vec<JoinStage>) -> Self {
-        Self {
-            instrs: Arc::new(instrs),
-            families: Arc::from(Vec::new()),
+    fn into_instrs(self) -> Vec<JoinStage> {
+        match Arc::try_unwrap(self.0) {
+            Ok(data) => data.instrs,
+            Err(shared) => shared.instrs.clone(),
         }
+    }
+
+    pub(crate) fn new(instrs: Vec<JoinStage>) -> Self {
+        Self(Arc::new(JoinStageData {
+            instrs,
+            families: Box::new([]),
+            prepared_layout: OnceLock::new(),
+        }))
+    }
+
+    pub(super) fn set_families(&mut self, families: Box<[AccessFamilies]>) {
+        let data =
+            Arc::get_mut(&mut self.0).expect("families are assigned before a plan is shared");
+        assert!(data.prepared_layout.get().is_none());
+        data.families = families;
     }
 
     /// Visit every indexed access as `(atom, columns, constraints)`, in the
@@ -1097,12 +1130,9 @@ fn fuse_last_stage(
     }
 
     // Fuse the instructions
-    let mut last_block = last_block.0;
-    let mut instrs = Arc::unwrap_or_clone(last_block.instrs);
+    let mut instrs = last_block.0.into_instrs();
     instrs.extend(result_block.instrs[1..].iter().cloned());
-    last_block.instrs = Arc::new(instrs);
-
-    (blocks, last_block)
+    (blocks, JoinStages::new(instrs))
 }
 
 /// Eagerly lift materialization lookups up
@@ -1115,7 +1145,7 @@ fn fuse_last_stage(
 ///   if r in Mat[x]:
 ///     yield
 fn loop_lifting(stages: JoinStages) -> JoinStages {
-    let mut instrs = Arc::unwrap_or_clone(stages.instrs);
+    let mut instrs = stages.into_instrs();
     for i in 1..instrs.len() {
         if let JoinStage::FusedIntersectMat {
             cover: _,

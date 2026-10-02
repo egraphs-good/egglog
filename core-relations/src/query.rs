@@ -16,7 +16,7 @@ use crate::{
     free_join::{
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
         Variable,
-        plan::{JoinHeader, JoinStages, Plan, PlanStrategy},
+        plan::{JoinHeader, Plan, PlanStrategy},
     },
     pool::{Pooled, with_pool_set},
     table_spec::{ColumnId, Constraint},
@@ -197,10 +197,7 @@ impl<'outer> RuleSetBuilder<'outer> {
         match &cached.plan {
             Plan::SinglePlan(cached_plan) => {
                 let mut headers = vec![];
-                let stages = JoinStages {
-                    instrs: cached_plan.stages.instrs.clone(),
-                    families: cached_plan.stages.families.clone(),
-                };
+                let stages = cached_plan.stages.clone();
                 self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
                 self.reprocess_existing_headers(
                     &mut headers,
@@ -224,16 +221,10 @@ impl<'outer> RuleSetBuilder<'outer> {
                     &cached_plan.header,
                 )?;
                 for cached_block in cached_plan.stages.blocks.iter() {
-                    let stages = JoinStages {
-                        instrs: cached_block.0.instrs.clone(),
-                        families: cached_block.0.families.clone(),
-                    };
+                    let stages = cached_block.0.clone();
                     blocks.push((stages, cached_block.1.clone()));
                 }
-                let result_block = JoinStages {
-                    instrs: cached_plan.result_block.instrs.clone(),
-                    families: cached_plan.result_block.families.clone(),
-                };
+                let result_block = cached_plan.result_block.clone();
                 Some(Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
