@@ -20,13 +20,13 @@ use crate::{
 use crate::free_join::{
     join_tail::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
-        packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner,
+        packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
     },
     packed_cache::{RootProjection, TrieRoot},
     packed_trie::ChildShape,
     prepared_index::{
         AccessId, PreparedIndexKind, PreparedIndexRef, PreparedIndexSlot, PreparedIndexState,
-        PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMasks,
+        PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMaskWidth, StageMask,
     },
 };
 
@@ -399,7 +399,7 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
                 .collect()
         })
         .collect();
-    let tail_masks = PreparedTailMasks::new(stages, &prepared_stages, access_counts.n_ids());
+    let tail_masks = PreparedTailMaskWidth::new(stages, &prepared_stages, access_counts.n_ids());
     PreparedJoinIndexes::Indexed {
         stages: prepared_stages,
         states: states.into_boxed_slice(),
@@ -417,6 +417,31 @@ fn permutations(values: &mut [usize], start: usize, result: &mut Vec<Vec<usize>>
         values.swap(start, index);
         permutations(values, start + 1, result);
         values.swap(start, index);
+    }
+}
+
+/// Check the prepared masks against the exact scanner for every suffix of
+/// every `order` and every atom in `0..atom_count`.
+fn assert_tail_masks_match_scanner<M: StageMask>(
+    stages: &[JoinStage],
+    orders: &[Vec<usize>],
+    atom_count: usize,
+) {
+    let prepared = prepared_for(stages);
+    let masks = prepared.tail_masks::<M>().unwrap();
+    for order in orders {
+        let instr_order = InstrOrder::from_iter(order.iter().copied());
+        for resume_pos in 0..=order.len() {
+            let remaining = suffix_stage_mask::<M>(&instr_order, resume_pos);
+            for atom_index in 0..atom_count {
+                let atom = AtomId::from_usize(atom_index);
+                assert_eq!(
+                    masks.atom_tail_use(atom, remaining, prepared.access_count(atom)),
+                    scan_atom_tail_use(atom, stages, &prepared, &instr_order, resume_pos),
+                    "tail metadata diverged for order {order:?}, suffix {resume_pos}, atom {atom_index}"
+                );
+            }
+        }
     }
 }
 
@@ -442,40 +467,71 @@ fn prepared_tail_masks_match_scanner_for_every_permutation_and_suffix() {
         intersect_stage(1, 1),
         intersect_stage(2, 0),
     ];
-    let prepared = prepared_for(&stages);
-    let masks = prepared.tail_masks().unwrap();
     let mut orders = Vec::new();
     permutations(&mut [0, 1, 2, 3], 0, &mut orders);
-    for order in orders {
-        let instr_order = InstrOrder::from_iter(order.iter().copied());
-        for resume_pos in 0..=order.len() {
-            let remaining = order[resume_pos..]
-                .iter()
-                .fold(0u64, |mask, &stage| mask | (1u64 << stage));
-            for atom_index in 0..=3 {
-                let atom = AtomId::from_usize(atom_index);
-                assert_eq!(
-                    masks.atom_tail_use(atom, remaining, prepared.access_count(atom)),
-                    scan_atom_tail_use(atom, &stages, &prepared, &instr_order, resume_pos,),
-                    "tail metadata diverged for order {order:?}, suffix {resume_pos}, atom {atom_index}"
-                );
-            }
-        }
-    }
+    assert_tail_masks_match_scanner::<u64>(&stages, &orders, 4);
 }
 
 #[test]
-fn prepared_tail_masks_use_u64_boundary_and_fallback_after_it() {
-    let stages_64 = (0..64)
+fn wide_prepared_tail_masks_match_scanner_past_the_u64_boundary() {
+    // 70 stages: atom 0 is probed at every stage, atoms 1 and 2 only beyond
+    // bit 64, and stage 66 holds two accesses to atom 0 so the dynamic shape
+    // is exercised in the high word.
+    let mut stages = (0..70)
         .map(|column| intersect_stage(0, column))
         .collect::<Vec<_>>();
-    let prepared_64 = prepared_for(&stages_64);
-    assert_eq!(prepared_64.all_stage_mask(), Some(u64::MAX));
+    stages[65] = intersect_stage(1, 0);
+    stages[66] = JoinStage::Intersect {
+        var: Variable::from_usize(66),
+        scans: smallvec![
+            SingleScanSpec {
+                atom: AtomId::from_usize(0),
+                column: ColumnId::from_usize(66),
+                cs: Vec::new(),
+            },
+            SingleScanSpec {
+                atom: AtomId::from_usize(0),
+                column: ColumnId::from_usize(67),
+                cs: Vec::new(),
+            },
+        ],
+    };
+    stages[69] = intersect_stage(2, 0);
+    let identity = (0..stages.len()).collect::<Vec<_>>();
+    let reversed = identity.iter().rev().copied().collect::<Vec<_>>();
+    let rotated = identity[64..]
+        .iter()
+        .chain(&identity[..64])
+        .copied()
+        .collect::<Vec<_>>();
+    assert_tail_masks_match_scanner::<u128>(&stages, &[identity, reversed, rotated], 3);
+}
 
-    let stages_65 = (0..65)
-        .map(|column| intersect_stage(0, column))
-        .collect::<Vec<_>>();
-    assert!(prepared_for(&stages_65).tail_masks().is_none());
+#[test]
+fn prepared_tail_masks_pick_the_narrowest_width_that_fits() {
+    fn stages(count: usize) -> Vec<JoinStage> {
+        (0..count)
+            .map(|column| intersect_stage(0, column))
+            .collect()
+    }
+
+    let narrow_full = prepared_for(&stages(64));
+    assert!(!narrow_full.uses_wide_stage_mask());
+    assert_eq!(narrow_full.all_stage_mask::<u64>(), Some(u64::MAX));
+    assert!(narrow_full.tail_masks::<u128>().is_none());
+
+    let wide = prepared_for(&stages(65));
+    assert!(wide.uses_wide_stage_mask());
+    assert!(wide.tail_masks::<u64>().is_none());
+    assert_eq!(wide.all_stage_mask::<u128>(), Some((1u128 << 65) - 1));
+
+    let wide_full = prepared_for(&stages(128));
+    assert_eq!(wide_full.all_stage_mask::<u128>(), Some(u128::MAX));
+
+    let over = prepared_for(&stages(129));
+    assert!(!over.uses_wide_stage_mask());
+    assert!(over.tail_masks::<u64>().is_none());
+    assert!(over.tail_masks::<u128>().is_none());
 }
 
 #[test]
@@ -485,11 +541,11 @@ fn packed_tail_shape_preserves_direct_graph_path() {
     let order = InstrOrder::from_iter(0..stages.len());
 
     assert_eq!(
-        packed_child_shape_in_tail(AtomId::from_usize(0), &stages, &prepared, &order, 1,),
+        packed_child_shape_in_tail::<u64>(AtomId::from_usize(0), &stages, &prepared, &order, 1,),
         ChildShape::Direct
     );
     assert_eq!(
-        packed_child_shape_in_tail(AtomId::from_usize(0), &stages, &prepared, &order, 2,),
+        packed_child_shape_in_tail::<u64>(AtomId::from_usize(0), &stages, &prepared, &order, 2,),
         ChildShape::Leaf
     );
 }
@@ -505,7 +561,7 @@ fn packed_tail_shape_uses_dynamic_families_for_dvo_choice() {
     let order = InstrOrder::from_iter([0, 2, 1].into_iter());
 
     assert_eq!(
-        packed_child_shape_in_tail(AtomId::from_usize(0), &stages, &prepared, &order, 1,),
+        packed_child_shape_in_tail::<u64>(AtomId::from_usize(0), &stages, &prepared, &order, 1,),
         ChildShape::Dynamic { families: 3 }
     );
 }
@@ -531,7 +587,7 @@ fn packed_tail_shape_stops_at_cover_and_reorder_barriers() {
     let prepared = prepared_for(&stages);
     let order = InstrOrder::from_iter(0..stages.len());
     assert_eq!(
-        packed_child_shape_in_tail(atom, &stages, &prepared, &order, 1),
+        packed_child_shape_in_tail::<u64>(atom, &stages, &prepared, &order, 1),
         ChildShape::Leaf,
         "the cover consumes the packed residual before the later phase"
     );
@@ -549,7 +605,7 @@ fn packed_tail_shape_stops_at_cover_and_reorder_barriers() {
     let prepared = prepared_for(&stages);
     let order = InstrOrder::from_iter(0..stages.len());
     assert_eq!(
-        packed_child_shape_in_tail(atom, &stages, &prepared, &order, 1),
+        packed_child_shape_in_tail::<u64>(atom, &stages, &prepared, &order, 1),
         ChildShape::Direct,
         "a singleton barrier hides indexed accesses in later phases"
     );

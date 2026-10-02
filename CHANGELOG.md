@@ -3,7 +3,7 @@
 ## [Unreleased] - ReleaseDate
 
 - Tree extraction prepares child dependencies when initial ordered sweeps do not converge, avoiding repeated full-table rescans on deep dependency chains while preserving chronological tie-breaking.
-
+- Free-join plans with 65 to 128 stages now use constant-time tail metadata (128-bit stage masks) instead of rescanning the remaining stages; smaller plans keep their 64-bit masks. `paged_llama` runs about 17% faster.
 - **The scheduler runner applies each rule's chosen matches immediately.** After a rule's `filter_matches`, its chosen matches are applied before the next rule's `filter_matches` is called, so schedulers observe up-to-date e-node counts within an iteration. The e-graph is still rebuilt at most once per iteration (egglog-bridge gains `run_rules_no_rebuild`, `flush_updates_no_rebuild`, and `rebuild_now` for this). Measured on Herbie's rewriting workload with identical scheduling decisions, the per-rule application costs nothing single-threaded and 0–7 % wall time with 8 threads.
 - Fix subsuming constructor rows created earlier in the same rule or `EGraph::update` action, including executing subsequent rule actions after subsuming a missing row.
 - Egglog-level rule-action errors preserve completed effects without rollback; successful recovery rebuilds leave the e-graph reusable in a canonical partial state. Custom schedulers clear failed decided rows instead of retaining them, though a later query may rediscover the match.

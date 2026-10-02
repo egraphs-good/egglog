@@ -25,7 +25,7 @@ use super::{
     packed_cache::TrieRoot,
     packed_trie::ChildShape,
     plan::{JoinStage, MatId, MatScanMode},
-    prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes},
+    prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes, StageMask},
     probe::{AtomRows, Prober},
     with_pool_set,
 };
@@ -161,15 +161,24 @@ pub(super) fn scan_atom_tail_use(
     }
 }
 
-pub(super) fn atom_tail_use(
+/// Bit set of the logical stages at physical positions `from..` in
+/// `instr_order`.
+#[cfg(any(debug_assertions, test))]
+pub(super) fn suffix_stage_mask<M: StageMask>(instr_order: &InstrOrder, from: usize) -> M {
+    (from..instr_order.len()).fold(M::EMPTY, |mask, position| {
+        mask | M::stage_bit(instr_order.get(position))
+    })
+}
+
+pub(super) fn atom_tail_use<M: StageMask>(
     atom: AtomId,
     stages: &[JoinStage],
     prepared: &PreparedJoinIndexes,
-    remaining_stages: Option<u64>,
+    remaining_stages: Option<M>,
     instr_order: &InstrOrder,
     resume_pos: usize,
 ) -> AtomTailUse {
-    let Some((masks, remaining_stages)) = prepared.tail_masks().zip(remaining_stages) else {
+    let Some((masks, remaining_stages)) = prepared.tail_masks::<M>().zip(remaining_stages) else {
         return scan_atom_tail_use(atom, stages, prepared, instr_order, resume_pos);
     };
     let result = masks.atom_tail_use(atom, remaining_stages, prepared.access_count(atom));
@@ -183,18 +192,16 @@ pub(super) fn atom_tail_use(
 }
 
 #[cfg(test)]
-pub(super) fn packed_child_shape_in_tail(
+pub(super) fn packed_child_shape_in_tail<M: StageMask>(
     atom: AtomId,
     stages: &[JoinStage],
     prepared: &PreparedJoinIndexes,
     instr_order: &InstrOrder,
     resume_pos: usize,
 ) -> ChildShape {
-    let remaining_stages = prepared.all_stage_mask().map(|_| {
-        (resume_pos..instr_order.len()).fold(0u64, |mask, position| {
-            mask | (1u64 << instr_order.get(position))
-        })
-    });
+    let remaining_stages = prepared
+        .all_stage_mask::<M>()
+        .map(|_| suffix_stage_mask::<M>(instr_order, resume_pos));
     atom_tail_use(
         atom,
         stages,
