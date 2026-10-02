@@ -199,6 +199,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                 let mut headers = vec![];
                 let stages = JoinStages {
                     instrs: cached_plan.stages.instrs.clone(),
+                    families: cached_plan.stages.families.clone(),
                 };
                 self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
                 self.reprocess_existing_headers(
@@ -225,11 +226,13 @@ impl<'outer> RuleSetBuilder<'outer> {
                 for cached_block in cached_plan.stages.blocks.iter() {
                     let stages = JoinStages {
                         instrs: cached_block.0.instrs.clone(),
+                        families: cached_block.0.families.clone(),
                     };
                     blocks.push((stages, cached_block.1.clone()));
                 }
                 let result_block = JoinStages {
                     instrs: cached_plan.result_block.instrs.clone(),
+                    families: cached_plan.result_block.families.clone(),
                 };
                 Some(Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),

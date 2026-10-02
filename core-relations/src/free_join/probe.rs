@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use crate::{
     common::Value,
     hash_index::{ColumnIndex, Index, IndexPosition, TupleIndex},
+    numeric_id::NumericId,
     offsets::{OffsetRange, RowId, SubsetRef},
     table_spec::{Constraint, WrappedTableRef},
 };
@@ -19,10 +20,10 @@ use crate::{
 use super::{
     AtomId, ColumnIds,
     frame_update::FrameUpdates,
-    packed_cache::{RootProjection, TrieRoot},
+    packed_cache::{FamilyId, RootProjection, TrieRoot},
     packed_trie::{ChildShape, PackedCursor, TrieNode},
     plan::{ScanSpec, SingleScanSpec},
-    prepared_index::{AccessId, ContinuationPosition, PreparedIndexRef, RootContinuationCache},
+    prepared_index::{ContinuationPosition, PreparedIndexRef, RootContinuationCache},
     residual_index::{InlineRows, SmallColumnIndex, SmallExactProbe},
 };
 
@@ -111,7 +112,8 @@ pub(super) fn seek_sorted_key(
     }
 }
 
-/// A plan-local continuation for rows borrowed from a catalog or root index.
+/// A continuation for rows borrowed from a catalog or root index. Its grid is
+/// plan-local below an unshared root and run-wide below a shared one.
 #[derive(Clone, Copy)]
 pub(super) struct CatalogContinuation<'rows> {
     pub(super) cache: &'rows RootContinuationCache,
@@ -121,10 +123,9 @@ pub(super) struct CatalogContinuation<'rows> {
 /// The rows currently associated with an atom during one plan execution.
 /// Roots retain ownership of their header-filtered subset. An indexed cursor
 /// borrows a first-level group from either a prepared persistent index or a
-/// shared round-local root index and carries a plan-local continuation slot.
-/// Every lower cursor is just a packed node plus a key ordinal. Dense
-/// singletons come from cover scans and are packed lazily if the atom is probed
-/// again.
+/// shared round-local root index and carries its continuation slot. Every
+/// lower cursor is just a packed node plus a key ordinal. Dense singletons
+/// come from cover scans and are packed lazily if the atom is probed again.
 #[derive(Clone)]
 pub(super) enum AtomRows<'rows, 'exec> {
     Root(Arc<TrieRoot>),
@@ -231,8 +232,11 @@ pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// the scan has additional constraints.
     ProjectedRoot(RootProjectionProbe<'ctx, 'rows, 'exec>),
     /// An inline scalar index for a source containing at most
-    /// [`super::residual_index::SMALL_RESIDUAL`] rows. It supports both exact lookup and enumeration
-    /// without constructing a general packed trie.
+    /// [`super::residual_index::SMALL_RESIDUAL`] rows and no publication slot
+    /// (a root, dense singleton, inline residual, or terminal catalog match).
+    /// It supports both exact lookup and enumeration without constructing a
+    /// general packed trie. Tiny sources with a slot use a packed node
+    /// instead, since the slot lets later probes reuse it.
     SmallColumn(SmallColumnIndex),
     /// An exact-only multi-column probe over an inline residual. Join stages
     /// select it when the source is already [`AtomRows::Inline`]; it scans those
@@ -307,13 +311,53 @@ impl<'rows, 'exec> ProbeMatch<'rows, 'exec> {
     }
 }
 
+/// How a multi-column probe publishes the packed node below each key.
+///
+/// Below an unshared root, children are plan-local: tuple interiors use the
+/// single direct slot and the final level uses the plan's tail shape. Below a
+/// shared root, every level uses the table's shared shape and the run-global
+/// family of the next column, so other plans find the same nodes.
+#[derive(Clone, Copy)]
+pub(super) enum Descent<'rows> {
+    Local {
+        terminal_child_shape: ChildShape,
+    },
+    Shared {
+        child_shape: ChildShape,
+        families: &'rows [FamilyId],
+    },
+}
+
+impl Descent<'_> {
+    /// The `(family, shape)` of the node indexing column `depth + 1` of a
+    /// `column_count`-column probe.
+    fn child(self, depth: usize, column_count: usize) -> (usize, ChildShape) {
+        match self {
+            Self::Local {
+                terminal_child_shape,
+            } => {
+                let child_shape = if depth + 2 < column_count {
+                    ChildShape::Direct
+                } else {
+                    terminal_child_shape
+                };
+                (0, child_shape)
+            }
+            Self::Shared {
+                child_shape,
+                families,
+            } => (families[depth + 1].index(), child_shape),
+        }
+    }
+}
+
 pub(super) struct PackedProbe<'ctx, 'rows, 'exec> {
     pub(super) first: &'rows TrieNode<'exec>,
     pub(super) columns: ColumnIds,
     pub(super) table: WrappedTableRef<'ctx>,
     pub(super) handle: &'ctx LazyArenaHandle<'exec>,
     pub(super) scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
-    pub(super) terminal_child_shape: ChildShape,
+    pub(super) descent: Descent<'rows>,
 }
 
 /// Probes a first-column grouping shared by plans with the same root subset.
@@ -323,26 +367,34 @@ pub(super) struct PackedProbe<'ctx, 'rows, 'exec> {
 /// subset. `JoinState::get_index` selects this representation when the atom
 /// has a cross-plan shared root but cannot use a persistent table index, such
 /// as when header or scan constraints have filtered the root. The grouping is
-/// built once and reused directly by every qualifying plan.
-///
-/// For a one-column scan, this object returns the shared row subset. For a
-/// multi-column scan, only the first grouping is shared; subsequent packed
-/// trie nodes and their continuation slots remain local to this query.
+/// built once and reused directly by every qualifying plan, as are the packed
+/// nodes below it: their continuation grid and successor families are shared.
 pub(super) struct RootProjectionProbe<'ctx, 'rows, 'exec> {
     pub(super) first: &'rows RootProjection,
     pub(super) columns: ColumnIds,
     pub(super) table: WrappedTableRef<'ctx>,
     pub(super) continuations: &'rows RootContinuationCache,
-    pub(super) access: AccessId,
     pub(super) handle: &'ctx LazyArenaHandle<'exec>,
     pub(super) scratch: &'ctx RefCell<Vec<(Value, RowId)>>,
+    /// The plan's tail shape, which decides whether a scalar match carries a
+    /// continuation at all.
     pub(super) terminal_child_shape: ChildShape,
+    /// Shared shape and families of the nodes below the projection.
+    pub(super) child_shape: ChildShape,
+    pub(super) families: &'rows [FamilyId],
 }
 
 impl<'ctx, 'rows, 'exec> RootProjectionProbe<'ctx, 'rows, 'exec>
 where
     'exec: 'rows,
 {
+    fn descent(&self) -> Descent<'rows> {
+        Descent::Shared {
+            child_shape: self.child_shape,
+            families: self.families,
+        }
+    }
+
     fn scalar_rows(&self, key_index: usize) -> AtomRows<'rows, 'exec> {
         debug_assert_eq!(self.columns.len(), 1);
         AtomRows::Catalog {
@@ -358,14 +410,10 @@ where
 
     fn first_child(&self, key_index: usize) -> &'exec TrieNode<'exec> {
         debug_assert!(self.columns.len() > 1);
-        let child_shape = if self.columns.len() > 2 {
-            ChildShape::Direct
-        } else {
-            self.terminal_child_shape
-        };
+        let (family, child_shape) = self.descent().child(0, self.columns.len());
         let slot = self
             .continuations
-            .slot(ContinuationPosition::unsharded(key_index), self.access);
+            .slot(ContinuationPosition::unsharded(key_index), family);
         let address = *slot.get_or_init(|| {
             TrieNode::build_from_subset(
                 self.handle.get(),
@@ -373,11 +421,12 @@ where
                 self.first.subset_at(key_index),
                 self.columns[1],
                 child_shape,
+                true,
                 &mut self.scratch.borrow_mut(),
             ) as *const TrieNode<'exec> as usize
         });
-        // SAFETY: this continuation cache belongs to the prepared query and can
-        // only publish nodes allocated by the same query's SharedArena.
+        // SAFETY: this continuation grid belongs to the run's shared root and
+        // only publishes nodes allocated in the run's SharedArena.
         let child = unsafe { &*(address as *const TrieNode<'exec>) };
         assert_eq!(child.child_shape(), child_shape);
         child
@@ -396,16 +445,12 @@ where
             let cursor = PackedCursor::new(node, node.find(value)?);
             terminal = Some(cursor);
             if depth + 1 < self.columns.len() {
-                let child_shape = if depth + 2 < self.columns.len() {
-                    ChildShape::Direct
-                } else {
-                    self.terminal_child_shape
-                };
+                let (family, child_shape) = self.descent().child(depth, self.columns.len());
                 node = cursor.child_index(
                     self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
-                    0,
+                    family,
                     child_shape,
                     &mut self.scratch.borrow_mut(),
                 );
@@ -427,16 +472,12 @@ where
             if depth + 1 == self.columns.len() {
                 f(key, AtomRows::Packed(cursor));
             } else {
-                let child_shape = if depth + 2 < self.columns.len() {
-                    ChildShape::Direct
-                } else {
-                    self.terminal_child_shape
-                };
+                let (family, child_shape) = self.descent().child(depth, self.columns.len());
                 let child = cursor.child_index(
                     self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
-                    0,
+                    family,
                     child_shape,
                     &mut self.scratch.borrow_mut(),
                 );
@@ -473,16 +514,12 @@ where
             let cursor = PackedCursor::new(node, node.find(value)?);
             terminal = Some(cursor);
             if depth + 1 < self.columns.len() {
-                let child_shape = if depth + 2 < self.columns.len() {
-                    ChildShape::Direct
-                } else {
-                    self.terminal_child_shape
-                };
+                let (family, child_shape) = self.descent.child(depth, self.columns.len());
                 node = cursor.child_index(
                     self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
-                    0,
+                    family,
                     child_shape,
                     &mut self.scratch.borrow_mut(),
                 );
@@ -504,16 +541,12 @@ where
             if depth + 1 == self.columns.len() {
                 f(key, AtomRows::Packed(cursor));
             } else {
-                let child_shape = if depth + 2 < self.columns.len() {
-                    ChildShape::Direct
-                } else {
-                    self.terminal_child_shape
-                };
+                let (family, child_shape) = self.descent.child(depth, self.columns.len());
                 let child = cursor.child_index(
                     self.handle.get(),
                     self.table,
                     self.columns[depth + 1],
-                    0,
+                    family,
                     child_shape,
                     &mut self.scratch.borrow_mut(),
                 );

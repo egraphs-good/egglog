@@ -54,6 +54,8 @@ use crate::{
 };
 use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
+
+use super::packed_cache::AccessFamilies;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -243,6 +245,19 @@ impl Plan {
             Plan::DecomposedPlan(p) => &p.header,
         }
     }
+
+    /// Visit every stage block of the plan.
+    pub(crate) fn for_each_stages_mut(&mut self, mut f: impl FnMut(&mut JoinStages)) {
+        match self {
+            Plan::SinglePlan(p) => f(&mut p.stages),
+            Plan::DecomposedPlan(p) => {
+                for (stages, _) in &mut p.stages.blocks {
+                    f(stages);
+                }
+                f(&mut p.result_block);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +271,42 @@ pub(crate) struct SinglePlan {
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStages {
     pub instrs: Arc<Vec<JoinStage>>,
+    /// The successor families of each indexed access, in the order
+    /// [`Self::for_each_indexed_access`] visits them. Assigned by
+    /// `Database::plan_query`; empty until then.
+    pub families: Arc<[AccessFamilies]>,
+}
+
+impl JoinStages {
+    pub(crate) fn new(instrs: Vec<JoinStage>) -> Self {
+        Self {
+            instrs: Arc::new(instrs),
+            families: Arc::from(Vec::new()),
+        }
+    }
+
+    /// Visit every indexed access as `(atom, columns, constraints)`, in the
+    /// order prepared index slots are assigned. Cover scans are not indexed.
+    pub(crate) fn for_each_indexed_access(
+        &self,
+        mut f: impl FnMut(AtomId, &[ColumnId], &[Constraint]),
+    ) {
+        for stage in self.instrs.iter() {
+            match stage {
+                JoinStage::Intersect { scans, .. } => {
+                    for scan in scans {
+                        f(scan.atom, std::slice::from_ref(&scan.column), &scan.cs);
+                    }
+                }
+                JoinStage::FusedIntersect { to_intersect, .. }
+                | JoinStage::FusedIntersectMat { to_intersect, .. } => {
+                    for (scan, _) in to_intersect {
+                        f(scan.to_index.atom, &scan.to_index.vars, &scan.constraints);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Specification of the materialization of the intermediate results, as required by tree decomposition.
@@ -965,9 +1016,7 @@ fn plan_single_bag(
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
 
-    let stages = JoinStages {
-        instrs: Arc::new(instrs),
-    };
+    let stages = JoinStages::new(instrs);
 
     (header, stages, MatSpec { msg_vars, val_vars })
 }
@@ -1010,9 +1059,7 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
         });
     }
 
-    JoinStages {
-        instrs: Arc::new(result_block),
-    }
+    JoinStages::new(result_block)
 }
 
 /// The last stage and the result block have the following structure:
@@ -1094,9 +1141,7 @@ fn loop_lifting(stages: JoinStages) -> JoinStages {
             }
         }
     }
-    JoinStages {
-        instrs: Arc::new(instrs),
-    }
+    JoinStages::new(instrs)
 }
 
 /// This is the main entry point for query optimization using tree decomposition.
@@ -1109,9 +1154,7 @@ pub(crate) fn tree_decompose_and_plan(
     macro_rules! fast_path {
         () => {{
             let (header, instrs) = plan_stages(&ctx, strat);
-            let stages = JoinStages {
-                instrs: Arc::new(instrs),
-            };
+            let stages = JoinStages::new(instrs);
 
             Plan::SinglePlan(SinglePlan {
                 atoms: Arc::new(ctx.atoms),
