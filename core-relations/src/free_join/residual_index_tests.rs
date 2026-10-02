@@ -54,14 +54,17 @@ fn sorted_match_ordinal_reconstructs_row_carrying_small_probe() {
         sink.len += 1;
     }
     let index = SmallColumnIndex::from_projected(sink);
-    let source = AtomRows::Inline(index.rows_at(0));
+    let source = AtomRows::inline(index.rows_at(0));
     let mut prober = Prober {
         source,
         ix: ProbeIndex::SmallColumn(index),
         keep_rows: true,
     };
 
-    let ProbeMatch::Rows(AtomRows::Inline(rows)) = prober.sorted_match_at(1) else {
+    let ProbeMatch::Rows(rows) = prober.sorted_match_at(1) else {
+        panic!("a row-carrying small probe must reconstruct inline rows")
+    };
+    let crate::free_join::probe::AtomRowsKind::Inline(rows) = rows.kind() else {
         panic!("a row-carrying small probe must reconstruct inline rows")
     };
     assert_eq!(

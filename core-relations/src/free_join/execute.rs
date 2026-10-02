@@ -55,8 +55,8 @@ use super::{
         columns_are_cacheable,
     },
     probe::{
-        AtomRows, CatalogFilter, Descent, LazyArenaHandle, PackedProbe, ProbeIndex, ProbeRequest,
-        Prober, RootProjectionProbe, SortedScalarProbe, seek_sorted_key,
+        AtomRows, AtomRowsKind, CatalogFilter, Descent, LazyArenaHandle, PackedProbe, ProbeIndex,
+        ProbeRequest, Prober, RootProjectionProbe, SortedScalarProbe, seek_sorted_key,
     },
     residual_index::{SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
     with_pool_set,
@@ -807,8 +807,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 (prepared.access.index(), child_shape)
             }
         };
-        match rows {
-            AtomRows::Owned(root) if !root.is_plan_root() => self.build_packed_node(
+        match rows.kind() {
+            AtomRowsKind::Root(root) if !root.is_plan_root() => self.build_packed_node(
                 table,
                 root.subset.as_ref(),
                 false,
@@ -817,7 +817,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 child_shape,
                 false,
             ),
-            AtomRows::Owned(root) => {
+            AtomRowsKind::Root(root) => {
                 let address = *prepared.state.packed_root.get_or_init(|| {
                     self.build_packed_node(
                         table,
@@ -835,7 +835,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 assert_eq!(node.child_shape(), child_shape);
                 node
             }
-            AtomRows::Catalog {
+            AtomRowsKind::Catalog {
                 subset,
                 continuation,
             } => {
@@ -861,7 +861,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 assert_eq!(node.child_shape(), child_shape);
                 node
             }
-            AtomRows::Packed(cursor) => {
+            AtomRowsKind::Packed(cursor) => {
                 let shared = cursor.node().is_shared();
                 let (family, child_shape) = shared_child(shared);
                 cursor.child_index_with(self.handle.get(), family, child_shape, || {
@@ -876,10 +876,10 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     )
                 })
             }
-            AtomRows::Inline(..) => {
+            AtomRowsKind::Inline(..) => {
                 unreachable!("inline residuals must use a stack-owned probe")
             }
-            AtomRows::Dense(range) => self.build_packed_node(
+            AtomRowsKind::Dense(range) => self.build_packed_node(
                 table,
                 SubsetRef::Dense(*range),
                 true,
@@ -919,8 +919,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let shared_child_shape = info.shared_child_shape();
         let all_cacheable = columns_are_cacheable(info, &cols);
         let whole_table = info.table.all();
-        let root_range = match &source {
-            AtomRows::Owned(root) => match &root.subset {
+        let root_range = match source.kind() {
+            AtomRowsKind::Root(root) => match &root.subset {
                 Subset::Dense(range) => Some(*range),
                 Subset::Sparse(_) => None,
             },
@@ -933,8 +933,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         // the shared continuation grid, which is keyed by columns only. Below
         // a shared root, a constrained scan therefore keeps the shared root
         // projection, whose grid is keyed by those constraints.
-        let constrained_shared_root =
-            !constraints.is_empty() && matches!(&source, AtomRows::Owned(root) if root.is_shared());
+        let constrained_shared_root = !constraints.is_empty()
+            && matches!(source.kind(), AtomRowsKind::Root(root) if root.is_shared());
         let can_use_catalog = root_range.is_some()
             && all_cacheable
             && whole_table.size() / 2 < source.size()
@@ -945,9 +945,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         // continuation key is typically probed many times per run, so the
         // packed node built once is reused from the slot.
         let has_slot = matches!(
-            &source,
-            AtomRows::Packed(_)
-                | AtomRows::Catalog {
+            source.kind(),
+            AtomRowsKind::Packed(_)
+                | AtomRowsKind::Catalog {
                     continuation: Some(_),
                     ..
                 }
@@ -959,7 +959,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 constraints,
                 cols[0],
             ))
-        } else if let AtomRows::Inline(rows) = &source {
+        } else if let AtomRowsKind::Inline(rows) = source.kind() {
             ProbeIndex::SmallExact(SmallExactProbe::new(
                 info.table.as_ref(),
                 *rows,
@@ -974,8 +974,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Below a shared root, the catalog key positions identify the same
             // rows for every plan, so the continuation cache is shared too. A
             // terminal probe never continues, so it skips the lookup.
-            let shared_continuations = match &source {
-                AtomRows::Owned(root)
+            let shared_continuations = match source.kind() {
+                AtomRowsKind::Root(root)
                     if terminal_child_shape != ChildShape::Leaf && self.trie_cache.is_some() =>
                 {
                     prepared.shared_catalog_continuations(root, &cols)
@@ -1026,8 +1026,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             } else {
                 terminal_child_shape
             };
-            let projected_root = match &source {
-                AtomRows::Owned(root) => self.projected_root_index(
+            let projected_root = match source.kind() {
+                AtomRowsKind::Root(root) => self.projected_root_index(
                     root,
                     info.table.as_ref(),
                     constraints,
