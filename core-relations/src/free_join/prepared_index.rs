@@ -18,7 +18,6 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    Constraint,
     hash_index::{ColumnIndex, Index, IndexPosition, TupleIndex},
     numeric_id::{DenseIdMap, NumericId, define_id},
     query::Atom,
@@ -31,10 +30,7 @@ use super::{
     join_tail::{
         AtomTailUse, for_each_stage_atom, for_each_stage_indexed_access, is_reorder_barrier,
     },
-    packed_cache::{
-        AccessFamilies, FamilyId, OwnedAtomRows, RootProjection, RootProjectionEntry,
-        RootProjectionSlot,
-    },
+    packed_cache::{AccessFamilies, FamilyId, TrieRoot},
     packed_trie::ChildShape,
     plan::{JoinStage, JoinStages, Plan},
 };
@@ -60,24 +56,21 @@ after reaching that atom."#
 
 /// Identifies a root-index key within a [`RootContinuationCache`].
 ///
-/// Persistent catalog indexes identify the key with an [`IndexPosition`];
-/// unsharded, round-local projections use a key ordinal. This position
-/// represents both forms without confusing it with the exact persistent-index
-/// identity documented by [`IndexPosition`].
+/// A root lookup initially returns all rows having one key. If a later join
+/// stage needs to index another column of those same rows, execution builds a
+/// packed trie node for that narrower operation. That node is the
+/// *continuation* of the root lookup. For example, after looking up `x = 5` in
+/// a root index for `R(x, y, z)`, a later access to `R.y` continues from that
+/// result by building an index of `y` over only the matching `R` rows.
+///
+/// Each root key gets a slot that publishes this packed child once and shares
+/// it with concurrent probes. Persistent catalog indexes identify the key with
+/// an [`IndexPosition`]. Only its shard and slot are needed here: the
+/// execution-local catalog handle already fixes the index identity.
 #[derive(Clone, Copy)]
 pub(super) struct ContinuationPosition {
     shard: u32,
     slot: u32,
-}
-
-impl ContinuationPosition {
-    pub(super) fn unsharded(slot: usize) -> Self {
-        Self {
-            shard: 0,
-            slot: u32::try_from(slot)
-                .expect("a root continuation grid cannot contain more than u32::MAX keys"),
-        }
-    }
 }
 
 impl From<IndexPosition> for ContinuationPosition {
@@ -316,10 +309,6 @@ pub(super) struct PreparedIndexState {
     /// Shared [`RootContinuationCache`] of the catalog index this access probes
     /// below a shared root. The retained `Arc` keeps it alive for the whole query.
     shared_continuations: OnceLock<Arc<RootContinuationCache>>,
-    /// Shared scalar projection selected for this logical access. Once set, the
-    /// retained `Arc` keeps its immutable key and row arrays alive for the
-    /// entire query, so output frames can borrow them without cloning the Arc.
-    projected_root: OnceLock<RootProjectionSlot>,
     /// Erased arena address of the packed root for this logical scan.
     /// This remains the fallback for roots that are not shared across plans.
     pub(super) packed_root: OnceLock<usize>,
@@ -336,7 +325,6 @@ impl PreparedIndexState {
             cache,
             root_continuations: RootContinuationCache::default(),
             shared_continuations: OnceLock::new(),
-            projected_root: OnceLock::new(),
             packed_root: OnceLock::new(),
         }
     }
@@ -377,7 +365,7 @@ impl PreparedIndexSlot {
 /// Borrowed execution view obtained by resolving a compact
 /// [`PreparedIndexSlot`] against its separately stored mutable state.
 ///
-/// Its methods retain catalog handles and shared projections in
+/// Its methods retain catalog handles in
 /// [`PreparedIndexState`]. Returned borrows live as long as that state, so the
 /// executor can copy or discard this view without shortening those borrows.
 #[derive(Clone, Copy)]
@@ -395,6 +383,14 @@ pub(super) struct PreparedIndexRef<'a> {
 }
 
 impl<'a> PreparedIndexRef<'a> {
+    pub(super) fn packed_root(self, build: impl FnOnce() -> usize) -> usize {
+        *self.state.packed_root.get_or_init(build)
+    }
+
+    pub(super) fn local_continuations(self) -> &'a RootContinuationCache {
+        &self.state.root_continuations
+    }
+
     /// Acquire this access's single-column catalog index on first use.
     ///
     /// The catalog helper refreshes the index before its handle is retained.
@@ -435,34 +431,7 @@ impl<'a> PreparedIndexRef<'a> {
             .expect("prepared tuple index must already be refreshed")
     }
 
-    /// Retain this access's shared root projection, initializing it with `build`.
-    ///
-    /// `root`, `column`, and `slow_constraints` must identify the same logical
-    /// projection on every call. Fast constraints already selected the root's
-    /// rows. The retained slot avoids repeated map lookups and `Arc` clones;
-    /// its shared `OnceLock` coordinates construction across concurrent plans.
-    /// `build` runs only if the shared projection needs initialization.
-    /// Returns `None` without calling `build` if the root has no shared cache.
-    /// The returned entry, with the projection and its shared
-    /// [`RootContinuationCache`], is borrowed from this execution's retained state.
-    pub(super) fn get_or_init_root_projection(
-        self,
-        root: &OwnedAtomRows,
-        column: ColumnId,
-        slow_constraints: &[Constraint],
-        build: impl FnOnce() -> RootProjection,
-    ) -> Option<&'a RootProjectionEntry> {
-        let slot = if let Some(slot) = self.state.projected_root.get() {
-            slot
-        } else {
-            let candidate = root.projection_slot(column, slow_constraints)?;
-            self.state.projected_root.get_or_init(|| candidate)
-        };
-        slot.projection.get_or_init(build);
-        Some(slot)
-    }
-
-    /// Retain the shared [`RootContinuationCache`] of the persistent catalog index
+    /// Retain the shared continuation grid of the persistent catalog index
     /// over `columns` below the shared `root`, or `None` if the root is not
     /// shared. `root` and `columns` must identify the same index on every call.
     pub(super) fn shared_catalog_continuations(

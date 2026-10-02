@@ -188,7 +188,7 @@ mod catalog_filter {
             ix: ProbeIndex::CachedColumn {
                 intersect_outer: None,
                 table: index,
-                continuations,
+                continuations: Some(continuations),
                 child_shape,
                 filter: CatalogFilter {
                     table: wrapped.as_ref(),
@@ -402,7 +402,7 @@ mod catalog_filter {
             ix: ProbeIndex::CachedTuple {
                 intersect_outer: None,
                 table: index,
-                continuations: &continuations,
+                continuations: Some(&continuations),
                 child_shape: ChildShape::Leaf,
                 filter,
             },
