@@ -349,7 +349,7 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
 
 fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
     let mut access_counts = crate::numeric_id::DenseIdMap::new();
-    let mut states = Vec::new();
+    let mut state_count = 0;
     let prepared_stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]> = stages
         .iter()
         .map(|stage| {
@@ -370,8 +370,8 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
                     let access = AccessId::from_usize(*next);
                     *next += 1;
                     let kind = PreparedIndexKind::Uncacheable;
-                    let state = PreparedIndexStateId::from_usize(states.len());
-                    states.push(kind);
+                    let state = PreparedIndexStateId::from_usize(state_count);
+                    state_count += 1;
                     PreparedIndexSlot::new(kind, access, state)
                 })
                 .collect()
@@ -380,7 +380,7 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
     let tail_masks = PreparedTailMaskWidth::new(stages, &prepared_stages, access_counts.n_ids());
     PreparedJoinLayout {
         stages: prepared_stages,
-        state_count: states.len(),
+        state_count,
         access_counts,
         tail_masks,
     }

@@ -365,7 +365,7 @@ pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// The general fallback: an arena-allocated packed trie over an arbitrary
     /// source subset, with lower column indexes constructed lazily.
     Packed(PackedProbe<'ctx, 'rows, 'exec>),
-    /// The original scalar index needs only its immutable key/row arrays.
+    /// A scalar packed index needs only its immutable key/row arrays.
     /// Tuple descent state belongs only to accesses projecting several columns.
     PackedColumn(&'rows TrieNode<'exec>),
 }

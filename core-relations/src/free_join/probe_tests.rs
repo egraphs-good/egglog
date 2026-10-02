@@ -1,4 +1,3 @@
-use super::AtomRowsKind;
 use super::*;
 
 #[test]
