@@ -12,6 +12,13 @@ fn v(x: usize) -> Value {
 }
 
 #[test]
+fn empty_buffer_does_not_enqueue_work() {
+    let d = DisplacedTable::default();
+    drop(d.new_buffer());
+    assert!(d.buffered_writes.is_empty());
+}
+
+#[test]
 fn displaced() {
     empty_execution_state!(e);
     let mut d = DisplacedTable::default();

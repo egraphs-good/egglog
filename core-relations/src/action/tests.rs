@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    PredictedEntry, PredictedVals, PredictedValueEntry, PredictionOwner,
+    PredictedEntry, PredictedVals, PredictedValueEntry,
     mask::{Mask, MaskIter},
 };
 
@@ -119,7 +119,7 @@ fn predicted_vals_resolve_hash_collisions_with_the_backing_rows() {
             hash,
             index: 0,
             row_end: collision_row.len() as u32,
-            owner: PredictionOwner::table(table),
+            owner: table,
             key_arity: collision_key.len() as u32,
         },
         |entry| entry.hash,
@@ -196,10 +196,10 @@ fn predicted_vals_reverse_lookup_rejects_a_conflicting_identity() {
 }
 
 #[test]
-fn predicted_vals_keep_table_and_container_namespaces_distinct() {
+fn predicted_vals_keep_backing_table_namespaces_distinct() {
     let mut predicted = PredictedVals::default();
     let table = TableId::from_usize(3);
-    let container = ContainerValueId::from_usize(3);
+    let container = ContainerValueId::from_usize(4);
     let key = [Value::from_usize(10)];
     let table_row = [key[0], Value::from_usize(80)];
     let container_row = [key[0], Value::from_usize(90)];
@@ -244,7 +244,7 @@ fn predicted_container_rows_require_exactly_one_identity_value() {
 fn predicted_vals_reverse_lookup_resolves_raw_hash_collisions() {
     let mut predicted = PredictedVals::default();
     let container = ContainerValueId::from_usize(3);
-    let owner = PredictionOwner::container(container);
+    let owner = TableId::from(container);
     let collision_row = [Value::from_usize(10), Value::from_usize(80)];
     let key = [Value::from_usize(20), Value::from_usize(21)];
     let identity = Value::from_usize(90);
