@@ -275,12 +275,16 @@ pub struct TreeExtractor<'g, C: Cost> {
     funcs: Vec<String>,
     cost_model: Box<dyn TreeExtractorCostModel<C> + 'g>,
     /// Dense id assigned to each eq sort that some extractable function outputs;
-    /// indexes into `costs`, `topo_rnk`, and `parent_edge`.
+    /// indexes into `costs` and `parent_edge`.
     sort_ids: HashMap<String, usize>,
-    costs: Vec<HashMap<Value, C>>,
-    topo_rnk_cnt: usize,
-    topo_rnk: Vec<HashMap<Value, usize>>,
+    costs: Vec<HashMap<Value, RankedCost<C>>>,
     parent_edge: Vec<HashMap<Value, (usize, Vec<Value>)>>,
+}
+
+/// Every successful relaxation updates the cost and chronological rank together.
+struct RankedCost<C> {
+    cost: C,
+    rank: usize,
 }
 
 /// How extraction treats one child column of a function, resolved once so the
@@ -461,8 +465,6 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             cost_model: Box::new(cost_model),
             sort_ids,
             costs: (0..n_sorts).map(|_| Default::default()).collect(),
-            topo_rnk_cnt: 0,
-            topo_rnk: (0..n_sorts).map(|_| Default::default()).collect(),
             parent_edge: (0..n_sorts).map(|_| Default::default()).collect(),
         };
 
@@ -488,7 +490,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         } else if sort.is_eq_sort() {
             self.costs[*self.sort_ids.get(sort.name())?]
                 .get(&value)
-                .cloned()
+                .map(|entry| entry.cost.clone())
         } else {
             // Primitive
             Some(self.cost_model.base_value_cost(egraph, sort, value))
@@ -537,7 +539,9 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 })
         } else if sort.is_eq_sort() {
             if let Some(id) = self.sort_ids.get(sort.name()) {
-                *self.topo_rnk[*id].get(&value).unwrap_or(&usize::MAX)
+                self.costs[*id]
+                    .get(&value)
+                    .map_or(usize::MAX, |entry| entry.rank)
             } else {
                 usize::MAX
             }
@@ -556,14 +560,13 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         ch_costs: &mut Vec<C>,
     ) -> Option<C> {
         ch_costs.clear();
-        for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
-            let cost = match kind {
-                ChildKind::EqSort(Some(id)) => self.costs[*id].get(value)?.clone(),
+        for (kind, value) in f.child_kinds.iter().zip(row) {
+            ch_costs.push(match kind {
+                ChildKind::EqSort(Some(id)) => self.costs[*id].get(value)?.cost.clone(),
                 ChildKind::EqSort(None) => return None,
                 ChildKind::Container(sort) => self.compute_cost_node(egraph, *value, sort)?,
                 ChildKind::Base(sort) => self.cost_model.base_value_cost(egraph, sort, *value),
-            };
-            ch_costs.push(cost);
+            });
         }
         let enode = Enode {
             name: f.func.extraction_term_name(),
@@ -575,6 +578,18 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             self.cost_model
                 .total_enode_cost(egraph, f.cost_func, &enode, ch_costs),
         )
+    }
+
+    /// The chronological rank of one child; a row's edge rank is its children's maximum.
+    fn child_rank(&self, egraph: &EGraph, kind: &ChildKind, value: Value) -> usize {
+        match kind {
+            ChildKind::EqSort(Some(id)) => self.costs[*id]
+                .get(&value)
+                .map_or(usize::MAX, |entry| entry.rank),
+            ChildKind::EqSort(None) => usize::MAX,
+            ChildKind::Container(sort) => self.compute_topo_rnk_node(egraph, value, sort),
+            ChildKind::Base(_) => 0,
+        }
     }
 
     /// Report every (sort id, value) pair a container value's cost depends on:
@@ -677,6 +692,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             }
         }
 
+        let mut topo_rnk_cnt = 0usize;
         // Semi-naive relaxation: a row recomputes exactly the same cost against a
         // never-increasing target unless one of its child (sort, value) costs
         // changed since the row was last evaluated, so only such "dirty" rows are
@@ -707,31 +723,23 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         continue;
                     };
                     let target = row[f.output_idx];
-                    let updated = match self.costs[f.output_sort_id].entry(target) {
-                        HEntry::Vacant(e) => {
-                            e.insert(new_cost);
-                            true
-                        }
-                        HEntry::Occupied(mut e) => {
-                            if new_cost < *(e.get()) {
-                                e.insert(new_cost);
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                    };
+                    let entry = self.costs[f.output_sort_id].entry(target);
+                    if let HEntry::Occupied(old) = &entry
+                        && new_cost >= old.get().cost
+                    {
+                        continue;
+                    }
                     // record the chronological order of the updates
                     // which serves as a topological order that avoids cycles
                     // even when a term has a cost equal to its subterms
-                    if updated {
-                        self.topo_rnk_cnt += 1;
-                        self.topo_rnk[f.output_sort_id].insert(target, self.topo_rnk_cnt);
-                        if let Some(readers) = child_index.get(&(f.output_sort_id, target)) {
-                            for &(dfi, dri) in readers {
-                                let (dfi, dri) = (dfi as usize, dri as usize);
-                                dirty[dfi].insert(dri);
-                            }
+                    topo_rnk_cnt += 1;
+                    entry.insert(RankedCost {
+                        cost: new_cost,
+                        rank: topo_rnk_cnt,
+                    });
+                    if let Some(readers) = child_index.get(&(f.output_sort_id, target)) {
+                        for &(dfi, dri) in readers {
+                            dirty[dfi as usize].insert(dri as usize);
                         }
                     }
                 }
@@ -751,38 +759,25 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         for (fi, f) in func_data.into_iter().enumerate() {
             for row in f.rows.chunks_exact(f.arity) {
                 let target = row[f.output_idx];
-                let Some(best_cost) = self.costs[f.output_sort_id].get(&target) else {
+                let Some(best) = self.costs[f.output_sort_id].get(&target) else {
                     continue;
                 };
-                if Some(best_cost.clone()) != self.row_cost(egraph, &f, row, &mut ch_costs) {
+                // one of the possible best parent edges
+                if self.row_cost(egraph, &f, row, &mut ch_costs).as_ref() != Some(&best.cost) {
                     continue;
                 }
-                // one of the possible best parent edges
-                let target_topo_rnk = *self.topo_rnk[f.output_sort_id].get(&target).unwrap();
-                let edge_topo_rnk =
-                    f.child_kinds
-                        .iter()
-                        .zip(row.iter())
-                        .fold(0, |ret, (kind, value)| {
-                            usize::max(
-                                ret,
-                                match kind {
-                                    ChildKind::EqSort(Some(id)) => {
-                                        *self.topo_rnk[*id].get(value).unwrap_or(&usize::MAX)
-                                    }
-                                    ChildKind::EqSort(None) => usize::MAX,
-                                    ChildKind::Container(sort) => {
-                                        self.compute_topo_rnk_node(egraph, *value, sort)
-                                    }
-                                    ChildKind::Base(_) => 0,
-                                },
-                            )
-                        });
-                if target_topo_rnk > edge_topo_rnk {
-                    // one of the parent edges that avoids cycles
-                    if let HEntry::Vacant(e) = self.parent_edge[f.output_sort_id].entry(target) {
-                        e.insert((fi, row.to_vec()));
-                    }
+                let edge_rank = f
+                    .child_kinds
+                    .iter()
+                    .zip(row)
+                    .map(|(kind, value)| self.child_rank(egraph, kind, *value))
+                    .max()
+                    .unwrap_or(0);
+                // one of the parent edges that avoids cycles
+                if best.rank > edge_rank
+                    && let HEntry::Vacant(e) = self.parent_edge[f.output_sort_id].entry(target)
+                {
+                    e.insert((fi, row.to_vec()));
                 }
             }
         }
