@@ -289,12 +289,17 @@ struct SharedRootIndexes {
     catalog_continuations: OnceLock<CatalogContinuationMap>,
 }
 
-/// Owning root subset for an atom. Lower trie levels are execution-scoped
+/// Owning row subset for an atom. Lower trie levels are execution-scoped
 /// packed nodes; below a shared root they are shared across plans.
+///
+/// A plan root holds the atom's header-filtered rows for a whole plan
+/// execution. A residual root holds the rows left by one constrained probe
+/// and belongs to a single frame.
 pub(crate) struct TrieRoot {
     pub(super) subset: Subset,
     /// Present only for roots shared across plans.
     shared: Option<SharedRootIndexes>,
+    plan_root: bool,
 }
 
 impl std::fmt::Debug for TrieRoot {
@@ -310,6 +315,7 @@ impl TrieRoot {
         Self {
             subset,
             shared: None,
+            plan_root: true,
         }
     }
 
@@ -317,7 +323,28 @@ impl TrieRoot {
         Self {
             subset,
             shared: Some(SharedRootIndexes::default()),
+            plan_root: true,
         }
+    }
+
+    /// Whether plans starting from this root share the indexes below it.
+    pub(super) fn is_shared(&self) -> bool {
+        self.shared.is_some()
+    }
+
+    /// A frame-local residual that no plan-level slot may cache.
+    pub(super) fn new_residual(subset: Subset) -> Self {
+        Self {
+            subset,
+            shared: None,
+            plan_root: false,
+        }
+    }
+
+    /// Whether this root is the atom's rows for the whole plan execution, so
+    /// per-plan state keyed by the atom may describe it.
+    pub(super) fn is_plan_root(&self) -> bool {
+        self.plan_root
     }
 
     /// Find the shared slot for projecting `column` after applying the scan's
