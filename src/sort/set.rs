@@ -25,12 +25,12 @@ impl ContainerValue for SetContainer {
 }
 
 impl SequenceContainerValue for SetContainer {
-    fn encode_sequence(&self, out: &mut Vec<Value>) {
+    fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         out.push(Value::from_usize(self.do_rebuild as usize));
         out.extend(self.data.iter().copied());
     }
 
-    fn decode_sequence(sequence: &[Value]) -> Self {
+    fn decode_sequence(sequence: &[Value], _base_values: &BaseValues) -> Self {
         let (&header, data) = sequence
             .split_first()
             .expect("serialized SetContainer must include its rebuild flag");
@@ -65,6 +65,7 @@ impl SequenceContainerValue for SetContainer {
 
     fn rebuild_sequence(
         sequence: &[Value],
+        _base_values: &BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
@@ -683,12 +684,16 @@ mod tests {
             data: [value(2), value(4), value(6)].into_iter().collect(),
         };
         let mut encoded = Vec::new();
-        set.encode_sequence(&mut encoded);
-        assert_eq!(SetContainer::decode_sequence(&encoded), set);
+        set.encode_sequence(&BaseValues::default(), &mut encoded);
+        assert_eq!(
+            SetContainer::decode_sequence(&encoded, &BaseValues::default()),
+            set
+        );
 
         let mut rebuilt = Vec::new();
         assert!(SetContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &Collapse {
                 from: value(6),
                 to: value(2),
@@ -708,6 +713,7 @@ mod tests {
         let mut rebuilt = Vec::new();
         assert!(!SetContainer::rebuild_sequence(
             &encoded,
+            &BaseValues::default(),
             &Collapse {
                 from: value(2),
                 to: value(4),

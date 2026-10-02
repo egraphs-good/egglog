@@ -26,12 +26,12 @@ impl ContainerValue for VecContainer {
 }
 
 impl SequenceContainerValue for VecContainer {
-    fn encode_sequence(&self, out: &mut Vec<Value>) {
+    fn encode_sequence(&self, _base_values: &BaseValues, out: &mut Vec<Value>) {
         out.push(Value::from_usize(self.do_rebuild as usize));
         out.extend_from_slice(&self.data);
     }
 
-    fn decode_sequence(sequence: &[Value]) -> Self {
+    fn decode_sequence(sequence: &[Value], _base_values: &BaseValues) -> Self {
         let (&header, data) = sequence
             .split_first()
             .expect("serialized VecContainer must include its rebuild flag");
@@ -64,6 +64,7 @@ impl SequenceContainerValue for VecContainer {
 
     fn rebuild_sequence(
         sequence: &[Value],
+        _base_values: &BaseValues,
         rebuilder: &dyn ValueRebuilder,
         out: &mut Vec<Value>,
     ) -> bool {
@@ -663,7 +664,7 @@ impl PurePrim for VecMap {
         mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        let fc = state.value_to_owned_container::<FunctionContainer>(args[0])?;
+        let function = state.prepare_function(args[0])?;
         // Copy before invoking the callback: it may intern another Vec and
         // grow this execution's local prediction storage.
         let input = state
@@ -675,7 +676,7 @@ impl PurePrim for VecMap {
             })?;
         let mut new_data = Vec::with_capacity(input.len());
         for v in input {
-            if let Some(mapped) = state.apply_function(&fc, &[v]) {
+            if let Some(mapped) = state.apply_prepared_function(&function, &[v]) {
                 new_data.push(mapped);
             }
         }
