@@ -725,8 +725,14 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             }
         }
 
+        // Free the scheduler's state before the parent edges allocate.
+        drop((child_index, dirty, dirty_count));
+
         // Save the edges for reconstruction
-        for (fi, f) in func_data.iter().enumerate() {
+        for (parents, costs) in self.parent_edge.iter_mut().zip(&self.costs) {
+            parents.reserve(costs.len());
+        }
+        for (fi, f) in func_data.into_iter().enumerate() {
             if f.rows.is_empty() {
                 continue;
             }
@@ -735,7 +741,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 let Some(best_cost) = self.costs[f.output_sort_id].get(&target) else {
                     continue;
                 };
-                if Some(best_cost.clone()) != self.row_cost(egraph, f, row, &mut ch_costs) {
+                if Some(best_cost.clone()) != self.row_cost(egraph, &f, row, &mut ch_costs) {
                     continue;
                 }
                 // one of the possible best parent edges
