@@ -1,12 +1,13 @@
-//! Prepared index state for one execution of a logical plan.
+//! Cached logical index layout and execution-local index state.
 //!
-//! Start with `PreparedJoinIndexes::new` for the structure of this file: it
-//! walks a `JoinStages` block, aligns slots with its indexed scans, assigns
-//! per-atom `AccessId`s, and derives the join-tail metadata. Then read
+//! `PreparedJoinLayout` walks a `JoinStages` block, aligns slots with its
+//! indexed scans, assigns per-atom `AccessId`s, and derives join-tail metadata.
+//! This immutable analysis is shared by cached-plan clones. Then read
 //! `PreparedIndexSlot` for the state associated with one indexed access and
 //! [`RootContinuationCache`] for how a root lookup continues on another column.
 //! `PreparedPlanIndexes::new` assembles these per-block structures for a whole
-//! plan. Preparation does not build the indexes; `execute.rs` acquires their
+//! plan, with fresh mutable state on every execution. Preparation does not
+//! build the indexes; `execute.rs` acquires their
 //! handles lazily when an access first needs them.
 
 use std::{
@@ -506,6 +507,7 @@ impl_stage_mask!(u64, Narrow);
 impl_stage_mask!(u128, Wide);
 
 /// Tail masks prepared at the narrowest [`StageMask`] width that fits the plan.
+#[derive(Debug)]
 pub(super) enum PreparedTailMaskWidth {
     /// The plan has more than 128 stages; callers scan the suffix instead.
     None,
@@ -543,7 +545,7 @@ impl PreparedTailMaskWidth {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct PreparedAtomUse<M> {
     /// Stages that read or refine this atom, including cover-only accesses.
     touched_stages: M,
@@ -567,6 +569,7 @@ impl<M: StageMask> Default for PreparedAtomUse<M> {
 /// remaining stages in one `M`. DVO only permutes stages within the fixed
 /// barrier phases, so successor shape depends on the remaining set, not its
 /// current permutation.
+#[derive(Debug)]
 pub(super) struct PreparedTailMasks<M> {
     /// Per-atom stage classifications used to decide whether rows must survive
     /// and whether the next packed child has a direct or dynamic shape.
@@ -692,30 +695,30 @@ impl<M: StageMask> PreparedTailMasks<M> {
 ///
 /// Start with [`Self::new`] to see how the per-access slots, access identities,
 /// and tail metadata fit together.
-// One value per plan block, always behind a reference, so the variant size
-// never matters.
-#[allow(clippy::large_enum_variant)]
-pub(super) enum PreparedJoinIndexes {
+pub(super) enum PreparedJoinIndexes<'plan> {
     /// A block made entirely of cover scans cannot build a packed node or use
     /// an index. Avoid constructing any index sidecar for these blocks; unary
     /// rules hit this path especially often.
     NoIndexes,
     Indexed {
-        stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
+        layout: &'plan PreparedJoinLayout,
         states: Box<[PreparedIndexState]>,
-        /// The plan's successor families, aligned with `states`.
-        families: Arc<[AccessFamilies]>,
-        access_counts: DenseIdMap<AtomId, usize>,
-        tail_masks: PreparedTailMaskWidth,
+        families: &'plan [AccessFamilies],
     },
 }
 
-impl PreparedJoinIndexes {
-    pub(super) fn new(
-        db: &Database,
-        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
-        stages: &JoinStages,
-    ) -> Self {
+/// Immutable access identities and tail analysis belong to the cached logical
+/// plan. Only index handles and arena addresses must be rebuilt each run.
+#[derive(Debug)]
+pub(super) struct PreparedJoinLayout {
+    pub(super) stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]>,
+    pub(super) kinds: Box<[PreparedIndexKind]>,
+    pub(super) access_counts: DenseIdMap<AtomId, usize>,
+    pub(super) tail_masks: PreparedTailMaskWidth,
+}
+
+impl PreparedJoinLayout {
+    fn new(db: &Database, atoms: &Arc<DenseIdMap<AtomId, Atom>>, stages: &JoinStages) -> Self {
         let index_count = stages
             .instrs
             .iter()
@@ -726,11 +729,16 @@ impl PreparedJoinIndexes {
             })
             .sum::<usize>();
         if index_count == 0 {
-            return Self::NoIndexes;
+            return Self {
+                stages: Box::new([]),
+                kinds: Box::new([]),
+                access_counts: DenseIdMap::new(),
+                tail_masks: PreparedTailMaskWidth::None,
+            };
         }
 
         let mut access_counts = DenseIdMap::with_capacity(atoms.n_ids());
-        let mut states = Vec::with_capacity(index_count);
+        let mut kinds = Vec::with_capacity(index_count);
         let mut prepared_stages = Vec::with_capacity(stages.instrs.len());
         // Slots are assigned in `for_each_indexed_access` order, which is also
         // the order of `stages.families`.
@@ -748,8 +756,8 @@ impl PreparedJoinIndexes {
                 } else {
                     PreparedIndexKind::Tuple
                 };
-                let state_id = PreparedIndexStateId::from_usize(states.len());
-                states.push(PreparedIndexState::new(kind));
+                let state_id = PreparedIndexStateId::from_usize(kinds.len());
+                kinds.push(kind);
                 PreparedIndexSlot::new(kind, access, state_id)
             };
             match stage {
@@ -771,27 +779,61 @@ impl PreparedJoinIndexes {
         }
         let tail_masks =
             PreparedTailMaskWidth::new(&stages.instrs, &prepared_stages, atoms.n_ids());
-        Self::Indexed {
+        Self {
             stages: prepared_stages.into_boxed_slice(),
-            states: states.into_boxed_slice(),
-            families: stages.families.clone(),
+            kinds: kinds.into_boxed_slice(),
             access_counts,
             tail_masks,
+        }
+    }
+}
+
+impl<'plan> PreparedJoinIndexes<'plan> {
+    pub(super) fn new(
+        db: &Database,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        stages: &'plan JoinStages,
+    ) -> Self {
+        let layout = stages.prepared_layout.get_or_init(|| {
+            let layout = PreparedJoinLayout::new(db, atoms, stages);
+            (!layout.kinds.is_empty()).then(|| Box::new(layout))
+        });
+        match layout {
+            Some(layout) => Self::from_layout(layout, &stages.families),
+            None => Self::NoIndexes,
+        }
+    }
+
+    pub(super) fn from_layout(
+        layout: &'plan PreparedJoinLayout,
+        families: &'plan [AccessFamilies],
+    ) -> Self {
+        if layout.kinds.is_empty() {
+            return Self::NoIndexes;
+        }
+        Self::Indexed {
+            layout,
+            states: layout
+                .kinds
+                .iter()
+                .map(|&kind| PreparedIndexState::new(kind))
+                .collect(),
+            families,
         }
     }
 
     pub(super) fn stage(&self, index: usize) -> &[PreparedIndexSlot] {
         match self {
             Self::NoIndexes => &[],
-            Self::Indexed { stages, .. } => &stages[index],
+            Self::Indexed { layout, .. } => &layout.stages[index],
         }
     }
 
     pub(super) fn access_count(&self, atom: AtomId) -> usize {
         match self {
             Self::NoIndexes => 0,
-            Self::Indexed { access_counts, .. } => {
-                access_counts.get(atom).copied().unwrap_or_default()
+            Self::Indexed { layout, .. } => {
+                layout.access_counts.get(atom).copied().unwrap_or_default()
             }
         }
     }
@@ -816,13 +858,8 @@ impl PreparedJoinIndexes {
     /// Whether the plan needs 128-bit stage masks; callers choose the width to
     /// run the join at from this.
     pub(super) fn uses_wide_stage_mask(&self) -> bool {
-        matches!(
-            self,
-            Self::Indexed {
-                tail_masks: PreparedTailMaskWidth::Wide(_),
-                ..
-            }
-        )
+        matches!(self, Self::Indexed { layout, .. }
+            if matches!(layout.tail_masks, PreparedTailMaskWidth::Wide(_)))
     }
 
     pub(super) fn all_stage_mask<M: StageMask>(&self) -> Option<M> {
@@ -832,22 +869,22 @@ impl PreparedJoinIndexes {
     pub(super) fn tail_masks<M: StageMask>(&self) -> Option<&PreparedTailMasks<M>> {
         match self {
             Self::NoIndexes => None,
-            Self::Indexed { tail_masks, .. } => M::tail_masks(tail_masks),
+            Self::Indexed { layout, .. } => M::tail_masks(&layout.tail_masks),
         }
     }
 }
 
 /// Execution-scoped index sidecar mirroring the shape of a logical [`Plan`].
-pub(super) enum PreparedPlanIndexes {
-    Single(PreparedJoinIndexes),
+pub(super) enum PreparedPlanIndexes<'plan> {
+    Single(PreparedJoinIndexes<'plan>),
     Decomposed {
-        blocks: Vec<PreparedJoinIndexes>,
-        result: PreparedJoinIndexes,
+        blocks: Vec<PreparedJoinIndexes<'plan>>,
+        result: PreparedJoinIndexes<'plan>,
     },
 }
 
-impl PreparedPlanIndexes {
-    pub(super) fn new(db: &Database, plan: &Plan) -> Self {
+impl<'plan> PreparedPlanIndexes<'plan> {
+    pub(super) fn new(db: &Database, plan: &'plan Plan) -> Self {
         match plan {
             Plan::SinglePlan(plan) => {
                 Self::Single(PreparedJoinIndexes::new(db, &plan.atoms, &plan.stages))

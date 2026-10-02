@@ -25,8 +25,8 @@ use crate::free_join::{
     packed_cache::{FamilyId, TrieRoot},
     packed_trie::ChildShape,
     prepared_index::{
-        AccessId, PreparedIndexKind, PreparedIndexSlot, PreparedIndexState, PreparedIndexStateId,
-        PreparedJoinIndexes, PreparedTailMaskWidth, StageMask,
+        AccessId, PreparedIndexKind, PreparedIndexSlot, PreparedIndexStateId, PreparedJoinIndexes,
+        PreparedJoinLayout, PreparedTailMaskWidth, StageMask,
     },
 };
 
@@ -347,7 +347,7 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
     assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3].into_iter()));
 }
 
-fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
+fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
     let mut access_counts = crate::numeric_id::DenseIdMap::new();
     let mut states = Vec::new();
     let prepared_stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]> = stages
@@ -371,17 +371,16 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
                     *next += 1;
                     let kind = PreparedIndexKind::Uncacheable;
                     let state = PreparedIndexStateId::from_usize(states.len());
-                    states.push(PreparedIndexState::new(kind));
+                    states.push(kind);
                     PreparedIndexSlot::new(kind, access, state)
                 })
                 .collect()
         })
         .collect();
     let tail_masks = PreparedTailMaskWidth::new(stages, &prepared_stages, access_counts.n_ids());
-    PreparedJoinIndexes::Indexed {
+    PreparedJoinLayout {
         stages: prepared_stages,
-        states: states.into_boxed_slice(),
-        families: Arc::from(Vec::new()),
+        kinds: states.into_boxed_slice(),
         access_counts,
         tail_masks,
     }
@@ -406,7 +405,8 @@ fn assert_tail_masks_match_scanner<M: StageMask>(
     orders: &[Vec<usize>],
     atom_count: usize,
 ) {
-    let prepared = prepared_for(stages);
+    let prepared_layout = prepared_for(stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let masks = prepared.tail_masks::<M>().unwrap();
     for order in orders {
         let instr_order = InstrOrder::from_iter(order.iter().copied());
@@ -494,20 +494,24 @@ fn prepared_tail_masks_pick_the_narrowest_width_that_fits() {
             .collect()
     }
 
-    let narrow_full = prepared_for(&stages(64));
+    let narrow_full_layout = prepared_for(&stages(64));
+    let narrow_full = PreparedJoinIndexes::from_layout(&narrow_full_layout, &[]);
     assert!(!narrow_full.uses_wide_stage_mask());
     assert_eq!(narrow_full.all_stage_mask::<u64>(), Some(u64::MAX));
     assert!(narrow_full.tail_masks::<u128>().is_none());
 
-    let wide = prepared_for(&stages(65));
+    let wide_layout = prepared_for(&stages(65));
+    let wide = PreparedJoinIndexes::from_layout(&wide_layout, &[]);
     assert!(wide.uses_wide_stage_mask());
     assert!(wide.tail_masks::<u64>().is_none());
     assert_eq!(wide.all_stage_mask::<u128>(), Some((1u128 << 65) - 1));
 
-    let wide_full = prepared_for(&stages(128));
+    let wide_full_layout = prepared_for(&stages(128));
+    let wide_full = PreparedJoinIndexes::from_layout(&wide_full_layout, &[]);
     assert_eq!(wide_full.all_stage_mask::<u128>(), Some(u128::MAX));
 
-    let over = prepared_for(&stages(129));
+    let over_layout = prepared_for(&stages(129));
+    let over = PreparedJoinIndexes::from_layout(&over_layout, &[]);
     assert!(!over.uses_wide_stage_mask());
     assert!(over.tail_masks::<u64>().is_none());
     assert!(over.tail_masks::<u128>().is_none());
@@ -516,7 +520,8 @@ fn prepared_tail_masks_pick_the_narrowest_width_that_fits() {
 #[test]
 fn packed_tail_shape_preserves_direct_graph_path() {
     let stages = vec![intersect_stage(0, 0), intersect_stage(0, 1)];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter(0..stages.len());
 
     assert_eq!(
@@ -536,7 +541,8 @@ fn packed_tail_shape_uses_dynamic_families_for_dvo_choice() {
         intersect_stage(0, 1),
         intersect_stage(0, 2),
     ];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter([0, 2, 1].into_iter());
 
     assert_eq!(
@@ -563,7 +569,8 @@ fn packed_tail_shape_stops_at_cover_and_reorder_barriers() {
         },
         intersect_stage(0, 1),
     ];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter(0..stages.len());
     assert_eq!(
         packed_child_shape_in_tail::<u64>(atom, &stages, &prepared, &order, 1),
@@ -581,7 +588,8 @@ fn packed_tail_shape_stops_at_cover_and_reorder_barriers() {
         },
         intersect_stage(0, 2),
     ];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter(0..stages.len());
     assert_eq!(
         packed_child_shape_in_tail::<u64>(atom, &stages, &prepared, &order, 1),
