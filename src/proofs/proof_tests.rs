@@ -266,6 +266,394 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn no_merge_conflict_matches_normal_mode() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (function f (i64) i64 :no-merge)
+                    (set (f 0) 1)
+                    "#,
+                )
+                .unwrap_or_else(|error| panic!("{mode} setup failed: {error}"));
+
+            let error = egraph
+                .parse_and_run_program(None, "(set (f 0) 2)")
+                .expect_err("a conflicting no-merge set must fail");
+            assert_eq!(
+                error.to_string(),
+                "Panic: Illegal merge attempted for function f",
+                "{mode} mode exposed a different conflict surface"
+            );
+        }
+    }
+
+    #[test]
+    fn no_merge_repeated_value_succeeds_in_all_modes() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (function f (i64) i64 :no-merge)
+                    (set (f 0) 1)
+                    (set (f 0) 1)
+                    (check (= (f 0) 1))
+                    "#,
+                )
+                .unwrap_or_else(|error| panic!("{mode} mode rejected an idempotent set: {error}"));
+        }
+    }
+
+    /// `:no-merge` compares canonical values, not the constructor spelling
+    /// used to reach them. Once two outputs are unioned, writing either member
+    /// of that e-class is an idempotent update rather than a conflict.
+    #[test]
+    fn no_merge_equal_eclass_outputs_succeed_in_all_modes() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (datatype E (A) (B))
+                    (function f (i64) E :no-merge)
+                    (set (f 0) (A))
+                    (union (A) (B))
+                    (set (f 0) (B))
+                    (check (= (f 0) (A)))
+                    "#,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{mode} mode rejected equal e-class outputs: {error}")
+                });
+        }
+    }
+
+    /// Equality containers are rebuilt from their elements' canonical
+    /// representatives. Two structurally equal rebuilt outputs must therefore
+    /// satisfy the same no-merge slot just as two unioned scalar outputs do.
+    #[test]
+    fn no_merge_equal_container_outputs_succeed_in_all_modes() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (datatype E (A) (B))
+                    (sort Es (Vec E))
+                    (function f (i64) Es :no-merge)
+                    (set (f 0) (vec-of (A)))
+                    (union (A) (B))
+                    (set (f 0) (vec-of (B)))
+                    (check (= (f 0) (vec-of (A))))
+                    "#,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{mode} mode rejected equal container outputs: {error}")
+                });
+            if mode == "proof" {
+                egraph
+                    .parse_and_run_program(None, "(prove (= (f 0) (vec-of (B))))")
+                    .expect("canonical container output proof must pass the checker");
+            }
+        }
+    }
+
+    /// Container canonicalization in an authority guard is a database read.
+    /// Rule instrumentation must select a safe evaluation mode and still emit
+    /// a checker-valid proof for the original, uninstrumented premise.
+    #[test]
+    fn no_merge_container_authority_is_safe_in_rule_queries() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype E (A) (B))
+                (sort Es (Vec E))
+                (function f (i64) Es :no-merge)
+                (relation Observed ())
+                (set (f 0) (vec-of (A)))
+                (union (A) (B))
+                (rule ((= (f 0) value))
+                      ((Observed))
+                      :name "observe-no-merge-container")
+                (run 1)
+                (prove (Observed))
+                "#,
+            )
+            .expect("container authority queries in rules must remain proof-checkable");
+    }
+
+    #[test]
+    fn no_merge_distinct_eclass_outputs_still_conflict() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype E (A) (B))
+                (function f (i64) E :no-merge)
+                (set (f 0) (A))
+                "#,
+            )
+            .unwrap();
+        let error = egraph
+            .parse_and_run_program(None, "(set (f 0) (B))")
+            .expect_err("distinct e-classes must conflict");
+        assert_eq!(
+            error.to_string(),
+            "Panic: Illegal merge attempted for function f"
+        );
+    }
+
+    #[test]
+    fn no_merge_zero_arity_function_preserves_first_value() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function answer () i64 :no-merge)
+                (set (answer) 42)
+                (set (answer) 42)
+                (prove (= (answer) 42))
+                "#,
+            )
+            .expect("zero-arity idempotent updates must succeed");
+        let error = egraph
+            .parse_and_run_program(None, "(set (answer) 7)")
+            .expect_err("zero-arity conflict must fail");
+        assert_eq!(
+            error.to_string(),
+            "Panic: Illegal merge attempted for function answer"
+        );
+    }
+
+    /// Merge expressions run through action instrumentation. A custom-function
+    /// lookup there is independently unsupported and must be rejected by the
+    /// capability gate, even when the looked-up function itself is no-merge.
+    #[test]
+    fn proof_support_rejects_function_lookup_in_merge_expression() {
+        let mut egraph = EGraph::new_with_proofs();
+        let error = egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function source () i64 :no-merge)
+                (function sink () i64 :merge (source))
+                "#,
+            )
+            .expect_err("merge-expression function lookup must fail at the support gate");
+        assert!(
+            matches!(
+                error,
+                Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::FunctionLookupInAction,
+                    ..
+                }
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    /// Function keys over equality sorts are canonicalized as the e-graph is
+    /// rebuilt. An idempotent write through the new representative must find
+    /// the original key instead of creating an independent authority row.
+    #[test]
+    fn no_merge_keys_follow_eclass_rebuild_without_false_conflict() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (datatype E (A) (B))
+                    (function f (E) i64 :no-merge)
+                    (set (f (A)) 1)
+                    (union (A) (B))
+                    (set (f (B)) 1)
+                    (check (= (f (A)) 1))
+                    "#,
+                )
+                .unwrap_or_else(|error| panic!("{mode} mode lost a rebuilt no-merge key: {error}"));
+        }
+    }
+
+    #[test]
+    fn no_merge_conflict_does_not_leave_a_provable_row() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function f (i64) i64 :no-merge)
+                (set (f 0) 1)
+                "#,
+            )
+            .unwrap();
+        egraph
+            .parse_and_run_program(None, "(set (f 0) 2)")
+            .expect_err("conflicting set must fail");
+
+        let ghost = egraph
+            .parse_and_run_program(None, "(check (= (f 0) 2))")
+            .expect_err("the rejected row must not be queryable");
+        assert!(
+            matches!(ghost, Error::CheckError(..)),
+            "unexpected error: {ghost}"
+        );
+
+        let outputs = egraph
+            .parse_and_run_program(None, "(prove (= (f 0) 1))")
+            .expect("the accepted row must remain provable after the conflict");
+        assert!(
+            outputs
+                .iter()
+                .any(|output| matches!(output, CommandOutput::ProveExists { .. })),
+            "prove command emitted no checked proof"
+        );
+    }
+
+    /// An expected conflict is still a complete command boundary after term
+    /// instrumentation expands one surface `set` into several internal writes
+    /// plus rebuilding. The rejected candidate must not escape that boundary.
+    #[test]
+    fn no_merge_expected_conflict_preserves_the_accepted_row() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (function f (i64) i64 :no-merge)
+                    (set (f 0) 1)
+                    (fail (set (f 0) 2))
+                    (check (= (f 0) 1))
+                    "#,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{mode} mode did not contain the expected conflict: {error}")
+                });
+
+            let sizes = egraph
+                .parse_and_run_program(None, "(print-size f)")
+                .unwrap_or_else(|error| panic!("{mode} mode could not size f: {error}"));
+            assert!(
+                sizes
+                    .iter()
+                    .any(|output| matches!(output, CommandOutput::PrintFunctionSize(1))),
+                "{mode} mode counted a rejected no-merge row: {sizes:?}"
+            );
+
+            if mode == "proof" {
+                egraph
+                    .parse_and_run_program(None, "(prove (= (f 0) 1))")
+                    .expect("the accepted row proof must remain checker-valid");
+            }
+        }
+    }
+
+    /// Rebuild-deferred no-merge handling must not move an immediate failure
+    /// out of its `fail` boundary. This protects the generic command contract
+    /// while the no-merge path receives its additional completion rebuild.
+    #[test]
+    fn expected_panic_remains_wrapped_in_all_modes() {
+        for (mode, mut egraph) in [
+            ("normal", EGraph::default()),
+            ("term", EGraph::new_with_term_encoding()),
+            ("proof", EGraph::new_with_proofs()),
+        ] {
+            egraph
+                .parse_and_run_program(None, r#"(fail (panic "expected"))"#)
+                .unwrap_or_else(|error| panic!("{mode} mode leaked the expected panic: {error}"));
+        }
+    }
+
+    /// Rule actions execute in one backend batch. A conflict must not make the
+    /// rejected row visible even if later actions in that batch have already run.
+    #[test]
+    fn no_merge_rule_conflict_does_not_leave_a_provable_row() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function f (i64) i64 :no-merge)
+                (relation Trigger (i64))
+                (set (f 0) 1)
+                (Trigger 2)
+                (rule ((Trigger value))
+                      ((set (f 0) value))
+                      :name "write-conflicting-value")
+                "#,
+            )
+            .unwrap();
+        let error = egraph
+            .parse_and_run_program(None, "(run 1)")
+            .expect_err("rule-produced no-merge conflict must fail");
+        assert_eq!(
+            error.to_string(),
+            "Panic: Illegal merge attempted for function f"
+        );
+
+        let ghost = egraph
+            .parse_and_run_program(None, "(check (= (f 0) 2))")
+            .expect_err("the rejected rule row must not be queryable");
+        assert!(
+            matches!(ghost, Error::CheckError(..)),
+            "unexpected error: {ghost}"
+        );
+        egraph
+            .parse_and_run_program(None, "(prove (= (f 0) 1))")
+            .expect("checker must still accept the pre-conflict row proof");
+    }
+
+    #[test]
+    fn no_merge_rule_repeating_the_same_value_succeeds() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (function f (i64) i64 :no-merge)
+                (relation Trigger (i64))
+                (set (f 0) 1)
+                (Trigger 1)
+                (rule ((Trigger value))
+                      ((set (f 0) value))
+                      :name "repeat-same-value")
+                (run 1)
+                (prove (= (f 0) 1))
+                "#,
+            )
+            .expect("same-value rule update must remain idempotent");
+    }
+
     // A container constructed in the query is a side condition with no carryable
     // proof (just an `Eval` marker), so it can't be used in an action. Proof mode
     // rejects such a rule rather than producing an unsound proof.
