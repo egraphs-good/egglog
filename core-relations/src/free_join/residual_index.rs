@@ -166,15 +166,24 @@ impl SmallColumnIndex {
     ) -> Self {
         debug_assert!(subset.size() <= SMALL_RESIDUAL);
         let mut sink = SmallColumnSink::default();
-        let next = table.scan_project(
-            subset,
-            std::slice::from_ref(&column),
-            Offset::new(0),
-            usize::MAX,
-            constraints,
-            &mut sink,
-        );
-        debug_assert!(next.is_none());
+        if constraints.is_empty() {
+            // The original scalar residual index projected directly into its
+            // stack buffer. General row projection is only needed for filters.
+            table.for_each_col(subset, column, &mut |row_id, value| {
+                sink.rows[sink.len] = (value, row_id);
+                sink.len += 1;
+            });
+        } else {
+            let next = table.scan_project(
+                subset,
+                std::slice::from_ref(&column),
+                Offset::new(0),
+                usize::MAX,
+                constraints,
+                &mut sink,
+            );
+            debug_assert!(next.is_none());
+        }
         Self::from_projected(sink)
     }
 
