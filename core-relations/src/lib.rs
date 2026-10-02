@@ -40,7 +40,7 @@ pub use query::{
     CachedPlan, QueryBuilder, QueryError, RuleBuilder, RuleId, RuleSet, RuleSetBuilder,
 };
 pub use row_buffer::TaggedRowBuffer;
-pub use table::{MergeFn, SortedWritesTable};
+pub use table::{MergeFn, SequenceTable, SortedWritesTable};
 pub use table_spec::{
     ColumnId, Constraint, MutationBuffer, Offset, Rebuilder, Row, Table, TableChange, TableSpec,
     TableVersion, ValueRebuilder, WrappedTable,

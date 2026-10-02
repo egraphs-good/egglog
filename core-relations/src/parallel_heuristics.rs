@@ -45,7 +45,10 @@ pub(crate) fn parallelize_index_construction(items_to_insert: usize) -> bool {
     should_parallelize(items_to_insert, cutoffs().index_construction)
 }
 
-/// Whether or not to use a parallel algorithm to rebuild a [`crate::table::SortedWritesTable`].
+/// Whether or not to use a parallel algorithm for a full table rebuild.
+///
+/// This applies to both fixed-arity [`crate::table::SortedWritesTable`] and
+/// variable-arity [`crate::table::SequenceTable`] scans.
 pub(crate) fn parallelize_rebuild(table_size: usize) -> bool {
     should_parallelize(table_size, cutoffs().rebuild)
 }
