@@ -87,3 +87,69 @@ fn cover_only_stages_skip_prepared_index_state() {
         PreparedJoinIndexes::NoIndexes
     ));
 }
+
+#[test]
+fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
+    use crate::{PlanStrategy, table::SortedWritesTable, table_shortcuts::v};
+
+    let mut db = Database::new();
+    let table = db.add_table(
+        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+        std::iter::empty(),
+        std::iter::empty(),
+    );
+    let mut rsb = db.new_rule_set();
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(PlanStrategy::Gj);
+    query.set_no_decomp(true);
+    let x = query.new_var_named("x");
+    query.add_atom(table, &[x.into()], &[]).unwrap();
+    query.add_atom(table, &[x.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(table, &[x.into()]).unwrap();
+    rule.build();
+    let rules = rsb.build();
+    let (plan, _, _) = rules.plans.values().next().unwrap();
+    let Plan::SinglePlan(plan) = plan else {
+        unreachable!()
+    };
+    let cloned_stages = plan.stages.clone();
+    assert!(plan.stages.prepared_layout.get().is_none());
+    let first = PreparedJoinIndexes::new(&db, &plan.atoms, &plan.stages);
+    let PreparedJoinIndexes::Indexed { layout, states, .. } = &first else {
+        panic!("fixture must prepare indexed accesses")
+    };
+    // Execution addresses and retained catalog handles must never enter the
+    // shared plan layout, even when plans differ only in seminaive headers.
+    assert!(states.iter().all(|state| state.packed_root.get().is_none()));
+    assert_eq!(first.resolve(&first.stage(0)[0]).packed_root(|| 123), 123);
+    let next = PreparedJoinIndexes::new(&db, &plan.atoms, &cloned_stages);
+    let PreparedJoinIndexes::Indexed {
+        layout: next_layout,
+        states: next_states,
+        ..
+    } = &next
+    else {
+        unreachable!()
+    };
+    assert!(std::ptr::eq(*layout, *next_layout));
+    assert!(next_states[0].packed_root.get().is_none());
+    assert!(!std::ptr::eq(states.as_ptr(), next_states.as_ptr()));
+    drop(first);
+    drop(next);
+    // The same layout remains valid after table mutations; catalog handles
+    // are reacquired from the fresh execution state.
+    let mut buffer = db.new_buffer(table);
+    buffer.stage_insert(&[v(1)]);
+    drop(buffer);
+    db.merge_all();
+    let refreshed = PreparedJoinIndexes::new(&db, &plan.atoms, &cloned_stages);
+    let slot = refreshed.stage(0)[0];
+    assert_eq!(
+        refreshed
+            .resolve(&slot)
+            .column_index(&db.tables[table], ColumnId::new(0))
+            .len(),
+        1
+    );
+}
