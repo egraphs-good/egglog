@@ -349,9 +349,9 @@ impl PreparedIndexSlot {
 /// Borrowed execution view obtained by resolving a compact
 /// [`PreparedIndexSlot`] against its separately stored mutable state.
 ///
-/// Its methods retain catalog handles in
-/// [`PreparedIndexState`]. Returned borrows live as long as that state, so the
-/// executor can copy or discard this view without shortening those borrows.
+/// Its methods retain catalog handles in [`PreparedIndexState`]. Returned
+/// borrows live as long as that state; copying or discarding this view does
+/// not shorten them.
 #[derive(Clone, Copy)]
 pub(super) struct PreparedIndexRef<'a> {
     /// Persistent-index strategy copied from the stage descriptor.

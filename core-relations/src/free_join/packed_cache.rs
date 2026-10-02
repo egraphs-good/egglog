@@ -193,7 +193,7 @@ fn dashmap_shards() -> usize {
         .max(2)
 }
 
-/// Lazily created maps that publish shared indexes below a shared root.
+/// Lazily created slots and maps that publish indexes below a shared root.
 #[derive(Default)]
 struct SharedRootIndexes {
     packed_roots: OnceLock<PackedRootSlots>,

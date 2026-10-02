@@ -557,14 +557,13 @@ impl ActionState {
     }
 }
 
-/// Worker-local context for executing one logical join plan.
+/// Worker-local resources for joins in one ruleset run.
 ///
-/// A `JoinState` combines the frozen database view and early-stop state needed
-/// by the query with the allocation and caching resources used while traversing
-/// that query's trie indexes. Recursive calls to [`JoinState::run_plan`] reuse
-/// the same state. Parallel tasks construct their own `JoinState`, sharing the
-/// database, cross-plan root cache, and query arena while retaining independent
-/// arena handles and scratch storage.
+/// Serial plans and recursive calls to [`JoinState::run_plan`] reuse the frozen
+/// database view, early-stop state, allocation handle, and scan/sort scratch.
+/// Parallel tasks construct their own `JoinState`, sharing the database,
+/// cross-plan root cache, and query arena while retaining independent handles
+/// and scratch storage.
 ///
 /// The current variable bindings and atom row subsets are deliberately not
 /// stored here: they describe one recursive branch and live in `BindingInfo`.
