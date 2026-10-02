@@ -3,8 +3,8 @@
 //! The probe layer in `probe.rs` adapts every physical representation of an
 //! atom's current rows to the two operations needed by join execution: look up
 //! one key, or enumerate all keys. A probe may read a persistent table index, a
-//! projection shared for the current ruleset run, a tiny residual index, or an
-//! arena-allocated packed trie. It returns the matching rows in a representation
+//! tiny residual index, or an arena-allocated packed trie shared across plans
+//! when their roots match. It returns the matching rows in a representation
 //! that later stages can refine without copying them. This separation keeps the
 //! stage executor independent of the storage strategy selected for each access.
 //!
@@ -47,7 +47,7 @@ use super::{
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
         materialization_is_live_in_tail, sort_plan_by_size,
     },
-    packed_cache::{RootProjection, RootProjectionEntry, TrieCache, TrieRoot},
+    packed_cache::{TrieCache, TrieRoot},
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
@@ -56,7 +56,7 @@ use super::{
     },
     probe::{
         AtomRows, AtomRowsKind, CatalogFilter, Descent, LazyArenaHandle, PackedProbe, ProbeIndex,
-        ProbeRequest, Prober, RootProjectionProbe, SortedScalarProbe, seek_sorted_key,
+        ProbeRequest, Prober, SortedScalarProbe, seek_sorted_key,
     },
     residual_index::{SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
     with_pool_set,
@@ -726,60 +726,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         )
     }
 
-    /// Acquire a scalar index shared by plans that project the same root subset.
-    ///
-    /// A root projection groups the root's rows by `column` after applying
-    /// `constraints`. `RootProjection` stores that grouping as immutable sorted
-    /// keys plus the `RowId`s for each key. Shared trie roots own a map from
-    /// `(column, constraints)` to `Arc<OnceLock<RootProjection>>`, so concurrent
-    /// plans build a particular projection at most once.
-    ///
-    /// `prepared` is query-local state for this particular logical index use.
-    /// It retains one clone of the shared `Arc`, keeping the projection alive
-    /// and letting recursive output frames borrow it for `'rows` without doing
-    /// another cache lookup or `Arc` clone. Returns `None` when root sharing is
-    /// disabled or this root has no shared projection map.
-    fn projected_root_index<'rows>(
-        &self,
-        root: &TrieRoot,
-        table: WrappedTableRef<'_>,
-        constraints: &[Constraint],
-        column: ColumnId,
-        prepared: PreparedIndexRef<'rows>,
-    ) -> Option<&'rows RootProjectionEntry> {
-        self.trie_cache.as_ref()?;
-        prepared.get_or_init_root_projection(root, column, constraints, || {
-            let filtered = if constraints.is_empty() {
-                None
-            } else {
-                let mut filtered = root.subset.as_ref().to_owned(&self.pool);
-                if table.has_stale_rows() {
-                    filtered = table.refine_live(filtered);
-                }
-                Some(table.refine(filtered, constraints))
-            };
-            let subset = filtered
-                .as_ref()
-                .map_or_else(|| root.subset.as_ref(), Subset::as_ref);
-            let mut pairs = Vec::with_capacity(subset.size());
-            table.for_each_col(subset, column, &mut |row_id, value| {
-                pairs.push((value, row_id));
-            });
-            debug_assert!(
-                pairs.windows(2).all(|pair| pair[0].1 <= pair[1].1),
-                "root projection must preserve RowId order before sorting"
-            );
-            if pairs.len() < 64 {
-                pairs.sort_unstable();
-            } else {
-                let mut sort_scratch =
-                    vec![(Value::new_const(0), RowId::new_const(0)); pairs.len()];
-                crate::hash_index::radix_sort_slice_by_value(&mut pairs, &mut sort_scratch);
-            }
-            RootProjection::from_sorted_pairs(pairs)
-        })
-    }
-
     /// `shared_child_shape` is the table's child storage for shared nodes
     /// (see `TableInfo::shared_child_shape`).
     #[allow(clippy::too_many_arguments)]
@@ -818,16 +764,35 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 false,
             ),
             AtomRowsKind::Root(root) => {
-                let address = *prepared.state.packed_root.get_or_init(|| {
-                    self.build_packed_node(
-                        table,
-                        root.subset.as_ref(),
-                        true,
-                        constraints,
-                        column,
-                        child_shape,
-                        false,
-                    ) as *const TrieNode<'exec> as usize
+                let shared = root.is_shared();
+                let child_shape = if shared {
+                    shared_child_shape
+                } else {
+                    child_shape
+                };
+                let address = prepared.packed_root(|| {
+                    let build = || {
+                        self.build_packed_node(
+                            table,
+                            root.subset.as_ref(),
+                            true,
+                            constraints,
+                            column,
+                            child_shape,
+                            shared,
+                        ) as *const TrieNode<'exec> as usize
+                    };
+                    if shared {
+                        let ChildShape::Dynamic { families } = shared_child_shape else {
+                            unreachable!("an indexed shared root has successor families")
+                        };
+                        *root
+                            .packed_root_slot(prepared.families[0], families)
+                            .unwrap()
+                            .get_or_init(build)
+                    } else {
+                        build()
+                    }
                 });
                 // SAFETY: the slot is plan-execution scoped and can only be
                 // initialized with a node from the run's SharedArena.
@@ -932,7 +897,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         // constrained match is materialized per frame and cannot publish into
         // the shared continuation grid, which is keyed by columns only. Below
         // a shared root, a constrained scan therefore keeps the shared root
-        // projection, whose grid is keyed by those constraints.
+        // packed index, whose grid is keyed by those constraints.
         let constrained_shared_root = !constraints.is_empty()
             && matches!(source.kind(), AtomRowsKind::Root(root) if root.is_shared());
         let can_use_catalog = root_range.is_some()
@@ -982,9 +947,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 }
                 _ => None,
             };
-            let (continuations, continuation_shape) = match shared_continuations {
-                Some(continuations) => (continuations, shared_child_shape),
-                None => (&prepared.state.root_continuations, terminal_child_shape),
+            let (continuations, continuation_shape) = if terminal_child_shape == ChildShape::Leaf {
+                (None, ChildShape::Leaf)
+            } else {
+                match shared_continuations {
+                    Some(continuations) => (Some(continuations), shared_child_shape),
+                    None => (Some(prepared.local_continuations()), terminal_child_shape),
+                }
             };
             let filter = CatalogFilter {
                 table: info.table.as_ref(),
@@ -993,7 +962,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             };
             if cols.len() == 1 {
                 let index = prepared.column_index(info, cols[0]);
-                if terminal_child_shape != ChildShape::Leaf {
+                if let Some(continuations) = continuations {
                     continuations.prepare(continuation_shape, index.shard_count(), |shard| {
                         index.shard_len(shard)
                     });
@@ -1007,7 +976,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 }
             } else {
                 let index = prepared.tuple_index(info, cols.as_slice());
-                if terminal_child_shape != ChildShape::Leaf {
+                if let Some(continuations) = continuations {
                     continuations.prepare(continuation_shape, index.shard_count(), |shard| {
                         index.shard_len(shard)
                     });
@@ -1026,68 +995,33 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             } else {
                 terminal_child_shape
             };
-            let projected_root = match source.kind() {
-                AtomRowsKind::Root(root) => self.projected_root_index(
-                    root,
-                    info.table.as_ref(),
-                    constraints,
-                    cols[0],
-                    prepared,
-                ),
-                _ => None,
-            };
-            if let Some(entry) = projected_root {
-                let first = entry
-                    .projection
-                    .get()
-                    .expect("a retained root projection is initialized");
-                // Nodes below a shared projection are shared, so they use the
-                // table's shared shape regardless of this plan's tail.
-                if first_child_shape != ChildShape::Leaf {
-                    entry
-                        .continuations
-                        .prepare(shared_child_shape, 1, |_| first.len());
-                }
-                ProbeIndex::ProjectedRoot(RootProjectionProbe {
-                    first,
-                    columns: cols,
-                    table: info.table.as_ref(),
-                    continuations: &entry.continuations,
-                    handle: &self.handle,
-                    scratch: &self.packed_scratch,
-                    terminal_child_shape,
+            let first = self.packed_index_for_rows(
+                &source,
+                info.table.as_ref(),
+                constraints,
+                cols[0],
+                first_child_shape,
+                shared_child_shape,
+                prepared,
+            );
+            let descent = if first.is_shared() {
+                Descent::Shared {
                     child_shape: shared_child_shape,
                     families: prepared.families,
-                })
+                }
             } else {
-                let first = self.packed_index_for_rows(
-                    &source,
-                    info.table.as_ref(),
-                    constraints,
-                    cols[0],
-                    first_child_shape,
-                    shared_child_shape,
-                    prepared,
-                );
-                let descent = if first.is_shared() {
-                    Descent::Shared {
-                        child_shape: shared_child_shape,
-                        families: prepared.families,
-                    }
-                } else {
-                    Descent::Local {
-                        terminal_child_shape,
-                    }
-                };
-                ProbeIndex::Packed(PackedProbe {
-                    first,
-                    columns: cols,
-                    table: info.table.as_ref(),
-                    handle: &self.handle,
-                    scratch: &self.packed_scratch,
-                    descent,
-                })
-            }
+                Descent::Local {
+                    terminal_child_shape,
+                }
+            };
+            ProbeIndex::Packed(PackedProbe {
+                first,
+                columns: cols,
+                table: info.table.as_ref(),
+                handle: &self.handle,
+                scratch: &self.packed_scratch,
+                descent,
+            })
         };
         Prober {
             source,
@@ -1103,7 +1037,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// [`Self::run_plan`]. Probers move trie nodes out of `binding_info`, so
     /// restore every node before returning. Persistent catalog indexes use
     /// their physical hash shards, including when a dense timestamp range is
-    /// intersected at probe time. Projected and packed filtered roots use
+    /// intersected at probe time. Packed filtered roots use
     /// disjoint ordinal ranges of the already-built scalar index, avoiding a
     /// scan-and-project handoff copy. Tiny leaders stay on the existing path.
     #[allow(clippy::too_many_arguments)]

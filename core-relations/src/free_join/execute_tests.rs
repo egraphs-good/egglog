@@ -22,11 +22,11 @@ use crate::free_join::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
         packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
     },
-    packed_cache::{RootProjection, RootProjectionEntry, TrieRoot},
+    packed_cache::{FamilyId, TrieRoot},
     packed_trie::ChildShape,
     prepared_index::{
-        AccessId, PreparedIndexKind, PreparedIndexRef, PreparedIndexSlot, PreparedIndexState,
-        PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMaskWidth, StageMask,
+        AccessId, PreparedIndexKind, PreparedIndexSlot, PreparedIndexState, PreparedIndexStateId,
+        PreparedJoinIndexes, PreparedTailMaskWidth, StageMask,
     },
 };
 
@@ -215,25 +215,12 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
 }
 
 #[test]
-fn shared_root_projection_keys_are_canonical_and_single_flight() {
+fn shared_packed_root_keys_are_canonical_and_single_flight() {
     let unshared = TrieRoot::new(Subset::Dense(crate::OffsetRange::new(
         crate::RowId::from_usize(0),
         crate::RowId::from_usize(1),
     )));
-    let state = PreparedIndexState::new(PreparedIndexKind::Uncacheable);
-    let prepared = PreparedIndexRef {
-        kind: PreparedIndexKind::Uncacheable,
-        access: AccessId::new(0),
-        state: &state,
-        families: &[],
-    };
-    assert!(
-        prepared
-            .get_or_init_root_projection(&unshared, ColumnId::from_usize(0), &[], || {
-                panic!("an unshared root must not build a shared projection")
-            })
-            .is_none()
-    );
+    assert!(unshared.packed_root_slot(FamilyId::new(0), 0).is_none());
 
     let root = Arc::new(TrieRoot::new_shared(Subset::Dense(
         crate::OffsetRange::new(crate::RowId::from_usize(0), crate::RowId::from_usize(1)),
@@ -246,19 +233,30 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
         col: ColumnId::from_usize(1),
         val: Value::from_usize(20),
     };
-    let forward = root
-        .projection_slot(ColumnId::from_usize(0), &[lower.clone(), upper.clone()])
-        .unwrap();
+    let mut db = crate::free_join::Database::new();
+    let table = db.add_table(
+        crate::table::SortedWritesTable::new(2, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        std::iter::empty(),
+        std::iter::empty(),
+    );
+    let info = &mut db.tables[table];
+    let family = info.successor_family(ColumnId::new(0), &[lower.clone(), upper.clone()]);
+    let reversed_family = info.successor_family(ColumnId::new(0), &[upper.clone(), lower.clone()]);
+    let other_column = info.successor_family(ColumnId::new(1), &[lower.clone(), upper]);
+    let other_constraints = info.successor_family(ColumnId::new(0), &[lower]);
+    let family_count = info.successor_families.len();
+    assert_eq!(family, reversed_family);
+    let forward = root.packed_root_slot(family, family_count).unwrap();
     let reversed = root
-        .projection_slot(ColumnId::from_usize(0), &[upper.clone(), lower.clone()])
+        .packed_root_slot(reversed_family, family_count)
         .unwrap();
-    assert!(Arc::ptr_eq(&forward, &reversed));
-    assert!(!Arc::ptr_eq(
-        &forward,
-        &root
-            .projection_slot(ColumnId::from_usize(1), &[lower.clone(), upper.clone()])
-            .unwrap()
-    ));
+    assert!(std::ptr::eq(forward, reversed));
+    for other in [other_column, other_constraints] {
+        assert!(!std::ptr::eq(
+            forward,
+            root.packed_root_slot(other, family_count).unwrap()
+        ));
+    }
 
     let builds = AtomicUsize::new(0);
     let barrier = Barrier::new(16);
@@ -266,43 +264,20 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
         let mut handles = Vec::new();
         for _ in 0..16 {
             let root = root.clone();
-            let lower = lower.clone();
-            let upper = upper.clone();
             let builds = &builds;
             let barrier = &barrier;
             handles.push(scope.spawn(move || {
-                let state = PreparedIndexState::new(PreparedIndexKind::Uncacheable);
-                let prepared = PreparedIndexRef {
-                    kind: PreparedIndexKind::Uncacheable,
-                    access: AccessId::new(0),
-                    state: &state,
-                    families: &[],
-                };
                 barrier.wait();
-                // Race both the canonicalized DashMap lookup and the lazy
-                // projection publication, as parallel plans do.
-                let projection = prepared
-                    .get_or_init_root_projection(
-                        &root,
-                        ColumnId::from_usize(0),
-                        &[upper.clone(), lower.clone()],
-                        || {
-                            builds.fetch_add(1, Ordering::Relaxed);
-                            RootProjection::from_sorted_pairs(Vec::new())
-                        },
-                    )
-                    .unwrap();
-                let reused = prepared
-                    .get_or_init_root_projection(
-                        &root,
-                        ColumnId::from_usize(0),
-                        &[lower, upper],
-                        || panic!("a retained projection must not be rebuilt"),
-                    )
-                    .unwrap();
-                assert!(std::ptr::eq(projection, reused));
-                assert!(projection.continuations.is_shared());
-                projection as *const RootProjectionEntry as usize
+                let slot = root.packed_root_slot(family, family_count).unwrap();
+                let address = slot.get_or_init(|| {
+                    builds.fetch_add(1, Ordering::Relaxed);
+                    123
+                });
+                assert_eq!(
+                    *slot.get_or_init(|| panic!("a packed root must not be rebuilt")),
+                    123
+                );
+                *address
             }));
         }
         let addresses = handles
