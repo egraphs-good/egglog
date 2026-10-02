@@ -427,3 +427,29 @@ fn nested_set_rebuild_term_only() {
         )
         .unwrap();
 }
+
+/// Compact MultiSet count lanes are metadata, not child IDs. Nested rebuild
+/// propagation must follow only the semantic values in each encoded entry.
+#[test]
+fn nested_multiset_rebuild_term_only() {
+    let mut egraph = EGraph::new_with_term_encoding();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (sort Math)
+            (constructor A () Math)
+            (constructor B () Math)
+            (sort MathMS (MultiSet Math))
+            (sort NestedMS (MultiSet MathMS))
+            (constructor Holds (NestedMS) Math)
+            (Holds (multiset-of (multiset-of (A) (A))))
+            (Holds (multiset-of (multiset-of (B) (B))))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (multiset-of (multiset-of (A) (A))))
+                      (Holds (multiset-of (multiset-of (B) (B))))))
+            "#,
+        )
+        .unwrap();
+}
