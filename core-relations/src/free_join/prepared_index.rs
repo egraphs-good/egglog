@@ -7,8 +7,7 @@
 //! [`RootContinuationCache`] for how a root lookup continues on another column.
 //! `PreparedPlanIndexes::new` assembles these per-block structures for a whole
 //! plan, with fresh mutable state on every execution. Preparation does not
-//! build the indexes; `execute.rs` acquires their
-//! handles lazily when an access first needs them.
+//! build the indexes; `execute.rs` acquires their handles lazily on first use.
 
 use std::{
     fmt,
@@ -289,9 +288,9 @@ define_id!(
 ///
 /// Keeping the table-owned index handle in execution-local state avoids
 /// repeated catalog lookups and reference-count traffic in recursive join
-/// execution. `Uncacheable` records that this access must use a round-local
-/// packed index instead. All initialized handles are dropped before
-/// `merge_all` resets the database's indexes.
+/// execution. A root uses either a persistent catalog index or a round-local
+/// packed index. All initialized handles are dropped before `merge_all` resets
+/// the database's indexes.
 enum PreparedRootIndex {
     Tuple(HashIndex),
     Column(HashColumnIndex),
@@ -845,6 +844,8 @@ impl<'plan> PreparedJoinIndexes<'plan> {
         }
     }
 
+    // Resolve directly into the probe request: an outlined call introduces a
+    // stack temporary for this borrowed view on the hot recursive path.
     #[inline(always)]
     pub(super) fn resolve<'a>(&'a self, slot: &PreparedIndexSlot) -> PreparedIndexRef<'a> {
         let Self::Indexed {
