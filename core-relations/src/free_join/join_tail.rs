@@ -181,7 +181,7 @@ pub(super) fn atom_tail_use<M: StageMask>(
     let Some((masks, remaining_stages)) = prepared.tail_masks::<M>().zip(remaining_stages) else {
         return scan_atom_tail_use(atom, stages, prepared, instr_order, resume_pos);
     };
-    let result = masks.atom_tail_use(atom, remaining_stages, prepared.access_count(atom));
+    let result = masks.atom_tail_use(atom, remaining_stages);
     #[cfg(debug_assertions)]
     debug_assert_eq!(
         result,

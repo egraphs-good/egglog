@@ -415,7 +415,7 @@ fn assert_tail_masks_match_scanner<M: StageMask>(
             for atom_index in 0..atom_count {
                 let atom = AtomId::from_usize(atom_index);
                 assert_eq!(
-                    masks.atom_tail_use(atom, remaining, prepared.access_count(atom)),
+                    masks.atom_tail_use(atom, remaining),
                     scan_atom_tail_use(atom, stages, &prepared, &instr_order, resume_pos),
                     "tail metadata diverged for order {order:?}, suffix {resume_pos}, atom {atom_index}"
                 );

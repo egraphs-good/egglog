@@ -526,6 +526,7 @@ struct PreparedAtomUse<M> {
     one_index_access_stages: M,
     /// Stages containing multiple indexed accesses to this atom.
     multiple_index_access_stages: M,
+    families: usize,
 }
 
 impl<M: StageMask> Default for PreparedAtomUse<M> {
@@ -534,6 +535,7 @@ impl<M: StageMask> Default for PreparedAtomUse<M> {
             touched_stages: M::EMPTY,
             one_index_access_stages: M::EMPTY,
             multiple_index_access_stages: M::EMPTY,
+            families: 0,
         }
     }
 }
@@ -546,7 +548,7 @@ impl<M: StageMask> Default for PreparedAtomUse<M> {
 pub(super) struct PreparedTailMasks<M> {
     /// Per-atom stage classifications used to decide whether rows must survive
     /// and whether the next packed child has a direct or dynamic shape.
-    atom_uses: DenseIdMap<AtomId, PreparedAtomUse<M>>,
+    atom_uses: Vec<PreparedAtomUse<M>>,
     /// Ordered reorder phases. Reorderable stages share a mask; every cover or
     /// materialization barrier occupies a singleton mask so DVO cannot move an
     /// access across it.
@@ -567,17 +569,20 @@ impl<M: StageMask> PreparedTailMasks<M> {
             stages.len(),
             M::BITS
         );
-        let mut atom_uses: DenseIdMap<AtomId, PreparedAtomUse<M>> =
-            DenseIdMap::with_capacity(atom_capacity);
+        let mut atom_uses = vec![PreparedAtomUse::<M>::default(); atom_capacity];
         for (stage_index, (stage, prepared_stage)) in stages.iter().zip(prepared_stages).enumerate()
         {
             let stage_bit = M::stage_bit(stage_index);
             for_each_stage_atom(stage, |atom| {
-                atom_uses.get_or_default(atom).touched_stages |= stage_bit;
+                if atom.index() >= atom_uses.len() {
+                    atom_uses.resize(atom.index() + 1, PreparedAtomUse::default());
+                }
+                atom_uses[atom.index()].touched_stages |= stage_bit;
             });
 
             let mut indexed_counts = SmallVec::<[(AtomId, u8); 4]>::new();
             for_each_stage_indexed_access(stage, prepared_stage, |atom, _| {
+                atom_uses[atom.index()].families += 1;
                 if let Some((_, count)) = indexed_counts
                     .iter_mut()
                     .find(|(candidate, _)| *candidate == atom)
@@ -588,7 +593,7 @@ impl<M: StageMask> PreparedTailMasks<M> {
                 }
             });
             for (atom, count) in indexed_counts {
-                let use_ = atom_uses.get_or_default(atom);
+                let use_ = &mut atom_uses[atom.index()];
                 if count == 1 {
                     use_.one_index_access_stages |= stage_bit;
                 } else {
@@ -624,13 +629,12 @@ impl<M: StageMask> PreparedTailMasks<M> {
         }
     }
 
-    pub(super) fn atom_tail_use(
-        &self,
-        atom: AtomId,
-        remaining_stages: M,
-        families: usize,
-    ) -> AtomTailUse {
-        let use_ = self.atom_uses.get(atom).copied().unwrap_or_default();
+    pub(super) fn atom_tail_use(&self, atom: AtomId, remaining_stages: M) -> AtomTailUse {
+        let use_ = self
+            .atom_uses
+            .get(atom.index())
+            .copied()
+            .unwrap_or_default();
         if remaining_stages & use_.touched_stages == M::EMPTY {
             return AtomTailUse {
                 keep_rows: false,
@@ -647,7 +651,9 @@ impl<M: StageMask> PreparedTailMasks<M> {
             let multiple_accesses = live & use_.multiple_index_access_stages != M::EMPTY
                 || single_accesses.count_ones() > 1;
             let child_shape = if multiple_accesses {
-                ChildShape::Dynamic { families }
+                ChildShape::Dynamic {
+                    families: use_.families,
+                }
             } else if single_accesses != M::EMPTY {
                 ChildShape::Direct
             } else {
