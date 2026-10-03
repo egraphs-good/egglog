@@ -646,9 +646,16 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         }
                     })
                     .collect();
+                let arity = func.func_type.input.len() + 1;
+                // Reserved from the table's size at the first live row, so the copy never
+                // regrows and a fully subsumed table allocates nothing.
+                let reserve = egraph.backend.table_size(func.backend_id) * arity;
                 let mut rows = Vec::new();
                 egraph.backend.for_each(func.backend_id, |row| {
                     if !row.subsumed {
+                        if rows.is_empty() {
+                            rows.reserve_exact(reserve);
+                        }
                         rows.extend_from_slice(row.vals);
                     }
                 });
@@ -660,7 +667,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         .as_ref()
                         .and_then(|name| egraph.functions.get(name))
                         .unwrap_or(func),
-                    arity: func.func_type.input.len() + 1,
+                    arity,
                     output_idx: func.extraction_output_index(),
                     output_sort_id: self.sort_ids[func.extraction_output_sort().name()],
                     child_kinds,
