@@ -15,6 +15,7 @@
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
+use numeric_id::NumericId;
 use std::collections::VecDeque;
 
 /// A value that can be used to rank extraction candidates.
@@ -312,6 +313,105 @@ struct FuncData<'a> {
     rows: Vec<Value>,
 }
 
+/// The rows reading each eq value as a child, directly or inside a container.
+struct ChildIndex {
+    packed: Vec<u64>,
+    start: HashMap<Value, u32>,
+    row_base: Vec<u32>,
+    table_of_word: Vec<u32>,
+}
+
+impl ChildIndex {
+    // Every eq-sort id comes from one backend counter, so a value names its
+    // class without its sort.
+    fn pack(value: Value, row: u32) -> u64 {
+        ((value.index() as u64) << 32) | row as u64
+    }
+
+    /// Row bases for tables of the given row counts, each aligned to 64 rows.
+    fn row_bases(row_counts: impl Iterator<Item = usize>) -> Vec<u32> {
+        std::iter::once(0)
+            .chain(row_counts.scan(0u32, |base, rows| {
+                *base = u32::try_from(rows.next_multiple_of(64))
+                    .ok()
+                    .and_then(|rows| base.checked_add(rows))
+                    .expect("extraction tables exceed 2^32 rows");
+                Some(*base)
+            }))
+            .collect()
+    }
+
+    fn new(mut packed: Vec<u64>, row_base: Vec<u32>) -> Self {
+        assert!(
+            u32::try_from(packed.len()).is_ok(),
+            "extraction index exceeds 2^32 child reads"
+        );
+        packed.shrink_to_fit();
+        Self::sort_by_value(&mut packed);
+        let mut start = HashMap::default();
+        for (i, &p) in packed.iter().enumerate() {
+            if i == 0 || packed[i - 1] >> 32 != p >> 32 {
+                start.insert(Value::from_usize((p >> 32) as usize), i as u32);
+            }
+        }
+        let table_of_word = row_base
+            .windows(2)
+            .enumerate()
+            .flat_map(|(fi, range)| {
+                std::iter::repeat_n(fi as u32, (range[1] - range[0]) as usize / 64)
+            })
+            .collect();
+        ChildIndex {
+            packed,
+            start,
+            row_base,
+            table_of_word,
+        }
+    }
+
+    /// Sorts by the value half of each word; rows keep their registration order
+    /// within a value.
+    fn sort_by_value(packed: &mut Vec<u64>) {
+        const BITS: u32 = 11;
+        let widest = packed.iter().map(|&p| p >> 32).max().unwrap_or(0);
+        let mut scratch = vec![0u64; packed.len()];
+        for shift in (32..64).step_by(BITS as usize) {
+            if widest >> (shift - 32) == 0 {
+                break;
+            }
+            let mut offsets = [0usize; 1 << BITS];
+            for &p in packed.iter() {
+                offsets[((p >> shift) & ((1 << BITS) - 1)) as usize] += 1;
+            }
+            let mut total = 0;
+            for slot in offsets.iter_mut() {
+                total += std::mem::replace(slot, total);
+            }
+            for &p in packed.iter() {
+                let slot = &mut offsets[((p >> shift) & ((1 << BITS) - 1)) as usize];
+                scratch[*slot] = p;
+                *slot += 1;
+            }
+            std::mem::swap(packed, &mut scratch);
+        }
+    }
+
+    /// The (table, row) pairs reading `value`, in row order.
+    fn readers(&self, value: Value) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let run = match self.start.get(&value) {
+            Some(&start) => &self.packed[start as usize..],
+            None => &[],
+        };
+        run.iter()
+            .take_while(move |&&p| p >> 32 == value.index() as u64)
+            .map(|&p| {
+                let row = p as u32;
+                let fi = self.table_of_word[row as usize / 64] as usize;
+                (fi, (row - self.row_base[fi]) as usize)
+            })
+    }
+}
+
 /// Dirty rows are visited in sweep order.
 struct DirtyRows {
     words: Vec<u64>,
@@ -592,15 +692,14 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
     }
 
-    /// Report every (sort id, value) pair a container value's cost depends on:
-    /// the eq values stored anywhere inside it, found by recursing through
-    /// nested container values.
+    /// Report every eq value a container value's cost depends on, found by
+    /// recursing through nested container values.
     fn register_container_deps(
         &self,
         egraph: &EGraph,
         sort: &ArcSort,
         value: Value,
-        register: &mut impl FnMut(usize, Value),
+        register: &mut impl FnMut(Value),
     ) {
         if sort.is_container_sort() {
             for (inner_sort, inner_value) in
@@ -608,10 +707,8 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             {
                 self.register_container_deps(egraph, &inner_sort, inner_value, register);
             }
-        } else if sort.is_eq_sort()
-            && let Some(id) = self.sort_ids.get(sort.name())
-        {
-            register(*id, value);
+        } else if sort.is_eq_sort() && self.sort_ids.contains_key(sort.name()) {
+            register(value);
         }
     }
 
@@ -676,28 +773,64 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             })
             .collect();
 
-        // Reverse dependency index: (sort id, value) -> rows reading that value
-        // as an eq child, directly or inside a container child.
-        let mut child_index: HashMap<(usize, Value), Vec<(u32, u32)>> = Default::default();
-        for (fi, f) in func_data.iter().enumerate() {
+        // Reverse dependency index from each eq child value to the rows reading it,
+        // directly or inside a container child.
+        let row_base = ChildIndex::row_bases(func_data.iter().map(|f| f.rows.len() / f.arity));
+        let eq_reads: usize = func_data
+            .iter()
+            .map(|f| {
+                f.child_kinds
+                    .iter()
+                    .filter(|k| matches!(k, ChildKind::EqSort(Some(_))))
+                    .count()
+                    * (f.rows.len() / f.arity)
+            })
+            .sum();
+        // Container children are registered first, since only walking them tells how
+        // many eq values they hold; they fill the eq reservation's slack. After one
+        // exact re-reservation they move to the tail and are merged back in row order
+        // as the eq children fill the front, so each value's readers stay sorted by
+        // row. The write cursor never passes the read cursor.
+        let mut packed: Vec<u64> = Vec::with_capacity(eq_reads);
+        for (f, base) in func_data.iter().zip(&row_base) {
+            if !f
+                .child_kinds
+                .iter()
+                .any(|k| matches!(k, ChildKind::Container(_)))
+            {
+                continue;
+            }
             for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
                 for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
-                    let mut register = |sid: usize, v: Value| {
-                        child_index
-                            .entry((sid, v))
-                            .or_default()
-                            .push((fi as u32, ri as u32));
-                    };
-                    match kind {
-                        ChildKind::EqSort(Some(id)) => register(*id, *value),
-                        ChildKind::EqSort(None) | ChildKind::Base(_) => {}
-                        ChildKind::Container(sort) => {
-                            self.register_container_deps(egraph, sort, *value, &mut register)
-                        }
+                    if let ChildKind::Container(sort) = kind {
+                        self.register_container_deps(egraph, sort, *value, &mut |v| {
+                            packed.push(ChildIndex::pack(v, base + ri as u32))
+                        });
                     }
                 }
             }
         }
+        let containers = packed.len();
+        packed.reserve_exact(eq_reads);
+        packed.resize(containers + eq_reads, 0);
+        packed.copy_within(..containers, eq_reads);
+        let (mut write, mut read) = (0, eq_reads);
+        for (f, base) in func_data.iter().zip(&row_base) {
+            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
+                let global_row = base + ri as u32;
+                while read < packed.len() && packed[read] as u32 == global_row {
+                    packed[write] = packed[read];
+                    (write, read) = (write + 1, read + 1);
+                }
+                for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
+                    if let ChildKind::EqSort(Some(_)) = kind {
+                        packed[write] = ChildIndex::pack(*value, global_row);
+                        write += 1;
+                    }
+                }
+            }
+        }
+        let child_index = ChildIndex::new(packed, row_base);
 
         let mut topo_rnk_cnt = 0usize;
         // Semi-naive relaxation: a row recomputes exactly the same cost against a
@@ -744,10 +877,8 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         cost: new_cost,
                         rank: topo_rnk_cnt,
                     });
-                    if let Some(readers) = child_index.get(&(f.output_sort_id, target)) {
-                        for &(dfi, dri) in readers {
-                            dirty[dfi as usize].insert(dri as usize);
-                        }
+                    for (dfi, dri) in child_index.readers(target) {
+                        dirty[dfi].insert(dri);
                     }
                 }
             }
@@ -1215,7 +1346,7 @@ impl EGraph {
 
 #[cfg(test)]
 mod tests {
-    use super::DirtyRows;
+    use super::*;
 
     #[test]
     fn dirty_rows_have_no_padding_rows() {
@@ -1228,6 +1359,42 @@ mod tests {
             assert_eq!(rows.pop_from(0), None);
             assert_eq!(rows.count, 0);
         }
+    }
+
+    #[test]
+    fn child_index_sorts_by_value_and_decodes_tables() {
+        let row_base = ChildIndex::row_bases([3, 0, 70].into_iter());
+        assert_eq!(row_base, vec![0, 64, 64, 192]);
+        let values = [7u32, 0, 1 << 22, 7, u32::MAX - 1, 0, 7];
+        let rows = [0u32, 1, 2, 64, 65, 130, 133];
+        let packed: Vec<u64> = values
+            .iter()
+            .zip(rows)
+            .map(|(&v, row)| ChildIndex::pack(Value::from_usize(v as usize), row))
+            .collect();
+        let index = ChildIndex::new(packed, row_base);
+        let unpacked: Vec<(u32, u32)> = index
+            .packed
+            .iter()
+            .map(|&p| ((p >> 32) as u32, p as u32))
+            .collect();
+        assert_eq!(
+            unpacked,
+            vec![
+                (0, 1),
+                (0, 130),
+                (7, 0),
+                (7, 64),
+                (7, 133),
+                (1 << 22, 2),
+                (u32::MAX - 1, 65)
+            ]
+        );
+        assert_eq!(
+            index.readers(Value::from_usize(7)).collect::<Vec<_>>(),
+            vec![(0, 0), (2, 0), (2, 69)]
+        );
+        assert_eq!(index.readers(Value::from_usize(8)).count(), 0);
     }
 
     #[test]
