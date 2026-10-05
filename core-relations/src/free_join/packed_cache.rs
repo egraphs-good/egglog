@@ -2,8 +2,8 @@
 //!
 //! Plans that constrain the same table with the same fast constraints share
 //! one [`TrieRoot`]. Everything built below a shared root is shared as well:
-//! its scalar projections, the continuation grids of its persistent catalog
-//! indexes, and every packed descendant node. Descendants are published under
+//! its scalar projections, the [`RootContinuationCache`]s of its persistent
+//! catalog indexes, and every packed descendant node. Descendants are published under
 //! table-wide [`FamilyId`]s, so two plans that reach the same rows and index
 //! the same next column with the same constraints build that index once.
 
@@ -162,7 +162,7 @@ impl RootProjection {
     }
 }
 
-/// A shared root projection together with the continuation grid that
+/// A shared root projection together with the [`RootContinuationCache`] that
 /// publishes the shared packed index below each of its keys.
 #[derive(Default)]
 pub(super) struct RootProjectionEntry {
@@ -350,8 +350,9 @@ impl TrieRoot {
         })
     }
 
-    /// Find the shared continuation grid for the persistent catalog index over
-    /// `columns`, whose key positions identify this root's rows for every plan.
+    /// Find the shared [`RootContinuationCache`] for the persistent catalog
+    /// index over `columns`, whose key positions identify this root's rows
+    /// for every plan.
     pub(super) fn catalog_continuations(
         &self,
         columns: &[ColumnId],

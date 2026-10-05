@@ -794,8 +794,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     where
         'exec: 'rows,
     {
-        // Below a shared node or grid, the child is published under this
-        // access's table-wide family with the table's shared shape, so every
+        // Below a shared node or continuation cache, the child is published
+        // under this access's table-wide family with the table's shared shape, so every
         // plan reaching these rows finds the same node. Otherwise the child is
         // plan-local, keyed by access id with the plan's own tail shape.
         let shared_child = |shared: bool| {
@@ -957,7 +957,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 !(whole_table.is_dense() && source.subset().bounds() == whole_table.bounds());
             let intersect_outer = needs_intersect.then_some(range);
             // Below a shared root, the catalog key positions identify the same
-            // rows for every plan, so the continuation grid is shared too. A
+            // rows for every plan, so the continuation cache is shared too. A
             // terminal probe never continues, so it skips the lookup.
             let shared_continuations = match &source {
                 AtomRows::Root(root)

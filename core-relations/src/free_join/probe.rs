@@ -112,8 +112,9 @@ pub(super) fn seek_sorted_key(
     }
 }
 
-/// A continuation for rows borrowed from a catalog or root index. Its grid is
-/// plan-local below an unshared root and run-wide below a shared one.
+/// A continuation for rows borrowed from a catalog or root index. Its
+/// [`RootContinuationCache`] is plan-local below an unshared root and run-wide
+/// below a shared one.
 #[derive(Clone, Copy)]
 pub(super) struct CatalogContinuation<'rows> {
     pub(super) cache: &'rows RootContinuationCache,
@@ -368,7 +369,8 @@ pub(super) struct PackedProbe<'ctx, 'rows, 'exec> {
 /// has a cross-plan shared root but cannot use a persistent table index, such
 /// as when header or scan constraints have filtered the root. The grouping is
 /// built once and reused directly by every qualifying plan, as are the packed
-/// nodes below it: their continuation grid and successor families are shared.
+/// nodes below it: their [`RootContinuationCache`] and successor families
+/// are shared.
 pub(super) struct RootProjectionProbe<'ctx, 'rows, 'exec> {
     pub(super) first: &'rows RootProjection,
     pub(super) columns: ColumnIds,
@@ -425,7 +427,7 @@ where
                 &mut self.scratch.borrow_mut(),
             ) as *const TrieNode<'exec> as usize
         });
-        // SAFETY: this continuation grid belongs to the run's shared root and
+        // SAFETY: this continuation cache belongs to the run's shared root and
         // only publishes nodes allocated in the run's SharedArena.
         let child = unsafe { &*(address as *const TrieNode<'exec>) };
         assert_eq!(child.child_shape(), child_shape);

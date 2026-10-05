@@ -4,7 +4,7 @@
 //! walks a `JoinStages` block, aligns slots with its indexed scans, assigns
 //! per-atom `AccessId`s, and derives the join-tail metadata. Then read
 //! `PreparedIndexSlot` for the state associated with one indexed access and
-//! `RootContinuationCache` for how a root lookup continues on another column.
+//! [`RootContinuationCache`] for how a root lookup continues on another column.
 //! `PreparedPlanIndexes::new` assembles these per-block structures for a whole
 //! plan. Preparation does not build the indexes; `execute.rs` acquires their
 //! handles lazily when an access first needs them.
@@ -57,21 +57,12 @@ node uses these ids to distinguish the successor families that DVO may choose
 after reaching that atom."#
 );
 
-/// Identifies where a root-index result stores the packed index used to
-/// continue a join.
+/// Identifies a root-index key within a [`RootContinuationCache`].
 ///
-/// A root lookup initially returns all rows having one key. If a later join
-/// stage needs to index another column of those same rows, execution builds a
-/// packed trie node for that narrower operation. That node is the
-/// *continuation* of the root lookup. For example, after looking up `x = 5` in
-/// a root index for `R(x, y, z)`, a later access to `R.y` continues from that
-/// result by building an index of `y` over only the matching `R` rows.
-///
-/// Each root key gets a slot that publishes this packed child once and shares
-/// it with concurrent probes. Persistent catalog indexes identify the key with
-/// an [`IndexPosition`]; unsharded, round-local projections use a key ordinal.
-/// This position represents both forms without confusing it with the exact
-/// persistent-index identity documented by [`IndexPosition`].
+/// Persistent catalog indexes identify the key with an [`IndexPosition`];
+/// unsharded, round-local projections use a key ordinal. This position
+/// represents both forms without confusing it with the exact persistent-index
+/// identity documented by [`IndexPosition`].
 #[derive(Clone, Copy)]
 pub(super) struct ContinuationPosition {
     shard: u32,
@@ -99,31 +90,26 @@ impl From<IndexPosition> for ContinuationPosition {
     }
 }
 
-/// Publication slots that map each root-index key to its arena-allocated
-/// packed continuation.
+/// Publication slots for one successor family in a [`RootContinuationCache`],
+/// indexed by physical shard and key slot.
 ///
 /// The boxes do not hold trie rows or trie nodes: every initialized
-/// [`OnceLock`] contains the erased address of a [`super::packed_trie::TrieNode`] allocated
-/// in the run's [`egglog_concurrency::SharedArena`]. This grid is mutable synchronization
-/// metadata owned by the prepared-index sidecar or, below a shared root, by
-/// the run's trie cache. Keeping it heap-owned avoids erasing another arena
-/// lifetime merely to store the locks and lets Rust drop their structure
-/// normally with its owner.
+/// [`OnceLock`] contains the erased address of a [`super::packed_trie::TrieNode`]
+/// allocated in the run's [`egglog_concurrency::SharedArena`]. Keeping these
+/// locks heap-owned avoids erasing another arena lifetime and lets Rust drop
+/// their structure normally with the owning cache.
 ///
 /// The nested shape mirrors the persistent index: one outer allocation plus
-/// one allocation per physical shard, with no box per key. It therefore maps
-/// a [`ContinuationPosition`] to a slot without a prefix-sum lookup. Dynamic
-/// ordering adds one lazy grid per successor family, and allocates only a
-/// family that is actually selected. A plan-local grid keys its families by
-/// [`AccessId`]; a grid shared below a shared root keys them by
-/// [`FamilyId`], so plans continuing the same root key
-/// with different columns or constraints use different families.
+/// one allocation per physical shard, with no box per key. It maps a
+/// [`ContinuationPosition`] to a slot without a prefix-sum lookup. Root
+/// projections use a single shard. Dynamic storage allocates these slots
+/// lazily for each successor family that is actually selected.
 type RootContinuationSlots = Box<[Box<[OnceLock<usize>]>]>;
 
 enum RootContinuationStorage {
     /// The atom has one statically possible indexed successor.  This is the
     /// existing compact path: one continuation slot per physical root key.
-    /// Defer allocating that grid until a probe actually asks for a child;
+    /// Defer allocating those slots until a probe actually asks for a child;
     /// many shallow plans prepare a possible successor but never descend.
     Direct {
         shard_lens: Box<[usize]>,
@@ -137,6 +123,37 @@ enum RootContinuationStorage {
     },
 }
 
+/// Caches the packed indexes used to continue below a root-index lookup.
+///
+/// For example, looking up `x = 5` in a root index for `R(x, y, z)` returns
+/// a group of matching rows. A later join stage may need an index on `y`
+/// over those rows. That packed index is the *continuation* of the root
+/// lookup; this cache stores it so subsequent probes can reuse it.
+///
+/// Conceptually, entries form a grid of root-key positions and ways to continue:
+///
+/// ```text
+///                 next access: y       next access: z
+/// root key x=5    index y over R[x=5]   index z over R[x=5]
+/// root key x=9    index y over R[x=9]   ...
+/// ```
+///
+/// A way to continue is a successor family. In a shared cache, a [`FamilyId`]
+/// identifies the next column and the slow constraints applied before indexing
+/// it. Different columns or constraints therefore select different entries.
+/// Each entry starts empty; its [`OnceLock`] publishes the address of an
+/// arena-allocated packed node, which subsequent probes reuse.
+///
+/// Below a shared root, plans use the same cache and table-wide family ids,
+/// so equivalent continuations are built once and reused across plans.
+/// Otherwise, the cache is plan-local and uses [`AccessId`]s. The physical
+/// layout is family -> shard -> key slot; direct storage omits the family
+/// dimension when there is only one possible successor.
+///
+/// The cache belongs to one root and one particular catalog index or root
+/// projection: positions from different indexes must never be mixed. Shared
+/// caches and their packed nodes live only for the current rule-set run and
+/// are released after all plans finish, before table updates are merged.
 pub(super) struct RootContinuationCache {
     storage: OnceLock<RootContinuationStorage>,
     /// Whether the published nodes are shared across plans and therefore keyed
@@ -158,7 +175,7 @@ impl Default for RootContinuationCache {
 }
 
 impl RootContinuationCache {
-    /// A grid shared by every plan of the run, keyed by `FamilyId`.
+    /// A continuation cache shared across plans of the run, keyed by [`FamilyId`].
     pub(super) fn shared() -> Self {
         Self {
             shared: true,
@@ -217,8 +234,8 @@ impl RootContinuationCache {
         );
     }
 
-    /// The slot grid of one successor `family`: an [`AccessId`] index for a
-    /// plan-local grid, or a `FamilyId` index for a shared one.
+    /// The slots of one successor `family`: an [`AccessId`] index for a
+    /// plan-local cache, or a [`FamilyId`] index for a shared one.
     fn slots(&self, family: usize) -> &RootContinuationSlots {
         let storage = self
             .storage
@@ -295,8 +312,8 @@ pub(super) struct PreparedIndexState {
     /// continue this access on another column of the same atom. Used below
     /// roots that are not shared across plans.
     pub(super) root_continuations: RootContinuationCache,
-    /// Shared continuation grid of the catalog index this access probes below
-    /// a shared root. The retained `Arc` keeps it alive for the whole query.
+    /// Shared [`RootContinuationCache`] of the catalog index this access probes
+    /// below a shared root. The retained `Arc` keeps it alive for the whole query.
     shared_continuations: OnceLock<Arc<RootContinuationCache>>,
     /// Shared scalar projection selected for this logical access. Once set, the
     /// retained `Arc` keeps its immutable key and row arrays alive for the
@@ -328,7 +345,7 @@ impl PreparedIndexState {
 ///
 /// Stage descriptors are copied frequently while the executor walks or
 /// reorders the plan, so they contain only ids and an index strategy. The
-/// associated locks, cached indexes, and continuation grids live separately in
+/// associated locks, cached indexes, and continuation caches live separately in
 /// the [`PreparedIndexState`] array and are reached through `state`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PreparedIndexSlot {
@@ -425,8 +442,8 @@ impl<'a> PreparedIndexRef<'a> {
     /// its shared `OnceLock` coordinates construction across concurrent plans.
     /// `build` runs only if the shared projection needs initialization.
     /// Returns `None` without calling `build` if the root has no shared cache.
-    /// The returned entry, with the projection and its shared continuation
-    /// grid, is borrowed from this execution's retained state.
+    /// The returned entry, with the projection and its shared
+    /// [`RootContinuationCache`], is borrowed from this execution's retained state.
     pub(super) fn get_or_init_root_projection(
         self,
         root: &TrieRoot,
@@ -444,7 +461,7 @@ impl<'a> PreparedIndexRef<'a> {
         Some(slot)
     }
 
-    /// Retain the shared continuation grid of the persistent catalog index
+    /// Retain the shared [`RootContinuationCache`] of the persistent catalog index
     /// over `columns` below the shared `root`, or `None` if the root is not
     /// shared. `root` and `columns` must identify the same index on every call.
     pub(super) fn shared_catalog_continuations(
