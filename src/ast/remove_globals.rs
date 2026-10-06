@@ -130,13 +130,15 @@ impl GlobalRemover<'_> {
                 // A map from the global variables in actions to their new names
                 // in the query.
                 let mut globals = HashMap::default();
-                rule.head.clone().visit_exprs(&mut |expr| {
-                    if let Some(resolved_var) = expr.get_global_var() {
+                rule.head.visit_vars(&mut |span, resolved_var| {
+                    // Type checking marks let binders as local, so only references
+                    // to globals contribute query facts.
+                    if resolved_var.is_global_ref {
                         let new_name = self.fresh.fresh(&resolved_var.name);
                         globals.insert(
                             resolved_var.clone(),
                             GenericExpr::Var(
-                                expr.span(),
+                                span.clone(),
                                 ResolvedVar {
                                     name: new_name,
                                     sort: resolved_var.sort.clone(),
@@ -145,7 +147,6 @@ impl GlobalRemover<'_> {
                             ),
                         );
                     }
-                    expr
                 });
                 let new_facts: Vec<ResolvedFact> = globals
                     .iter()
@@ -163,20 +164,20 @@ impl GlobalRemover<'_> {
                     // instrument the old facts and add the new facts to the end
                     body: rule
                         .body
-                        .iter()
-                        .map(|fact| fact.clone().visit_exprs(&mut replace_global_vars))
+                        .into_iter()
+                        .map(|fact| fact.visit_exprs(&mut replace_global_vars))
                         .chain(new_facts)
                         .collect(),
                     // replace references to globals with the newly bound names
-                    head: rule.head.clone().visit_exprs(&mut |expr| {
+                    head: rule.head.visit_exprs(&mut |expr| {
                         if let Some(resolved_var) = expr.get_global_var() {
                             globals.get(&resolved_var).unwrap().clone()
                         } else {
                             expr
                         }
                     }),
-                    name: rule.name.clone(),
-                    ruleset: rule.ruleset.clone(),
+                    name: rule.name,
+                    ruleset: rule.ruleset,
                     eval_mode: rule.eval_mode,
                     no_decomp: rule.no_decomp,
                     include_subsumed: rule.include_subsumed,
@@ -194,5 +195,30 @@ impl GlobalRemover<'_> {
             }
             _ => vec![cmd.visit_exprs(&mut replace_global_vars)],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::EGraph;
+
+    #[test]
+    fn globals_in_rule_actions_preserve_local_bindings() {
+        EGraph::default()
+            .parse_and_run_program(
+                None,
+                r#"
+                (let $offset 3)
+                (function result (i64) i64 :no-merge)
+                (relation seed (i64))
+                (seed 1)
+                (rule ((seed n) (= $offset 3))
+                      ((let local (+ n $offset))
+                       (set (result n) (+ local $offset))))
+                (run 1)
+                (check (= (result 1) 7))
+                "#,
+            )
+            .unwrap();
     }
 }
