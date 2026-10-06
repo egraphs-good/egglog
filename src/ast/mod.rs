@@ -1574,7 +1574,8 @@ pub(crate) type ResolvedActions = GenericActions<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedActions<Head, Leaf> = GenericActions<CorrespondingVar<Head, Leaf>, Leaf>;
 
 pub type Rule = GenericRule<String, String>;
-pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
+/// A typechecked rule; see [`crate::TypeInfo::typecheck_rule`].
+pub type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
 pub type Rewrite = GenericRewrite<String, String>;
 
