@@ -2,8 +2,8 @@ use crate::{util::HashMap, *};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Names {
-    seen: HashMap<String, Span>,
-    global_aliases: HashMap<String, (String, Span)>,
+    seen: IndexMap<String, Span>,
+    global_aliases: IndexMap<String, (String, Span)>,
 }
 
 impl Names {
@@ -57,23 +57,10 @@ impl Names {
             ResolvedNCommand::UnstableCombinedRuleset(span, name, _args) => {
                 self.check(name.clone(), span.clone())
             }
-            ResolvedNCommand::NormRule { rule, .. } => {
-                let mut inner = self.clone();
-                inner.check_shadowing_query(&rule.body)?;
-                for action in rule.head.iter() {
-                    inner.check_shadowing_action(action)?;
-                }
-                Ok(())
-            }
+            ResolvedNCommand::NormRule { .. }
+            | ResolvedNCommand::Check(..)
+            | ResolvedNCommand::Fail(..) => self.check_shadowing_scoped(command),
             ResolvedNCommand::CoreAction(action) => self.check_shadowing_action(action),
-            ResolvedNCommand::Check(_span, query) => {
-                let mut inner = self.clone();
-                inner.check_shadowing_query(query)
-            }
-            ResolvedNCommand::Fail(_span, command) => {
-                let mut inner = self.clone();
-                inner.check_shadowing(command)
-            }
             ResolvedNCommand::Extract(..) => Ok(()),
             ResolvedNCommand::RunSchedule(..) => Ok(()),
             ResolvedNCommand::PrintOverallStatistics(..) => Ok(()),
@@ -86,6 +73,28 @@ impl Names {
             ResolvedNCommand::Pop(..) => Ok(()),
             ResolvedNCommand::UserDefined(..) => Ok(()),
         }
+    }
+
+    fn check_shadowing_scoped(&mut self, command: &ResolvedNCommand) -> Result<(), Error> {
+        // Checks only append fresh names, so truncating restores the enclosing
+        // scope on both success and error, including nested `fail` commands.
+        let seen_len = self.seen.len();
+        let aliases_len = self.global_aliases.len();
+        let result = match command {
+            ResolvedNCommand::NormRule { rule, .. } => {
+                self.check_shadowing_query(&rule.body).and_then(|()| {
+                    rule.head
+                        .iter()
+                        .try_for_each(|action| self.check_shadowing_action(action))
+                })
+            }
+            ResolvedNCommand::Check(_, query) => self.check_shadowing_query(query),
+            ResolvedNCommand::Fail(_, command) => self.check_shadowing(command),
+            _ => unreachable!("only rules, checks, and fail commands introduce a name scope"),
+        };
+        self.seen.truncate(seen_len);
+        self.global_aliases.truncate(aliases_len);
+        result
     }
 
     fn check_shadowing_query(&mut self, query: &[ResolvedFact]) -> Result<(), Error> {
@@ -128,5 +137,42 @@ impl Names {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_fail_preserves_global_aliases() {
+        let mut egraph = EGraph::default();
+        let commands = egraph.parse_program(None, "(let $kept 1)").unwrap();
+        let mut declaration = egraph
+            .resolve_command(commands.into_iter().next().unwrap())
+            .unwrap()
+            .desugared
+            .into_iter()
+            .find(|command| matches!(command, ResolvedNCommand::Function(_)))
+            .unwrap();
+        let mut names = Names::default();
+        names.check_shadowing(&declaration).unwrap();
+
+        let ResolvedNCommand::Function(decl) = &mut declaration else {
+            unreachable!()
+        };
+        decl.name = "$temporary".into();
+        let nested = ResolvedNCommand::Fail(
+            span!(),
+            Box::new(ResolvedNCommand::Fail(span!(), Box::new(declaration))),
+        );
+        names.check_shadowing(&nested).unwrap();
+        names.check_shadowing(&nested).unwrap();
+        names.check_pattern_name("temporary", &span!()).unwrap();
+        assert!(matches!(
+            names.check_pattern_name("kept", &span!()),
+            Err(Error::Shadowing(message, _, _))
+                if message == "pattern variable `kept` conflicts with global `$kept`"
+        ));
     }
 }
