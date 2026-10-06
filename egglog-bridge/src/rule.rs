@@ -18,7 +18,7 @@ use log::debug;
 use smallvec::SmallVec;
 use thiserror::Error;
 
-use crate::{CachedPlanInfo, NOT_SUBSUMED, RowVals, SUBSUMED, SchemaMath};
+use crate::{CachedPlanInfo, CachedPlanState, NOT_SUBSUMED, RowVals, SUBSUMED, SchemaMath};
 use crate::{ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp};
 
 define_id!(pub VariableId, u32, "A variable in an egglog query");
@@ -296,7 +296,7 @@ impl RuleBuilder<'_> {
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
             query: Arc::new(self.query),
-            cached_plan: None,
+            cached_plan: CachedPlanState::Unbuilt,
             desc: self.desc,
         };
         debug!("created rule {res:?} / {}", info.desc);
@@ -726,35 +726,48 @@ impl Query {
         (qb, inner)
     }
 
-    fn run_rules_and_build(
-        &self,
-        qb: QueryBuilder,
-        mut inner: Bindings,
-        desc: &str,
-    ) -> Result<core_relations::RuleId> {
-        let mut rb = qb.build();
-        inner.next_ts = Some(rb.read_counter(self.ts_counter).into());
-        self.add_rule
-            .iter()
-            .try_for_each(|f| f(&mut inner, &mut rb))?;
-        Ok(rb.build_with_description(desc))
+    /// Defer only when every seminaive variant would already be pruned by a
+    /// timestamp constraint. Other empty atoms can leave a zero-match plan whose
+    /// execution still flushes pending writes and contributes a rule report.
+    /// The physical subset must be empty: timestamp subsets can retain tombstones
+    /// even when a table has no live rows.
+    pub(crate) fn can_defer_plan(&self, db: &core_relations::Database) -> bool {
+        self.seminaive
+            && self
+                .atoms
+                .get(self.sole_focus.unwrap_or(0))
+                .is_some_and(|(table, ..)| db.get_table(*table).all().size() == 0)
     }
 
     pub(crate) fn build_cached_plan(
         &self,
         db: &mut core_relations::Database,
         desc: &str,
-    ) -> Result<CachedPlanInfo> {
+    ) -> Result<CachedPlanState> {
+        let defer = self.can_defer_plan(db);
         let mut rsb = RuleSetBuilder::new(db);
         let (mut qb, mut inner) = self.query_state(&mut rsb);
         let mut atom_mapping = Vec::with_capacity(self.atoms.len());
         for (table, entries, _schema_info) in &self.atoms {
             atom_mapping.push(add_atom(&mut qb, *table, entries, &[], &mut inner)?);
         }
-        let rule_id = self.run_rules_and_build(qb, inner, desc)?;
+        let mut rb = qb.build();
+        inner.next_ts = Some(rb.read_counter(self.ts_counter).into());
+        self.add_rule
+            .iter()
+            .try_for_each(|f| f(&mut inner, &mut rb))?;
+        // All atoms and actions have been validated. Discard their temporary
+        // constraints and rebuild against current tables when the rule activates.
+        if defer {
+            return Ok(CachedPlanState::ValidatedDeferred);
+        }
+        let rule_id = rb.build_with_description(desc);
         let rs = rsb.build();
         let plan = Arc::new(rs.build_cached_plan(rule_id));
-        Ok(CachedPlanInfo { plan, atom_mapping })
+        Ok(CachedPlanState::Planned(CachedPlanInfo {
+            plan,
+            atom_mapping,
+        }))
     }
 
     /// Add rules to the [`RuleSetBuilder`] for the query specified by the [`CachedPlanInfo`].

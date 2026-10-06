@@ -1181,8 +1181,15 @@ impl EGraph {
 struct RuleInfo {
     last_run_at: Timestamp,
     query: Arc<rule::Query>,
-    cached_plan: Option<CachedPlanInfo>,
+    cached_plan: CachedPlanState,
     desc: Arc<str>,
+}
+
+#[derive(Clone)]
+enum CachedPlanState {
+    Unbuilt,
+    ValidatedDeferred,
+    Planned(CachedPlanInfo),
 }
 
 #[derive(Clone)]
@@ -1733,16 +1740,26 @@ fn run_rules_impl(
 ) -> Result<RuleSetReport> {
     for rule in rules {
         let info = &mut rule_info[*rule];
-        if info.cached_plan.is_none() {
-            info.cached_plan = Some(info.query.build_cached_plan(db, &info.desc)?);
+        let should_build = match &info.cached_plan {
+            CachedPlanState::Unbuilt => true,
+            CachedPlanState::ValidatedDeferred => !info.query.can_defer_plan(db),
+            CachedPlanState::Planned(_) => false,
+        };
+        if should_build {
+            info.cached_plan = info.query.build_cached_plan(db, &info.desc)?;
         }
     }
     let mut rsb = db.new_rule_set();
     for rule in rules {
         let info = &mut rule_info[*rule];
-        let cached_plan = info.cached_plan.as_ref().unwrap();
-        info.query
-            .add_rules_from_cached(&mut rsb, info.last_run_at, cached_plan);
+        match &info.cached_plan {
+            CachedPlanState::Planned(cached_plan) => {
+                info.query
+                    .add_rules_from_cached(&mut rsb, info.last_run_at, cached_plan);
+            }
+            CachedPlanState::ValidatedDeferred => {}
+            CachedPlanState::Unbuilt => unreachable!("rules must be validated before execution"),
+        }
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();

@@ -836,6 +836,211 @@ fn seminaive_query_prim_rechecks_after_preseeded_container_rebuild() {
 }
 
 #[test]
+fn deferred_plan_activates_independently_in_snapshots_and_after_clear() {
+    let mut egraph = EGraph::default();
+    let int_base = egraph.base_values_mut().register_type::<i64>();
+    let [one, two, three, four] = [1i64, 2, 3, 4].map(|value| egraph.base_values_mut().get(value));
+    let [input, output] = ["input", "output"].map(|name| {
+        egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Base(int_base); 2],
+            default: DefaultVal::Fail,
+            merge: MergeFn::AssertEq,
+            name: name.into(),
+            can_subsume: false,
+        })
+    });
+    let copy = {
+        let mut rb = egraph.new_rule("copy", true);
+        let row = [
+            rb.new_var(ColumnTy::Base(int_base)).into(),
+            rb.new_var(ColumnTy::Base(int_base)).into(),
+        ];
+        rb.query_table(input, &row, None).unwrap();
+        rb.set(output, &row);
+        rb.build()
+    };
+    let unbuilt_snapshot = egraph.clone();
+    for _ in 0..2 {
+        let report = egraph.run_rules_no_rebuild(&[copy], None).unwrap();
+        assert!(!report.changed());
+        assert!(report.rule_reports().is_empty());
+    }
+    let deferred_snapshot = egraph.clone();
+    let mut graphs = [egraph, unbuilt_snapshot, deferred_snapshot];
+    // Populate all branches before running any of them, so one branch cannot
+    // advance another's timestamp past its pending first matches.
+    for (graph, value) in graphs.iter_mut().zip([one, two, three]) {
+        graph.add_values([(input, vec![value, value])]);
+    }
+    for (graph, value) in graphs.iter_mut().zip([one, two, three]) {
+        let report = graph.run_rules_no_rebuild(&[copy], None).unwrap();
+        assert!(report.changed());
+        assert_eq!(report.rule_set_report.num_matches("copy"), 1);
+        assert_eq!(graph.lookup_id(output, &[value]), Some(value));
+        assert_eq!(graph.table_size(output), 1);
+        let report = graph.run_rules_no_rebuild(&[copy], None).unwrap();
+        assert!(!report.changed());
+        assert_eq!(report.rule_set_report.num_matches("copy"), 0);
+    }
+
+    // A snapshot after activation retains a usable plan, while clearing and
+    // repopulating either branch must use fresh table subsets.
+    let mut active_snapshot = graphs[0].clone();
+    active_snapshot.clear_table(input);
+    active_snapshot.clear_table(output);
+    assert!(
+        !active_snapshot
+            .run_rules_no_rebuild(&[copy], None)
+            .unwrap()
+            .changed()
+    );
+    active_snapshot.add_values([(input, vec![four, four])]);
+    let report = active_snapshot.run_rules_no_rebuild(&[copy], None).unwrap();
+    assert!(report.changed());
+    assert_eq!(report.rule_set_report.num_matches("copy"), 1);
+    assert_eq!(active_snapshot.lookup_id(output, &[four]), Some(four));
+    assert_eq!(active_snapshot.lookup_id(output, &[one]), None);
+    assert_eq!(graphs[0].lookup_id(output, &[one]), Some(one));
+    assert_eq!(graphs[0].lookup_id(output, &[four]), None);
+}
+
+#[test]
+fn deferred_plan_validates_all_atoms_and_actions_before_running_rules() {
+    for malformed_atom in [false, true] {
+        let mut egraph = EGraph::default();
+        let int_base = egraph.base_values_mut().register_type::<i64>();
+        let one = egraph.base_values_mut().get(1i64);
+        let [input, output] = ["input", "output"].map(|name| {
+            egraph.add_table(FunctionConfig {
+                schema: vec![ColumnTy::Base(int_base); 2],
+                default: DefaultVal::Fail,
+                merge: MergeFn::AssertEq,
+                name: name.into(),
+                can_subsume: false,
+            })
+        });
+        let seed = {
+            let value = egraph.base_value_constant(1i64);
+            let mut rb = egraph.new_rule("seed", true);
+            rb.set(output, &[value.clone(), value]);
+            rb.build()
+        };
+        let malformed = {
+            let raw_input = egraph.funcs[input].table;
+            let mut rb = egraph.new_rule("malformed", true);
+            let row = [
+                rb.new_var(ColumnTy::Base(int_base)).into(),
+                rb.new_var(ColumnTy::Base(int_base)).into(),
+            ];
+            rb.query_table(input, &row, None).unwrap();
+            if malformed_atom {
+                rb.add_atom_with_timestamp_and_func(raw_input, None, None, &row[..1]);
+            } else {
+                rb.remove(output, &[]);
+            }
+            rb.build()
+        };
+        let error = egraph
+            .run_rules_no_rebuild(&[seed, malformed], None)
+            .unwrap_err();
+        if malformed_atom {
+            assert!(matches!(
+                error.downcast_ref::<core_relations::QueryError>(),
+                Some(core_relations::QueryError::BadArity { .. })
+            ));
+        } else {
+            assert!(matches!(
+                error.downcast_ref::<core_relations::QueryError>(),
+                Some(core_relations::QueryError::KeyArityMismatch { .. })
+            ));
+        }
+        assert_eq!(egraph.lookup_id(output, &[one]), None);
+        // Failed validation must not advance the earlier RHS-only rule's history.
+        assert!(
+            egraph
+                .run_rules_no_rebuild(&[seed], None)
+                .unwrap()
+                .changed()
+        );
+        assert_eq!(egraph.lookup_id(output, &[one]), Some(one));
+    }
+}
+
+#[test]
+fn deferred_plan_preserves_pending_write_flushes_and_reports() {
+    for (seminaive, empty_atom, sole_focus, deleted_last_row, pruned) in [
+        (true, 0, None, false, true),
+        (true, 1, None, false, false),
+        (true, 1, Some(1), false, true),
+        (false, 0, None, false, false),
+        (true, 0, None, true, false),
+    ] {
+        let mut egraph = EGraph::default();
+        let int_base = egraph.base_values_mut().register_type::<i64>();
+        let one = egraph.base_values_mut().get(1i64);
+        let [first, second, output] = ["first", "second", "output"].map(|name| {
+            egraph.add_table(FunctionConfig {
+                schema: vec![ColumnTy::Base(int_base); 2],
+                default: DefaultVal::Fail,
+                merge: MergeFn::AssertEq,
+                name: name.into(),
+                can_subsume: false,
+            })
+        });
+        let inputs = [first, second];
+        let copy = {
+            let mut rb = egraph.new_rule("copy", seminaive);
+            let first_row = [
+                rb.new_var(ColumnTy::Base(int_base)).into(),
+                rb.new_var(ColumnTy::Base(int_base)).into(),
+            ];
+            let second_row = [
+                rb.new_var(ColumnTy::Base(int_base)).into(),
+                rb.new_var(ColumnTy::Base(int_base)).into(),
+            ];
+            // Distinct variables and no constants leave the empty non-focus
+            // atom unconstrained, so its zero-match plan must still execute.
+            rb.query_table(first, &first_row, None).unwrap();
+            rb.query_table(second, &second_row, None).unwrap();
+            rb.set(output, &first_row);
+            if let Some(focus) = sole_focus {
+                rb.set_focus(focus);
+            }
+            rb.build()
+        };
+        egraph.add_values([(inputs[1 - empty_atom], vec![one, one])]);
+        let action = crate::TableAction::new(&egraph, inputs[empty_atom]);
+        if deleted_last_row {
+            // A live-empty table can retain tombstones in its timestamp subsets.
+            // Its zero-match plan must still flush writes and contribute a report.
+            egraph.add_values([(inputs[empty_atom], vec![one, one])]);
+            egraph.with_execution_state(None, |state| action.remove(state, &[one]));
+            egraph.flush_updates_no_rebuild();
+        }
+        egraph.with_execution_state(None, |state| {
+            action.insert(state, [one, one].into_iter());
+        });
+        assert_eq!(egraph.table_size(inputs[empty_atom]), 0);
+        let report = egraph.run_rules_no_rebuild(&[copy], None).unwrap();
+        assert_eq!(report.changed(), !pruned);
+        assert_eq!(report.rule_reports().is_empty(), pruned);
+        assert_eq!(report.rule_set_report.num_matches("copy"), 0);
+        assert_eq!(egraph.lookup_id(output, &[one]), None);
+        if pruned {
+            assert_eq!(egraph.table_size(inputs[empty_atom]), 0);
+            assert!(egraph.flush_updates_no_rebuild());
+        } else {
+            assert_eq!(report.rule_reports()["copy"].len(), 1);
+            assert_eq!(egraph.table_size(inputs[empty_atom]), 1);
+        }
+        let report = egraph.run_rules_no_rebuild(&[copy], None).unwrap();
+        assert!(report.changed());
+        assert_eq!(report.rule_set_report.num_matches("copy"), 1);
+        assert_eq!(egraph.lookup_id(output, &[one]), Some(one));
+    }
+}
+
+#[test]
 fn snapshot_query_keeps_rows_rules_and_run_history_independent() {
     for cache_before_clone in [false, true] {
         let mut egraph = EGraph::default();
