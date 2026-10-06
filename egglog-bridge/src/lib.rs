@@ -1180,7 +1180,7 @@ impl EGraph {
 #[derive(Clone)]
 struct RuleInfo {
     last_run_at: Timestamp,
-    query: rule::Query,
+    query: Arc<rule::Query>,
     cached_plan: Option<CachedPlanInfo>,
     desc: Arc<str>,
 }
