@@ -34,8 +34,11 @@ use crate::{
     },
 };
 
+use self::packed_cache::{AccessFamilies, FamilyId, SuccessorSig, canonical_constraints};
+use self::packed_trie::ChildShape;
 use self::plan::Plan;
 use crate::action::{ExecutionState, ExternalContext};
+use crate::common::HashMap;
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
@@ -169,9 +172,35 @@ pub struct TableInfo {
     pub(crate) table: WrappedTable,
     pub(crate) indexes: IndexCatalog<ColumnIds, HashIndex>,
     pub(crate) column_indexes: IndexCatalog<ColumnId, HashColumnIndex>,
+    /// Every way a built plan indexes rows below this table's shared trie
+    /// nodes, interned in plan-build order; see [`FamilyId`].
+    successor_families: HashMap<SuccessorSig, FamilyId>,
 }
 
 impl TableInfo {
+    /// Intern the family that indexes `column` after applying `constraints`.
+    fn successor_family(&mut self, column: ColumnId, constraints: &[Constraint]) -> FamilyId {
+        let next = FamilyId::from_usize(self.successor_families.len());
+        *self
+            .successor_families
+            .entry((column, canonical_constraints(constraints)))
+            .or_insert(next)
+    }
+
+    /// The child storage of every trie node shared below this table's roots:
+    /// one family per interned successor, or a leaf if no plan indexes below
+    /// them. Plans are built before a rule set runs, so the count is fixed for
+    /// the whole run.
+    pub(crate) fn shared_child_shape(&self) -> ChildShape {
+        if self.successor_families.is_empty() {
+            ChildShape::Leaf
+        } else {
+            ChildShape::Dynamic {
+                families: self.successor_families.len(),
+            }
+        }
+    }
+
     #[doc(hidden)]
     pub fn identity(&self) -> TableIdentity {
         self.identity
@@ -213,6 +242,7 @@ impl Clone for TableInfo {
             table: self.table.dyn_clone(),
             indexes: deep_clone_map(&self.indexes, self.table.as_ref()),
             column_indexes: deep_clone_map(&self.column_indexes, self.table.as_ref()),
+            successor_families: self.successor_families.clone(),
         }
     }
 }
@@ -854,6 +884,7 @@ impl Database {
             table,
             indexes: IndexCatalog::new(),
             column_indexes: IndexCatalog::new(),
+            successor_families: HashMap::default(),
         });
         self.deps.add_table(res, read_deps, write_deps);
         res
@@ -1002,7 +1033,27 @@ impl Database {
     }
 
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
-        plan::plan_query(query, ColumnCardEst::new(self))
+        let mut plan = plan::plan_query(query, ColumnCardEst::new(self));
+        // Intern the successor family of every indexed access now, so nodes
+        // shared across plans publish their children under ids that are fixed
+        // before any rule set runs.
+        let atoms = plan.atoms();
+        plan.for_each_stages_mut(|stages| {
+            let mut families = Vec::new();
+            stages.for_each_indexed_access(|atom, columns, constraints| {
+                let info = &mut self.tables[atoms[atom].table];
+                let mut access = AccessFamilies::new();
+                access.push(info.successor_family(columns[0], constraints));
+                access.extend(
+                    columns[1..]
+                        .iter()
+                        .map(|column| info.successor_family(*column, &[])),
+                );
+                families.push(access);
+            });
+            stages.families = families.into();
+        });
+        plan
     }
 }
 

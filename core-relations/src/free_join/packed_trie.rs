@@ -25,8 +25,9 @@ use crate::{
 
 /// A packed distinct-key count and description of the trailing child storage.
 ///
-/// The low 30 bits store the key count. Bit 30 selects dynamic child families,
-/// while bit 31 records that the node has children at all.
+/// The low 29 bits store the key count. Bit 29 marks a node shared across the
+/// plans of one rule-set run, bit 30 selects dynamic child families, and bit 31
+/// records that the node has children at all.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PackedKeyLen(u32);
@@ -34,13 +35,15 @@ struct PackedKeyLen(u32);
 impl PackedKeyLen {
     const HAS_CHILDREN: u32 = 1 << 31;
     const DYNAMIC_CHILDREN: u32 = 1 << 30;
-    const LEN_MASK: u32 = Self::DYNAMIC_CHILDREN - 1;
+    const SHARED: u32 = 1 << 29;
+    const LEN_MASK: u32 = Self::SHARED - 1;
 
-    fn new(key_len: usize, child_shape: ChildShape) -> Self {
+    fn new(key_len: usize, child_shape: ChildShape, shared: bool) -> Self {
         assert!(
             key_len <= Self::LEN_MASK as usize,
-            "a packed trie node cannot contain 2^30 or more keys"
+            "a packed trie node cannot contain 2^29 or more keys"
         );
+        let shared = if shared { Self::SHARED } else { 0 };
         let flags = match child_shape {
             ChildShape::Leaf => 0,
             ChildShape::Direct => Self::HAS_CHILDREN,
@@ -56,11 +59,15 @@ impl PackedKeyLen {
                 Self::HAS_CHILDREN | Self::DYNAMIC_CHILDREN
             }
         };
-        Self(key_len as u32 | flags)
+        Self(key_len as u32 | flags | shared)
     }
 
     fn len(self) -> usize {
         (self.0 & Self::LEN_MASK) as usize
+    }
+
+    fn is_shared(self) -> bool {
+        self.0 & Self::SHARED != 0
     }
 
     fn has_children(self) -> bool {
@@ -73,6 +80,18 @@ impl PackedKeyLen {
 }
 
 type ChildSlot<'exec> = OnceLock<&'exec TrieNode<'exec>>;
+
+#[cfg(test)]
+thread_local! {
+    static PACKED_NODE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The number of packed nodes built on this thread; serial tests use it to
+/// show that plans reuse shared nodes instead of rebuilding them.
+#[cfg(test)]
+pub(crate) fn packed_node_builds() -> usize {
+    PACKED_NODE_BUILDS.with(|builds| builds.get())
+}
 
 /// The child-publication storage trailing a packed trie node.
 ///
@@ -202,7 +221,15 @@ where
         scratch: &mut Vec<(Value, RowId)>,
     ) -> &'exec TrieNode<'exec> {
         self.child_index_with(arena, family, child_shape, || {
-            TrieNode::build_from_subset(arena, table, self.subset(), column, child_shape, scratch)
+            TrieNode::build_from_subset(
+                arena,
+                table,
+                self.subset(),
+                column,
+                child_shape,
+                self.node.is_shared(),
+                scratch,
+            )
         })
     }
 
@@ -225,7 +252,15 @@ where
         scratch: &mut Vec<(Value, RowId)>,
     ) -> &'exec TrieNode<'exec> {
         self.child_index_with(arena, family, child_shape, || {
-            TrieNode::build_from_subset(arena, table, subset, column, child_shape, scratch)
+            TrieNode::build_from_subset(
+                arena,
+                table,
+                subset,
+                column,
+                child_shape,
+                self.node.is_shared(),
+                scratch,
+            )
         })
     }
 
@@ -256,6 +291,10 @@ where
     fn key_index(self) -> usize {
         self.key_index as usize
     }
+
+    pub(crate) fn node(self) -> &'node TrieNode<'exec> {
+        self.node
+    }
 }
 
 struct PackedLayout {
@@ -269,7 +308,7 @@ struct PackedLayout {
 
 impl PackedLayout {
     fn new(key_len: usize, row_len: usize, child_shape: ChildShape) -> Self {
-        let _ = PackedKeyLen::new(key_len, child_shape);
+        let _ = PackedKeyLen::new(key_len, child_shape, false);
         // Lifetimes do not affect layout; use one concrete instantiation so
         // callers do not need to manufacture a lifetime solely for arithmetic.
         let (layout, keys_offset) = Layout::new::<TrieNode<'static>>()
@@ -329,26 +368,24 @@ impl<'exec> TrieNode<'exec> {
     /// scalar trie level.
     ///
     /// `subset` must already reflect every row-local constraint that applies
-    /// at this point in the join. The caller owns `scratch` so recursive join
-    /// execution can reuse the projection and radix-sort allocation. On
-    /// return, `scratch` contains the sorted `(Value, RowId)` pairs used to
-    /// build the node; its capacity also retains the radix sort's ping-pong
-    /// storage for the next build.
+    /// at this point in the join. `shared` marks a node published to every
+    /// plan of the run (see [`Self::is_shared`]). The caller owns `scratch` so
+    /// recursive join execution can reuse the projection and radix-sort
+    /// allocation. On return, `scratch` contains the sorted `(Value, RowId)`
+    /// pairs used to build the node; its capacity also retains the radix
+    /// sort's ping-pong storage for the next build.
     pub(crate) fn build_from_subset(
         arena: &Handle<'exec>,
         table: WrappedTableRef<'_>,
         subset: SubsetRef<'_>,
         column: ColumnId,
         child_shape: ChildShape,
+        shared: bool,
         scratch: &mut Vec<(Value, RowId)>,
     ) -> &'exec Self {
         scratch.clear();
-        scratch.reserve(subset.size());
-        table.for_each_col(subset, column, &mut |row_id, value| {
-            scratch.push((value, row_id));
-        });
-        // A SubsetRef is RowId-ordered, and for_each_col preserves that scan
-        // order. The repository's value-stable radix sort therefore produces
+        table.collect_col_pairs(subset, column, scratch);
+        // A SubsetRef is RowId-ordered, and the scan preserves that order. The repository's value-stable radix sort therefore produces
         // full (Value, RowId) order without a separate RowId pass. A scalar
         // projection has exactly one pair per input row, so retaining every
         // pair (rather than deduplicating) preserves the subset exactly. Keep
@@ -376,7 +413,7 @@ impl<'exec> TrieNode<'exec> {
             scratch.truncate(pair_len);
         }
 
-        Self::build_from_sorted_pairs(arena, scratch, child_shape)
+        Self::build_from_sorted_pairs(arena, scratch, child_shape, shared)
     }
 
     /// Build a node from pairs sorted lexicographically by `(Value, RowId)`.
@@ -387,12 +424,15 @@ impl<'exec> TrieNode<'exec> {
         arena: &Handle<'exec>,
         pairs: &[(Value, RowId)],
         child_shape: ChildShape,
+        shared: bool,
     ) -> &'exec Self {
         debug_assert!(
             pairs.windows(2).all(|pair| pair[0] <= pair[1]),
             "packed trie input must be sorted by (Value, RowId)"
         );
 
+        #[cfg(test)]
+        PACKED_NODE_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let row_len = u32::try_from(pairs.len())
             .expect("a packed trie node cannot contain more than u32::MAX rows");
         let key_len_usize = pairs
@@ -400,7 +440,7 @@ impl<'exec> TrieNode<'exec> {
             .enumerate()
             .filter(|(index, pair)| *index == 0 || pairs[*index - 1].0 != pair.0)
             .count();
-        let key_len = PackedKeyLen::new(key_len_usize, child_shape);
+        let key_len = PackedKeyLen::new(key_len_usize, child_shape, shared);
         let layout = PackedLayout::new(key_len_usize, pairs.len(), child_shape);
         debug_assert_eq!(layout.keys_offset, Self::keys_offset());
         debug_assert_eq!(
@@ -703,6 +743,15 @@ impl<'exec> TrieNode<'exec> {
         }
     }
 
+    /// Whether this node belongs to the run-wide trie shared by every plan.
+    ///
+    /// Shared nodes publish their children under run-global successor families
+    /// rather than plan-local access ids, and every descendant of a shared node
+    /// is shared as well.
+    pub(crate) fn is_shared(&self) -> bool {
+        self.key_len.is_shared()
+    }
+
     pub(crate) fn child_shape(&self) -> ChildShape {
         match self.children() {
             PackedChildren::Leaf => ChildShape::Leaf,
@@ -824,12 +873,13 @@ mod tests {
             "the invariant lifetime marker must not grow the header"
         );
 
-        let leaf = PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize, ChildShape::Leaf);
+        let leaf = PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize, ChildShape::Leaf, false);
         assert_eq!(leaf.len(), PackedKeyLen::LEN_MASK as usize);
         assert!(!leaf.has_children());
         assert!(!leaf.has_dynamic_children());
+        assert!(!leaf.is_shared());
 
-        let direct = PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize, ChildShape::Direct);
+        let direct = PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize, ChildShape::Direct, false);
         assert_eq!(direct.len(), PackedKeyLen::LEN_MASK as usize);
         assert!(direct.has_children());
         assert!(!direct.has_dynamic_children());
@@ -837,17 +887,19 @@ mod tests {
         let dynamic = PackedKeyLen::new(
             PackedKeyLen::LEN_MASK as usize,
             ChildShape::Dynamic { families: 2 },
+            true,
         );
         assert_eq!(dynamic.0, u32::MAX);
         assert_eq!(dynamic.len(), PackedKeyLen::LEN_MASK as usize);
         assert!(dynamic.has_children());
         assert!(dynamic.has_dynamic_children());
+        assert!(dynamic.is_shared());
     }
 
     #[test]
-    #[should_panic(expected = "cannot contain 2^30 or more keys")]
+    #[should_panic(expected = "cannot contain 2^29 or more keys")]
     fn packed_trie_rejects_key_count_that_uses_shape_bit() {
-        PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize + 1, ChildShape::Leaf);
+        PackedKeyLen::new(PackedKeyLen::LEN_MASK as usize + 1, ChildShape::Leaf, false);
     }
 
     #[test]
@@ -861,7 +913,7 @@ mod tests {
             (value(3), row(4)),
             (value(3), row(5)),
         ];
-        let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct);
+        let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct, false);
 
         assert_eq!(node.values(), &[value(1), value(2), value(3)]);
         assert_eq!(node.boundaries(), &[0, 2, 3, 5]);
@@ -893,7 +945,7 @@ mod tests {
         // row 2 is absent. An endpoint-only density check would incorrectly
         // turn this into the range 1..4 and admit row 2.
         let pairs = [(value(1), row(1)), (value(1), row(1)), (value(1), row(3))];
-        let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf);
+        let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf, false);
 
         let SubsetRef::Sparse(rows) = node.subset_at(0) else {
             panic!("a non-contiguous row sequence with duplicates must stay sparse")
@@ -906,8 +958,12 @@ mod tests {
     fn packed_cursor_checks_key_ordinal() {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
-        let node =
-            TrieNode::build_from_sorted_pairs(&handle, &[(value(1), row(0))], ChildShape::Leaf);
+        let node = TrieNode::build_from_sorted_pairs(
+            &handle,
+            &[(value(1), row(0))],
+            ChildShape::Leaf,
+            false,
+        );
         let _ = PackedCursor::new(node, 1);
     }
 
@@ -941,6 +997,7 @@ mod tests {
                 filtered.as_ref(),
                 column(1),
                 ChildShape::Direct,
+                false,
                 &mut scratch,
             );
             let mut expected: Vec<_> = (0..130)
@@ -984,6 +1041,7 @@ mod tests {
                 small.as_ref(),
                 column(1),
                 ChildShape::Leaf,
+                false,
                 &mut scratch,
             );
             let mut expected: Vec<_> = (1..20)
@@ -1001,11 +1059,14 @@ mod tests {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
         let pairs = [(value(1), row(0)), (value(2), row(1))];
-        let leaf = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf);
-        let branch = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct);
+        let leaf = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf, false);
+        let branch = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct, false);
 
-        assert_eq!(leaf.key_len, PackedKeyLen::new(2, ChildShape::Leaf));
-        assert_eq!(branch.key_len, PackedKeyLen::new(2, ChildShape::Direct));
+        assert_eq!(leaf.key_len, PackedKeyLen::new(2, ChildShape::Leaf, false));
+        assert_eq!(
+            branch.key_len,
+            PackedKeyLen::new(2, ChildShape::Direct, false)
+        );
         assert_eq!(leaf.values(), branch.values());
         assert!(matches!(leaf.children(), PackedChildren::Leaf));
         let PackedChildren::Direct(slots) = branch.children() else {
@@ -1020,8 +1081,12 @@ mod tests {
     fn packed_trie_leaf_rejects_child_publication() {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
-        let leaf =
-            TrieNode::build_from_sorted_pairs(&handle, &[(value(1), row(0))], ChildShape::Leaf);
+        let leaf = TrieNode::build_from_sorted_pairs(
+            &handle,
+            &[(value(1), row(0))],
+            ChildShape::Leaf,
+            false,
+        );
         let cursor = PackedCursor::new(leaf, 0);
         cursor.child_index_with(&handle, 0, ChildShape::Leaf, || {
             unreachable!("a leaf must reject publication before invoking the builder")
@@ -1033,7 +1098,7 @@ mod tests {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
         let pairs = [(value(1), row(0)), (value(2), row(2))];
-        let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct);
+        let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Direct, false);
 
         assert_eq!(node as *const _ as usize % align_of::<TrieNode<'_>>(), 0);
         assert_eq!(node.values().as_ptr() as usize % align_of::<Value>(), 0);
@@ -1062,8 +1127,12 @@ mod tests {
     fn packed_trie_child_is_published_once_under_race() {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
-        let parent =
-            TrieNode::build_from_sorted_pairs(&handle, &[(value(1), row(0))], ChildShape::Direct);
+        let parent = TrieNode::build_from_sorted_pairs(
+            &handle,
+            &[(value(1), row(0))],
+            ChildShape::Direct,
+            false,
+        );
         let PackedChildren::Direct(slots) = parent.children() else {
             panic!("a direct node must expose inline child slots")
         };
@@ -1082,6 +1151,7 @@ mod tests {
                             &handle,
                             &[(value(7), row(9))],
                             ChildShape::Leaf,
+                            false,
                         )
                     });
                     assert_eq!(child.values(), &[value(7)]);
@@ -1104,7 +1174,8 @@ mod tests {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
         let parent_pairs: Vec<_> = (0..8).map(|row_id| (value(0), row(row_id))).collect();
-        let parent = TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct);
+        let parent =
+            TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct, false);
         let cursor = PackedCursor::new(parent, 0);
 
         WrappedTableRef::with_wrapper(&table, |table| {
@@ -1139,11 +1210,12 @@ mod tests {
                 &handle,
                 &parent_pairs,
                 ChildShape::Dynamic { families: 2 },
+                false,
             );
             assert_eq!(parent.child_shape(), ChildShape::Dynamic { families: 2 });
             assert_eq!(
                 parent.key_len,
-                PackedKeyLen::new(1, ChildShape::Dynamic { families: 2 })
+                PackedKeyLen::new(1, ChildShape::Dynamic { families: 2 }, false)
             );
             let cursor = PackedCursor::new(parent, 0);
 
@@ -1198,6 +1270,7 @@ mod tests {
             &handle,
             &parent_pairs,
             ChildShape::Dynamic { families: 2 },
+            false,
         );
         let cursor = PackedCursor::new(parent, 0);
         let published = AtomicUsize::new(0);
@@ -1253,7 +1326,8 @@ mod tests {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
         let parent_pairs: Vec<_> = (0..8).map(|row_id| (value(0), row(row_id))).collect();
-        let parent = TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct);
+        let parent =
+            TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct, false);
         let cursor = PackedCursor::new(parent, 0);
 
         WrappedTableRef::with_wrapper(&table, |table| {
@@ -1283,7 +1357,8 @@ mod tests {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
         let parent_pairs: Vec<_> = (0..96).map(|row_id| (value(0), row(row_id))).collect();
-        let parent = TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct);
+        let parent =
+            TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct, false);
         let cursor = PackedCursor::new(parent, 0);
         let published = AtomicUsize::new(0);
 
@@ -1328,7 +1403,8 @@ mod tests {
         let arena = SharedArena::new();
         let handle = arena.new_handle();
         let parent_pairs: Vec<_> = (0..4).map(|row_id| (value(0), row(row_id))).collect();
-        let parent = TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct);
+        let parent =
+            TrieNode::build_from_sorted_pairs(&handle, &parent_pairs, ChildShape::Direct, false);
         let cursor = PackedCursor::new(parent, 0);
 
         WrappedTableRef::with_wrapper(&table, |table| {

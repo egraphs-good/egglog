@@ -22,7 +22,7 @@ use crate::free_join::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
         packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
     },
-    packed_cache::{RootProjection, TrieRoot},
+    packed_cache::{RootProjection, RootProjectionEntry, TrieRoot},
     packed_trie::ChildShape,
     prepared_index::{
         AccessId, PreparedIndexKind, PreparedIndexRef, PreparedIndexSlot, PreparedIndexState,
@@ -225,6 +225,7 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
         kind: PreparedIndexKind::Uncacheable,
         access: AccessId::new(0),
         state: &state,
+        families: &[],
     };
     assert!(
         prepared
@@ -275,6 +276,7 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
                     kind: PreparedIndexKind::Uncacheable,
                     access: AccessId::new(0),
                     state: &state,
+                    families: &[],
                 };
                 barrier.wait();
                 // Race both the canonicalized DashMap lookup and the lazy
@@ -299,7 +301,8 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
                     )
                     .unwrap();
                 assert!(std::ptr::eq(projection, reused));
-                projection as *const RootProjection as usize
+                assert!(projection.continuations.is_shared());
+                projection as *const RootProjectionEntry as usize
             }));
         }
         let addresses = handles
@@ -403,6 +406,7 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
     PreparedJoinIndexes::Indexed {
         stages: prepared_stages,
         states: states.into_boxed_slice(),
+        families: Arc::from(Vec::new()),
         access_counts,
         tail_masks,
     }
