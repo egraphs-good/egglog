@@ -783,14 +783,13 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Appends atoms in postorder, assigning each call's fresh variable before its children.
     fn to_query(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> (
-        Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
-        MappedExpr<Head, Leaf>,
-    );
+        out_atoms: &mut Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
+    ) -> MappedExpr<Head, Leaf>;
 
     fn to_core_actions<FG: FreshGen<Head, Leaf>>(
         &self,
@@ -808,45 +807,38 @@ where
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> (
-        Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
-        MappedExpr<Head, Leaf>,
-    )
+        out_atoms: &mut Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
+    ) -> MappedExpr<Head, Leaf>
     where
         Head: Clone + Display,
         Leaf: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
-            GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
-            GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(span.clone(), v.clone())),
+            GenericExpr::Lit(span, lit) => GenericExpr::Lit(span.clone(), lit.clone()),
+            GenericExpr::Var(span, v) => GenericExpr::Var(span.clone(), v.clone()),
             GenericExpr::Call(span, f, children) => {
                 let fresh = fresh_gen.fresh(f);
-                let mut new_children = vec![];
-                let mut atoms = vec![];
-                let mut child_exprs = vec![];
+                let mut new_children = Vec::with_capacity(children.len() + 1);
+                let mut child_exprs = Vec::with_capacity(children.len());
                 for child in children {
-                    let (child_atoms, child_expr) = child.to_query(typeinfo, fresh_gen);
+                    let child_expr = child.to_query(typeinfo, fresh_gen, out_atoms);
                     let child_atomterm = child_expr.get_corresponding_var_or_lit(typeinfo);
                     new_children.push(child_atomterm);
-                    atoms.extend(child_atoms);
                     child_exprs.push(child_expr);
                 }
                 let args = {
                     new_children.push(GenericAtomTerm::Var(span.clone(), fresh.clone()));
                     new_children
                 };
-                atoms.push(GenericAtom {
+                out_atoms.push(GenericAtom {
                     span: span.clone(),
                     head: HeadOrEq::Head(f.clone()),
                     args,
                 });
-                (
-                    atoms,
-                    GenericExpr::Call(
-                        span.clone(),
-                        CorrespondingVar::new(f.clone(), fresh),
-                        child_exprs,
-                    ),
+                GenericExpr::Call(
+                    span.clone(),
+                    CorrespondingVar::new(f.clone(), fresh),
+                    child_exprs,
                 )
             }
         }
@@ -1111,7 +1103,7 @@ where
         Head: Clone + Display + IsFunc,
         Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
     {
-        let (body, _correspondence) = Facts(self.body.clone()).to_query(typeinfo, fresh_gen);
+        let (body, _correspondence) = Facts::to_query(&self.body, typeinfo, fresh_gen);
         let mut binding = body.get_vars();
         let mut ctx =
             CoreActionContext::new(typeinfo, &mut binding, fresh_gen, union_to_set_optimization);
@@ -1169,6 +1161,126 @@ mod tests {
     use super::*;
 
     type TestCoreRule = GenericCoreRule<String, String, String>;
+
+    #[test]
+    fn test_query_lowering_preserves_order_spans_and_mapping() {
+        struct RecordingFresh(Vec<String>);
+
+        impl FreshGen<String, String> for RecordingFresh {
+            fn fresh(&mut self, hint: &String) -> String {
+                let name = format!("@v{}", self.0.len());
+                self.0.push(hint.clone());
+                name
+            }
+        }
+
+        let mut typeinfo = TypeInfo::default();
+        typeinfo
+            .global_sorts
+            .insert("g".to_owned(), I64Sort.to_arcsort());
+        let mut parser = Parser::default();
+        let mut facts: Vec<_> = ["(= (outer (inner x 7)) (right))", "(outer g)", "(= g 7)"]
+            .into_iter()
+            .map(|source| parser.get_fact_from_string(None, source).unwrap())
+            .collect();
+        facts.extend(
+            ["x", "7"]
+                .into_iter()
+                .map(|source| Fact::Fact(parser.get_expr_from_string(None, source).unwrap())),
+        );
+        let mut fresh = RecordingFresh(vec![]);
+        let (query, mapped) = Facts::to_query(&facts, &typeinfo, &mut fresh);
+
+        assert_eq!(fresh.0, vec!["outer", "inner", "right", "outer"]);
+        assert_eq!(
+            query
+                .atoms
+                .iter()
+                .map(|atom| {
+                    let head = match &atom.head {
+                        HeadOrEq::Head(head) => head.as_str(),
+                        HeadOrEq::Eq => "=",
+                    };
+                    format!("{head}: {}", ListDisplay(&atom.args, " "))
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "inner: x 7 @v1",
+                "outer: @v1 @v0",
+                "right: @v2",
+                "=: @v0 @v2",
+                "outer: g @v3",
+                "=: g 7",
+            ]
+        );
+        assert!(matches!(query.atoms[0].args[0], GenericAtomTerm::Var(..)));
+        assert!(matches!(
+            query.atoms[0].args[1],
+            GenericAtomTerm::Literal(..)
+        ));
+        assert!(matches!(
+            query.atoms[4].args[0],
+            GenericAtomTerm::Global(..)
+        ));
+        assert!(matches!(
+            query.atoms[5].args[0],
+            GenericAtomTerm::Global(..)
+        ));
+        assert_eq!(
+            query
+                .atoms
+                .iter()
+                .map(|atom| atom.span.string())
+                .collect::<Vec<_>>(),
+            vec![
+                "(inner x 7)",
+                "(outer (inner x 7))",
+                "(right)",
+                "(= (outer (inner x 7)) (right))",
+                "(outer g)",
+                "(= g 7)",
+            ]
+        );
+        assert_eq!(
+            query
+                .atoms
+                .iter()
+                .map(|atom| {
+                    atom.args
+                        .iter()
+                        .map(|arg| arg.span().string())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec!["x", "7", "(inner x 7)"],
+                vec!["(inner x 7)", "(outer (inner x 7))"],
+                vec!["(right)"],
+                vec!["(outer (inner x 7))", "(right)"],
+                vec!["g", "(outer g)"],
+                vec!["g", "7"],
+            ]
+        );
+
+        let mut correspondence = vec![];
+        let original: Vec<_> = mapped
+            .into_iter()
+            .map(|fact| {
+                fact.map_symbols(
+                    &mut |var| {
+                        correspondence.push(format!("{}: {}", var.head, var.to));
+                        var.head
+                    },
+                    &mut |var| var,
+                )
+            })
+            .collect();
+        assert_eq!(original, facts);
+        assert_eq!(
+            correspondence,
+            vec!["inner: @v1", "outer: @v0", "right: @v2", "outer: @v3"]
+        );
+    }
 
     fn make_var(name: &str) -> GenericAtomTerm<String> {
         GenericAtomTerm::Var(span!(), name.to_string())
