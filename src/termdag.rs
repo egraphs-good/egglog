@@ -406,7 +406,15 @@ impl TermDag {
 
         if should_bind {
             let hint = ctx.get_name_hint(constructor_name.as_deref().unwrap_or("t"));
-            let let_name = ctx.fresh.fresh(&hint);
+            let mut let_name = ctx.fresh.fresh(&hint);
+            // Avoid capturing variables anywhere in the rendered term, even later siblings.
+            while self
+                .nodes
+                .get_index_of(&Term::Var(let_name.clone()))
+                .is_some_and(|id| ctx.ref_counts.contains_key(&id))
+            {
+                let_name = ctx.fresh.fresh(&hint);
+            }
             self.push_binding(ctx.buf, &let_name, &rendered.pretty);
             ctx.bindings.insert(term_id, let_name.clone());
             RenderedTerm::from_symbol(let_name)
@@ -690,6 +698,24 @@ mod tests {
         );
         assert!(buf.trim_end().ends_with(')'));
         assert_eq!(repr, "(f t_0 t_0)");
+    }
+
+    #[test]
+    fn test_to_string_with_let_avoids_existing_variables() {
+        for (prefix, hint) in [("", "t"), ("p_", "t"), ("", "s"), ("p_", "s")] {
+            let name = format!("{prefix}{hint}");
+            let s = format!("(f (g {name}_0 a b) (g {name}_0 a b) {name}_1 {name}_2)");
+            let (mut td, t) = parse_term(&s);
+            // An unrelated arena variable must not affect this term's rendering.
+            td.var(format!("{name}_3"));
+            let mut sym = SymbolGen::new(prefix.into());
+            assert_eq!(
+                td.to_string_with_let_and_hint(&mut sym, t, hint),
+                format!(
+                    "(let {name}_3 (g {name}_0 a b))\n\n(f {name}_3 {name}_3 {name}_1 {name}_2)"
+                )
+            );
+        }
     }
 
     #[test]
