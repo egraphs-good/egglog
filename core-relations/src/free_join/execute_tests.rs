@@ -22,11 +22,11 @@ use crate::free_join::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
         packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
     },
-    packed_cache::{RootProjection, RootProjectionEntry, TrieRoot},
+    packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
     prepared_index::{
-        AccessId, PreparedIndexKind, PreparedIndexRef, PreparedIndexSlot, PreparedIndexState,
-        PreparedIndexStateId, PreparedJoinIndexes, PreparedTailMaskWidth, StageMask,
+        AccessId, PreparedIndexKind, PreparedIndexSlot, PreparedIndexStateId, PreparedJoinIndexes,
+        PreparedJoinLayout, PreparedTailMaskWidth, StageMask,
     },
 };
 
@@ -215,27 +215,14 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
 }
 
 #[test]
-fn shared_root_projection_keys_are_canonical_and_single_flight() {
-    let unshared = TrieRoot::new(Subset::Dense(crate::OffsetRange::new(
+fn shared_packed_root_keys_are_canonical_and_single_flight() {
+    let unshared = OwnedAtomRows::new(Subset::Dense(crate::OffsetRange::new(
         crate::RowId::from_usize(0),
         crate::RowId::from_usize(1),
     )));
-    let state = PreparedIndexState::new(PreparedIndexKind::Uncacheable);
-    let prepared = PreparedIndexRef {
-        kind: PreparedIndexKind::Uncacheable,
-        access: AccessId::new(0),
-        state: &state,
-        families: &[],
-    };
-    assert!(
-        prepared
-            .get_or_init_root_projection(&unshared, ColumnId::from_usize(0), &[], || {
-                panic!("an unshared root must not build a shared projection")
-            })
-            .is_none()
-    );
+    assert!(unshared.packed_root_slot(FamilyId::new(0), 0).is_none());
 
-    let root = Arc::new(TrieRoot::new_shared(Subset::Dense(
+    let root = Arc::new(OwnedAtomRows::new_shared(Subset::Dense(
         crate::OffsetRange::new(crate::RowId::from_usize(0), crate::RowId::from_usize(1)),
     )));
     let lower = crate::Constraint::GtConst {
@@ -246,19 +233,30 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
         col: ColumnId::from_usize(1),
         val: Value::from_usize(20),
     };
-    let forward = root
-        .projection_slot(ColumnId::from_usize(0), &[lower.clone(), upper.clone()])
-        .unwrap();
+    let mut db = crate::free_join::Database::new();
+    let table = db.add_table(
+        crate::table::SortedWritesTable::new(2, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        std::iter::empty(),
+        std::iter::empty(),
+    );
+    let info = &mut db.tables[table];
+    let family = info.successor_family(ColumnId::new(0), &[lower.clone(), upper.clone()]);
+    let reversed_family = info.successor_family(ColumnId::new(0), &[upper.clone(), lower.clone()]);
+    let other_column = info.successor_family(ColumnId::new(1), &[lower.clone(), upper]);
+    let other_constraints = info.successor_family(ColumnId::new(0), &[lower]);
+    let family_count = info.successor_families.len();
+    assert_eq!(family, reversed_family);
+    let forward = root.packed_root_slot(family, family_count).unwrap();
     let reversed = root
-        .projection_slot(ColumnId::from_usize(0), &[upper.clone(), lower.clone()])
+        .packed_root_slot(reversed_family, family_count)
         .unwrap();
-    assert!(Arc::ptr_eq(&forward, &reversed));
-    assert!(!Arc::ptr_eq(
-        &forward,
-        &root
-            .projection_slot(ColumnId::from_usize(1), &[lower.clone(), upper.clone()])
-            .unwrap()
-    ));
+    assert!(std::ptr::eq(forward, reversed));
+    for other in [other_column, other_constraints] {
+        assert!(!std::ptr::eq(
+            forward,
+            root.packed_root_slot(other, family_count).unwrap()
+        ));
+    }
 
     let builds = AtomicUsize::new(0);
     let barrier = Barrier::new(16);
@@ -266,43 +264,20 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
         let mut handles = Vec::new();
         for _ in 0..16 {
             let root = root.clone();
-            let lower = lower.clone();
-            let upper = upper.clone();
             let builds = &builds;
             let barrier = &barrier;
             handles.push(scope.spawn(move || {
-                let state = PreparedIndexState::new(PreparedIndexKind::Uncacheable);
-                let prepared = PreparedIndexRef {
-                    kind: PreparedIndexKind::Uncacheable,
-                    access: AccessId::new(0),
-                    state: &state,
-                    families: &[],
-                };
                 barrier.wait();
-                // Race both the canonicalized DashMap lookup and the lazy
-                // projection publication, as parallel plans do.
-                let projection = prepared
-                    .get_or_init_root_projection(
-                        &root,
-                        ColumnId::from_usize(0),
-                        &[upper.clone(), lower.clone()],
-                        || {
-                            builds.fetch_add(1, Ordering::Relaxed);
-                            RootProjection::from_sorted_pairs(Vec::new())
-                        },
-                    )
-                    .unwrap();
-                let reused = prepared
-                    .get_or_init_root_projection(
-                        &root,
-                        ColumnId::from_usize(0),
-                        &[lower, upper],
-                        || panic!("a retained projection must not be rebuilt"),
-                    )
-                    .unwrap();
-                assert!(std::ptr::eq(projection, reused));
-                assert!(projection.continuations.is_shared());
-                projection as *const RootProjectionEntry as usize
+                let slot = root.packed_root_slot(family, family_count).unwrap();
+                let address = slot.get_or_init(|| {
+                    builds.fetch_add(1, Ordering::Relaxed);
+                    123
+                });
+                assert_eq!(
+                    *slot.get_or_init(|| panic!("a packed root must not be rebuilt")),
+                    123
+                );
+                *address
             }));
         }
         let addresses = handles
@@ -372,9 +347,9 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
     assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3].into_iter()));
 }
 
-fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
+fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
     let mut access_counts = crate::numeric_id::DenseIdMap::new();
-    let mut states = Vec::new();
+    let mut state_count = 0;
     let prepared_stages: Box<[SmallVec<[PreparedIndexSlot; 4]>]> = stages
         .iter()
         .map(|stage| {
@@ -395,18 +370,17 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinIndexes {
                     let access = AccessId::from_usize(*next);
                     *next += 1;
                     let kind = PreparedIndexKind::Uncacheable;
-                    let state = PreparedIndexStateId::from_usize(states.len());
-                    states.push(PreparedIndexState::new(kind));
+                    let state = PreparedIndexStateId::from_usize(state_count);
+                    state_count += 1;
                     PreparedIndexSlot::new(kind, access, state)
                 })
                 .collect()
         })
         .collect();
     let tail_masks = PreparedTailMaskWidth::new(stages, &prepared_stages, access_counts.n_ids());
-    PreparedJoinIndexes::Indexed {
+    PreparedJoinLayout {
         stages: prepared_stages,
-        states: states.into_boxed_slice(),
-        families: Arc::from(Vec::new()),
+        state_count,
         access_counts,
         tail_masks,
     }
@@ -431,7 +405,8 @@ fn assert_tail_masks_match_scanner<M: StageMask>(
     orders: &[Vec<usize>],
     atom_count: usize,
 ) {
-    let prepared = prepared_for(stages);
+    let prepared_layout = prepared_for(stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let masks = prepared.tail_masks::<M>().unwrap();
     for order in orders {
         let instr_order = InstrOrder::from_iter(order.iter().copied());
@@ -440,7 +415,7 @@ fn assert_tail_masks_match_scanner<M: StageMask>(
             for atom_index in 0..atom_count {
                 let atom = AtomId::from_usize(atom_index);
                 assert_eq!(
-                    masks.atom_tail_use(atom, remaining, prepared.access_count(atom)),
+                    masks.atom_tail_use(atom, remaining),
                     scan_atom_tail_use(atom, stages, &prepared, &instr_order, resume_pos),
                     "tail metadata diverged for order {order:?}, suffix {resume_pos}, atom {atom_index}"
                 );
@@ -519,20 +494,24 @@ fn prepared_tail_masks_pick_the_narrowest_width_that_fits() {
             .collect()
     }
 
-    let narrow_full = prepared_for(&stages(64));
+    let narrow_full_layout = prepared_for(&stages(64));
+    let narrow_full = PreparedJoinIndexes::from_layout(&narrow_full_layout, &[]);
     assert!(!narrow_full.uses_wide_stage_mask());
     assert_eq!(narrow_full.all_stage_mask::<u64>(), Some(u64::MAX));
     assert!(narrow_full.tail_masks::<u128>().is_none());
 
-    let wide = prepared_for(&stages(65));
+    let wide_layout = prepared_for(&stages(65));
+    let wide = PreparedJoinIndexes::from_layout(&wide_layout, &[]);
     assert!(wide.uses_wide_stage_mask());
     assert!(wide.tail_masks::<u64>().is_none());
     assert_eq!(wide.all_stage_mask::<u128>(), Some((1u128 << 65) - 1));
 
-    let wide_full = prepared_for(&stages(128));
+    let wide_full_layout = prepared_for(&stages(128));
+    let wide_full = PreparedJoinIndexes::from_layout(&wide_full_layout, &[]);
     assert_eq!(wide_full.all_stage_mask::<u128>(), Some(u128::MAX));
 
-    let over = prepared_for(&stages(129));
+    let over_layout = prepared_for(&stages(129));
+    let over = PreparedJoinIndexes::from_layout(&over_layout, &[]);
     assert!(!over.uses_wide_stage_mask());
     assert!(over.tail_masks::<u64>().is_none());
     assert!(over.tail_masks::<u128>().is_none());
@@ -541,7 +520,8 @@ fn prepared_tail_masks_pick_the_narrowest_width_that_fits() {
 #[test]
 fn packed_tail_shape_preserves_direct_graph_path() {
     let stages = vec![intersect_stage(0, 0), intersect_stage(0, 1)];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter(0..stages.len());
 
     assert_eq!(
@@ -561,7 +541,8 @@ fn packed_tail_shape_uses_dynamic_families_for_dvo_choice() {
         intersect_stage(0, 1),
         intersect_stage(0, 2),
     ];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter([0, 2, 1].into_iter());
 
     assert_eq!(
@@ -588,7 +569,8 @@ fn packed_tail_shape_stops_at_cover_and_reorder_barriers() {
         },
         intersect_stage(0, 1),
     ];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter(0..stages.len());
     assert_eq!(
         packed_child_shape_in_tail::<u64>(atom, &stages, &prepared, &order, 1),
@@ -606,7 +588,8 @@ fn packed_tail_shape_stops_at_cover_and_reorder_barriers() {
         },
         intersect_stage(0, 2),
     ];
-    let prepared = prepared_for(&stages);
+    let prepared_layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&prepared_layout, &[]);
     let order = InstrOrder::from_iter(0..stages.len());
     assert_eq!(
         packed_child_shape_in_tail::<u64>(atom, &stages, &prepared, &order, 1),
@@ -643,7 +626,7 @@ fn task_clone_keeps_only_atoms_in_the_dynamic_join_tail() {
     let order = InstrOrder::from_iter([2, 0, 1].into_iter());
 
     let nodes = (0..4)
-        .map(|_| Arc::new(TrieRoot::new(Subset::empty())))
+        .map(|_| Arc::new(OwnedAtomRows::new(Subset::empty())))
         .collect::<Vec<_>>();
     let mut source = BindingInfo::default();
     for (atom, node) in nodes.iter().enumerate() {
@@ -661,7 +644,7 @@ fn task_clone_keeps_only_atoms_in_the_dynamic_join_tail() {
     let child = source.clone_for_join_tail(&stages, &order, 1);
     for (atom, node) in nodes.iter().enumerate().take(3) {
         let cloned = child.subsets.get(AtomId::from_usize(atom)).unwrap();
-        assert!(Arc::ptr_eq(cloned.root_arc(), node));
+        assert!(Arc::ptr_eq(cloned.owned_arc(), node));
         assert_eq!(Arc::strong_count(node), 3);
     }
     assert!(!child.subsets.contains_key(AtomId::from_usize(3)));
@@ -806,5 +789,43 @@ fn filtered_index_ranges_are_complete_disjoint_and_coarse() {
             expected_start += scan_size;
         }
         assert_eq!(expected_start, leader_keys, "ranges must cover every key");
+    }
+}
+
+#[test]
+fn row_handle_cardinality_tracks_each_storage_representation() {
+    use crate::{
+        free_join::{
+            packed_trie::{PackedCursor, TrieNode},
+            probe::AtomRows,
+            residual_index::InlineRows,
+        },
+        offsets::{OffsetRange, RowId, SortedOffsetSlice, SubsetRef},
+    };
+    let arena = egglog_concurrency::SharedArena::new();
+    let handle = arena.new_handle();
+    let rows = [RowId::new_const(1), RowId::new_const(3)];
+    // This deliberately has a gap: cardinality counts rows, not the span.
+    let sparse = SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(&rows) });
+    let pairs = [
+        (Value::new_const(0), rows[0]),
+        (Value::new_const(0), rows[1]),
+    ];
+    let packed = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf, false);
+    let range = OffsetRange::new(RowId::new_const(5), RowId::new_const(8));
+    let cases = [
+        AtomRows::owned(Arc::new(OwnedAtomRows::new(Subset::Dense(range)))),
+        AtomRows::catalog(sparse, None),
+        AtomRows::packed(PackedCursor::new(packed, 0)),
+        AtomRows::inline(InlineRows::from_sorted(&rows)),
+        AtomRows::dense(range),
+        AtomRows::dense(OffsetRange::new(rows[0], rows[0])),
+    ];
+    for rows in cases {
+        assert_eq!(rows.size(), rows.subset().size());
+        assert_eq!(rows.is_empty(), rows.subset().size() == 0);
+        let clone = rows.clone();
+        drop(rows);
+        assert_eq!(clone.size(), clone.subset().size());
     }
 }

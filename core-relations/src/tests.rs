@@ -1190,20 +1190,20 @@ fn shared_root_indexes_are_single_flight_and_execution_scoped_inner() {
 }
 
 #[test]
-fn terminal_shared_root_index_is_probed_without_packed_nodes() {
-    run_serial_and_parallel(terminal_shared_root_index_is_probed_without_packed_nodes_inner);
+fn terminal_shared_root_index_preserves_matches() {
+    run_serial_and_parallel(terminal_shared_root_index_preserves_matches_inner);
 }
 
-fn terminal_shared_root_index_is_probed_without_packed_nodes_inner() {
+fn terminal_shared_root_index_preserves_matches_inner() {
     terminal_shared_root_index_fixture(v(31), 32..128);
 }
 
 #[test]
-fn empty_terminal_shared_root_index_is_probed_without_packed_nodes() {
-    run_serial_and_parallel(empty_terminal_shared_root_index_is_probed_without_packed_nodes_inner);
+fn empty_terminal_shared_root_index_preserves_matches() {
+    run_serial_and_parallel(empty_terminal_shared_root_index_preserves_matches_inner);
 }
 
-fn empty_terminal_shared_root_index_is_probed_without_packed_nodes_inner() {
+fn empty_terminal_shared_root_index_preserves_matches_inner() {
     terminal_shared_root_index_fixture(v(1_000), 0..0);
 }
 

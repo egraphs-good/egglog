@@ -23,7 +23,7 @@ use super::{AtomId, Variable};
 pub(super) enum UpdateInstr<'rows, 'exec> {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, AtomRows<'rows, 'exec>),
-    /// Refine an atom to a dense offset range, avoiding an Arc<TrieRoot> allocation.
+    /// Refine an atom to a dense offset range, avoiding an Arc<OwnedAtomRows> allocation.
     RefineAtomDense(AtomId, OffsetRange),
     /// Marks the end of the current frame. Time to make a recursive call.
     EndFrame,
@@ -76,7 +76,7 @@ impl<'rows, 'exec> FrameUpdates<'rows, 'exec> {
     }
 
     /// Refine `atom` to consider only the given dense offset range, without
-    /// allocating an Arc<TrieRoot> eagerly.
+    /// allocating an Arc<OwnedAtomRows> eagerly.
     pub(super) fn refine_atom_dense(&mut self, atom: AtomId, range: OffsetRange) {
         self.updates
             .push(BufferedUpdateInstr::RefineAtomDense(atom, range));

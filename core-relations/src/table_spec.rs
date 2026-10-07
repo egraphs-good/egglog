@@ -339,6 +339,14 @@ pub trait Table: Any + Send + Sync {
         }
     }
 
+    /// Whether `subset` contains at least one live row matching `cs`.
+    ///
+    /// Equivalent to checking that [`Table::refine_ref`] with `check_live` set
+    /// returns a nonempty subset; implementors may stop at the first match.
+    fn contains_match(&self, subset: SubsetRef, cs: &[Constraint]) -> bool {
+        self.refine_ref(subset, cs, true).size() != 0
+    }
+
     /// An optional method for quickly generating a subset from a constraint.
     /// The standard use-case here is to apply constraints based on a column
     /// that is known to be sorted.
