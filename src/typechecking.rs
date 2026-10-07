@@ -872,7 +872,11 @@ impl TypeInfo {
         Result::Ok(schedule)
     }
 
-    fn typecheck_rule(
+    /// Typechecks `rule`, solving the body and the head together, and
+    /// returns it with every variable and call resolved. `global_seminaive`
+    /// is the e-graph's seminaive setting: when it is off, or for `:naive`
+    /// and `:unsafe-seminaive` rules, the head may read the database.
+    pub fn typecheck_rule(
         &self,
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
