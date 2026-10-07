@@ -22,7 +22,7 @@ use crate::{
 use super::{
     ActionId, AtomId, Variable,
     frame_update::FrameUpdates,
-    packed_cache::TrieRoot,
+    packed_cache::OwnedAtomRows,
     packed_trie::ChildShape,
     plan::{JoinStage, MatId, MatScanMode},
     prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes, StageMask},
@@ -312,7 +312,7 @@ where
     pub(super) fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
         let rows = match subset {
             Subset::Dense(range) => AtomRows::Dense(range),
-            subset => AtomRows::Root(Arc::new(TrieRoot::new(subset))),
+            subset => AtomRows::Owned(Arc::new(OwnedAtomRows::new(subset))),
         };
         self.subsets.insert(atom, rows);
     }

@@ -22,7 +22,7 @@ use crate::free_join::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
         packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
     },
-    packed_cache::{RootProjection, RootProjectionEntry, TrieRoot},
+    packed_cache::{OwnedAtomRows, RootProjection, RootProjectionEntry},
     packed_trie::ChildShape,
     prepared_index::{
         AccessId, PreparedIndexKind, PreparedIndexRef, PreparedIndexSlot, PreparedIndexState,
@@ -216,7 +216,7 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
 
 #[test]
 fn shared_root_projection_keys_are_canonical_and_single_flight() {
-    let unshared = TrieRoot::new(Subset::Dense(crate::OffsetRange::new(
+    let unshared = OwnedAtomRows::new(Subset::Dense(crate::OffsetRange::new(
         crate::RowId::from_usize(0),
         crate::RowId::from_usize(1),
     )));
@@ -235,7 +235,7 @@ fn shared_root_projection_keys_are_canonical_and_single_flight() {
             .is_none()
     );
 
-    let root = Arc::new(TrieRoot::new_shared(Subset::Dense(
+    let root = Arc::new(OwnedAtomRows::new_shared(Subset::Dense(
         crate::OffsetRange::new(crate::RowId::from_usize(0), crate::RowId::from_usize(1)),
     )));
     let lower = crate::Constraint::GtConst {
@@ -643,7 +643,7 @@ fn task_clone_keeps_only_atoms_in_the_dynamic_join_tail() {
     let order = InstrOrder::from_iter([2, 0, 1].into_iter());
 
     let nodes = (0..4)
-        .map(|_| Arc::new(TrieRoot::new(Subset::empty())))
+        .map(|_| Arc::new(OwnedAtomRows::new(Subset::empty())))
         .collect::<Vec<_>>();
     let mut source = BindingInfo::default();
     for (atom, node) in nodes.iter().enumerate() {
@@ -661,7 +661,7 @@ fn task_clone_keeps_only_atoms_in_the_dynamic_join_tail() {
     let child = source.clone_for_join_tail(&stages, &order, 1);
     for (atom, node) in nodes.iter().enumerate().take(3) {
         let cloned = child.subsets.get(AtomId::from_usize(atom)).unwrap();
-        assert!(Arc::ptr_eq(cloned.root_arc(), node));
+        assert!(Arc::ptr_eq(cloned.owned_arc(), node));
         assert_eq!(Arc::strong_count(node), 3);
     }
     assert!(!child.subsets.contains_key(AtomId::from_usize(3)));

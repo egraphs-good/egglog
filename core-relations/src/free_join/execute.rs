@@ -47,7 +47,7 @@ use super::{
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
         materialization_is_live_in_tail, sort_plan_by_size,
     },
-    packed_cache::{RootProjection, RootProjectionEntry, TrieCache, TrieRoot},
+    packed_cache::{OwnedAtomRows, RootProjection, RootProjectionEntry, TrieCache},
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
@@ -616,13 +616,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// Roots whose signature is used by more than one plan (see
     /// [`TrieCache::shared`]) are shared through the cache; the rest are built
     /// fresh per plan so the pool can recycle them.
-    fn root_node(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<Arc<TrieRoot>> {
+    fn root_node(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<Arc<OwnedAtomRows>> {
         // Fast path: when sharing is disabled this run (small database, or no
         // root reused across plans), skip the root-signature machinery entirely
         // and build a fresh per-plan root — matching the pre-sharing behavior at
         // no added cost.
         let Some(trie_cache) = self.trie_cache.as_ref() else {
-            return Some(Arc::new(TrieRoot::new(
+            return Some(Arc::new(OwnedAtomRows::new(
                 self.build_root_subset(table_id, headers)?,
             )));
         };
@@ -636,7 +636,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
 
         if !trie_cache.shared.contains(&sig) {
             // Not reused across plans: build a fresh, unshared root.
-            return Some(Arc::new(TrieRoot::new(
+            return Some(Arc::new(OwnedAtomRows::new(
                 self.build_root_subset(table_id, headers)?,
             )));
         }
@@ -650,7 +650,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let node = match trie_cache.roots.entry(key) {
             Entry::Occupied(o) => o.get().clone(),
             Entry::Vacant(v) => {
-                let node = Arc::new(TrieRoot::new_shared(subset));
+                let node = Arc::new(OwnedAtomRows::new_shared(subset));
                 v.insert(node.clone());
                 node
             }
@@ -739,7 +739,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// disabled or this root has no shared projection map.
     fn projected_root_index<'rows>(
         &self,
-        root: &TrieRoot,
+        root: &OwnedAtomRows,
         table: WrappedTableRef<'_>,
         constraints: &[Constraint],
         column: ColumnId,
@@ -806,7 +806,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
         };
         match rows {
-            AtomRows::Root(root) if !root.is_plan_root() => self.build_packed_node(
+            AtomRows::Owned(root) if !root.is_plan_root() => self.build_packed_node(
                 table,
                 root.subset.as_ref(),
                 false,
@@ -815,7 +815,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 child_shape,
                 false,
             ),
-            AtomRows::Root(root) => {
+            AtomRows::Owned(root) => {
                 let address = *prepared.state.packed_root.get_or_init(|| {
                     self.build_packed_node(
                         table,
@@ -918,7 +918,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         let all_cacheable = columns_are_cacheable(info, &cols);
         let whole_table = info.table.all();
         let root_range = match &source {
-            AtomRows::Root(root) => match &root.subset {
+            AtomRows::Owned(root) => match &root.subset {
                 Subset::Dense(range) => Some(*range),
                 Subset::Sparse(_) => None,
             },
@@ -932,7 +932,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         // a shared root, a constrained scan therefore keeps the shared root
         // projection, whose grid is keyed by those constraints.
         let constrained_shared_root =
-            !constraints.is_empty() && matches!(&source, AtomRows::Root(root) if root.is_shared());
+            !constraints.is_empty() && matches!(&source, AtomRows::Owned(root) if root.is_shared());
         let can_use_catalog = root_range.is_some()
             && all_cacheable
             && whole_table.size() / 2 < source.size()
@@ -973,7 +973,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // rows for every plan, so the continuation cache is shared too. A
             // terminal probe never continues, so it skips the lookup.
             let shared_continuations = match &source {
-                AtomRows::Root(root)
+                AtomRows::Owned(root)
                     if terminal_child_shape != ChildShape::Leaf && self.trie_cache.is_some() =>
                 {
                     prepared.shared_catalog_continuations(root, &cols)
@@ -1025,7 +1025,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 terminal_child_shape
             };
             let projected_root = match &source {
-                AtomRows::Root(root) => self.projected_root_index(
+                AtomRows::Owned(root) => self.projected_root_index(
                     root,
                     info.table.as_ref(),
                     constraints,

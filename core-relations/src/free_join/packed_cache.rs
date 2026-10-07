@@ -1,7 +1,7 @@
 //! Trie state shared across the plans of one rule-set execution.
 //!
 //! Plans that constrain the same table with the same fast constraints share
-//! one [`TrieRoot`]. Everything built below a shared root is shared as well:
+//! one [`OwnedAtomRows`]. Everything built below a shared root is shared as well:
 //! its scalar projections, the [`RootContinuationCache`]s of its persistent
 //! catalog indexes, and every packed descendant node. Descendants are published under
 //! table-wide [`FamilyId`]s, so two plans that reach the same rows and index
@@ -194,7 +194,7 @@ type CatalogContinuationMap = DashMap<ColumnIds, Arc<RootContinuationCache>>;
 /// run, so each key continues to denote the same subset after publication.
 #[derive(Default)]
 pub(super) struct TrieCache {
-    pub(super) roots: DashMap<RootKey, Arc<TrieRoot>>,
+    pub(super) roots: DashMap<RootKey, Arc<OwnedAtomRows>>,
     /// Interns canonical header-constraint sets to keep [`RootKey`] cheap.
     /// The table stays outside the id and remains the first part of `RootKey`.
     header_ids: DashMap<SmallVec<[Constraint; 2]>, HeaderConstraintId>,
@@ -293,24 +293,24 @@ struct SharedRootIndexes {
 /// packed nodes; below a shared root they are shared across plans.
 ///
 /// A plan root holds the atom's header-filtered rows for a whole plan
-/// execution. A residual root holds the rows left by one constrained probe
+/// execution. An owned residual holds the rows left by one constrained probe
 /// and belongs to a single frame.
-pub(crate) struct TrieRoot {
+pub(crate) struct OwnedAtomRows {
     pub(super) subset: Subset,
     /// Present only for roots shared across plans.
     shared: Option<SharedRootIndexes>,
     plan_root: bool,
 }
 
-impl std::fmt::Debug for TrieRoot {
+impl std::fmt::Debug for OwnedAtomRows {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrieRoot")
+        f.debug_struct("OwnedAtomRows")
             .field("subset", &self.subset)
             .finish()
     }
 }
 
-impl TrieRoot {
+impl OwnedAtomRows {
     pub(super) fn new(subset: Subset) -> Self {
         Self {
             subset,

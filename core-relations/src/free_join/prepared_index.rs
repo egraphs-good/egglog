@@ -32,7 +32,8 @@ use super::{
         AtomTailUse, for_each_stage_atom, for_each_stage_indexed_access, is_reorder_barrier,
     },
     packed_cache::{
-        AccessFamilies, FamilyId, RootProjection, RootProjectionEntry, RootProjectionSlot, TrieRoot,
+        AccessFamilies, FamilyId, OwnedAtomRows, RootProjection, RootProjectionEntry,
+        RootProjectionSlot,
     },
     packed_trie::ChildShape,
     plan::{JoinStage, JoinStages, Plan},
@@ -446,7 +447,7 @@ impl<'a> PreparedIndexRef<'a> {
     /// [`RootContinuationCache`], is borrowed from this execution's retained state.
     pub(super) fn get_or_init_root_projection(
         self,
-        root: &TrieRoot,
+        root: &OwnedAtomRows,
         column: ColumnId,
         slow_constraints: &[Constraint],
         build: impl FnOnce() -> RootProjection,
@@ -466,7 +467,7 @@ impl<'a> PreparedIndexRef<'a> {
     /// shared. `root` and `columns` must identify the same index on every call.
     pub(super) fn shared_catalog_continuations(
         self,
-        root: &TrieRoot,
+        root: &OwnedAtomRows,
         columns: &[ColumnId],
     ) -> Option<&'a RootContinuationCache> {
         if let Some(cache) = self.state.shared_continuations.get() {

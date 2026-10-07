@@ -291,8 +291,8 @@ mod catalog_filter {
         let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(1)]) else {
             panic!("expected filtered rows")
         };
-        let AtomRows::Root(root) = &rows else {
-            panic!("a large filtered group must become a residual root")
+        let AtomRows::Owned(root) = &rows else {
+            panic!("a large filtered group must become an owned residual")
         };
         assert!(!root.is_plan_root());
         let mut expected = live_rows_matching(
