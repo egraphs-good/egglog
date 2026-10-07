@@ -2,9 +2,9 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-(let t0 (MathU (Add (Const 5) (Const 1))))
+(let t_0 (MathU (Add (Const 5) (Const 1))))
 (Rule
-  (= t0 t0)
+  (= t_0 t_0)
   (name
     "(rule ((MathU (Const a))
        (> (+ a 1) 5))
