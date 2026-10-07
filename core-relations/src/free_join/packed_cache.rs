@@ -1,7 +1,7 @@
 //! Trie state shared across the plans of one rule-set execution.
 //!
 //! Plans that constrain the same table with the same fast constraints share
-//! one [`TrieRoot`]. Everything built below a shared root is shared as well:
+//! one [`OwnedAtomRows`]. Everything built below a shared root is shared as well:
 //! its packed root indexes, the continuation grids of its persistent catalog
 //! indexes, and every packed descendant node. Descendants are published under
 //! table-wide [`FamilyId`]s, so two plans that reach the same rows and index

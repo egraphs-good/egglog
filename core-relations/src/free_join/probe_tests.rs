@@ -294,7 +294,7 @@ mod catalog_filter {
         let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(1)]) else {
             panic!("expected filtered rows")
         };
-        let AtomRowsKind::Root(root) = rows.kind() else {
+        let AtomRowsKind::Owned(root) = rows.kind() else {
             panic!("a large filtered group must become a residual root")
         };
         assert!(!root.is_plan_root());

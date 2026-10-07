@@ -47,7 +47,7 @@ use super::{
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
         materialization_is_live_in_tail, sort_plan_by_size,
     },
-    packed_cache::{TrieCache, TrieRoot},
+    packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
@@ -753,7 +753,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
         };
         match rows.kind() {
-            AtomRowsKind::Root(root) if !root.is_plan_root() => self.build_packed_node(
+            AtomRowsKind::Owned(root) if !root.is_plan_root() => self.build_packed_node(
                 table,
                 root.subset.as_ref(),
                 false,
@@ -762,7 +762,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 child_shape,
                 false,
             ),
-            AtomRowsKind::Root(root) => {
+            AtomRowsKind::Owned(root) => {
                 let shared = root.is_shared();
                 let child_shape = if shared {
                     shared_child_shape
@@ -925,7 +925,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         // cursors already select their continuation index, so do not repeat
         // whole-table metadata work for them (including tiny cached groups).
         let catalog_intersection = match source.kind() {
-            AtomRowsKind::Root(root) if constraints.is_empty() || !root.is_shared() => {
+            AtomRowsKind::Owned(root) if constraints.is_empty() || !root.is_shared() => {
                 if let Subset::Dense(range) = &root.subset
                     && columns_are_cacheable(info, &cols)
                 {
@@ -947,7 +947,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // rows for every plan, so the continuation cache is shared too. A
             // terminal probe never continues, so it skips the lookup.
             let shared_continuations = match source.kind() {
-                AtomRowsKind::Root(root)
+                AtomRowsKind::Owned(root)
                     if terminal_child_shape != ChildShape::Leaf && self.trie_cache.is_some() =>
                 {
                     prepared.shared_catalog_continuations(root, &cols)

@@ -312,7 +312,7 @@ where
     pub(super) fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
         let rows = match subset {
             Subset::Dense(range) => AtomRows::dense(range),
-            subset => AtomRows::root(Arc::new(TrieRoot::new(subset))),
+            subset => AtomRows::owned(Arc::new(OwnedAtomRows::new(subset))),
         };
         self.subsets.insert(atom, rows);
     }

@@ -20,7 +20,7 @@ use crate::{
 use super::{
     AtomId, ColumnIds,
     frame_update::FrameUpdates,
-    packed_cache::{FamilyId, TrieRoot},
+    packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::{ChildShape, PackedCursor, TrieNode},
     plan::{ScanSpec, SingleScanSpec},
     prepared_index::{ContinuationPosition, PreparedIndexRef, RootContinuationCache},
@@ -125,14 +125,14 @@ pub(super) struct CatalogContinuation<'rows> {
 /// Owned rows retain a plan's header-filtered subset or a frame's residual
 /// subset. An indexed cursor borrows a first-level group from a prepared
 /// persistent index or a shared round-local root index and carries its
-/// continuation slot. Every
-/// lower cursor is just a packed node plus a key ordinal. Dense singletons
+/// continuation slot. Every lower cursor is just a packed node plus a key
+/// ordinal. Dense singletons
 /// come from cover scans and are packed lazily if the atom is probed again, as
 /// are owned residuals left by a constrained catalog match.
 #[derive(Clone)]
 pub(super) enum AtomRowsKind<'rows, 'exec> {
-    /// The atom's plan root, or a frame-local residual root (see [`TrieRoot`]).
-    Root(Arc<TrieRoot>),
+    /// An owned subset serving as the atom's plan root or a frame-local residual.
+    Owned(Arc<OwnedAtomRows>),
     /// A persistent index group. It may still contain stale rows; every
     /// consumer of retained rows skips them.
     Catalog {
@@ -176,7 +176,7 @@ where
     /// this label and their cardinality rather than formatting their contents.
     fn kind_name(&self) -> &'static str {
         match &self.kind {
-            AtomRowsKind::Root(_) => "root",
+            AtomRowsKind::Owned(_) => "owned",
             AtomRowsKind::Catalog { .. } => "catalog",
             AtomRowsKind::Packed(_) => "packed",
             AtomRowsKind::Inline(_) => "inline",
@@ -191,13 +191,13 @@ where
             Subset::Sparse(rows) if rows.slice().inner().len() <= SMALL_RESIDUAL => {
                 Self::inline(InlineRows::from_sorted(rows.slice().inner()))
             }
-            subset => Self::root(Arc::new(TrieRoot::new_residual(subset))),
+            subset => Self::owned(Arc::new(OwnedAtomRows::new_residual(subset))),
         }
     }
 
     pub(super) fn subset(&self) -> SubsetRef<'_> {
         match &self.kind {
-            AtomRowsKind::Root(root) => root.subset.as_ref(),
+            AtomRowsKind::Owned(root) => root.subset.as_ref(),
             AtomRowsKind::Catalog { subset, .. } => *subset,
             AtomRowsKind::Packed(cursor) => cursor.subset(),
             AtomRowsKind::Inline(rows) => rows.subset(),
@@ -214,10 +214,10 @@ where
         &self.kind
     }
 
-    pub(super) fn root(root: Arc<TrieRoot>) -> Self {
+    pub(super) fn owned(root: Arc<OwnedAtomRows>) -> Self {
         Self {
             cardinality: root.subset.size(),
-            kind: AtomRowsKind::Root(root),
+            kind: AtomRowsKind::Owned(root),
         }
     }
     pub(super) fn packed(cursor: PackedCursor<'rows, 'exec>) -> Self {
@@ -256,17 +256,17 @@ where
     }
 
     #[cfg(test)]
-    pub(super) fn root_arc(&self) -> &Arc<TrieRoot> {
-        let AtomRowsKind::Root(root) = &self.kind else {
-            panic!("expected root rows")
+    pub(super) fn owned_arc(&self) -> &Arc<OwnedAtomRows> {
+        let AtomRowsKind::Owned(root) = &self.kind else {
+            panic!("expected owned rows")
         };
-        rows
+        root
     }
 }
 
-impl<'rows, 'exec> From<Arc<TrieRoot>> for AtomRows<'rows, 'exec> {
-    fn from(root: Arc<TrieRoot>) -> Self {
-        Self::root(root)
+impl<'rows, 'exec> From<Arc<OwnedAtomRows>> for AtomRows<'rows, 'exec> {
+    fn from(root: Arc<OwnedAtomRows>) -> Self {
+        Self::owned(root)
     }
 }
 

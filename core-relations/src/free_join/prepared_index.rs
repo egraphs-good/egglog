@@ -30,7 +30,7 @@ use super::{
     join_tail::{
         AtomTailUse, for_each_stage_atom, for_each_stage_indexed_access, is_reorder_barrier,
     },
-    packed_cache::{AccessFamilies, FamilyId, TrieRoot},
+    packed_cache::{AccessFamilies, FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
     plan::{JoinStage, JoinStages, Plan},
 };

@@ -22,7 +22,7 @@ use crate::free_join::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
         packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
     },
-    packed_cache::{FamilyId, TrieRoot},
+    packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
     prepared_index::{
         AccessId, PreparedIndexKind, PreparedIndexSlot, PreparedIndexStateId, PreparedJoinIndexes,
@@ -216,7 +216,7 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
 
 #[test]
 fn shared_packed_root_keys_are_canonical_and_single_flight() {
-    let unshared = TrieRoot::new(Subset::Dense(crate::OffsetRange::new(
+    let unshared = OwnedAtomRows::new(Subset::Dense(crate::OffsetRange::new(
         crate::RowId::from_usize(0),
         crate::RowId::from_usize(1),
     )));
@@ -814,7 +814,7 @@ fn row_handle_cardinality_tracks_each_storage_representation() {
     let packed = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf, false);
     let range = OffsetRange::new(RowId::new_const(5), RowId::new_const(8));
     let cases = [
-        AtomRows::root(Arc::new(TrieRoot::new(Subset::Dense(range)))),
+        AtomRows::owned(Arc::new(OwnedAtomRows::new(Subset::Dense(range)))),
         AtomRows::catalog(sparse, None),
         AtomRows::packed(PackedCursor::new(packed, 0)),
         AtomRows::inline(InlineRows::from_sorted(&rows)),
