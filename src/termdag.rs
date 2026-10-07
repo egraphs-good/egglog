@@ -689,7 +689,7 @@ mod tests {
             "unexpected standalone closing paren in\n{buf}"
         );
         assert!(buf.trim_end().ends_with(')'));
-        assert_eq!(repr, "(f t t)");
+        assert_eq!(repr, "(f t_0 t_0)");
     }
 
     #[test]
