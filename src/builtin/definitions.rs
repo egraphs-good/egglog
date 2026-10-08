@@ -3,14 +3,21 @@
 
 use crate::{HashMap, HashSet, proto as pb};
 
-/// The namespace is part of identity; sort and callable names may coincide.
-fn declaration_identity(d: &pb::Declaration) -> Result<(bool, &str), String> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Namespace {
+    EqSort,
+    HostSortFamily,
+    Callable,
+}
+
+/// Existing declaration tags select three namespaces; spellings may coincide.
+fn declaration_identity(d: &pb::Declaration) -> Result<(Namespace, &str), String> {
     let identity = match d.kind.as_ref().ok_or("missing declaration kind")? {
-        pb::declaration::Kind::EqSort(s) => (true, s.name.as_str()),
-        pb::declaration::Kind::HostSortFamily(s) => (true, s.name.as_str()),
-        pb::declaration::Kind::Constructor(c) => (false, c.name.as_str()),
-        pb::declaration::Kind::Function(f) => (false, f.name.as_str()),
-        pb::declaration::Kind::HostPrimitive(p) => (false, p.name.as_str()),
+        pb::declaration::Kind::EqSort(s) => (Namespace::EqSort, s.name.as_str()),
+        pb::declaration::Kind::HostSortFamily(s) => (Namespace::HostSortFamily, s.name.as_str()),
+        pb::declaration::Kind::Constructor(c) => (Namespace::Callable, c.name.as_str()),
+        pb::declaration::Kind::Function(f) => (Namespace::Callable, f.name.as_str()),
+        pb::declaration::Kind::HostPrimitive(p) => (Namespace::Callable, p.name.as_str()),
         _ => return Err("declaration reconciliation does not support this kind yet".into()),
     };
     if identity.1.is_empty() {
@@ -635,13 +642,12 @@ fn pattern_scope(p: &pb::Program, index: u32, parameters: usize) -> Result<(), S
                 return Err("unbound presentation sort parameter".into());
             }
             pb::sort::Kind::Family(f) => {
-                if let Some(d) = p
-                    .declarations
-                    .iter()
-                    .find(|d| declaration_identity(d).ok() == Some((true, f.name.as_str())))
-                    && !matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.arity as usize == f.args.len())
+                if let Some(d) = p.declarations.iter().find(|d| {
+                    declaration_identity(d).ok()
+                        == Some((Namespace::HostSortFamily, f.name.as_str()))
+                }) && !matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.arity as usize == f.args.len())
                 {
-                    return Err("presentation family arity or kind mismatch".into());
+                    return Err("presentation family arity mismatch".into());
                 }
                 pending.extend(&f.args);
             }
@@ -681,7 +687,10 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                 let declaration = p
                     .declarations
                     .iter()
-                    .find(|d| declaration_identity(d).ok() == Some((false, call.func.as_str())))
+                    .find(|d| {
+                        declaration_identity(d).ok()
+                            == Some((Namespace::Callable, call.func.as_str()))
+                    })
                     .ok_or("unknown default callee")?;
                 let (inputs, output, tail, parameters) = match declaration.kind.as_ref().unwrap() {
                     pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, &[][..], 0),

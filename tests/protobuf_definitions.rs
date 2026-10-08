@@ -1,6 +1,197 @@
 use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
 
 #[test]
+fn declaration_namespaces_coexist_with_defaults_and_frozen_resupply() {
+    let mut source = pair_default_definition();
+    source.sorts[1].kind = Some(pb::sort::Kind::Eq("Pair".into()));
+    let Some(pb::declaration::Kind::EqSort(eq)) = &mut source.declarations[0].kind else {
+        unreachable!()
+    };
+    eq.name = "Pair".into();
+    let Some(pb::declaration::Kind::Constructor(c)) = &mut source.declarations[1].kind else {
+        unreachable!()
+    };
+    c.name = "Pair".into();
+    let Some(pb::declaration::Kind::HostSortFamily(f)) = &mut source.declarations[3].kind else {
+        unreachable!()
+    };
+    f.bindings = Some(pb::SortBindings {
+        python: Some(pb::TypeBinding {
+            path: vec!["test".into(), "HostPair".into()],
+            type_params: vec!["A".into(), "B".into()],
+        }),
+        ..Default::default()
+    });
+    source.nodes.push(pb::Node {
+        sort_id: 1,
+        kind: Some(pb::node::Kind::Call(pb::Call {
+            func: "Pair".into(),
+            args: vec![2],
+        })),
+        ..Default::default()
+    });
+    source.declarations.push(pb::Declaration {
+        kind: Some(pb::declaration::Kind::Function(pb::Function {
+            name: "use_pair".into(),
+            inputs: vec![pb::Arg {
+                sort: 1,
+                name: "value".into(),
+            }],
+            output: 0,
+            ..Default::default()
+        })),
+        bindings: Some(pb::CallableBindings {
+            python: Some(pb::PythonBindings {
+                views: vec![pb::PythonCallable {
+                    kind: pb::PythonCallKind::Function.into(),
+                    path: vec!["test".into(), "use_pair".into()],
+                    params: vec![pb::PythonParameter {
+                        core_input: Some(0),
+                        name: "value".into(),
+                        default_expr: Some(3),
+                    }],
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    for reverse in [false, true] {
+        for incremental in [false, true] {
+            let mut incoming = source.clone();
+            if reverse {
+                incoming.declarations.reverse();
+            }
+            let mut destination = pb::Program::default();
+            if incremental {
+                // Install the two sort namespaces in both arrival orders before
+                // supplying callable/default closures. Neither shadows the other.
+                let sorts = pb::Program {
+                    ir_version: 1,
+                    declarations: incoming
+                        .declarations
+                        .iter()
+                        .filter(|d| {
+                            matches!(
+                                d.kind,
+                                Some(
+                                    pb::declaration::Kind::EqSort(_)
+                                        | pb::declaration::Kind::HostSortFamily(_)
+                                )
+                            )
+                        })
+                        .cloned()
+                        .collect(),
+                    ..Default::default()
+                };
+                for d in sorts.declarations {
+                    reconcile_declarations(
+                        &pb::Program {
+                            ir_version: 1,
+                            declarations: vec![d],
+                            ..Default::default()
+                        },
+                        &mut destination,
+                    )
+                    .unwrap();
+                }
+            }
+            reconcile_declarations(&incoming, &mut destination).unwrap();
+            assert_eq!(destination.declarations.len(), 5);
+            assert!(
+                destination
+                    .sorts
+                    .iter()
+                    .any(|s| s.kind == Some(pb::sort::Kind::Eq("Pair".into())))
+            );
+            assert!(destination.sorts.iter().any(|s| matches!(&s.kind,
+                Some(pb::sort::Kind::Family(f)) if f.name == "Pair" && f.args.len() == 2)));
+            let frozen = destination.clone();
+            incoming.declarations.reverse();
+            assert_eq!(
+                reconcile_declarations(&incoming, &mut destination).unwrap(),
+                [false; 5]
+            );
+            assert_eq!(
+                destination, frozen,
+                "compatible resupply retains exact closures"
+            );
+            for bad in 0..5 {
+                let mut conflict = source.clone();
+                match bad {
+                    0 => {
+                        let Some(pb::declaration::Kind::EqSort(eq)) =
+                            &mut conflict.declarations[0].kind
+                        else {
+                            unreachable!()
+                        };
+                        eq.bindings.as_mut().unwrap().python.as_mut().unwrap().path[1] =
+                            "Changed".into();
+                    }
+                    1 | 2 => {
+                        let Some(pb::declaration::Kind::HostSortFamily(f)) =
+                            &mut conflict.declarations[3].kind
+                        else {
+                            unreachable!()
+                        };
+                        if bad == 1 {
+                            f.arity = 1;
+                        } else {
+                            f.bindings.as_mut().unwrap().python.as_mut().unwrap().path[1] =
+                                "Changed".into();
+                        }
+                    }
+                    3 => {
+                        let Some(pb::declaration::Kind::Constructor(c)) =
+                            &mut conflict.declarations[1].kind
+                        else {
+                            unreachable!()
+                        };
+                        c.unextractable = true;
+                    }
+                    _ => {
+                        conflict.declarations[1]
+                            .bindings
+                            .as_mut()
+                            .unwrap()
+                            .python
+                            .as_mut()
+                            .unwrap()
+                            .views[0]
+                            .params[0]
+                            .name = "Changed".into()
+                    }
+                }
+                assert!(
+                    reconcile_declarations(&conflict, &mut destination).is_err(),
+                    "conflict {bad}"
+                );
+                assert_eq!(destination, frozen, "conflict {bad} must be transactional");
+            }
+        }
+    }
+    // Neither same-named sort declaration can satisfy a default callee lookup.
+    let mut no_callable = source.clone();
+    no_callable.declarations.remove(1);
+    let mut destination = pb::Program::default();
+    assert_eq!(
+        reconcile_declarations(&no_callable, &mut destination).unwrap_err(),
+        "unknown default callee"
+    );
+    assert_eq!(destination, pb::Program::default());
+
+    // A nominal declaration cannot satisfy or mask the family's arity check.
+    let Some(pb::sort::Kind::Family(f)) = &mut source.sorts[3].kind else {
+        unreachable!()
+    };
+    f.args.pop();
+    let mut destination = pb::Program::default();
+    assert!(reconcile_declarations(&source, &mut destination).is_err());
+    assert_eq!(destination, pb::Program::default());
+}
+
+#[test]
 fn documentation_presence_is_retained_but_not_semantic_identity() {
     for first in [None, Some(""), Some(" docs\n")] {
         let mut source = box_definition();

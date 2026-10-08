@@ -266,7 +266,7 @@ fn family_registration_rejects_native_kind_and_arity_mismatches_transactionally(
         .parse_and_run_program(None, "(sort NativeEq) (sort Alias (Vec i64))")
         .unwrap();
     let before = graph.type_info().builtin_catalog().unwrap();
-    for (name, arity) in [("bool", 1), ("NativeEq", 0), ("Alias", 0)] {
+    for (name, arity) in [("bool", 1), ("NativeEq", 0), ("Alias", 0), ("Absent", 0)] {
         assert!(
             graph
                 .type_info()
@@ -286,6 +286,92 @@ fn family_registration_rejects_native_kind_and_arity_mismatches_transactionally(
         assert_eq!(
             after.undescribed_family_primitives,
             before.undescribed_family_primitives
+        );
+    }
+}
+
+#[test]
+fn family_registration_uses_presort_despite_same_named_nominal_sort() {
+    let mut graph = EGraph::default();
+    let before = graph.type_info().builtin_catalog().unwrap().definitions;
+    graph.parse_and_run_program(None, "(sort Pair)").unwrap();
+    graph
+        .type_info()
+        .register_builtin_family(proto::HostSortFamily {
+            name: "Pair".into(),
+            arity: 2,
+            bindings: None,
+        })
+        .unwrap();
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before
+    );
+    let error = graph
+        .type_info()
+        .register_builtin_family(proto::HostSortFamily {
+            name: "Pair".into(),
+            arity: 1,
+            bindings: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("conflicting declaration"), "{error}");
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before
+    );
+    graph
+        .parse_and_run_program(
+            None,
+            "(constructor P () Pair) (sort Real (Pair Pair i64)) (pair (P) 7)",
+        )
+        .unwrap();
+    let mut sorts = vec![];
+    let nominal = graph.get_sort_by_name("Pair").unwrap().clone();
+    let scalar = graph.get_sort_by_name("i64").unwrap().clone();
+    let actual = graph.get_sort_by_name("Real").unwrap().clone();
+    let first = graph.export_sort(&nominal, &mut sorts).unwrap();
+    let second = graph.export_sort(&scalar, &mut sorts).unwrap();
+    let output = graph.export_sort(&actual, &mut sorts).unwrap();
+    let program = proto::Program {
+        ir_version: 1,
+        sorts,
+        ..Default::default()
+    };
+    let native = [nominal, scalar, actual];
+    graph
+        .type_info()
+        .resolve_builtin(
+            &program,
+            "egglog.core.pair.make",
+            &[first, second],
+            output,
+            &native,
+        )
+        .unwrap();
+    for index in [first, second, output] {
+        let mut wrong = program.clone();
+        wrong.sorts[index as usize].kind =
+            Some(match wrong.sorts[index as usize].kind.as_ref().unwrap() {
+                proto::sort::Kind::Eq(name) => proto::sort::Kind::Family(proto::HostSort {
+                    name: name.clone(),
+                    args: vec![],
+                }),
+                proto::sort::Kind::Family(f) => proto::sort::Kind::Eq(f.name.clone()),
+                _ => unreachable!(),
+            });
+        assert!(
+            graph
+                .type_info()
+                .resolve_builtin(
+                    &wrong,
+                    "egglog.core.pair.make",
+                    &[first, second],
+                    output,
+                    &native
+                )
+                .is_err(),
+            "other-kind native availability must not satisfy sort {index}"
         );
     }
 }

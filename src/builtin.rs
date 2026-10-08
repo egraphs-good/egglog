@@ -527,14 +527,18 @@ impl TypeInfo {
     /// Installs a family's generated declaration at its native registration site.
     /// Later fragments may assert the same arity without repeating its views.
     pub fn register_builtin_family(&mut self, family: pb::HostSortFamily) -> Result<(), String> {
-        if let Some(sort) = self.sorts.get(&family.name) {
-            if sort.is_eq_sort() || sort.is_container_sort() || family.arity != 0 {
-                return Err(
-                    "builtin family disagrees with native sort kind or nullary arity".into(),
-                );
+        // Presorts and concrete sorts have distinct native namespaces. A
+        // same-named equality sort must not mask an available family factory.
+        if !self.mksorts.contains_key(&family.name) {
+            if let Some(sort) = self.sorts.get(&family.name) {
+                if sort.is_eq_sort() || sort.is_container_sort() || family.arity != 0 {
+                    return Err(
+                        "builtin family disagrees with native sort kind or nullary arity".into(),
+                    );
+                }
+            } else {
+                return Err("builtin family has no native registration".into());
             }
-        } else if !self.mksorts.contains_key(&family.name) {
-            return Err("builtin family has no native registration".into());
         }
         definitions::reconcile_declarations(
             &pb::Program {
