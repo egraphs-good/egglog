@@ -1,5 +1,4 @@
 use crate::{ast::ResolvedVar, core::ResolvedCall};
-use std::fmt::Write;
 
 pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
@@ -81,18 +80,16 @@ impl FreshGen<str, String> for SymbolGen {
             && !name_hint.rsplit_once('_').is_some_and(|(_, suffix)| {
                 !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
             });
-        let suffix_capacity = if omit_zero {
-            0
-        } else {
-            // One underscore plus enough decimal digits for this target's usize.
-            usize::MAX.ilog10() as usize + 2
-        };
-        let mut name =
-            String::with_capacity(self.reserved_string.len() + name_hint.len() + suffix_capacity);
+        let mut buffer = itoa::Buffer::new();
+        let digits = if omit_zero { "" } else { buffer.format(count) };
+        let mut name = String::with_capacity(
+            self.reserved_string.len() + name_hint.len() + digits.len() + usize::from(!omit_zero),
+        );
         name.push_str(&self.reserved_string);
         name.push_str(name_hint);
         if !omit_zero {
-            write!(name, "_{count}").unwrap();
+            name.push('_');
+            name.push_str(digits);
         }
         name
     }
