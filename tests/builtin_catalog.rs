@@ -489,7 +489,7 @@ fn generic_signature_import_remaps_children_and_ignores_binder_labels() {
         unreachable!()
     };
     signature.type_params[0] = "Renamed".into();
-    signature.varargs.as_mut().unwrap().name = "renamed".into();
+    signature.varargs[0].name = "renamed".into();
     builtin::import_definition(&definition, &mut destination).unwrap();
     assert_eq!(destination, before);
     definition.sorts[0].kind = Some(proto::sort::Kind::Var(1));

@@ -1,5 +1,61 @@
 use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
 
+#[test]
+fn documentation_presence_is_retained_but_not_semantic_identity() {
+    for first in [None, Some(""), Some(" docs\n")] {
+        let mut source = box_definition();
+        for d in &mut source.declarations {
+            d.doc = first.map(str::to_owned);
+        }
+        let mut destination = pb::Program::default();
+        reconcile_declarations(&source, &mut destination).unwrap();
+        let installed = destination.clone();
+        assert!(
+            destination
+                .declarations
+                .iter()
+                .all(|d| d.doc.as_deref() == first)
+        );
+        for later in [None, Some(""), Some("other")] {
+            let mut resupply = source.clone();
+            for d in &mut resupply.declarations {
+                d.doc = later.map(str::to_owned);
+            }
+            let mut independent = destination.clone();
+            reconcile_declarations(&resupply, &mut independent).unwrap();
+            assert_eq!(
+                independent, installed,
+                "resupply retains first-record diagnostics"
+            );
+            assert_eq!(destination, installed);
+            let Some(pb::declaration::Kind::Constructor(c)) = &mut resupply.declarations[1].kind
+            else {
+                unreachable!()
+            };
+            c.unextractable = true;
+            assert!(reconcile_declarations(&resupply, &mut independent).is_err());
+            assert_eq!(independent, installed);
+            let Some(pb::declaration::Kind::Constructor(c)) = &mut resupply.declarations[1].kind
+            else {
+                unreachable!()
+            };
+            c.unextractable = false;
+            resupply.declarations[1]
+                .bindings
+                .as_mut()
+                .unwrap()
+                .python
+                .as_mut()
+                .unwrap()
+                .views[0]
+                .params[0]
+                .name = "conflicting".into();
+            assert!(reconcile_declarations(&resupply, &mut independent).is_err());
+            assert_eq!(independent, installed);
+        }
+    }
+}
+
 fn constant_definition() -> pb::Program {
     let mut p = box_definition();
     p.nodes.clear();
@@ -232,10 +288,10 @@ fn constant_views_reject_malformed_forms_and_signatures_transactionally() {
                         sort: 0,
                     }),
                     8 => {
-                        s.varargs = Some(pb::Arg {
+                        s.varargs = vec![pb::Arg {
                             name: "xs".into(),
                             sort: 0,
-                        })
+                        }]
                     }
                     9 => s.type_params.push("Undetermined".into()),
                     _ => s.output = Some(99),
@@ -655,10 +711,14 @@ fn default_calls_determine_all_generic_parameters_including_empty_results() {
                         type_params: vec!["T".into()],
                         inputs: vec![],
                         output: Some(0),
-                        varargs: variadic.then(|| pb::Arg {
-                            sort: 2,
-                            name: "tail".into(),
-                        }),
+                        varargs: if variadic {
+                            vec![pb::Arg {
+                                sort: 2,
+                                name: "tail".into(),
+                            }]
+                        } else {
+                            vec![]
+                        },
                     },
                 )),
             })),

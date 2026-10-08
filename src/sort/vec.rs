@@ -59,15 +59,15 @@ impl Presort for VecSort {
     fn builtin_definitions() -> Vec<proto::Program> {
         use proto as pb;
         [
-            ("empty", "vec-empty", vec![], None),
+            ("empty", "vec-empty", vec![], vec![]),
             (
                 "of",
                 "vec-of",
                 vec![],
-                Some(pb::Arg {
+                vec![pb::Arg {
                     name: "values".into(),
                     sort: 0,
-                }),
+                }],
             ),
             (
                 "get",
@@ -82,7 +82,7 @@ impl Presort for VecSort {
                         sort: 2,
                     },
                 ],
-                None,
+                vec![],
             ),
         ]
         .into_iter()

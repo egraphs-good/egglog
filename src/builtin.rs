@@ -37,6 +37,8 @@ pub struct BuiltinInstance {
 impl BuiltinInstance {
     /// Checks the implementation's representation ABI against its descriptor.
     /// Raw Values use None; typed casts must agree in both type and storage kind.
+    /// Inputs describe each fixed position followed by each tail-pattern position;
+    /// variadic implementations must supply converters for the complete pattern.
     pub fn check_abi(
         &self,
         inputs: &[Option<(std::any::TypeId, bool)>],
@@ -55,9 +57,8 @@ impl BuiltinInstance {
         let Some(pb::host_primitive::Typing::Signature(signature)) = &declaration.typing else {
             unreachable!()
         };
-        if varargs != signature.varargs.is_some()
-            || (varargs && !signature.inputs.is_empty())
-            || inputs.len() != signature.inputs.len() + usize::from(varargs)
+        if varargs == signature.varargs.is_empty()
+            || inputs.len() != signature.inputs.len() + signature.varargs.len()
         {
             return Err("builtin implementation arity differs from canonical signature".into());
         }
@@ -103,8 +104,9 @@ impl BuiltinInstance {
                 .collect(),
             tail: signature
                 .varargs
-                .as_ref()
-                .map(|a| self.sorts[a.sort as usize].clone()),
+                .iter()
+                .map(|a| self.sorts[a.sort as usize].clone())
+                .collect(),
             output: self.sorts[signature.output.unwrap() as usize].clone(),
             name: declaration
                 .bindings
@@ -120,7 +122,7 @@ impl BuiltinInstance {
 
 struct InstanceConstraint {
     fixed: Vec<ArcSort>,
-    tail: Option<ArcSort>,
+    tail: Vec<ArcSort>,
     output: ArcSort,
     name: String,
     span: Span,
@@ -133,11 +135,17 @@ impl TypeConstraint for InstanceConstraint {
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn constraint::Constraint<AtomTerm, ArcSort>>> {
         let mut sorts = self.fixed.clone();
-        if let Some(tail) = &self.tail {
-            sorts.extend(std::iter::repeat_n(
-                tail.clone(),
-                arguments.len().saturating_sub(self.fixed.len() + 1),
-            ));
+        if !self.tail.is_empty() {
+            // Native arguments include the result. Only complete input groups
+            // count; SimpleTypeConstraint rejects any missing prefix or remainder.
+            let groups = arguments.len().saturating_sub(self.fixed.len() + 1) / self.tail.len();
+            sorts.extend(
+                self.tail
+                    .iter()
+                    .cloned()
+                    .cycle()
+                    .take(groups * self.tail.len()),
+            );
         }
         sorts.push(self.output.clone());
         SimpleTypeConstraint::new(&self.name, sorts, self.span.clone()).get(arguments, typeinfo)
@@ -352,7 +360,9 @@ pub fn signature_sorts(
     let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
         return Err("function-application builtin typing is not implemented yet".into());
     };
-    if primitive.name.is_empty() || !signature.type_params.is_empty() || signature.varargs.is_some()
+    if primitive.name.is_empty()
+        || !signature.type_params.is_empty()
+        || !signature.varargs.is_empty()
     {
         return Err(
             "builtin typing currently requires a named closed fixed-arity signature".into(),
@@ -772,7 +782,11 @@ impl TypeInfo {
             return Err("unsupported builtin typing".into());
         };
         if arguments.len() < signature.inputs.len()
-            || (signature.varargs.is_none() && arguments.len() != signature.inputs.len())
+            || if signature.varargs.is_empty() {
+                arguments.len() != signature.inputs.len()
+            } else {
+                !(arguments.len() - signature.inputs.len()).is_multiple_of(signature.varargs.len())
+            }
         {
             return Err(format!("builtin arity mismatch for {name}"));
         }
@@ -781,10 +795,14 @@ impl TypeInfo {
             .inputs
             .iter()
             .map(|a| a.sort)
-            .chain(std::iter::repeat_n(
-                signature.varargs.as_ref().map_or(0, |a| a.sort),
-                arguments.len() - signature.inputs.len(),
-            ))
+            .chain(
+                signature
+                    .varargs
+                    .iter()
+                    .cycle()
+                    .take(arguments.len() - signature.inputs.len())
+                    .map(|a| a.sort),
+            )
             .chain(signature.output)
             .collect();
         let actuals: Vec<_> = arguments

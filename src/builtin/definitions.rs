@@ -286,7 +286,7 @@ fn compatible_semantics(
     for (d, roots) in declarations.iter_mut().zip(&mut roots) {
         d.bindings = None;
         d.span = None;
-        d.doc.clear();
+        d.doc = None;
         match d.kind.as_mut().unwrap() {
             pb::declaration::Kind::EqSort(s) => s.bindings = None,
             pb::declaration::Kind::HostSortFamily(s) => s.bindings = None,
@@ -684,8 +684,8 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                     .find(|d| declaration_identity(d).ok() == Some((false, call.func.as_str())))
                     .ok_or("unknown default callee")?;
                 let (inputs, output, tail, parameters) = match declaration.kind.as_ref().unwrap() {
-                    pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, None, 0),
-                    pb::declaration::Kind::Function(f) => (&f.inputs, f.output, None, 0),
+                    pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, &[][..], 0),
+                    pb::declaration::Kind::Function(f) => (&f.inputs, f.output, &[][..], 0),
                     pb::declaration::Kind::HostPrimitive(h) => {
                         let Some(pb::host_primitive::Typing::Signature(s)) = &h.typing else {
                             return Err("unsupported default callee signature".into());
@@ -693,20 +693,27 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                         (
                             &s.inputs,
                             s.output.ok_or("missing default callee result")?,
-                            s.varargs.as_ref(),
+                            s.varargs.as_slice(),
                             s.type_params.len(),
                         )
                     }
                     _ => return Err("unsupported default callee".into()),
                 };
                 if call.args.len() < inputs.len()
-                    || (tail.is_none() && call.args.len() != inputs.len())
+                    || if tail.is_empty() {
+                        call.args.len() != inputs.len()
+                    } else {
+                        !(call.args.len() - inputs.len()).is_multiple_of(tail.len())
+                    }
                 {
                     return Err("default call arity mismatch".into());
                 }
                 let mut substitution = HashMap::default();
                 for (position, arg) in call.args.iter().enumerate() {
-                    let expected = inputs.get(position).or(tail).unwrap().sort;
+                    let expected = inputs
+                        .get(position)
+                        .unwrap_or_else(|| &tail[(position - inputs.len()) % tail.len()])
+                        .sort;
                     let actual = p
                         .nodes
                         .get(*arg as usize)
@@ -801,8 +808,8 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                     }
                     continue;
                 }
-                pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, None, 0),
-                pb::declaration::Kind::Function(f) => (&f.inputs, f.output, None, 0),
+                pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, &[][..], 0),
+                pb::declaration::Kind::Function(f) => (&f.inputs, f.output, &[][..], 0),
                 pb::declaration::Kind::HostPrimitive(h) => {
                     let Some(pb::host_primitive::Typing::Signature(s)) = &h.typing else {
                         return Err("unsupported binding signature".into());
@@ -810,7 +817,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                     (
                         &s.inputs,
                         s.output.ok_or("missing signature result")?,
-                        s.varargs.as_ref(),
+                        s.varargs.as_slice(),
                         s.type_params.len(),
                     )
                 }
@@ -820,7 +827,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
             .iter()
             .map(|a| a.sort)
             .chain([output])
-            .chain(tail.map(|a| a.sort))
+            .chain(tail.iter().map(|a| a.sort))
         {
             pattern_scope(p, i, parameters)?;
         }
@@ -867,7 +874,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 .map(|p| p.core_input)
                 .chain(v.receiver.map(Some))
                 .collect::<Vec<_>>();
-            validate_slots(&slots, inputs.len(), tail.is_some())?;
+            validate_slots(&slots, inputs.len(), !tail.is_empty())?;
             for (position, param) in v.params.iter().enumerate() {
                 let slot = param.core_input.unwrap() as usize;
                 if param.name.is_empty() {
@@ -919,7 +926,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 .map(|p| p.core_input)
                 .chain(v.receiver.map(|r| r.core_input))
                 .collect::<Vec<_>>();
-            validate_slots(&slots, inputs.len(), tail.is_some())?;
+            validate_slots(&slots, inputs.len(), !tail.is_empty())?;
             for (position, param) in v.params.iter().enumerate() {
                 if param.name.is_empty()
                     || (param.core_input == Some(inputs.len() as u32)
