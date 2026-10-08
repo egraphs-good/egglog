@@ -424,6 +424,7 @@ pool_set! {
     pub PoolSet {
         vec_vals: Vec<Value> [ 1 << 25 ],
         vec_cell_vals: Vec<Cell<Value>> [ 1 << 25 ],
+        sequence_offsets: Vec<Cell<u32>> [ 1 << 25 ],
         // TODO: work on scaffolding/DI/etc. so that we can share allocations
         // between vec_vals and shared_vals.
         rows: Vec<RowId> [ 1 << 25 ],
@@ -434,6 +435,7 @@ pool_set! {
         instrs: Vec<Instr> [ 1 << 20 ],
         tuple_indexes: HashTable<TableEntry<BufferedSubset>> [ 1 << 20 ],
         staged_outputs: HashTable<SwTableEntry> [ 1 << 25 ],
+        sequence_staged_rows: HashTable<RowId> [ 1 << 25 ],
         predicted_vals: PredictedVals [ 1 << 20 ],
         shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
         instr_indexes: Vec<u32> [ 1 << 20 ],
