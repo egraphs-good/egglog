@@ -704,19 +704,17 @@ mod tests {
     fn test_to_string_with_let_avoids_existing_variables() {
         for (prefix, hint) in [("", "t"), ("p_", "t"), ("", "s"), ("p_", "s")] {
             let name = format!("{prefix}{hint}");
-            for (include_zero, first_suffix) in [(false, ""), (true, "_0")] {
+            for (include_zero, first_suffix) in [(false, ""), (true, "0")] {
                 let first = format!("{name}{first_suffix}");
-                let s = format!("(f (g {first} a b) (g {first} a b) {name}_1 {name}_2)");
+                let s = format!("(f (g {first} a b) (g {first} a b) {name}1 {name}2)");
                 let (mut td, t) = parse_term(&s);
                 // An unrelated arena variable must not affect this term's rendering.
-                td.var(format!("{name}_3"));
+                td.var(format!("{name}3"));
                 let mut sym = SymbolGen::new(prefix.into());
                 sym.include_zero(include_zero);
                 assert_eq!(
                     td.to_string_with_let_and_hint(&mut sym, t, hint),
-                    format!(
-                        "(let {name}_3 (g {first} a b))\n\n(f {name}_3 {name}_3 {name}_1 {name}_2)"
-                    )
+                    format!("(let {name}3 (g {first} a b))\n\n(f {name}3 {name}3 {name}1 {name}2)")
                 );
             }
         }

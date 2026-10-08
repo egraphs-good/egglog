@@ -10,14 +10,16 @@ pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 pub use egglog_ast::generic_ast_helpers::INTERNAL_SYMBOL_PREFIX;
 
 /// Generates fresh symbols for internal use during typechecking and flattening.
-/// Symbols have the form `<reserved prefix><hint>_<count>`, with a separate
-/// counter for each complete hint shared across all input types. The first
-/// symbol omits `_0` when the hint is nonempty and does not end in `_[0-9]+`,
-/// except that an empty prefix never produces the wildcard `_`.
+/// Symbols have the form `<reserved prefix><hint><count>`, with a separate
+/// counter for each complete hint shared across all input types. An underscore
+/// separates hint and count when trimming trailing underscores from the hint
+/// leaves it empty or ending in an ASCII digit. The first symbol omits zero
+/// when the hint is nonempty and does not end in an ASCII digit, except that
+/// an empty prefix never produces the wildcard `_`.
 ///
-/// The final underscore uniquely separates a suffixed name's hint and counter.
-/// Bare names cannot have that suffix, so they cannot collide with suffixed
-/// names, and checked per-hint counters never reuse a count.
+/// After removing the prefix and trailing digits, trimming trailing underscores
+/// leaves an empty or digit-ending string exactly for separated hints. Bare
+/// names end in nondigits, and checked counters never repeat.
 /// A reserved prefix prevents collisions with user symbols.
 ///
 /// Generating a symbol after its hint's counter is exhausted panics.
@@ -38,7 +40,7 @@ impl SymbolGen {
         }
     }
 
-    /// By default, the first symbol generated with a given hint omits `_0`
+    /// By default, the first symbol generated with a given hint omits zero
     /// when doing so is unambiguous. Set this to `true` to always include it.
     /// Changing this option does not reset any hint's counter.
     pub fn include_zero(&mut self, include: bool) {
@@ -75,22 +77,31 @@ impl FreshGen<str, String> for SymbolGen {
             .expect("fresh symbol counter exhausted");
         let omit_zero = self.leave_off_zero
             && count == 0
-            && !name_hint.is_empty()
             && !(self.reserved_string.is_empty() && name_hint == "_")
-            && !name_hint.rsplit_once('_').is_some_and(|(_, suffix)| {
-                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
-            });
+            && name_hint
+                .as_bytes()
+                .last()
+                .is_some_and(|b| !b.is_ascii_digit());
+        let needs_separator = !omit_zero
+            && name_hint
+                .trim_end_matches('_')
+                .as_bytes()
+                .last()
+                .is_none_or(u8::is_ascii_digit);
         let mut buffer = itoa::Buffer::new();
         let digits = if omit_zero { "" } else { buffer.format(count) };
         let mut name = String::with_capacity(
-            self.reserved_string.len() + name_hint.len() + digits.len() + usize::from(!omit_zero),
+            self.reserved_string.len()
+                + name_hint.len()
+                + digits.len()
+                + usize::from(needs_separator),
         );
         name.push_str(&self.reserved_string);
         name.push_str(name_hint);
-        if !omit_zero {
+        if needs_separator {
             name.push('_');
-            name.push_str(digits);
         }
+        name.push_str(digits);
         name
     }
 }
@@ -131,10 +142,12 @@ mod tests {
         for (hint, expected) in [
             ("Proof", "@Proof"),
             ("v", "@v"),
-            ("Proof", "@Proof_1"),
-            ("v", "@v_1"),
-            ("x1", "@x1"),
+            ("Proof", "@Proof1"),
+            ("v", "@v1"),
+            ("x1", "@x1_0"),
             ("x_1", "@x_1_0"),
+            ("rewrite_var__", "@rewrite_var__"),
+            ("rewrite_var__", "@rewrite_var__1"),
             ("", "@_0"),
             ("λ_12", "@λ_12_0"),
             ("λ_١٢", "@λ_١٢"),
@@ -172,24 +185,29 @@ mod tests {
             assert!(!generator.is_reserved("anything"));
 
             let mut names = HashSet::default();
-            for hint in [
-                "",
-                "_",
-                "__",
-                "x",
-                "x1",
-                "x11",
-                "x_0",
-                "x_1",
-                "x_8",
-                "_0",
-                "__0",
-                "_0_",
-                "λ",
-                "λ_12",
-                "λ_١٢",
-                "🦀",
-                "a_longer_hint_with_underscores_123",
+            for (hint, separator) in [
+                ("", "_"),
+                ("_", "_"),
+                ("__", "_"),
+                ("x", ""),
+                ("x1", "_"),
+                ("x11", "_"),
+                ("x1_", "_"),
+                ("x1__", "_"),
+                ("x1_0", "_"),
+                ("x_", ""),
+                ("x__", ""),
+                ("x_0", "_"),
+                ("x_1", "_"),
+                ("x_8", "_"),
+                ("_0", "_"),
+                ("__0", "_"),
+                ("_0_", "_"),
+                ("λ", ""),
+                ("λ_12", "_"),
+                ("λ_١٢", ""),
+                ("🦀", ""),
+                ("a_longer_hint_with_underscores_123", "_"),
             ] {
                 let owned_hint = hint.to_owned();
                 let call = ResolvedCall::Func(Arc::new(FuncType {
@@ -202,8 +220,14 @@ mod tests {
                     let from_str = generator.fresh(hint);
                     let from_string = generator.fresh(&owned_hint);
                     let from_call = generator.fresh(&call);
-                    assert_eq!(from_string, format!("{prefix}{hint}_{}", 3 * i + 1));
-                    assert_eq!(from_call.name, format!("{prefix}{hint}_{}", 3 * i + 2));
+                    assert_eq!(
+                        from_string,
+                        format!("{prefix}{hint}{separator}{}", 3 * i + 1)
+                    );
+                    assert_eq!(
+                        from_call.name,
+                        format!("{prefix}{hint}{separator}{}", 3 * i + 2)
+                    );
                     assert_eq!(from_call.sort.name(), I64Sort.name());
                     assert!(!from_call.is_global_ref);
                     for name in [from_str, from_string, from_call.name] {
@@ -215,10 +239,10 @@ mod tests {
             }
             assert_eq!(generator.fresh("+"), format!("{prefix}+"));
             let from_primitive = generator.fresh(&primitive);
-            assert_eq!(from_primitive.name, format!("{prefix}+_1"));
+            assert_eq!(from_primitive.name, format!("{prefix}+1"));
             assert_eq!(from_primitive.sort.name(), I64Sort.name());
             assert!(!from_primitive.is_global_ref);
-            assert_eq!(generator.fresh(&"+".to_owned()), format!("{prefix}+_2"));
+            assert_eq!(generator.fresh(&"+".to_owned()), format!("{prefix}+2"));
             assert!(generator.has_been_used());
         }
     }
@@ -228,20 +252,26 @@ mod tests {
         let mut generator = SymbolGen::new("@".into());
         generator.include_zero(true);
         assert!(!generator.has_been_used());
-        assert_eq!(generator.fresh("x"), "@x_0");
+        assert_eq!(generator.fresh("x"), "@x0");
         let mut cloned = generator.clone();
         assert_eq!(generator, cloned);
 
         generator.include_zero(false);
         assert_eq!(generator.fresh("y"), "@y");
-        assert_eq!(cloned.fresh("y"), "@y_0");
+        assert_eq!(cloned.fresh("y"), "@y0");
         cloned.include_zero(false);
         for generator in [&mut generator, &mut cloned] {
-            assert_eq!(generator.fresh("x"), "@x_1");
+            assert_eq!(generator.fresh("x"), "@x1");
+            assert_eq!(generator.fresh("x1"), "@x1_0");
             assert_eq!(generator.fresh("x_0"), "@x_0_0");
             assert_eq!(generator.fresh("x_1"), "@x_1_0");
             generator.include_zero(true);
-            assert_eq!(generator.fresh("y"), "@y_1");
+            assert_eq!(generator.fresh("y"), "@y1");
+            assert_eq!(generator.fresh("x1_"), "@x1__0");
+            assert_eq!(generator.fresh("x1__"), "@x1___0");
+            assert_eq!(generator.fresh("x1_0"), "@x1_0_0");
+            assert_eq!(generator.fresh("t"), "@t0");
+            assert_eq!(generator.fresh("prf"), "@prf0");
             generator.include_zero(false);
             assert_eq!(generator.fresh("z"), "@z");
             assert_eq!(generator.fresh(""), "@_0");
@@ -253,7 +283,7 @@ mod tests {
     fn symbol_gen_exhaustion_does_not_wrap_or_reuse_names() {
         let mut generator = SymbolGen::new("@".into());
         generator.hint_to_count.insert("x".into(), usize::MAX - 1);
-        assert_eq!(generator.fresh("x"), format!("@x_{}", usize::MAX - 1));
+        assert_eq!(generator.fresh("x"), format!("@x{}", usize::MAX - 1));
         for _ in 0..2 {
             assert!(std::panic::catch_unwind(AssertUnwindSafe(|| generator.fresh("x"))).is_err());
             assert_eq!(generator.hint_to_count["x"], usize::MAX);
@@ -261,7 +291,7 @@ mod tests {
         let mut cloned = generator.clone();
         assert!(std::panic::catch_unwind(AssertUnwindSafe(|| cloned.fresh("x"))).is_err());
         assert_eq!(generator.fresh("y"), "@y");
-        assert_eq!(generator.fresh("y"), "@y_1");
+        assert_eq!(generator.fresh("y"), "@y1");
         assert_eq!(cloned.fresh("y"), "@y");
     }
 }
