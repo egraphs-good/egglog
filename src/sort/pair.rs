@@ -71,6 +71,77 @@ impl PairSort {
 }
 
 impl Presort for PairSort {
+    fn builtin_definitions() -> Vec<proto::Program> {
+        use proto as pb;
+        [
+            ("make", "pair", vec![("first", 0), ("second", 1)], 2),
+            ("first", "pair-first", vec![("pair", 2)], 0),
+            ("second", "pair-second", vec![("pair", 2)], 1),
+        ]
+        .into_iter()
+        .map(|(key, alias, inputs, output)| pb::Program {
+            ir_version: 1,
+            sorts: vec![
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Var(0)),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Var(1)),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                        name: "Pair".into(),
+                        args: vec![0, 1],
+                    })),
+                    ..Default::default()
+                },
+            ],
+            declarations: vec![
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                        name: "Pair".into(),
+                        arity: 2,
+                        bindings: None,
+                    })),
+                    ..Default::default()
+                },
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                        name: format!("egglog.core.pair.{key}"),
+                        typing: Some(pb::host_primitive::Typing::Signature(
+                            pb::GenericSignature {
+                                type_params: vec!["A".into(), "B".into()],
+                                inputs: inputs
+                                    .into_iter()
+                                    .map(|(name, sort)| pb::Arg {
+                                        name: name.into(),
+                                        sort,
+                                    })
+                                    .collect(),
+                                output: Some(output),
+                                varargs: vec![],
+                            },
+                        )),
+                    })),
+                    bindings: Some(pb::CallableBindings {
+                        egglog: Some(pb::EgglogBindings {
+                            views: vec![pb::EgglogCallable {
+                                symbol: alias.into(),
+                                datatype_member: false,
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .collect()
+    }
+
     fn presort_name() -> &'static str {
         "Pair"
     }
@@ -143,6 +214,25 @@ impl ContainerSort for PairSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
+        eg.type_info
+            .register_builtin_sort(
+                "Pair",
+                arc.clone(),
+                vec![self.first.clone(), self.second.clone()],
+            )
+            .unwrap();
+        let make = eg
+            .type_info
+            .instantiate_builtin("egglog.core.pair.make", &arc)
+            .unwrap();
+        let first = eg
+            .type_info
+            .instantiate_builtin("egglog.core.pair.first", &arc)
+            .unwrap();
+        let second = eg
+            .type_info
+            .instantiate_builtin("egglog.core.pair.second", &arc)
+            .unwrap();
 
         // The proof "term form" of a pair: an s-expr `(pair a b)` headed by
         // the constructing primitive, matching `reconstruct_termdag`. The
@@ -161,7 +251,7 @@ impl ContainerSort for PairSort {
             pair_term_children(termdag, *pair).map(|(_, second)| second)
         };
 
-        add_primitive_with_validator!(eg, "pair" = {self.clone(): PairSort} |x: # (self.first()), y: # (self.second())| -> @PairContainer (arc) {
+        add_primitive_with_validator!(eg, "pair" [instance = make] = {self.clone(): PairSort} |x: #, y: #| -> @PairContainer {
             PairContainer {
                 do_rebuild_first: self.ctx.first.is_eq_sort() || self.ctx.first.is_eq_container_sort(),
                 do_rebuild_second: self.ctx.second.is_eq_sort() || self.ctx.second.is_eq_container_sort(),
@@ -170,8 +260,8 @@ impl ContainerSort for PairSort {
             }
         }, pair_term);
 
-        add_primitive_with_validator!(eg, "pair-first"  = |xs: @PairContainer (arc)| -> # (self.first())  { xs.first  }, pair_first_validator);
-        add_primitive_with_validator!(eg, "pair-second" = |xs: @PairContainer (arc)| -> # (self.second()) { xs.second }, pair_second_validator);
+        add_primitive_with_validator!(eg, "pair-first" [instance = first] = |xs: @PairContainer| -> # { xs.first }, pair_first_validator);
+        add_primitive_with_validator!(eg, "pair-second" [instance = second] = |xs: @PairContainer| -> # { xs.second }, pair_second_validator);
     }
 
     fn reconstruct_termdag(

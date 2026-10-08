@@ -1,4 +1,4 @@
-use egglog::sort::{Presort, VecContainer, VecSort};
+use egglog::sort::{PairContainer, Presort, VecContainer, VecSort};
 use egglog::*;
 use std::sync::{
     Arc,
@@ -339,6 +339,9 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         [
             "egglog.core.f64.add",
             "egglog.core.i64.add",
+            "egglog.core.pair.first",
+            "egglog.core.pair.make",
+            "egglog.core.pair.second",
             "egglog.core.vec.empty",
             "egglog.core.vec.get",
             "egglog.core.vec.of",
@@ -349,6 +352,244 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         .parse_and_run_program(None, "(check (= (counted 7) 7))")
         .unwrap();
     assert!(CALLS.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
+fn pair_definitions_precede_instances_and_preserve_nominal_overloads() {
+    let mut graph = EGraph::default();
+    let before = graph.type_info().builtin_catalog().unwrap();
+    assert!(
+        !before
+            .undescribed_families
+            .iter()
+            .any(|name| name == "Pair")
+    );
+    assert!(
+        !before
+            .undescribed_family_primitives
+            .iter()
+            .any(|name| name.starts_with("Pair::"))
+    );
+    assert!(before.definitions.declarations.iter().any(|d| matches!(&d.kind,
+        Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Pair" && f.arity == 2 && f.bindings.is_none())));
+    for (key, alias, inputs, output) in [
+        ("make", "pair", vec![0, 1], 2),
+        ("first", "pair-first", vec![2], 0),
+        ("second", "pair-second", vec![2], 1),
+    ] {
+        let mut definition = proto::Program::default();
+        graph
+            .type_info()
+            .export_builtin_definition(&format!("egglog.core.pair.{key}"), &mut definition)
+            .unwrap();
+        let d = definition
+            .declarations
+            .iter()
+            .find(|d| matches!(d.kind, Some(proto::declaration::Kind::HostPrimitive(_))))
+            .unwrap();
+        let Some(proto::declaration::Kind::HostPrimitive(p)) = &d.kind else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(s)) = &p.typing else {
+            panic!("signature")
+        };
+        assert_eq!(s.type_params, ["A", "B"]);
+        assert!(s.varargs.is_empty());
+        let patterns = [
+            definition
+                .sorts
+                .iter()
+                .position(|s| s.kind == Some(proto::sort::Kind::Var(0)))
+                .unwrap() as u32,
+            definition
+                .sorts
+                .iter()
+                .position(|s| s.kind == Some(proto::sort::Kind::Var(1)))
+                .unwrap() as u32,
+            definition
+                .sorts
+                .iter()
+                .position(
+                    |s| matches!(&s.kind, Some(proto::sort::Kind::Family(f)) if f.name == "Pair"),
+                )
+                .unwrap() as u32,
+        ];
+        assert_eq!(
+            s.inputs.iter().map(|a| a.sort).collect::<Vec<_>>(),
+            inputs.into_iter().map(|i| patterns[i]).collect::<Vec<_>>()
+        );
+        assert_eq!(s.output, Some(patterns[output]));
+        let Some(proto::sort::Kind::Family(f)) = &definition.sorts[patterns[2] as usize].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(f.args, patterns[..2]);
+        let bindings = d.bindings.as_ref().unwrap();
+        assert!(bindings.python.is_none() && bindings.rust.is_none());
+        assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
+    }
+    graph
+        .parse_and_run_program(
+            None,
+            r#"
+        (sort P (Pair i64 String)) (sort Q (Pair i64 String))
+        (sort R (Pair String i64)) (sort V (Vec P)) (sort Nested (Pair P V))
+        (function p () P :merge new) (function q () Q :merge new)
+        (function r () R :merge new) (function n () Nested :merge new)
+        (set (p) (pair 1 "a")) (set (q) (pair 2 "b"))
+        (set (r) (pair "c" 3)) (set (n) (pair (p) (vec-of (p))))
+        (check (= (pair-first (p)) 1) (= (pair-second (q)) "b"))
+        (check (= (pair-first (r)) "c") (= (pair-second (r)) 3))
+        (check (= (pair-first (n)) (p)) (= (vec-get (pair-second (n)) 0) (p)))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before.definitions
+    );
+    for bad in [
+        "(set (p) (q))",
+        "(set (p) (pair \"a\" 1))",
+        "(set (p) (pair 1))",
+        "(pair-first 1)",
+    ] {
+        assert!(
+            graph.clone().parse_and_run_program(None, bad).is_err(),
+            "{bad}"
+        );
+    }
+    let mut sorts = vec![];
+    let p = graph.get_sort_by_name("P").unwrap();
+    let q = graph.get_sort_by_name("Q").unwrap();
+    assert_eq!(
+        graph.export_sort(p, &mut sorts).unwrap(),
+        graph.export_sort(q, &mut sorts).unwrap()
+    );
+    let nested = graph
+        .export_sort(graph.get_sort_by_name("Nested").unwrap(), &mut sorts)
+        .unwrap();
+    assert!(
+        matches!(&sorts[nested as usize].kind, Some(proto::sort::Kind::Family(f)) if f.name == "Pair" && f.args.len() == 2)
+    );
+    let i = graph.get_sort_by_name("i64").unwrap();
+    let s = graph.get_sort_by_name("String").unwrap();
+    for (alias, key, types) in [
+        (
+            "pair",
+            "egglog.core.pair.make",
+            vec![i.clone(), s.clone(), p.clone()],
+        ),
+        (
+            "pair-first",
+            "egglog.core.pair.first",
+            vec![p.clone(), i.clone()],
+        ),
+        (
+            "pair-second",
+            "egglog.core.pair.second",
+            vec![p.clone(), s.clone()],
+        ),
+    ] {
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            assert_eq!(
+                ResolvedCall::from_resolution(
+                    alias,
+                    &types,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic
+                )
+                .unwrap(),
+                ResolvedCall::from_resolution(
+                    key,
+                    &types,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic
+                )
+                .unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn pair_instances_reject_wrong_ownership_annotations_and_converters() {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(None, "(sort P (Pair i64 String)) (sort V (Vec i64))")
+        .unwrap();
+    let p = graph.get_sort_by_name("P").unwrap().clone();
+    let v = graph.get_sort_by_name("V").unwrap().clone();
+    let i = graph.get_sort_by_name("i64").unwrap().clone();
+    let s = graph.get_sort_by_name("String").unwrap().clone();
+    let before = graph.type_info().builtin_catalog().unwrap().definitions;
+    assert!(
+        graph
+            .type_info()
+            .instantiate_builtin("egglog.core.pair.make", &v)
+            .is_err()
+    );
+    assert!(
+        graph
+            .type_info()
+            .instantiate_builtin("egglog.core.vec.of", &p)
+            .is_err()
+    );
+    for (key, types) in [
+        (
+            "egglog.core.pair.make",
+            vec![s.clone(), i.clone(), p.clone()],
+        ),
+        (
+            "egglog.core.pair.make",
+            vec![i.clone(), s.clone(), v.clone()],
+        ),
+        ("egglog.core.pair.first", vec![p.clone(), s.clone()]),
+        ("egglog.core.pair.second", vec![p.clone(), i.clone()]),
+    ] {
+        assert!(
+            ResolvedCall::from_resolution(
+                key,
+                &types,
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic
+            )
+            .is_err()
+        );
+    }
+    for wrong in 0..4 {
+        let instance = graph
+            .type_info()
+            .instantiate_builtin("egglog.core.pair.first", &p)
+            .unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match wrong {
+            0 => {
+                add_primitive_with_validator!(&mut graph, "bad-pair" [instance = instance] = |xs: @VecContainer| -> # {
+                    { CALLS.fetch_add(1, Ordering::SeqCst); xs.data[0] }
+                }, |_: &mut TermDag, _: &[TermId]| { CALLS.fetch_add(1, Ordering::SeqCst); None });
+            }
+            1 => {
+                add_primitive!(&mut graph, "bad-pair" [instance = instance] = |xs: @PairContainer| -> String { { let _ = xs; String::new() } });
+            }
+            2 => {
+                add_primitive!(&mut graph, "bad-pair" [instance = instance] = |xs: @PairContainer, extra: #| -> # { { let _ = extra; xs.first } });
+            }
+            _ => {
+                add_primitive!(&mut graph, "bad-pair" [instance = instance] = [mut xs: @PairContainer] -> # { xs.next().unwrap().first });
+            }
+        }));
+        assert!(result.is_err(), "bad converter {wrong}");
+        assert!(!graph.type_info().is_primitive("bad-pair"));
+        assert_eq!(
+            graph.type_info().builtin_catalog().unwrap().definitions,
+            before
+        );
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]

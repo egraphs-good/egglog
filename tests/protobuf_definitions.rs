@@ -455,6 +455,355 @@ fn box_definition() -> pb::Program {
 }
 
 #[test]
+fn pair_defaults_validate_order_presence_and_structural_child_sorts() {
+    for reverse in [false, true] {
+        let mut source = pair_default_definition();
+        if reverse {
+            let Some(pb::sort::Kind::Family(f)) = &mut source.sorts[3].kind else {
+                unreachable!()
+            };
+            f.args.reverse();
+            let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Pair(p)),
+            })) = &mut source.nodes[2].kind
+            else {
+                unreachable!()
+            };
+            std::mem::swap(&mut p.first, &mut p.second);
+        }
+        // Incoming node and family child use different indices for equal sorts.
+        source.sorts.push(source.sorts[0].clone());
+        source.nodes[0].sort_id = 4;
+        let mut destination = pb::Program::default();
+        reconcile_declarations(&source, &mut destination).unwrap();
+        let frozen = destination.clone();
+        for _ in 0..3 {
+            reconcile_declarations(&source, &mut destination).unwrap();
+            assert_eq!(destination, frozen);
+        }
+        for bad in 0..8 {
+            let mut invalid = source.clone();
+            match bad {
+                0..=4 => {
+                    let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                        value: Some(pb::primitive_value::Value::Pair(p)),
+                    })) = &mut invalid.nodes[2].kind
+                    else {
+                        unreachable!()
+                    };
+                    match bad {
+                        0 => p.first = None,
+                        1 => p.second = None,
+                        2 => p.first = Some(999),
+                        3 => std::mem::swap(&mut p.first, &mut p.second),
+                        _ => p.second = Some(2),
+                    }
+                }
+                5 => invalid.nodes[0].kind = Some(pb::node::Kind::Var("unbound".into())),
+                6 => {
+                    let Some(pb::sort::Kind::Family(f)) = &mut invalid.sorts[3].kind else {
+                        unreachable!()
+                    };
+                    f.args.pop();
+                }
+                _ => invalid.nodes[2].sort_id = 0,
+            }
+            let mut fresh = pb::Program::default();
+            assert!(
+                reconcile_declarations(&invalid, &mut fresh).is_err(),
+                "bad {bad}"
+            );
+            assert_eq!(fresh, pb::Program::default());
+            assert!(
+                reconcile_declarations(&invalid, &mut destination).is_err(),
+                "bad resupply {bad}"
+            );
+            assert_eq!(destination, frozen);
+        }
+    }
+}
+
+fn pair_default_definition() -> pb::Program {
+    let mut p = box_definition();
+    p.sorts.extend([
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "String".into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        },
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "Pair".into(),
+                args: vec![0, 2],
+            })),
+            ..Default::default()
+        },
+    ]);
+    p.nodes.truncate(1);
+    p.nodes.extend([
+        pb::Node {
+            sort_id: 2,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::String("x".into())),
+            })),
+            ..Default::default()
+        },
+        pb::Node {
+            sort_id: 3,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Pair(pb::PairValue {
+                    first: Some(0),
+                    second: Some(1),
+                })),
+            })),
+            ..Default::default()
+        },
+    ]);
+    let Some(pb::declaration::Kind::Constructor(c)) = &mut p.declarations[1].kind else {
+        unreachable!()
+    };
+    c.inputs[0].sort = 3;
+    p.declarations[1]
+        .bindings
+        .as_mut()
+        .unwrap()
+        .python
+        .as_mut()
+        .unwrap()
+        .views[0]
+        .params[0]
+        .default_expr = Some(2);
+    let Some(pb::declaration::Kind::Function(f)) = &mut p.declarations[2].kind else {
+        unreachable!()
+    };
+    f.merge = None;
+    p.declarations.push(pb::Declaration {
+        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+            name: "Pair".into(),
+            arity: 2,
+            bindings: None,
+        })),
+        ..Default::default()
+    });
+    p
+}
+
+#[test]
+fn pair_defaults_preserve_duplicate_slots_nested_values_and_union_topology() {
+    let mut duplicate = pair_default_definition();
+    let Some(pb::sort::Kind::Family(f)) = &mut duplicate.sorts[3].kind else {
+        unreachable!()
+    };
+    f.args = vec![0, 0];
+    duplicate.nodes[2].kind = Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+        value: Some(pb::primitive_value::Value::Pair(pb::PairValue {
+            first: Some(0),
+            second: Some(0),
+        })),
+    }));
+    let mut stored = pb::Program::default();
+    reconcile_declarations(&duplicate, &mut stored).unwrap();
+    assert!(stored.nodes.iter().any(|n| matches!(&n.kind,
+        Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue { value: Some(pb::primitive_value::Value::Pair(p)) })) if p.first == Some(0) && p.second == Some(0))));
+
+    let mut nested = pair_default_definition();
+    nested.sorts.extend([
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "Vec".into(),
+                args: vec![3],
+            })),
+            ..Default::default()
+        },
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "Pair".into(),
+                args: vec![3, 4],
+            })),
+            ..Default::default()
+        },
+    ]);
+    nested.nodes.extend([
+        pb::Node {
+            sort_id: 4,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Vec(pb::ValueList {
+                    items: vec![2, 2],
+                })),
+            })),
+            ..Default::default()
+        },
+        pb::Node {
+            sort_id: 5,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Pair(pb::PairValue {
+                    first: Some(2),
+                    second: Some(3),
+                })),
+            })),
+            ..Default::default()
+        },
+    ]);
+    let Some(pb::declaration::Kind::Constructor(c)) = &mut nested.declarations[1].kind else {
+        unreachable!()
+    };
+    c.inputs[0].sort = 5;
+    nested.declarations[1]
+        .bindings
+        .as_mut()
+        .unwrap()
+        .python
+        .as_mut()
+        .unwrap()
+        .views[0]
+        .params[0]
+        .default_expr = Some(4);
+    nested.declarations.push(pb::Declaration {
+        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+            name: "Vec".into(),
+            arity: 1,
+            bindings: None,
+        })),
+        ..Default::default()
+    });
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&nested, &mut destination).unwrap();
+    let frozen = destination.clone();
+    nested.sorts.reverse();
+    nested.nodes.reverse();
+    for s in &mut nested.sorts {
+        if let Some(pb::sort::Kind::Family(f)) = &mut s.kind {
+            for i in &mut f.args {
+                *i = 5 - *i;
+            }
+        }
+    }
+    for n in &mut nested.nodes {
+        n.sort_id = 5 - n.sort_id;
+        match &mut n.kind {
+            Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Pair(p)),
+            })) => {
+                p.first = p.first.map(|i| 4 - i);
+                p.second = p.second.map(|i| 4 - i);
+            }
+            Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Vec(v)),
+            })) => {
+                for i in &mut v.items {
+                    *i = 4 - *i;
+                }
+            }
+            _ => (),
+        }
+    }
+    let Some(pb::declaration::Kind::Constructor(c)) = &mut nested.declarations[1].kind else {
+        unreachable!()
+    };
+    c.inputs[0].sort = 0;
+    c.output = 4;
+    let b = nested.declarations[1].bindings.as_mut().unwrap();
+    b.python.as_mut().unwrap().views[0].params[0].default_expr = Some(0);
+    b.python.as_mut().unwrap().views[0]
+        .owner
+        .as_mut()
+        .unwrap()
+        .kind = Some(pb::binding_owner::Kind::Sort(4));
+    b.rust.as_mut().unwrap().views[0]
+        .owner
+        .as_mut()
+        .unwrap()
+        .kind = Some(pb::binding_owner::Kind::Sort(4));
+    let Some(pb::declaration::Kind::Function(f)) = &mut nested.declarations[2].kind else {
+        unreachable!()
+    };
+    f.output = 5;
+    for _ in 0..3 {
+        reconcile_declarations(&nested, &mut destination).unwrap();
+        assert_eq!(destination, frozen);
+    }
+
+    let mut shared = pair_default_definition();
+    let Some(pb::sort::Kind::Family(f)) = &mut shared.sorts[3].kind else {
+        unreachable!()
+    };
+    f.args = vec![1, 1];
+    shared.nodes = ["Leaf", "Other"]
+        .into_iter()
+        .map(|name| pb::Node {
+            sort_id: 1,
+            kind: Some(pb::node::Kind::Call(pb::Call {
+                func: name.into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        })
+        .collect();
+    for name in ["Leaf", "Other"] {
+        shared.declarations.push(pb::Declaration {
+            kind: Some(pb::declaration::Kind::Constructor(pb::Constructor {
+                name: name.into(),
+                output: 1,
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+    }
+    shared.nodes.push(pb::Node {
+        sort_id: 1,
+        kind: Some(pb::node::Kind::Union(pb::Union {
+            members: vec![0, 1],
+        })),
+        ..Default::default()
+    });
+    shared.nodes.push(pb::Node {
+        sort_id: 3,
+        kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+            value: Some(pb::primitive_value::Value::Pair(pb::PairValue {
+                first: Some(2),
+                second: Some(2),
+            })),
+        })),
+        ..Default::default()
+    });
+    shared.declarations[1]
+        .bindings
+        .as_mut()
+        .unwrap()
+        .python
+        .as_mut()
+        .unwrap()
+        .views[0]
+        .params[0]
+        .default_expr = Some(3);
+    let mut independent = shared.clone();
+    independent.nodes.push(shared.nodes[2].clone());
+    let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+        value: Some(pb::primitive_value::Value::Pair(p)),
+    })) = &mut independent.nodes[3].kind
+    else {
+        unreachable!()
+    };
+    p.second = Some(4);
+    for (first, later) in [(&shared, &independent), (&independent, &shared)] {
+        let mut destination = pb::Program::default();
+        reconcile_declarations(first, &mut destination).unwrap();
+        let frozen = destination.clone();
+        for _ in 0..3 {
+            reconcile_declarations(first, &mut destination).unwrap();
+            assert_eq!(destination, frozen);
+        }
+        assert!(reconcile_declarations(later, &mut destination).is_err());
+        assert_eq!(
+            destination, frozen,
+            "distinct Union topology cannot resupply frozen defaults"
+        );
+    }
+}
+
+#[test]
 fn declaration_closures_relocate_and_resupply_structurally() {
     let source = box_definition();
     let mut destination = pb::Program::default();

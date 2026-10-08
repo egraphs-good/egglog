@@ -1,6 +1,6 @@
 //! Engine-owned protobuf builtin definitions and derived native constraints.
 //!
-//! This migration covers scalar signatures and selected Vec operations, not a
+//! This migration covers scalar signatures, Pair and selected Vec operations, not a
 //! complete generic catalog. Opaque registrations and family gaps remain visible in
 //! the inventory. Export never calls an implementation or a proof validator.
 

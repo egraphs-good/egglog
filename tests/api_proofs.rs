@@ -42,6 +42,44 @@ impl PurePrim for ProofIdentity {
 }
 
 #[test]
+fn canonical_pair_instances_keep_nested_projection_proofs() {
+    for mode in ["terms", "proofs", "proof-testing"] {
+        let graph = EGraph::default();
+        let mut graph = match mode {
+            "terms" => graph.with_term_encoding_enabled(),
+            "proofs" => graph.with_proofs_enabled(),
+            _ => graph.with_proofs_enabled().with_proof_testing(),
+        };
+        graph
+            .parse_and_run_program(
+                None,
+                r#"
+            (datatype N (Z) (S N))
+            (sort P (Pair N N)) (sort Nested (Pair P P))
+            (relation Row (Nested)) (relation Result (N N))
+            (Row (pair (pair (Z) (S (Z))) (pair (S (Z)) (Z))))
+            (rule ((Row p) (= a (pair-second (pair-first p)))
+                          (= b (pair-first (pair-second p))))
+                  ((Result a b)))
+            (run 1)
+            (check (Result (S (Z)) (S (Z))))
+        "#,
+            )
+            .unwrap();
+        if mode != "terms" {
+            let outputs = graph
+                .parse_and_run_program(None, "(prove (Result (S (Z)) (S (Z))))")
+                .unwrap();
+            assert!(
+                outputs
+                    .iter()
+                    .any(|o| matches!(o, CommandOutput::ProveExists { .. }))
+            );
+        }
+    }
+}
+
+#[test]
 fn registered_providers_are_captured_before_enabling_encoding() {
     for mode in ["terms", "proofs", "proof-testing"] {
         let calls = Arc::new(AtomicUsize::new(0));

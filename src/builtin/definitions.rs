@@ -771,6 +771,30 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                         })?;
                         continue;
                     }
+                    V::Pair(v) => {
+                        let Some(pb::sort::Kind::Family(f)) = &p.sorts[n.sort_id as usize].kind
+                        else {
+                            return Err("default Pair sort mismatch".into());
+                        };
+                        if f.name != "Pair" || f.args.len() != 2 {
+                            return Err("default Pair sort mismatch".into());
+                        }
+                        for (member, expected) in [v.first, v.second].into_iter().zip(&f.args) {
+                            if p.nodes
+                                .get(member.ok_or("missing default Pair child")? as usize)
+                                .ok_or("default Pair child out of bounds")?
+                                .sort_id
+                                != *expected
+                            {
+                                return Err("default Pair child sort mismatch".into());
+                            }
+                        }
+                        node_edges(&mut kind, |i| {
+                            pending.push(*i);
+                            Ok(())
+                        })?;
+                        continue;
+                    }
                     _ => return Err("unsupported default value template".into()),
                 };
                 if !matches!(&p.sorts[n.sort_id as usize].kind, Some(pb::sort::Kind::Family(f)) if f.name == expected && f.args.is_empty())
