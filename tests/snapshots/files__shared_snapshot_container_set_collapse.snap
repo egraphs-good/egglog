@@ -1,14 +1,13 @@
 ---
 source: tests/files.rs
-assertion_line: 88
 expression: snapshot_content_across_treatments
 ---
 (let prf_0 (Fiat (= (B) (A))))
-(let t_1 (Holds (set-of (A) (B))))
-(let prf_2
+(let t_0 (Holds (set-of (A) (B))))
+(let prf_1
   (Congr
-            (= t_1 (Holds (set-of (A))))
-            (Fiat (= t_1 t_1))
+            (= t_0 (Holds (set-of (A))))
+            (Fiat (= t_0 t_0))
             (ContainerNormalize
               (= (set-of (A) (B)) (set-of (A)))
               (Congr
@@ -18,8 +17,8 @@ expression: snapshot_content_across_treatments
                 1))
             0))
 (Rule
-  (= (@ExistsConstructor_598) (@ExistsConstructor_598))
-  (name "@prove_exists_rule_600")
+  (= (@ExistsConstructor) (@ExistsConstructor))
+  (name "@prove_exists_rule")
   (premises
     (Fiat (= (A) (A)))
     prf_0
@@ -28,14 +27,14 @@ expression: snapshot_content_across_treatments
     (Eval)
     (Trans
       (= (Holds (set-of (A))) (Holds (set-of (A))))
-      (Sym (= (Holds (set-of (A))) t_1) prf_2)
-      prf_2))
+      (Sym (= (Holds (set-of (A))) t_0) prf_1)
+      prf_1))
   (substitution
-    (@v_603 (set-of (A)))
-    (@v_602 (A))
-    (@v_604 (A))
-    (@v_605 (set-of (A)))
-    (@v_601 (A))))
+    (@v_35 (set-of (A)))
+    (@v_34 (A))
+    (@v_37 (set-of (A)))
+    (@v_36 (A))
+    (@v_33 (A))))
 ((A 1)
  (B 1)
  (Holds 1))

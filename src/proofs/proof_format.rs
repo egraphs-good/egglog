@@ -394,6 +394,7 @@ impl ProofStore {
     pub fn proof_to_string(&self, proof_id: ProofId) -> String {
         let symbol_gen = &mut crate::util::SymbolGen::new("".to_string());
         let mut buffer = String::new();
+        symbol_gen.include_zero(true);
         let res = self.print_to_buffer(symbol_gen, proof_id, &mut buffer);
         buffer.push_str(&res);
         buffer

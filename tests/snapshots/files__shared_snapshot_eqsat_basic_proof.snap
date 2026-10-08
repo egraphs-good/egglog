@@ -11,10 +11,10 @@ expression: snapshot_content_across_treatments
 (let t_6 (premises (Fiat (= t_0 t_0))))
 (let t_7
   (substitution
-                (@rewrite_var___1108 t_0)
+                (c (Num 3))
                 (a (Num 2))
                 (b (Var "x"))
-                (c (Num 3))))
+                (@rewrite_var___1 t_0)))
 (let t_8
   (premises
           (Sym
@@ -24,7 +24,7 @@ expression: snapshot_content_across_treatments
               (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
               t_6
               t_7))))
-(let t_9 (substitution (@rewrite_var___1055 t_0) (a t_1) (b t_3)))
+(let t_9 (substitution (a t_1) (b t_3) (@rewrite_var__ t_0)))
 (Trans
   (= t_0 t_2)
   (Sym
@@ -42,7 +42,7 @@ expression: snapshot_content_across_treatments
           (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
           t_6
           t_7))
-      (substitution (a 2) (@rewrite_var___1275 t_3) (b 3)))
+      (substitution (a 2) (@rewrite_var___3 t_3) (b 3)))
     0))
 ((Add 4)
  (Mul 3)
