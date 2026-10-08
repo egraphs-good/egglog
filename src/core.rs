@@ -48,6 +48,21 @@ pub struct SpecializedPrimitive {
 }
 
 impl SpecializedPrimitive {
+    /// Exports this exact resolved registration, not another overload sharing
+    /// its source alias. The destination receives canonical signature records
+    /// with its own arena indices; implementations and validators stay native.
+    pub fn export_builtin(
+        &self,
+        destination: &mut crate::proto::Program,
+    ) -> Result<String, String> {
+        let definition = self
+            .prim_with_id
+            .primitive
+            .builtin_definition()
+            .ok_or_else(|| format!("primitive {} has no catalog definition yet", self.name()))?;
+        crate::builtin::import_definition(definition, destination)
+    }
+
     /// Get the name of this primitive
     pub fn name(&self) -> &str {
         self.prim_with_id.primitive.name()

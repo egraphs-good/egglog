@@ -1,6 +1,7 @@
 #![doc = include_str!("lib.md")]
 pub mod api;
 pub mod ast;
+pub mod builtin;
 #[cfg(feature = "bin")]
 mod cli;
 mod command_macro;
@@ -42,6 +43,7 @@ use egglog_ast::util::ListDisplay;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
+pub use egglog_proto as proto;
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
@@ -103,6 +105,13 @@ pub trait Primitive: Send + Sync + 'static {
 
     /// Constructs a type constraint for this primitive.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+
+    /// The canonical protobuf definition, when this registration has migrated
+    /// to catalog-driven typing. Missing definitions remain explicit inventory
+    /// gaps; they are not inferred from opaque native constraints.
+    fn builtin_definition(&self) -> Option<&proto::Program> {
+        None
+    }
 }
 
 /// A primitive whose body sees a [`PureState`]. Register via

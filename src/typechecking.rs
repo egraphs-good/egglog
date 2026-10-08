@@ -206,11 +206,13 @@ impl Debug for PrimitiveWithId {
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
-    mksorts: HashMap<String, MkSort>,
+    pub(crate) mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
-    primitives: HashMap<String, Vec<PrimitiveWithId>>,
+    pub(crate) primitives: HashMap<String, Vec<PrimitiveWithId>>,
+    pub(crate) builtin_primitives: HashMap<String, Vec<PrimitiveWithId>>,
+    pub(crate) builtin_errors: Vec<String>,
     func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
@@ -367,15 +369,42 @@ impl EGraph {
                     .register_external_func(build_wrapper(x.clone(), ctx))
             })
         });
+        let registered = PrimitiveWithId {
+            primitive,
+            validator,
+            context_ids,
+        };
+        if self.type_info.builtin_primitives.contains_key(&name) {
+            self.type_info.builtin_errors.push(format!(
+                "native alias {name} collides with a builtin definition key"
+            ));
+        }
+        if let Some(definition) = registered.primitive.builtin_definition() {
+            match crate::builtin::definition_key(definition) {
+                Ok(key)
+                    if key != name
+                        && !self.type_info.primitives.contains_key(key)
+                        && !self.type_info.func_types.contains_key(key)
+                        && !self.type_info.builtin_primitives.contains_key(key) =>
+                {
+                    // A second lookup key for the SAME registration and context
+                    // ids, not another implementation or semantic declaration.
+                    self.type_info
+                        .builtin_primitives
+                        .insert(key.into(), vec![registered.clone()]);
+                }
+                Ok(key) => self
+                    .type_info
+                    .builtin_errors
+                    .push(format!("builtin definition key collision: {key}")),
+                Err(error) => self.type_info.builtin_errors.push(error),
+            }
+        }
         self.type_info
             .primitives
             .entry(name)
             .or_default()
-            .push(PrimitiveWithId {
-                primitive,
-                validator,
-                context_ids,
-            });
+            .push(registered);
     }
 }
 
@@ -1116,11 +1145,21 @@ impl TypeInfo {
     }
 
     pub fn get_prims(&self, sym: &str) -> Option<&[PrimitiveWithId]> {
-        self.primitives.get(sym).map(Vec::as_slice)
+        self.primitives
+            .get(sym)
+            .or_else(|| {
+                self.builtin_errors
+                    .is_empty()
+                    .then(|| self.builtin_primitives.get(sym))
+                    .flatten()
+            })
+            .map(Vec::as_slice)
     }
 
     pub fn is_primitive(&self, sym: &str) -> bool {
-        self.primitives.contains_key(sym) || self.reserved_primitives.contains(sym)
+        self.primitives.contains_key(sym)
+            || self.builtin_primitives.contains_key(sym)
+            || self.reserved_primitives.contains(sym)
     }
 
     pub fn primitive_has_validator(&self, id: ExternalFunctionId) -> bool {

@@ -69,6 +69,10 @@ impl Parse for AddPrimitiveWithValidator {
 ///   will let you access the expression `x` of type `T` from inside
 ///   the body as `self.ctx`. `T` must be the real Rust type of `x`.
 ///   `T` must be `Clone` and `'static`.
+///
+/// - Catalog: `"alias" [id = "provider.definition"] = ...` retains the
+///   signature as protobuf and derives native constraints from that definition.
+///   This initial form requires closed scalar types and fixed arity.
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parse_macro_input!(input), None)
@@ -84,6 +88,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     let AddPrimitive {
         eg,
         name,
+        builtin_id,
         context,
         is_varargs,
         args,
@@ -99,11 +104,24 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     let value_type = syn::Type::Verbatim(quote!(Value));
 
     // List out the sorts that we need to store.
-    let (field_defs, field_uses): (Vec<_>, Vec<_>) = args
+    if builtin_id.is_some()
+        && (is_varargs || args.iter().any(|arg| arg.t.field.is_none()) || ret.field.is_none())
+    {
+        return syn::Error::new_spanned(
+            &name,
+            "catalog macros currently require closed fixed-arity signatures",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let (mut field_defs, mut field_uses): (Vec<_>, Vec<_>) = args
         .iter()
         .map(|arg| (&arg.x, &arg.t))
         .chain([(&y, &ret)])
         .filter_map(|(x, t)| {
+            if builtin_id.is_some() {
+                return None;
+            }
             t.field
                 .as_ref()
                 .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u.clone())))
@@ -113,6 +131,16 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             None => vec![],
         })
         .unzip();
+    if let Some(key) = &builtin_id {
+        let inputs = args.iter().map(|arg| {
+            let label = arg.x.to_string();
+            let expr = &arg.t.field.as_ref().unwrap().1;
+            quote!((#label, (#expr).clone() as ArcSort))
+        });
+        let output = &ret.field.as_ref().unwrap().1;
+        field_defs.push(quote!(__definition: Arc<::egglog::proto::Program>));
+        field_uses.push(quote!(__definition: Arc::new(::egglog::builtin::closed_signature(#key, #name, &[#(#inputs),*], (#output).clone() as ArcSort).expect("invalid builtin macro signature"))));
+    }
     // Bundle up the defs and uses into structs.
     let prim_def = quote!(struct Prim { #(#field_defs,)* });
     let prim_use = quote!(       Prim { #(#field_uses,)* });
@@ -121,7 +149,12 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // TODO: add a new type constraint that supports all possible combinations
     // of features that this macro supports. Right now `|a: #, b: i64|` is
     // impossible to express with the current type constraints.
-    let type_constraint = {
+    let type_constraint = if builtin_id.is_some() {
+        quote!(::egglog::builtin::type_constraints(
+            &self.__definition,
+            span
+        ))
+    } else {
         let has_type = |t: &Type| t.field.is_some();
         let args_have_types = args.iter().all(|arg| has_type(&arg.t));
         let ret_has_type = has_type(&ret);
@@ -166,6 +199,13 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             quote!(#new #len #args #ret .into_box())
         }
     };
+    let builtin_definition = builtin_id.as_ref().map(|_| {
+        quote! {
+            fn builtin_definition(&self) -> Option<&::egglog::proto::Program> {
+                Some(&self.__definition)
+            }
+        }
+    });
 
     // Create the function body for `apply`.
     let apply = {
@@ -267,6 +307,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
                 #type_constraint
             }
+            #builtin_definition
         }
 
         impl PurePrim for Prim {
@@ -288,6 +329,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
 struct AddPrimitive {
     eg: Expr,
     name: LitStr,
+    builtin_id: Option<LitStr>,
     context: Context,
     args: Vec<Arg>,
     ret: Type,
@@ -301,6 +343,22 @@ impl Parse for AddPrimitive {
         let eg = input.parse()?;
         input.parse::<Token![,]>()?;
         let name = input.parse()?;
+        let builtin_id = if input.peek(syn::token::Bracket) {
+            let options;
+            bracketed!(options in input);
+            let option: Ident = options.parse()?;
+            if option != "id" {
+                return Err(syn::Error::new_spanned(option, "expected id"));
+            }
+            options.parse::<Token![=]>()?;
+            let id = options.parse()?;
+            if !options.is_empty() {
+                return Err(options.error("unexpected builtin option"));
+            }
+            Some(id)
+        } else {
+            None
+        };
         input.parse::<Token![=]>()?;
         let context = input.parse()?;
         let Args { is_varargs, args } = input.parse()?;
@@ -314,6 +372,7 @@ impl Parse for AddPrimitive {
         Ok(AddPrimitive {
             eg,
             name,
+            builtin_id,
             context,
             args,
             ret,
@@ -522,7 +581,7 @@ pub fn add_literal_prim(input: TokenStream) -> TokenStream {
     // Create the validator expression
     let validator_expr = syn::parse2::<Expr>(quote! {
         |termdag: &mut ::egglog::TermDag, args: &[::egglog::TermId]| -> Option<::egglog::TermId> {
-            use egglog::termdag::Term;
+            use ::egglog::Term;
             use egglog_ast::generic_ast::Literal;
             Some({
                 #validator_body
