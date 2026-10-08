@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "classes": {
+    "@edgeSort-0": {
+      "sort": "@relation:[\"edge\"]"
+    },
+    "@edgeSort-1": {
+      "sort": "@relation:[\"edge\"]"
+    },
+    "@edgeSort-2": {
+      "sort": "@relation:[\"edge\"]"
+    },
+    "@pathSort-3": {
+      "sort": "@relation:[\"path\"]"
+    },
+    "@pathSort-4": {
+      "sort": "@relation:[\"path\"]"
+    },
+    "@pathSort-5": {
+      "sort": "@relation:[\"path\"]"
+    },
+    "@pathSort-6": {
+      "sort": "@relation:[\"path\"]"
+    },
+    "@pathSort-7": {
+      "sort": "@relation:[\"path\"]"
+    },
+    "@pathSort-8": {
+      "sort": "@relation:[\"path\"]"
+    },
+    "i64-1": {
+      "sort": "i64",
+      "literal": "1"
+    },
+    "i64-2": {
+      "sort": "i64",
+      "literal": "2"
+    },
+    "i64-3": {
+      "sort": "i64",
+      "literal": "3"
+    },
+    "i64-4": {
+      "sort": "i64",
+      "literal": "4"
+    }
+  },
+  "functions": {
+    "edge": {
+      "kind": "function",
+      "inputs": [
+        "i64",
+        "i64"
+      ],
+      "output": "@relation:[\"edge\"]"
+    },
+    "path": {
+      "kind": "function",
+      "inputs": [
+        "i64",
+        "i64"
+      ],
+      "output": "@relation:[\"path\"]"
+    }
+  },
+  "rows": [
+    {
+      "function": "path",
+      "inputs": [
+        "i64-1",
+        "i64-2"
+      ],
+      "output": "@pathSort-3",
+      "subsumed": false
+    },
+    {
+      "function": "path",
+      "inputs": [
+        "i64-2",
+        "i64-3"
+      ],
+      "output": "@pathSort-4",
+      "subsumed": false
+    },
+    {
+      "function": "path",
+      "inputs": [
+        "i64-3",
+        "i64-4"
+      ],
+      "output": "@pathSort-5",
+      "subsumed": false
+    },
+    {
+      "function": "path",
+      "inputs": [
+        "i64-1",
+        "i64-3"
+      ],
+      "output": "@pathSort-6",
+      "subsumed": false
+    },
+    {
+      "function": "path",
+      "inputs": [
+        "i64-2",
+        "i64-4"
+      ],
+      "output": "@pathSort-7",
+      "subsumed": false
+    },
+    {
+      "function": "path",
+      "inputs": [
+        "i64-1",
+        "i64-4"
+      ],
+      "output": "@pathSort-8",
+      "subsumed": false
+    },
+    {
+      "function": "edge",
+      "inputs": [
+        "i64-1",
+        "i64-2"
+      ],
+      "output": "@edgeSort-0",
+      "subsumed": false
+    },
+    {
+      "function": "edge",
+      "inputs": [
+        "i64-2",
+        "i64-3"
+      ],
+      "output": "@edgeSort-1",
+      "subsumed": false
+    },
+    {
+      "function": "edge",
+      "inputs": [
+        "i64-3",
+        "i64-4"
+      ],
+      "output": "@edgeSort-2",
+      "subsumed": false
+    }
+  ]
+}

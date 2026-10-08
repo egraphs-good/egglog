@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "classes": {
+    "i64-0": {
+      "sort": "i64",
+      "literal": "0"
+    },
+    "i64-1": {
+      "sort": "i64",
+      "literal": "1"
+    },
+    "i64-13": {
+      "sort": "i64",
+      "literal": "13"
+    },
+    "i64-2": {
+      "sort": "i64",
+      "literal": "2"
+    },
+    "i64-21": {
+      "sort": "i64",
+      "literal": "21"
+    },
+    "i64-3": {
+      "sort": "i64",
+      "literal": "3"
+    },
+    "i64-4": {
+      "sort": "i64",
+      "literal": "4"
+    },
+    "i64-5": {
+      "sort": "i64",
+      "literal": "5"
+    },
+    "i64-6": {
+      "sort": "i64",
+      "literal": "6"
+    },
+    "i64-7": {
+      "sort": "i64",
+      "literal": "7"
+    },
+    "i64-8": {
+      "sort": "i64",
+      "literal": "8"
+    }
+  },
+  "functions": {
+    "fib": {
+      "kind": "function",
+      "inputs": [
+        "i64"
+      ],
+      "output": "i64"
+    }
+  },
+  "rows": [
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-0"
+      ],
+      "output": "i64-0",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-1"
+      ],
+      "output": "i64-1",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-2"
+      ],
+      "output": "i64-1",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-3"
+      ],
+      "output": "i64-2",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-4"
+      ],
+      "output": "i64-3",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-5"
+      ],
+      "output": "i64-5",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-6"
+      ],
+      "output": "i64-8",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-7"
+      ],
+      "output": "i64-13",
+      "subsumed": false
+    },
+    {
+      "function": "fib",
+      "inputs": [
+        "i64-8"
+      ],
+      "output": "i64-21",
+      "subsumed": false
+    }
+  ]
+}
