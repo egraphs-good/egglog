@@ -6,6 +6,130 @@ use std::sync::{
 };
 
 #[test]
+fn vec_catalog_has_generic_rust_views_without_python_views() {
+    let catalog = EGraph::default()
+        .type_info()
+        .builtin_catalog()
+        .unwrap()
+        .definitions;
+    let family = catalog
+        .declarations
+        .iter()
+        .find_map(|d| match &d.kind {
+            Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Vec" => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    let binding = family.bindings.as_ref().expect("Vec family presentation");
+    assert!(binding.python.is_none());
+    let rust = binding.rust.as_ref().unwrap();
+    assert_eq!(
+        rust.path,
+        ["egglog_experimental", "typed", "builtins", "Vec"]
+    );
+    assert_eq!(rust.type_params, ["T"]);
+    for method in ["empty", "of", "get"] {
+        let declaration = catalog.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.vec.{method}"))).unwrap();
+        let bindings = declaration.bindings.as_ref().unwrap();
+        assert!(bindings.python.is_none());
+        assert_eq!(
+            bindings.egglog.as_ref().unwrap().views[0].symbol,
+            format!("vec-{method}")
+        );
+        let rust = &bindings
+            .rust
+            .as_ref()
+            .expect("Vec callable presentation")
+            .views[0];
+        assert_eq!(rust.path, [method]);
+        let Some(proto::binding_owner::Kind::Sort(owner)) = rust.owner.unwrap().kind else {
+            panic!("sort owner")
+        };
+        let Some(proto::sort::Kind::Family(owner)) = &catalog.sorts[owner as usize].kind else {
+            panic!("Vec owner")
+        };
+        assert_eq!(owner.name, "Vec");
+        assert!(matches!(
+            catalog.sorts[owner.args[0] as usize].kind,
+            Some(proto::sort::Kind::Var(0))
+        ));
+        let expected = match method {
+            "empty" => (None, vec![]),
+            "of" => (
+                None,
+                vec![proto::RustParameter {
+                    core_input: Some(0),
+                    name: "values".into(),
+                    borrowed: false,
+                }],
+            ),
+            _ => (
+                Some(proto::RustReceiver {
+                    core_input: Some(0),
+                    borrowed: true,
+                }),
+                vec![proto::RustParameter {
+                    core_input: Some(1),
+                    name: "index".into(),
+                    borrowed: false,
+                }],
+            ),
+        };
+        assert_eq!((rust.receiver, rust.params.clone()), expected);
+    }
+}
+
+#[test]
+fn constant_catalog_export_does_not_execute_the_body_or_validator() {
+    static BODY: AtomicUsize = AtomicUsize::new(0);
+    static VALIDATOR: AtomicUsize = AtomicUsize::new(0);
+    let bindings = |_: &proto::GenericSignature| proto::CallableBindings {
+        python: Some(proto::PythonBindings {
+            views: vec![proto::PythonCallable {
+                kind: proto::PythonCallKind::Constant.into(),
+                path: vec!["test".into(), "C".into()],
+                ..Default::default()
+            }],
+        }),
+        egglog: Some(proto::EgglogBindings {
+            views: vec![proto::EgglogCallable {
+                symbol: "constant".into(),
+                datatype_member: false,
+            }],
+        }),
+        ..Default::default()
+    };
+    let mut graph = EGraph::default();
+    add_primitive_with_validator!(&mut graph, "constant" [id = "test.constant", bindings = bindings] = || -> i64 {
+        { BODY.fetch_add(1, Ordering::SeqCst); 7 }
+    }, |_: &mut TermDag, _: &[TermId]| { VALIDATOR.fetch_add(1, Ordering::SeqCst); None });
+    let catalog = graph.type_info().builtin_catalog().unwrap().definitions;
+    let declaration = catalog.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == "test.constant")).unwrap();
+    assert_eq!(
+        declaration
+            .bindings
+            .as_ref()
+            .unwrap()
+            .python
+            .as_ref()
+            .unwrap()
+            .views[0]
+            .kind,
+        proto::PythonCallKind::Constant as i32
+    );
+    assert_eq!(BODY.load(Ordering::SeqCst), 0);
+    assert_eq!(VALIDATOR.load(Ordering::SeqCst), 0);
+    graph
+        .parse_and_run_program(None, "(check (= (constant) 7))")
+        .unwrap();
+    assert!(BODY.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        catalog
+    );
+}
+
+#[test]
 fn scalar_catalog_has_authoritative_language_views() {
     let catalog = EGraph::default()
         .type_info()

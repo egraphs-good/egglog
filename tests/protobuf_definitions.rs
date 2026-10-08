@@ -1,5 +1,188 @@
 use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
 
+fn constant_definition() -> pb::Program {
+    let mut p = box_definition();
+    p.nodes.clear();
+    let Some(pb::declaration::Kind::Constructor(c)) = &mut p.declarations[1].kind else {
+        unreachable!()
+    };
+    c.inputs.clear();
+    let Some(pb::declaration::Kind::Function(f)) = &mut p.declarations[2].kind else {
+        unreachable!()
+    };
+    f.merge = None;
+    p.declarations.push(pb::Declaration {
+        kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+            name: "test.constant".into(),
+            typing: Some(pb::host_primitive::Typing::Signature(
+                pb::GenericSignature {
+                    output: Some(0),
+                    ..Default::default()
+                },
+            )),
+        })),
+        ..Default::default()
+    });
+    for (d, name) in p.declarations[1..]
+        .iter_mut()
+        .zip(["BOX", "CURRENT", "HOST"])
+    {
+        d.bindings = Some(pb::CallableBindings {
+            python: Some(pb::PythonBindings {
+                views: vec![pb::PythonCallable {
+                    kind: pb::PythonCallKind::Constant.into(),
+                    path: vec!["test".into(), name.into()],
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        });
+    }
+    p
+}
+
+#[test]
+fn constant_views_install_resupply_and_freeze_without_evaluation() {
+    let source = constant_definition();
+    let mut absent = source.clone();
+    for d in &mut absent.declarations {
+        d.bindings = None;
+    }
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&absent, &mut destination).unwrap();
+    assert_eq!(
+        reconcile_declarations(&source, &mut destination).unwrap(),
+        [false; 4]
+    );
+    let frozen = destination.clone();
+    for _ in 0..3 {
+        reconcile_declarations(&source, &mut destination).unwrap();
+        reconcile_declarations(&absent, &mut destination).unwrap();
+        assert_eq!(destination, frozen);
+    }
+    let mut function = source;
+    function.declarations[2]
+        .bindings
+        .as_mut()
+        .unwrap()
+        .python
+        .as_mut()
+        .unwrap()
+        .views[0]
+        .kind = pb::PythonCallKind::Function.into();
+    let mut independent = pb::Program::default();
+    reconcile_declarations(&function, &mut independent).unwrap();
+    assert_ne!(independent, frozen, "nullary FUNCTION is not CONSTANT");
+    assert!(reconcile_declarations(&function, &mut destination).is_err());
+    assert_eq!(
+        destination, frozen,
+        "first supplied Python metadata is frozen"
+    );
+}
+
+#[test]
+fn constant_views_reject_malformed_forms_and_signatures_transactionally() {
+    let source = constant_definition();
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    for bad in 0..15 {
+        let mut candidate = source.clone();
+        let view = &mut candidate.declarations[3]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python
+            .as_mut()
+            .unwrap()
+            .views[0];
+        match bad {
+            0 => view.path.clear(),
+            1 => view.path.push(String::new()),
+            2 => {
+                view.owner = Some(pb::BindingOwner {
+                    kind: Some(pb::binding_owner::Kind::Sort(0)),
+                })
+            }
+            3 => view.receiver = Some(0),
+            4 => view.params.push(pb::PythonParameter {
+                core_input: Some(0),
+                name: "x".into(),
+                ..Default::default()
+            }),
+            5 => view.mutates = Some(0),
+            6 => view.kind = 99,
+            7..=10 => {
+                let Some(pb::declaration::Kind::HostPrimitive(h)) =
+                    &mut candidate.declarations[3].kind
+                else {
+                    unreachable!()
+                };
+                let Some(pb::host_primitive::Typing::Signature(s)) = &mut h.typing else {
+                    unreachable!()
+                };
+                match bad {
+                    7 => s.inputs.push(pb::Arg {
+                        name: "x".into(),
+                        sort: 0,
+                    }),
+                    8 => {
+                        s.varargs = Some(pb::Arg {
+                            name: "xs".into(),
+                            sort: 0,
+                        })
+                    }
+                    9 => s.type_params.push("Undetermined".into()),
+                    _ => s.output = Some(99),
+                }
+            }
+            11 => {
+                let Some(pb::declaration::Kind::Constructor(c)) =
+                    &mut candidate.declarations[1].kind
+                else {
+                    unreachable!()
+                };
+                c.inputs.push(pb::Arg {
+                    name: "x".into(),
+                    sort: 0,
+                });
+            }
+            12 => {
+                let Some(pb::declaration::Kind::Function(f)) = &mut candidate.declarations[2].kind
+                else {
+                    unreachable!()
+                };
+                f.inputs.push(pb::Arg {
+                    name: "x".into(),
+                    sort: 0,
+                });
+            }
+            13 => candidate.sorts[0].kind = Some(pb::sort::Kind::Var(0)),
+            _ => {
+                let Some(pb::declaration::Kind::HostPrimitive(h)) =
+                    &mut candidate.declarations[3].kind
+                else {
+                    unreachable!()
+                };
+                h.typing = Some(pb::host_primitive::Typing::Application(
+                    pb::FunctionApplication {},
+                ));
+            }
+        }
+        let before = destination.clone();
+        assert!(
+            reconcile_declarations(&candidate, &mut destination).is_err(),
+            "bad case {bad}"
+        );
+        assert_eq!(destination, before, "bad case {bad}");
+        let mut fresh = pb::Program::default();
+        assert!(
+            reconcile_declarations(&candidate, &mut fresh).is_err(),
+            "fresh bad case {bad}"
+        );
+        assert_eq!(fresh, pb::Program::default());
+    }
+}
+
 fn box_definition() -> pb::Program {
     pb::Program {
         ir_version: 1,

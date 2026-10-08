@@ -113,7 +113,18 @@ impl Presort for VecSort {
                     kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
                         name: "Vec".into(),
                         arity: 1,
-                        ..Default::default()
+                        bindings: Some(pb::SortBindings {
+                            rust: Some(pb::TypeBinding {
+                                path: vec![
+                                    "egglog_experimental".into(),
+                                    "typed".into(),
+                                    "builtins".into(),
+                                    "Vec".into(),
+                                ],
+                                type_params: vec!["T".into()],
+                            }),
+                            ..Default::default()
+                        }),
                     })),
                     ..Default::default()
                 },
@@ -138,6 +149,32 @@ impl Presort for VecSort {
                         )),
                     })),
                     bindings: Some(pb::CallableBindings {
+                        rust: Some(pb::RustBindings {
+                            views: vec![pb::RustCallable {
+                                path: vec![key.into()],
+                                owner: Some(pb::BindingOwner {
+                                    kind: Some(pb::binding_owner::Kind::Sort(1)),
+                                }),
+                                receiver: (key == "get").then_some(pb::RustReceiver {
+                                    core_input: Some(0),
+                                    borrowed: true,
+                                }),
+                                params: match key {
+                                    "of" => vec![pb::RustParameter {
+                                        core_input: Some(0),
+                                        name: "values".into(),
+                                        borrowed: false,
+                                    }],
+                                    "get" => vec![pb::RustParameter {
+                                        core_input: Some(1),
+                                        name: "index".into(),
+                                        borrowed: false,
+                                    }],
+                                    _ => vec![],
+                                },
+                                ..Default::default()
+                            }],
+                        }),
                         egglog: Some(pb::EgglogBindings {
                             views: vec![pb::EgglogCallable {
                                 symbol: alias.into(),

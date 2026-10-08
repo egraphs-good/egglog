@@ -832,15 +832,17 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 pb::PythonCallKind::try_from(v.kind).map_err(|_| "invalid Python call kind")?;
             use pb::PythonCallKind as K;
             if kind == K::Unspecified
-                || (kind == K::Function) == v.owner.is_some()
+                || matches!(kind, K::Function | K::Constant) == v.owner.is_some()
                 || matches!(kind, K::Method | K::Property) != v.receiver.is_some()
                 || v.path.iter().any(String::is_empty)
                 || match kind {
                     K::Initializer => !v.path.is_empty(),
-                    K::Function => v.path.is_empty(),
+                    K::Function | K::Constant => v.path.is_empty(),
                     _ => v.path.len() != 1,
                 }
-                || (matches!(kind, K::Property | K::ClassVariable) && !v.params.is_empty())
+                || (matches!(kind, K::Property | K::ClassVariable | K::Constant)
+                    && !v.params.is_empty())
+                || (kind == K::Constant && parameters != 0)
             {
                 return Err("invalid Python view form".into());
             }
