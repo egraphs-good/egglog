@@ -836,6 +836,90 @@ fn seminaive_query_prim_rechecks_after_preseeded_container_rebuild() {
 }
 
 #[test]
+fn snapshot_query_keeps_rows_rules_and_run_history_independent() {
+    for cache_before_clone in [false, true] {
+        let mut egraph = EGraph::default();
+        let int_base = egraph.base_values_mut().register_type::<i64>();
+        let [zero, one, two, three, four, five] =
+            [0i64, 1, 2, 3, 4, 5].map(|value| egraph.base_values_mut().get(value));
+        let [input, output] = ["input", "output"].map(|name| {
+            egraph.add_table(FunctionConfig {
+                schema: vec![ColumnTy::Base(int_base); 2],
+                default: DefaultVal::Fail,
+                merge: MergeFn::AssertEq,
+                name: name.into(),
+                can_subsume: false,
+            })
+        });
+        let copy_input = {
+            let mut rb = egraph.new_rule("copy input", true);
+            let value: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+            let row = [value.clone(), value];
+            rb.query_table(input, &row, Some(false)).unwrap();
+            rb.set(output, &row);
+            rb.build()
+        };
+        let seed_output = {
+            let value = egraph.base_value_constant(3i64);
+            let mut rb = egraph.new_rule("seed output", true);
+            rb.set(output, &[value.clone(), value]);
+            rb.build()
+        };
+        let rules = [copy_input, seed_output];
+        egraph.add_values([(input, vec![zero, zero])]);
+        if cache_before_clone {
+            assert!(egraph.run_rules(&rules, None).unwrap().changed());
+        }
+        let mut snapshot = egraph.clone();
+
+        // Both branches receive new rows before either advances its rule timestamps.
+        egraph.add_values([(input, vec![one, one])]);
+        snapshot.add_values([(input, vec![two, two])]);
+        assert!(snapshot.run_rules(&rules, None).unwrap().changed());
+        assert_eq!(egraph.lookup_id(input, &[two]), None);
+        assert_eq!(snapshot.lookup_id(input, &[one]), None);
+        assert_eq!(egraph.lookup_id(output, &[two]), None);
+        assert_eq!(
+            egraph.lookup_id(output, &[zero]),
+            cache_before_clone.then_some(zero)
+        );
+
+        // Running the snapshot must not suppress the original's first matches, including
+        // its RHS-only rule, or the new matches after an already-cached plan was cloned.
+        assert!(egraph.run_rules(&rules, None).unwrap().changed());
+        for value in [zero, one, three] {
+            assert_eq!(egraph.lookup_id(output, &[value]), Some(value));
+        }
+        for value in [zero, two, three] {
+            assert_eq!(snapshot.lookup_id(output, &[value]), Some(value));
+        }
+        assert_eq!(egraph.lookup_id(output, &[two]), None);
+        assert_eq!(snapshot.lookup_id(output, &[one]), None);
+
+        // Replacing a rule in the snapshot must leave the original rule executable.
+        snapshot.free_rule(copy_input);
+        let snapshot_only = {
+            let value = snapshot.base_value_constant(4i64);
+            let mut rb = snapshot.new_rule("snapshot only", true);
+            rb.set(output, &[value.clone(), value]);
+            rb.build()
+        };
+        assert!(
+            snapshot
+                .run_rules(&[snapshot_only], None)
+                .unwrap()
+                .changed()
+        );
+        assert_eq!(snapshot.lookup_id(output, &[four]), Some(four));
+        assert_eq!(egraph.lookup_id(output, &[four]), None);
+        egraph.add_values([(input, vec![five, five])]);
+        assert!(egraph.run_rules(&[copy_input], None).unwrap().changed());
+        assert_eq!(egraph.lookup_id(output, &[five]), Some(five));
+        assert_eq!(snapshot.lookup_id(output, &[five]), None);
+    }
+}
+
+#[test]
 fn rhs_only_rule() {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();

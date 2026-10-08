@@ -89,15 +89,9 @@ impl From<ExternalFunctionId> for Function {
     }
 }
 
-trait Brc:
-    Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + dyn_clone::DynClone + Send + Sync
-{
-}
-impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone + Send + Sync> Brc for T {}
-dyn_clone::clone_trait_object!(Brc);
-type BuildRuleCallback = Box<dyn Brc>;
+type BuildRuleCallback =
+    Box<dyn Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Send + Sync>;
 
-#[derive(Clone)]
 pub(crate) struct Query {
     uf_table: TableId,
     id_counter: CounterId,
@@ -162,7 +156,10 @@ impl EGraph {
 }
 
 impl RuleBuilder<'_> {
-    fn add_callback(&mut self, cb: impl Brc + 'static) {
+    fn add_callback(
+        &mut self,
+        cb: impl Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Send + Sync + 'static,
+    ) {
         self.query.add_rule.push(Box::new(cb));
     }
 
@@ -298,7 +295,7 @@ impl RuleBuilder<'_> {
         let res = self.query.rule_id;
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
-            query: self.query,
+            query: Arc::new(self.query),
             cached_plan: None,
             desc: self.desc,
         };
