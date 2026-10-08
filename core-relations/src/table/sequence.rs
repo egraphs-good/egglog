@@ -1012,6 +1012,10 @@ impl SequenceTable {
         Box::new(self.new_sequence_buffer())
     }
 
+    pub(crate) fn shard_data(&self) -> ShardData {
+        self.hash.shard_data()
+    }
+
     /// Publish staged set mutations for a table with no non-key values.
     ///
     /// Removals are applied before insertions, so removing and inserting the
