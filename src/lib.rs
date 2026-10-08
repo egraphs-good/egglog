@@ -110,6 +110,12 @@ pub trait Primitive: Send + Sync + 'static {
     /// to catalog-driven typing. Missing definitions remain explicit inventory
     /// gaps; they are not inferred from opaque native constraints.
     fn builtin_definition(&self) -> Option<&proto::Program> {
+        self.builtin_instance()
+            .map(|instance| instance.definition.as_ref())
+    }
+
+    /// Checked instantiation of a presort-owned definition, when applicable.
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
         None
     }
 }

@@ -158,6 +158,11 @@ pub trait Sort: Any + Send + Sync + Debug {
 pub trait Presort {
     fn presort_name() -> &'static str;
     fn reserved_primitives() -> Vec<&'static str>;
+    /// Canonical generic definitions, available before any instance exists.
+    /// Each fragment owns one callable and its referenced family declarations.
+    fn builtin_definitions() -> Vec<proto::Program> {
+        vec![]
+    }
     fn make_sort(
         typeinfo: &mut TypeInfo,
         name: String,

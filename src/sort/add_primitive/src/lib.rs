@@ -73,6 +73,9 @@ impl Parse for AddPrimitiveWithValidator {
 /// - Catalog: `"alias" [id = "provider.definition"] = ...` retains the
 ///   signature as protobuf and derives native constraints from that definition.
 ///   This initial form requires closed scalar types and fixed arity.
+///   `[instance = binding]` instead uses a presort-owned generic definition.
+///   Its annotations describe runtime representations only: explicit sort
+///   expressions are rejected, and casts/arity are checked against the record.
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parse_macro_input!(input), None)
@@ -89,6 +92,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         eg,
         name,
         builtin_id,
+        builtin_instance,
         context,
         is_varargs,
         args,
@@ -102,6 +106,16 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     let y = Ident::new("__y", Span::mixed_site().into());
     // Create a type that refers to whichever `Value` import is closer.
     let value_type = syn::Type::Verbatim(quote!(Value));
+
+    if builtin_instance.is_some()
+        && args
+            .iter()
+            .map(|a| &a.t)
+            .chain([&ret])
+            .any(|t| t.explicit_field)
+    {
+        return syn::Error::new_spanned(&name, "instance macros take runtime representations only; sorts come from the canonical definition").to_compile_error().into();
+    }
 
     // List out the sorts that we need to store.
     if builtin_id.is_some()
@@ -119,7 +133,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         .map(|arg| (&arg.x, &arg.t))
         .chain([(&y, &ret)])
         .filter_map(|(x, t)| {
-            if builtin_id.is_some() {
+            if builtin_id.is_some() || builtin_instance.is_some() {
                 return None;
             }
             t.field
@@ -141,6 +155,22 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         field_defs.push(quote!(__definition: Arc<::egglog::proto::Program>));
         field_uses.push(quote!(__definition: Arc::new(::egglog::builtin::closed_signature(#key, #name, &[#(#inputs),*], (#output).clone() as ArcSort).expect("invalid builtin macro signature"))));
     }
+    let check_instance = if let Some(instance) = &builtin_instance {
+        field_defs.push(quote!(__instance: ::egglog::builtin::BuiltinInstance));
+        field_uses.push(quote!(__instance: __instance));
+        let abi = |t: &Type| match &t.cast {
+            Some((ty, container)) => quote!(Some((::std::any::TypeId::of::<#ty>(), #container))),
+            None => quote!(None),
+        };
+        let inputs = args.iter().map(|a| abi(&a.t));
+        let output = abi(&ret);
+        quote! {
+            let __instance = #instance;
+            __instance.check_abi(&[#(#inputs),*], #output, #is_varargs).expect("builtin macro ABI mismatch");
+        }
+    } else {
+        quote!()
+    };
     // Bundle up the defs and uses into structs.
     let prim_def = quote!(struct Prim { #(#field_defs,)* });
     let prim_use = quote!(       Prim { #(#field_uses,)* });
@@ -149,7 +179,9 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // TODO: add a new type constraint that supports all possible combinations
     // of features that this macro supports. Right now `|a: #, b: i64|` is
     // impossible to express with the current type constraints.
-    let type_constraint = if builtin_id.is_some() {
+    let type_constraint = if builtin_instance.is_some() {
+        quote!(self.__instance.type_constraints(span))
+    } else if builtin_id.is_some() {
         quote!(::egglog::builtin::type_constraints(
             &self.__definition,
             span
@@ -205,6 +237,10 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
                 Some(&self.__definition)
             }
         }
+    });
+
+    let instance_method = builtin_instance.as_ref().map(|_| quote! {
+        fn builtin_instance(&self) -> Option<&::egglog::builtin::BuiltinInstance> { Some(&self.__instance) }
     });
 
     // Create the function body for `apply`.
@@ -308,6 +344,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
                 #type_constraint
             }
             #builtin_definition
+            #instance_method
         }
 
         impl PurePrim for Prim {
@@ -321,6 +358,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         }
 
         let eg: &mut EGraph = #eg;
+        #check_instance
         #add_call
     }}
     .into()
@@ -330,6 +368,7 @@ struct AddPrimitive {
     eg: Expr,
     name: LitStr,
     builtin_id: Option<LitStr>,
+    builtin_instance: Option<Expr>,
     context: Context,
     args: Vec<Arg>,
     ret: Type,
@@ -343,22 +382,24 @@ impl Parse for AddPrimitive {
         let eg = input.parse()?;
         input.parse::<Token![,]>()?;
         let name = input.parse()?;
-        let builtin_id = if input.peek(syn::token::Bracket) {
+        let mut builtin_id = None;
+        let mut builtin_instance = None;
+        if input.peek(syn::token::Bracket) {
             let options;
             bracketed!(options in input);
             let option: Ident = options.parse()?;
-            if option != "id" {
-                return Err(syn::Error::new_spanned(option, "expected id"));
-            }
             options.parse::<Token![=]>()?;
-            let id = options.parse()?;
+            if option == "id" {
+                builtin_id = Some(options.parse()?);
+            } else if option == "instance" {
+                builtin_instance = Some(options.parse()?);
+            } else {
+                return Err(syn::Error::new_spanned(option, "expected id or instance"));
+            }
             if !options.is_empty() {
                 return Err(options.error("unexpected builtin option"));
             }
-            Some(id)
-        } else {
-            None
-        };
+        }
         input.parse::<Token![=]>()?;
         let context = input.parse()?;
         let Args { is_varargs, args } = input.parse()?;
@@ -373,6 +414,7 @@ impl Parse for AddPrimitive {
             eg,
             name,
             builtin_id,
+            builtin_instance,
             context,
             args,
             ret,
@@ -469,6 +511,7 @@ impl Parse for Arg {
 struct Type {
     cast: Option<(syn::Type, bool)>,
     field: Option<(syn::Type, Expr)>,
+    explicit_field: bool,
 }
 
 impl Parse for Type {
@@ -481,7 +524,8 @@ impl Parse for Type {
 
         let field_def = syn::Type::Verbatim(quote!(ArcSort));
 
-        let field = if input.peek(syn::token::Paren) {
+        let explicit_field = input.peek(syn::token::Paren);
+        let field = if explicit_field {
             let inner;
             parenthesized!(inner in input);
             let field_use = inner.parse()?;
@@ -497,7 +541,11 @@ impl Parse for Type {
             None
         };
 
-        Ok(Type { cast, field })
+        Ok(Type {
+            cast,
+            field,
+            explicit_field,
+        })
     }
 }
 

@@ -212,6 +212,11 @@ pub struct TypeInfo {
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     pub(crate) primitives: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_primitives: HashMap<String, Vec<PrimitiveWithId>>,
+    pub(crate) builtin_definitions: HashMap<String, Arc<proto::Program>>,
+    pub(crate) builtin_owners: HashMap<String, &'static str>,
+    pub(crate) builtin_family_gaps: Vec<String>,
+    pub(crate) builtin_sorts: HashMap<String, (&'static str, Vec<ArcSort>)>,
+    pub(crate) builtin_instances: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_errors: Vec<String>,
     func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
@@ -374,7 +379,9 @@ impl EGraph {
             validator,
             context_ids,
         };
-        if self.type_info.builtin_primitives.contains_key(&name) {
+        if self.type_info.builtin_definitions.contains_key(&name)
+            || self.type_info.builtin_instances.contains_key(&name)
+        {
             self.type_info.builtin_errors.push(format!(
                 "native alias {name} collides with a builtin definition key"
             ));
@@ -385,13 +392,51 @@ impl EGraph {
                     if key != name
                         && !self.type_info.primitives.contains_key(key)
                         && !self.type_info.func_types.contains_key(key)
-                        && !self.type_info.builtin_primitives.contains_key(key) =>
+                        && !self.type_info.builtin_definitions.contains_key(key) =>
                 {
                     // A second lookup key for the SAME registration and context
                     // ids, not another implementation or semantic declaration.
                     self.type_info
                         .builtin_primitives
                         .insert(key.into(), vec![registered.clone()]);
+                    self.type_info
+                        .builtin_definitions
+                        .insert(key.into(), Arc::new(definition.clone()));
+                }
+                Ok(key)
+                    if registered
+                        .primitive
+                        .builtin_instance()
+                        .is_some_and(|instance| {
+                            self.type_info
+                                .builtin_definitions
+                                .get(key)
+                                .is_some_and(|definition| {
+                                    Arc::ptr_eq(definition, &instance.definition)
+                                })
+                                && !self
+                                    .type_info
+                                    .builtin_instances
+                                    .contains_key(&instance.dispatch_name)
+                                && !self
+                                    .type_info
+                                    .primitives
+                                    .contains_key(&instance.dispatch_name)
+                                && !self
+                                    .type_info
+                                    .func_types
+                                    .contains_key(&instance.dispatch_name)
+                        }) =>
+                {
+                    let instance = registered.primitive.builtin_instance().unwrap();
+                    self.type_info
+                        .builtin_instances
+                        .insert(instance.dispatch_name.clone(), vec![registered.clone()]);
+                    self.type_info
+                        .builtin_primitives
+                        .entry(key.into())
+                        .or_default()
+                        .push(registered.clone());
                 }
                 Ok(key) => self
                     .type_info
@@ -684,6 +729,42 @@ impl TypeInfo {
             HEntry::Vacant(e) => {
                 e.insert(S::make_sort);
                 self.reserved_primitives.extend(S::reserved_primitives());
+                for definition in S::builtin_definitions() {
+                    let key = match crate::builtin::definition_key(&definition) {
+                        Ok(key) => key.to_owned(),
+                        Err(error) => {
+                            self.builtin_errors.push(error);
+                            continue;
+                        }
+                    };
+                    if self.builtin_definitions.contains_key(&key)
+                        || self.primitives.contains_key(&key)
+                        || self.func_types.contains_key(&key)
+                    {
+                        self.builtin_errors
+                            .push(format!("builtin definition key collision: {key}"));
+                        continue;
+                    }
+                    self.builtin_owners.insert(key.clone(), name);
+                    self.builtin_definitions.insert(key, Arc::new(definition));
+                }
+                for alias in S::reserved_primitives() {
+                    if !self
+                        .builtin_owners
+                        .iter()
+                        .filter(|(_, owner)| **owner == name)
+                        .any(|(key, _)| {
+                            self.builtin_definitions[key].declarations.iter().any(|d| {
+                                d.bindings
+                                    .as_ref()
+                                    .and_then(|b| b.egglog.as_ref())
+                                    .is_some_and(|b| b.views.iter().any(|v| v.symbol == alias))
+                            })
+                        })
+                    {
+                        self.builtin_family_gaps.push(format!("{name}::{alias}"));
+                    }
+                }
                 Ok(())
             }
         }
@@ -1150,7 +1231,11 @@ impl TypeInfo {
             .or_else(|| {
                 self.builtin_errors
                     .is_empty()
-                    .then(|| self.builtin_primitives.get(sym))
+                    .then(|| {
+                        self.builtin_primitives
+                            .get(sym)
+                            .or_else(|| self.builtin_instances.get(sym))
+                    })
                     .flatten()
             })
             .map(Vec::as_slice)
@@ -1159,6 +1244,8 @@ impl TypeInfo {
     pub fn is_primitive(&self, sym: &str) -> bool {
         self.primitives.contains_key(sym)
             || self.builtin_primitives.contains_key(sym)
+            || self.builtin_definitions.contains_key(sym)
+            || self.builtin_instances.contains_key(sym)
             || self.reserved_primitives.contains(sym)
     }
 

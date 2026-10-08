@@ -56,6 +56,103 @@ fn vec_term(termdag: &mut TermDag, children: Vec<TermId>) -> TermId {
 }
 
 impl Presort for VecSort {
+    fn builtin_definitions() -> Vec<proto::Program> {
+        use proto as pb;
+        [
+            ("empty", "vec-empty", vec![], None),
+            (
+                "of",
+                "vec-of",
+                vec![],
+                Some(pb::Arg {
+                    name: "values".into(),
+                    sort: 0,
+                }),
+            ),
+            (
+                "get",
+                "vec-get",
+                vec![
+                    pb::Arg {
+                        name: "vec".into(),
+                        sort: 1,
+                    },
+                    pb::Arg {
+                        name: "index".into(),
+                        sort: 2,
+                    },
+                ],
+                None,
+            ),
+        ]
+        .into_iter()
+        .map(|(key, alias, inputs, varargs)| pb::Program {
+            ir_version: 1,
+            sorts: vec![
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Var(0)),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                        name: "Vec".into(),
+                        args: vec![0],
+                    })),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                        name: "i64".into(),
+                        args: vec![],
+                    })),
+                    ..Default::default()
+                },
+            ],
+            declarations: vec![
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                        name: "Vec".into(),
+                        arity: 1,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                        name: "i64".into(),
+                        arity: 0,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                        name: format!("egglog.core.vec.{key}"),
+                        typing: Some(pb::host_primitive::Typing::Signature(
+                            pb::GenericSignature {
+                                type_params: vec!["T".into()],
+                                inputs,
+                                output: Some(if key == "get" { 0 } else { 1 }),
+                                varargs,
+                            },
+                        )),
+                    })),
+                    bindings: Some(pb::CallableBindings {
+                        egglog: Some(pb::EgglogBindings {
+                            views: vec![pb::EgglogCallable {
+                                symbol: alias.into(),
+                                datatype_member: false,
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .collect()
+    }
     fn presort_name() -> &'static str {
         "Vec"
     }
@@ -136,6 +233,21 @@ impl ContainerSort for VecSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc: Arc<dyn Sort> = self.clone().to_arcsort();
+        eg.type_info
+            .register_builtin_sort("Vec", arc.clone(), vec![self.element.clone()])
+            .expect("invalid Vec family instance");
+        let empty = eg
+            .type_info
+            .instantiate_builtin("egglog.core.vec.empty", &arc)
+            .unwrap();
+        let of = eg
+            .type_info
+            .instantiate_builtin("egglog.core.vec.of", &arc)
+            .unwrap();
+        let get = eg
+            .type_info
+            .instantiate_builtin("egglog.core.vec.get", &arc)
+            .unwrap();
 
         // The proof "term form" of a vec: `(vec-of e0 e1 ...)`, or `(vec-empty)`
         // when empty, matching `reconstruct_termdag`. The validator lets the
@@ -172,11 +284,11 @@ impl ContainerSort for VecSort {
                 (!contains).then(|| termdag.lit(Literal::Unit))
             };
 
-        add_primitive_with_validator!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
+        add_primitive_with_validator!(eg, "vec-empty" [instance = empty] = {self.clone(): VecSort} || -> @VecContainer { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: Vec::new()
         } }, vec_empty_validator);
-        add_primitive_with_validator!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
+        add_primitive_with_validator!(eg, "vec-of" [instance = of] = {self.clone(): VecSort} [xs: #] -> @VecContainer { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs                     .collect()
         } }, vec_of_validator);
@@ -192,7 +304,7 @@ impl ContainerSort for VecSort {
         add_primitive_with_validator!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, vec_contains_validator);
         add_primitive_with_validator!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, vec_not_contains_validator);
 
-        add_primitive_with_validator!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() }, vec_get_validator);
+        add_primitive_with_validator!(eg, "vec-get" [instance = get] = |xs: @VecContainer, i: i64| -?> # { xs.data.get(i as usize).copied() }, vec_get_validator);
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data[idx] = x; Some(xs) } }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data.remove(idx); Some(xs) } }});
         if self.element.is_eq_sort() {

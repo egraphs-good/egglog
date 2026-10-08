@@ -1,3 +1,4 @@
+use egglog::sort::{Presort, VecContainer, VecSort};
 use egglog::*;
 use std::sync::{
     Arc,
@@ -29,7 +30,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         catalog
             .undescribed_families
             .iter()
-            .any(|name| name == "Vec")
+            .any(|name| name == "Map")
     );
     assert!(
         catalog
@@ -50,12 +51,251 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         .collect::<Vec<_>>();
     assert_eq!(
         keys,
-        ["egglog.core.f64.add", "egglog.core.i64.add", "test.counted"]
+        [
+            "egglog.core.f64.add",
+            "egglog.core.i64.add",
+            "egglog.core.vec.empty",
+            "egglog.core.vec.get",
+            "egglog.core.vec.of",
+            "test.counted"
+        ]
     );
     graph
         .parse_and_run_program(None, "(check (= (counted 7) 7))")
         .unwrap();
     assert!(CALLS.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
+fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
+    let mut graph = EGraph::default();
+    let before = graph.type_info().builtin_catalog().unwrap();
+    assert!(!before.undescribed_families.iter().any(|name| name == "Vec"));
+    assert!(
+        before
+            .undescribed_family_primitives
+            .iter()
+            .any(|name| name == "Vec::vec-append")
+    );
+    assert!(
+        !before
+            .undescribed_family_primitives
+            .iter()
+            .any(|name| name == "Vec::vec-of")
+    );
+    for key in [
+        "egglog.core.vec.empty",
+        "egglog.core.vec.of",
+        "egglog.core.vec.get",
+    ] {
+        assert!(before.definitions.declarations.iter().any(|declaration| matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)));
+    }
+    graph
+        .parse_and_run_program(
+            None,
+            r#"
+        (sort V (Vec i64)) (sort W (Vec i64)) (sort Nested (Vec V))
+        (function v () V :merge new) (function w () W :merge new)
+        (function nested () Nested :merge new)
+        (set (v) (vec-empty)) (set (w) (vec-of 3 4))
+        (set (nested) (vec-of (v)))
+        (check (= (vec-get (w) 1) 4) (= (vec-get (nested) 0) (v)))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before.definitions
+    );
+    assert!(graph.parse_and_run_program(None, "(set (v) (w))").is_err());
+    assert!(
+        graph
+            .parse_and_run_program(None, "(set (v) (vec-of 1.0))")
+            .is_err()
+    );
+    let v = graph.get_sort_by_name("V").unwrap();
+    let i = graph.get_sort_by_name("i64").unwrap();
+    for (alias, key, types) in [
+        ("vec-empty", "egglog.core.vec.empty", vec![v.clone()]),
+        ("vec-of", "egglog.core.vec.of", vec![i.clone(), v.clone()]),
+        (
+            "vec-get",
+            "egglog.core.vec.get",
+            vec![v.clone(), i.clone(), i.clone()],
+        ),
+    ] {
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            assert_eq!(
+                ResolvedCall::from_resolution(
+                    alias,
+                    &types,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic
+                )
+                .unwrap(),
+                ResolvedCall::from_resolution(
+                    key,
+                    &types,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic
+                )
+                .unwrap(),
+            );
+        }
+    }
+}
+
+#[test]
+fn vec_instance_macro_rejects_conversion_and_arity_mismatches_before_registration() {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(None, "(sort V (Vec i64))")
+        .unwrap();
+    let before = graph.type_info().builtin_catalog().unwrap().definitions;
+    for wrong in 0..3 {
+        let native = graph.get_sort_by_name("V").unwrap().clone();
+        let instance = graph
+            .type_info()
+            .instantiate_builtin("egglog.core.vec.get", &native)
+            .unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if wrong == 0 {
+                add_primitive_with_validator!(&mut graph, "bad" [instance = instance] = |xs: @VecContainer, index: String| -?> # {
+                    { CALLS.fetch_add(1, Ordering::SeqCst); xs.data.get(index.len()).copied() }
+                }, |_: &mut TermDag, _: &[TermId]| { CALLS.fetch_add(1, Ordering::SeqCst); None });
+            } else if wrong == 1 {
+                add_primitive!(&mut graph, "bad" [instance = instance] = |xs: @VecContainer, index: i64| -> bool { { let _ = (xs, index); false } });
+            } else {
+                add_primitive!(&mut graph, "bad" [instance = instance] = [mut xs: #] -> # { xs.next().unwrap() });
+            }
+        }));
+        assert!(result.is_err());
+        assert_eq!(
+            graph.type_info().builtin_catalog().unwrap().definitions,
+            before
+        );
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn generic_signature_import_remaps_children_and_ignores_binder_labels() {
+    let mut definitions = VecSort::builtin_definitions();
+    let mut definition = definitions.remove(1);
+    let mut destination = proto::Program {
+        ir_version: 1,
+        sorts: vec![proto::Sort {
+            kind: Some(proto::sort::Kind::Eq("Prior".into())),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    builtin::import_definition(&definition, &mut destination).unwrap();
+    let before = destination.clone();
+    let Some(proto::declaration::Kind::HostPrimitive(primitive)) =
+        &mut definition.declarations.last_mut().unwrap().kind
+    else {
+        unreachable!()
+    };
+    let Some(proto::host_primitive::Typing::Signature(signature)) = &mut primitive.typing else {
+        unreachable!()
+    };
+    signature.type_params[0] = "Renamed".into();
+    signature.varargs.as_mut().unwrap().name = "renamed".into();
+    builtin::import_definition(&definition, &mut destination).unwrap();
+    assert_eq!(destination, before);
+    definition.sorts[0].kind = Some(proto::sort::Kind::Var(1));
+    assert!(builtin::import_definition(&definition, &mut destination).is_err());
+}
+
+#[test]
+fn migrated_vec_operations_preserve_native_proofs() {
+    EGraph::new_with_proofs()
+        .parse_and_run_program(
+            None,
+            r#"
+        (sort V (Vec i64))
+        (datatype E (Wrap V) (Num i64))
+        (Wrap (vec-empty)) (Wrap (vec-of 1 2)) (Num (vec-get (vec-of 1 2) 1))
+        (prove (= (Num 2) (Num (vec-get (vec-of 1 2) 1))))
+        (prove (= (Wrap (vec-of)) (Wrap (vec-empty))))
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn builtin_dispatch_rejects_native_bindings_that_disagree_with_wire_sorts() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(None, "(sort V (Vec i64)) (sort W (Vec f64))")
+        .unwrap();
+    let v = graph.get_sort_by_name("V").unwrap().clone();
+    let w = graph.get_sort_by_name("W").unwrap().clone();
+    let mut program = proto::Program {
+        ir_version: 1,
+        ..Default::default()
+    };
+    let output = graph.export_sort(&v, &mut program.sorts).unwrap();
+    assert!(
+        graph
+            .type_info()
+            .resolve_builtin(&program, "egglog.core.vec.empty", &[], output, &[w])
+            .is_err()
+    );
+}
+
+#[test]
+fn empty_definition_keys_are_rejected_by_import_and_registration() {
+    #[derive(Clone)]
+    struct Invalid(proto::Program);
+    impl Primitive for Invalid {
+        fn name(&self) -> &str {
+            "invalid-definition"
+        }
+        fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn constraint::TypeConstraint> {
+            builtin::type_constraints(&self.0, span)
+        }
+        fn builtin_definition(&self) -> Option<&proto::Program> {
+            Some(&self.0)
+        }
+    }
+    impl PurePrim for Invalid {
+        fn apply<'a, 'db>(&self, _: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+            args.first().copied()
+        }
+    }
+    let mut graph = EGraph::default();
+    let sort = graph.get_sort_by_name("i64").unwrap().clone();
+    let mut definition = builtin::closed_signature(
+        "test.valid",
+        "invalid-definition",
+        &[("value", sort.clone())],
+        sort,
+    )
+    .unwrap();
+    let Some(proto::declaration::Kind::HostPrimitive(primitive)) =
+        &mut definition.declarations.last_mut().unwrap().kind
+    else {
+        unreachable!()
+    };
+    primitive.name.clear();
+    let imported = builtin::import_definition(
+        &definition,
+        &mut proto::Program {
+            ir_version: 1,
+            ..Default::default()
+        },
+    );
+    graph.add_pure_primitive(Invalid(definition), None);
+    assert!(imported.is_err(), "empty key must not import");
+    assert!(
+        graph.type_info().builtin_catalog().is_err(),
+        "empty key must not register"
+    );
 }
 
 #[test]
