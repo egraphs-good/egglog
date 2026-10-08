@@ -2050,6 +2050,45 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// Desugars and typechecks one already macro-expanded command, preserving globals.
+    ///
+    /// This updates the authoring type environment but executes no actions.
+    /// In ordinary mode, native name checks run on a discarded global-lowered
+    /// copy; the returned commands retain globals and are not proof-instrumented.
+    /// Frontends can export resolved sorts and global-reference annotations before
+    /// lowering passes erase them. Built-in sugar (including relation/rewrite
+    /// origins) is already eliminated; callers needing that provenance must
+    /// retain it while resolving the command. Use a separate graph for export.
+    pub fn resolve_command_preserving_globals(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
+        let typechecked = self.desugar_and_typecheck_command(command)?;
+        if self.proof_state.original_typechecking.is_none() {
+            let lowered = remove_globals::remove_globals(
+                typechecked.clone(),
+                &mut self.parser.symbol_gen.clone(),
+            );
+            for command in &lowered {
+                self.names.check_shadowing(command)?;
+            }
+        }
+        Ok(typechecked)
+    }
+
+    /// Shared compiler phase before global removal and proof instrumentation.
+    fn desugar_and_typecheck_command(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
+        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let typechecking = self.proof_state.original_typechecking.as_deref_mut();
+        Ok(match typechecking {
+            Some(original) => original.typecheck_program(&desugared)?,
+            None => self.typecheck_program(&desugared)?,
+        })
+    }
+
     /// Resolves one already macro-expanded command without executing it.
     ///
     /// This updates declaration/type information and removes globals, but does
@@ -2060,12 +2099,8 @@ impl EGraph {
         &mut self,
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
-        if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
-            // Typecheck using the original egraph
-            // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let typechecked = original_typechecking.typecheck_program(&desugared)?;
-
+        let mut typechecked = self.desugar_and_typecheck_command(command)?;
+        if let Some(original_typechecking) = self.proof_state.original_typechecking.as_ref() {
             for command in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
@@ -2081,8 +2116,6 @@ impl EGraph {
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
         } else {
-            let mut typechecked = self.typecheck_program(&desugared)?;
-
             typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
