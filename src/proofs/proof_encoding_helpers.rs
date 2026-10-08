@@ -667,17 +667,17 @@ pub(crate) fn command_supports_proof_encoding(
                 Ok(())
             }
         }
-        // no-merge on a non-global function
-        // To add support: https://github.com/egraphs-good/egglog/issues/774
+        // Merge expressions become the action of a generated rule, and
+        // instrument_action_expr doesn't support non-global function lookups
+        // (global function calls are fine - they get desugared to constructors)
         GenericCommand::Function {
-            merge: None, name, ..
-        } => {
-            if type_info.is_global(name) {
-                Ok(())
-            } else {
-                Err(ProofEncodingUnsupportedReason::NoMergeOnNonGlobalFunction)
-            }
+            merge: Some(expr), ..
+        } if type_info.expr_has_function_lookup(expr).is_some() => {
+            Err(ProofEncodingUnsupportedReason::FunctionLookupInAction)
         }
+        // The term/proof encoding enforces no-merge functions through a hidden
+        // first-value authority table and gates all user-visible row queries.
+        GenericCommand::Function { merge: None, .. } => Ok(()),
         // let binding with non-eq sort not supported by proof_global_desugar
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
             // let binding with non-eq sort not supported by proof_global_desugar
