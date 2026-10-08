@@ -592,7 +592,7 @@ version = "3.0.0"
 [[package]]
 name = "egglog-proto"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=adc4c0559f0f76088b2fceaca436bdd0788a2c24#adc4c0559f0f76088b2fceaca436bdd0788a2c24"
+source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=805ce71e3493fb9c5203a23350eb1c35d3ac9b3a#805ce71e3493fb9c5203a23350eb1c35d3ac9b3a"
 dependencies = [
  "prost",
 ]

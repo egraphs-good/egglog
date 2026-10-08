@@ -81,6 +81,112 @@ fn constant_views_install_resupply_and_freeze_without_evaluation() {
 }
 
 #[test]
+fn empty_constant_names_preserve_exact_metadata_and_freeze_transactionally() {
+    for path in [vec!["".to_string()], vec!["example".into(), "".into()]] {
+        let mut source = constant_definition();
+        source.declarations[2]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python
+            .as_mut()
+            .unwrap()
+            .views[0]
+            .path = path;
+        let mut absent = source.clone();
+        absent.declarations[2].bindings = None;
+        let mut destination = pb::Program::default();
+        reconcile_declarations(&absent, &mut destination).unwrap();
+        let mut independent = destination.clone();
+        reconcile_declarations(&source, &mut destination).unwrap();
+        assert_eq!(
+            destination.declarations[2].bindings,
+            source.declarations[2].bindings
+        );
+        let frozen = destination.clone();
+        reconcile_declarations(&source, &mut destination).unwrap();
+        reconcile_declarations(&absent, &mut destination).unwrap();
+        assert_eq!(destination, frozen);
+
+        let mut renamed = source.clone();
+        renamed.declarations[2]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python
+            .as_mut()
+            .unwrap()
+            .views[0]
+            .path
+            .last_mut()
+            .unwrap()
+            .push_str("named");
+        assert!(reconcile_declarations(&renamed, &mut destination).is_err());
+        assert_eq!(
+            destination, frozen,
+            "empty and nonempty names must not coalesce"
+        );
+        reconcile_declarations(&renamed, &mut independent).unwrap();
+        let independent_frozen = independent.clone();
+        assert!(reconcile_declarations(&source, &mut independent).is_err());
+        assert_eq!(
+            independent, independent_frozen,
+            "clone freezes its own first supply"
+        );
+
+        let mut function = source.clone();
+        function.declarations[2]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python
+            .as_mut()
+            .unwrap()
+            .views[0]
+            .kind = pb::PythonCallKind::Function.into();
+        let mut fresh = pb::Program::default();
+        assert!(reconcile_declarations(&function, &mut fresh).is_err());
+        assert_eq!(
+            fresh,
+            pb::Program::default(),
+            "FUNCTION does not admit an empty final name"
+        );
+        for bad in [
+            vec![],
+            vec!["", ""],
+            vec!["", "value"],
+            vec!["example", "", "value"],
+            vec!["example", "", ""],
+        ] {
+            let mut invalid = source.clone();
+            invalid.declarations[2]
+                .bindings
+                .as_mut()
+                .unwrap()
+                .python
+                .as_mut()
+                .unwrap()
+                .views[0]
+                .path = bad.into_iter().map(str::to_owned).collect();
+            assert!(reconcile_declarations(&invalid, &mut fresh).is_err());
+            assert_eq!(fresh, pb::Program::default());
+            assert!(reconcile_declarations(&invalid, &mut destination).is_err());
+            assert_eq!(destination, frozen);
+        }
+        let Some(pb::declaration::Kind::Function(f)) = &mut source.declarations[2].kind else {
+            unreachable!()
+        };
+        f.name.clear();
+        assert!(reconcile_declarations(&source, &mut fresh).is_err());
+        assert_eq!(
+            fresh,
+            pb::Program::default(),
+            "semantic names remain nonempty"
+        );
+    }
+}
+
+#[test]
 fn constant_views_reject_malformed_forms_and_signatures_transactionally() {
     let source = constant_definition();
     let mut destination = pb::Program::default();
@@ -97,7 +203,7 @@ fn constant_views_reject_malformed_forms_and_signatures_transactionally() {
             .views[0];
         match bad {
             0 => view.path.clear(),
-            1 => view.path.push(String::new()),
+            1 => view.path.insert(0, String::new()),
             2 => {
                 view.owner = Some(pb::BindingOwner {
                     kind: Some(pb::binding_owner::Kind::Sort(0)),
