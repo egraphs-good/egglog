@@ -132,7 +132,7 @@ serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
 
 [dependencies]
-egglog-proto = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "d385e2ec710b7340e48aa4e8afa0867cf5e18ee2" }
+egglog-proto = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "6e0dbc97fbe9f3868c4662b9a6d73b5d01913c9d" }
 clap = { workspace = true, features = ["derive"], optional = true }
 egraph-serialize = { workspace = true}
 env_logger = { workspace = true, optional = true }
