@@ -2050,7 +2050,13 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
-    fn resolve_command_before_proofs(
+    /// Resolves one already macro-expanded command without executing it.
+    ///
+    /// This updates declaration/type information and removes globals, but does
+    /// not instrument proof terms or execute actions. Adapters can call it on a
+    /// clone to validate a complete decoded program before mutating the live
+    /// graph. User-defined commands retain their own runtime validation.
+    pub fn resolve_command_before_proofs(
         &mut self,
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
