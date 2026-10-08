@@ -55,7 +55,7 @@ pub struct ProofConstructorNames {
 /// A lowered rule plus the execution options needed to rebuild it for scheduling.
 #[derive(Clone, Debug)]
 pub(crate) struct CompiledRule {
-    pub(crate) core: ResolvedCoreRule,
+    pub(crate) core: Arc<ResolvedCoreRule>,
     pub(crate) backend_id: egglog_bridge::RuleId,
     /// Whether this rule's query uses delta evaluation.
     pub(crate) seminaive: bool,
