@@ -1,6 +1,8 @@
 #![cfg(feature = "comparison")]
 use egglog::{CommandOutput, EGraph};
-use egraph_comparison::{Database, certificate, compare, verify};
+use egraph_comparison::{
+    CanonicalMode, Certificate, Database, canonicalize, certificate, compare, verify,
+};
 use std::{fs, path::Path, time::Instant};
 
 const GOLDENS: &[&str] = &["eqsat-basic", "path", "fibonacci"];
@@ -11,8 +13,34 @@ fn run(program: &str, threads: usize) -> (Database, Vec<CommandOutput>) {
     (graph.serialize_for_comparison().unwrap(), outputs)
 }
 
-// An explicit update mode, separate from comparison: ordinary test runs never
-// rewrite accepted databases. Each threading treatment uses the same baseline.
+// Load the diagnostic sidecar only after canonical bytes disagree. The sidecar
+// must describe the accepted bytes before it can justify a failure certificate.
+fn check_snapshot(
+    expected_bytes: &[u8],
+    actual: &Database,
+    load_expected: impl FnOnce() -> Result<Database, String>,
+) -> Result<Option<(Vec<u8>, Certificate)>, String> {
+    let actual_bytes = canonicalize(actual, CanonicalMode::Database).map_err(|e| e.to_string())?;
+    if expected_bytes == actual_bytes {
+        return Ok(None);
+    }
+    let expected = load_expected()?;
+    if canonicalize(&expected, CanonicalMode::Database).map_err(|e| e.to_string())?
+        != expected_bytes
+    {
+        return Err("canonical baseline and diagnostic sidecar disagree; regenerate both".into());
+    }
+    let witness = certificate(&expected, actual)
+        .map_err(|e| e.to_string())?
+        .ok_or("canonical bytes disagree but the databases compare equal")?;
+    if !verify(&witness, &expected, actual).map_err(|e| e.to_string())? {
+        return Err("disequality certificate failed verification".into());
+    }
+    Ok(Some((actual_bytes, witness)))
+}
+
+// Ordinary runs never rewrite accepted databases. Both files are regenerated
+// from one sequential run; all threading treatments use its canonical bytes.
 #[test]
 fn golden_databases_match_sequential_and_parallel_runs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -20,38 +48,84 @@ fn golden_databases_match_sequential_and_parallel_runs() {
     for name in GOLDENS {
         let program = fs::read_to_string(root.join(format!("tests/web-demo/{name}.egg"))).unwrap();
         let baseline_path = baseline_dir.join(format!("{name}.json"));
+        let canonical_path = baseline_dir.join(format!("{name}.canonical.json"));
         if std::env::var("EGGLOG_UPDATE_COMPARISON_SNAPSHOTS").as_deref() == Ok("1") {
             let (database, _) = run(&program, 1);
+            fs::write(
+                &canonical_path,
+                canonicalize(&database, CanonicalMode::Database).unwrap(),
+            )
+            .unwrap();
             fs::write(
                 &baseline_path,
                 serde_json::to_string_pretty(&database).unwrap() + "\n",
             )
             .unwrap();
         }
-        let expected: Database =
-            serde_json::from_slice(&fs::read(&baseline_path).unwrap()).unwrap();
+        let expected_bytes = fs::read(&canonical_path).unwrap();
         for threads in [1, 4, 32] {
             let (actual, _) = run(&program, threads);
-            let result = compare(&expected, &actual).unwrap();
-            if !result.database_equal {
-                let witness = certificate(&expected, &actual).unwrap().unwrap();
-                assert!(verify(&witness, &expected, &actual).unwrap());
+            let failure = check_snapshot(&expected_bytes, &actual, || {
+                let bytes = fs::read(&baseline_path).map_err(|e| e.to_string())?;
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+            })
+            .unwrap_or_else(|error| panic!("{name} ({threads} threads): {error}"));
+            if let Some((actual_bytes, witness)) = failure {
                 let output = root.join("target/comparison-snapshots");
                 fs::create_dir_all(&output).unwrap();
                 let stem = format!("{name}-{threads}threads");
                 let actual_path = output.join(format!("{stem}.actual.json"));
+                let actual_canonical_path = output.join(format!("{stem}.actual.canonical.json"));
                 let witness_path = output.join(format!("{stem}.certificate.json"));
                 fs::write(&actual_path, serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
+                fs::write(&actual_canonical_path, actual_bytes).unwrap();
                 fs::write(&witness_path, serde_json::to_vec_pretty(&witness).unwrap()).unwrap();
                 panic!(
-                    "{name} ({threads} threads): {result:?}\nbaseline: {}\nactual: {}\ncertificate: {}",
-                    baseline_path.display(),
+                    "{name} ({threads} threads): database differs\nbaseline: {}\nactual: {}\ncanonical: {}\ncertificate: {}",
+                    canonical_path.display(),
                     actual_path.display(),
+                    actual_canonical_path.display(),
                     witness_path.display()
                 );
             }
         }
     }
+}
+
+#[test]
+fn accepted_canonical_baselines_match_their_diagnostic_sidecars() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/comparison/baselines");
+    for name in GOLDENS {
+        let database: Database =
+            serde_json::from_slice(&fs::read(root.join(format!("{name}.json"))).unwrap()).unwrap();
+        assert_eq!(
+            fs::read(root.join(format!("{name}.canonical.json"))).unwrap(),
+            canonicalize(&database, CanonicalMode::Database).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn equal_bytes_skip_sidecar_loading_and_stale_sidecars_cannot_certify_failure() {
+    let (left, _) = run("(datatype E (A)) (A)", 1);
+    let (right, _) = run("(datatype E (A) (B)) (B)", 1);
+    let bytes = canonicalize(&left, CanonicalMode::Database).unwrap();
+    assert!(
+        check_snapshot(&bytes, &left, || panic!("must not load sidecar on success"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        check_snapshot(&bytes, &right, || Ok(right.clone()))
+            .unwrap_err()
+            .contains("sidecar disagree")
+    );
+    assert!(
+        check_snapshot(&bytes, &right, || Err("missing sidecar".into()))
+            .unwrap_err()
+            .contains("missing sidecar")
+    );
 }
 
 #[test]
@@ -77,7 +151,11 @@ fn database_snapshots_find_changes_that_keep_output_snapshots_identical() {
             CommandOutput::snapshot_stable_under_proof_encoding(&b)
         );
         assert!(!compare(&left, &right).unwrap().database_equal);
-        let witness = certificate(&left, &right).unwrap().unwrap();
+        let bytes = canonicalize(&left, CanonicalMode::Database).unwrap();
+        let (actual_bytes, witness) = check_snapshot(&bytes, &right, || Ok(left.clone()))
+            .unwrap()
+            .unwrap();
+        assert_ne!(bytes, actual_bytes);
         assert!(verify(&witness, &left, &right).unwrap());
     }
 }
