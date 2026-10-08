@@ -213,6 +213,7 @@ pub struct TypeInfo {
     pub(crate) primitives: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_primitives: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_definitions: HashMap<String, Arc<proto::Program>>,
+    pub(crate) builtin_families: proto::Program,
     pub(crate) builtin_owners: HashMap<String, &'static str>,
     pub(crate) builtin_family_gaps: Vec<String>,
     pub(crate) builtin_sorts: HashMap<String, (&'static str, Vec<ArcSort>)>,
@@ -730,6 +731,14 @@ impl TypeInfo {
                 e.insert(S::make_sort);
                 self.reserved_primitives.extend(S::reserved_primitives());
                 for definition in S::builtin_definitions() {
+                    for declaration in &definition.declarations {
+                        if let Some(proto::declaration::Kind::HostSortFamily(family)) =
+                            &declaration.kind
+                            && let Err(error) = self.register_builtin_family(family.clone())
+                        {
+                            self.builtin_errors.push(error);
+                        }
+                    }
                     let key = match crate::builtin::definition_key(&definition) {
                         Ok(key) => key.to_owned(),
                         Err(error) => {

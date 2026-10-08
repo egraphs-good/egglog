@@ -93,6 +93,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         name,
         builtin_id,
         builtin_instance,
+        builtin_bindings,
         context,
         is_varargs,
         args,
@@ -153,7 +154,20 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         });
         let output = &ret.field.as_ref().unwrap().1;
         field_defs.push(quote!(__definition: Arc<::egglog::proto::Program>));
-        field_uses.push(quote!(__definition: Arc::new(::egglog::builtin::closed_signature(#key, #name, &[#(#inputs),*], (#output).clone() as ArcSort).expect("invalid builtin macro signature"))));
+        let bindings = builtin_bindings.map(|bindings| quote! {
+            let mut supplied = definition.clone();
+            let declaration = supplied.declarations.last_mut().unwrap();
+            let ::egglog::proto::declaration::Kind::HostPrimitive(primitive) = declaration.kind.as_ref().unwrap() else { unreachable!() };
+            let ::egglog::proto::host_primitive::Typing::Signature(signature) = primitive.typing.as_ref().unwrap() else { unreachable!() };
+            declaration.bindings = Some((#bindings)(signature));
+            ::egglog::builtin::definitions::reconcile_declarations(&supplied, &mut definition).expect("invalid builtin presentation");
+        });
+        field_uses.push(quote!(__definition: {
+            #[allow(unused_mut)]
+            let mut definition = ::egglog::builtin::closed_signature(#key, #name, &[#(#inputs),*], (#output).clone() as ArcSort).expect("invalid builtin macro signature");
+            #bindings
+            Arc::new(definition)
+        }));
     }
     let check_instance = if let Some(instance) = &builtin_instance {
         field_defs.push(quote!(__instance: ::egglog::builtin::BuiltinInstance));
@@ -369,6 +383,7 @@ struct AddPrimitive {
     name: LitStr,
     builtin_id: Option<LitStr>,
     builtin_instance: Option<Expr>,
+    builtin_bindings: Option<Expr>,
     context: Context,
     args: Vec<Arg>,
     ret: Type,
@@ -384,6 +399,7 @@ impl Parse for AddPrimitive {
         let name = input.parse()?;
         let mut builtin_id = None;
         let mut builtin_instance = None;
+        let mut builtin_bindings = None;
         if input.peek(syn::token::Bracket) {
             let options;
             bracketed!(options in input);
@@ -397,7 +413,16 @@ impl Parse for AddPrimitive {
                 return Err(syn::Error::new_spanned(option, "expected id or instance"));
             }
             if !options.is_empty() {
-                return Err(options.error("unexpected builtin option"));
+                options.parse::<Token![,]>()?;
+                let option: Ident = options.parse()?;
+                if option != "bindings" || builtin_id.is_none() {
+                    return Err(options.error("bindings require a definition id"));
+                }
+                options.parse::<Token![=]>()?;
+                builtin_bindings = Some(options.parse()?);
+                if !options.is_empty() {
+                    return Err(options.error("unexpected builtin option"));
+                }
             }
         }
         input.parse::<Token![=]>()?;
@@ -415,6 +440,7 @@ impl Parse for AddPrimitive {
             name,
             builtin_id,
             builtin_instance,
+            builtin_bindings,
             context,
             args,
             ret,

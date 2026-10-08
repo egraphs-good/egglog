@@ -6,6 +6,167 @@ use std::sync::{
 };
 
 #[test]
+fn scalar_catalog_has_authoritative_language_views() {
+    let catalog = EGraph::default()
+        .type_info()
+        .builtin_catalog()
+        .unwrap()
+        .definitions;
+    for (scalar, rust_name) in [("i64", "I64"), ("f64", "F64")] {
+        let family = catalog
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == scalar => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        let bindings = family
+            .bindings
+            .as_ref()
+            .expect("native family must supply presentation");
+        assert_eq!(
+            bindings.python.as_ref().unwrap().path,
+            ["egglog", "builtins", scalar]
+        );
+        assert_eq!(
+            bindings.rust.as_ref().unwrap().path,
+            ["egglog_experimental", "typed", "builtins", rust_name]
+        );
+        let declaration = catalog.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.{scalar}.add"))).unwrap();
+        let bindings = declaration.bindings.as_ref().unwrap();
+        let python = &bindings.python.as_ref().unwrap().views[0];
+        assert_eq!(python.kind, proto::PythonCallKind::Method as i32);
+        assert_eq!(python.path, ["__add__"]);
+        assert_eq!(python.receiver, Some(0));
+        assert_eq!(python.params[0].core_input, Some(1));
+        let rust = &bindings.rust.as_ref().unwrap().views[0];
+        assert_eq!(rust.path, ["add"]);
+        assert_eq!(rust.receiver.unwrap().core_input, Some(0));
+        assert_eq!(
+            rust.trait_impl.as_ref().unwrap().path,
+            ["core", "ops", "Add"]
+        );
+        assert_eq!(
+            rust.trait_impl
+                .as_ref()
+                .unwrap()
+                .output_associated_type
+                .as_deref(),
+            Some("Output")
+        );
+        assert_eq!(python.owner, rust.owner);
+    }
+}
+
+#[test]
+fn family_metadata_is_optional_and_frozen_per_language() {
+    let graph = EGraph::default();
+    let scalar = graph.get_sort_by_name("i64").unwrap().clone();
+    let mut definition = builtin::closed_signature(
+        "test.identity",
+        "identity",
+        &[("x", scalar.clone())],
+        scalar,
+    )
+    .unwrap();
+    let mut destination = proto::Program {
+        ir_version: 1,
+        ..Default::default()
+    };
+    builtin::import_definition(&definition, &mut destination).unwrap();
+    let Some(proto::declaration::Kind::HostSortFamily(family)) =
+        &mut definition.declarations[0].kind
+    else {
+        unreachable!()
+    };
+    family.bindings = Some(proto::SortBindings {
+        python: Some(proto::TypeBinding {
+            path: vec!["test".into(), "Int".into()],
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    builtin::import_definition(&definition, &mut destination).unwrap();
+    let frozen = destination.clone();
+    let Some(proto::declaration::Kind::HostSortFamily(family)) =
+        &mut definition.declarations[0].kind
+    else {
+        unreachable!()
+    };
+    family.bindings = None;
+    builtin::import_definition(&definition, &mut destination).unwrap();
+    assert_eq!(destination, frozen);
+    let Some(proto::declaration::Kind::HostSortFamily(family)) =
+        &mut definition.declarations[0].kind
+    else {
+        unreachable!()
+    };
+    family.bindings = Some(proto::SortBindings {
+        python: Some(proto::TypeBinding::default()),
+        ..Default::default()
+    });
+    assert!(builtin::import_definition(&definition, &mut destination).is_err());
+    assert_eq!(
+        destination, frozen,
+        "conflict must not modify the destination"
+    );
+}
+
+#[test]
+fn authoritative_family_exports_without_a_described_callable() {
+    let mut graph = EGraph::default();
+    graph
+        .type_info()
+        .register_builtin_family(proto::HostSortFamily {
+            name: "bool".into(),
+            arity: 0,
+            bindings: Some(proto::SortBindings {
+                python: Some(proto::TypeBinding {
+                    path: vec!["test".into(), "Bool".into()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+    let catalog = graph.type_info().builtin_catalog().unwrap();
+    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "bool" && f.bindings.is_some())));
+    assert!(!catalog.undescribed_sorts.iter().any(|name| name == "bool"));
+}
+
+#[test]
+fn family_registration_rejects_native_kind_and_arity_mismatches_transactionally() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(None, "(sort NativeEq) (sort Alias (Vec i64))")
+        .unwrap();
+    let before = graph.type_info().builtin_catalog().unwrap();
+    for (name, arity) in [("bool", 1), ("NativeEq", 0), ("Alias", 0)] {
+        assert!(
+            graph
+                .type_info()
+                .register_builtin_family(proto::HostSortFamily {
+                    name: name.into(),
+                    arity,
+                    ..Default::default()
+                })
+                .is_err(),
+            "invalid family {name}/{arity}"
+        );
+        let after = graph.type_info().builtin_catalog().unwrap();
+        assert_eq!(after.definitions, before.definitions);
+        assert_eq!(after.undescribed_primitives, before.undescribed_primitives);
+        assert_eq!(after.undescribed_sorts, before.undescribed_sorts);
+        assert_eq!(after.undescribed_families, before.undescribed_families);
+        assert_eq!(
+            after.undescribed_family_primitives,
+            before.undescribed_family_primitives
+        );
+    }
+}
+
+#[test]
 fn export_is_inert_and_reports_unmigrated_registrations() {
     static CALLS: AtomicUsize = AtomicUsize::new(0);
     let mut graph = EGraph::default();

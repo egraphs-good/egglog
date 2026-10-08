@@ -6,6 +6,8 @@
 
 use crate::{constraint::TypeConstraint, proto as pb, *};
 
+pub mod definitions;
+
 /// Migrated definitions plus explicit remaining registration gaps. This is not
 /// a complete engine snapshot and must not be used as a successful Freeze.
 pub struct BuiltinCatalog {
@@ -367,12 +369,11 @@ pub fn signature_sorts(
 
 pub(crate) fn definition_key(program: &pb::Program) -> Result<&str, String> {
     if program.ir_version != 1
-        || !program.nodes.is_empty()
         || !program.commands.is_empty()
         || !program.rules.is_empty()
         || !program.rulesets.is_empty()
     {
-        return Err("builtin definition must contain only signature sorts and declarations".into());
+        return Err("builtin definition must contain only declaration templates".into());
     }
     let mut validated = vec![];
     for index in 0..program.sorts.len() {
@@ -393,6 +394,7 @@ pub(crate) fn definition_key(program: &pb::Program) -> Result<&str, String> {
             }
         }
     }
+    definitions::reconcile_declarations(program, &mut pb::Program::default())?;
     key.ok_or_else(|| "missing builtin definition".into())
 }
 
@@ -404,77 +406,57 @@ pub fn import_definition(
     destination: &mut pb::Program,
 ) -> Result<String, String> {
     let key = definition_key(definition)?.to_owned();
-    let mut remap = vec![];
-    for index in 0..definition.sorts.len() {
-        remap.push(import_sort(
-            &definition.sorts,
-            index as u32,
-            &mut destination.sorts,
-        )?);
-    }
-    for declaration in &definition.declarations {
-        let mut declaration = declaration.clone();
-        let name = match declaration.kind.as_mut().unwrap() {
-            pb::declaration::Kind::HostPrimitive(primitive) => {
-                let Some(pb::host_primitive::Typing::Signature(signature)) = &mut primitive.typing
-                else {
-                    unreachable!()
-                };
-                for arg in &mut signature.inputs {
-                    arg.sort = remap[arg.sort as usize];
-                }
-                if let Some(arg) = &mut signature.varargs {
-                    arg.sort = remap[arg.sort as usize];
-                }
-                signature.output = Some(remap[signature.output.unwrap() as usize]);
-                primitive.name.clone()
-            }
-            pb::declaration::Kind::HostSortFamily(family) => family.name.clone(),
-            _ => unreachable!(),
-        };
-        let sort_namespace = matches!(
-            declaration.kind,
-            Some(pb::declaration::Kind::HostSortFamily(_))
-        );
-        let existing = destination.declarations.iter().find(|existing| {
-            match (&existing.kind, sort_namespace) {
-                (Some(pb::declaration::Kind::HostSortFamily(family)), true) => family.name == name,
-                (Some(pb::declaration::Kind::EqSort(sort)), true) => sort.name == name,
-                (Some(pb::declaration::Kind::HostPrimitive(primitive)), false) => {
-                    primitive.name == name
-                }
-                (Some(pb::declaration::Kind::Primitive(primitive)), false) => {
-                    primitive.name == name
-                }
-                (Some(pb::declaration::Kind::Relation(relation)), false) => relation.name == name,
-                (Some(pb::declaration::Kind::Function(function)), false) => function.name == name,
-                (Some(pb::declaration::Kind::Constructor(constructor)), false) => {
-                    constructor.name == name
-                }
-                _ => false,
-            }
-        });
-        if let Some(existing) = existing {
-            let same_definition = match (&existing.kind, &declaration.kind) {
-                (
-                    Some(pb::declaration::Kind::HostPrimitive(existing)),
-                    Some(pb::declaration::Kind::HostPrimitive(incoming)),
-                ) => {
-                    // Arg.name is diagnostic, not part of signature identity.
-                    let mut sorts = vec![];
-                    normalized_signature(destination, existing, &mut sorts)?
-                        == normalized_signature(destination, incoming, &mut sorts)?
-                }
-                (existing, incoming) => existing == incoming,
-            };
-            if !same_definition || existing.bindings != declaration.bindings {
-                return Err(format!("conflicting builtin declaration {name}"));
-            }
-        } else {
-            destination.declarations.push(declaration);
-        }
-    }
+    definitions::reconcile_declarations(definition, destination)?;
     Ok(key)
+}
+
+/// The scalar addition surface views, with owners and trait types derived from
+/// the canonical signature, never from a separately maintained type scheme.
+pub fn scalar_add_bindings(signature: &pb::GenericSignature) -> pb::CallableBindings {
+    let owner = Some(pb::BindingOwner {
+        kind: Some(pb::binding_owner::Kind::Sort(signature.inputs[0].sort)),
+    });
+    pb::CallableBindings {
+        python: Some(pb::PythonBindings {
+            views: vec![pb::PythonCallable {
+                kind: pb::PythonCallKind::Method.into(),
+                path: vec!["__add__".into()],
+                owner,
+                receiver: Some(0),
+                params: vec![pb::PythonParameter {
+                    core_input: Some(1),
+                    name: "other".into(),
+                    default_expr: None,
+                }],
+                ..Default::default()
+            }],
+        }),
+        rust: Some(pb::RustBindings {
+            views: vec![pb::RustCallable {
+                path: vec!["add".into()],
+                owner,
+                receiver: Some(pb::RustReceiver {
+                    core_input: Some(0),
+                    borrowed: false,
+                }),
+                params: vec![pb::RustParameter {
+                    core_input: Some(1),
+                    name: "rhs".into(),
+                    borrowed: false,
+                }],
+                trait_impl: Some(pb::RustTrait {
+                    path: vec!["core".into(), "ops".into(), "Add".into()],
+                    args: vec![pb::RustType {
+                        sort: Some(signature.inputs[1].sort),
+                        borrowed: false,
+                    }],
+                    output_associated_type: Some("Output".into()),
+                }),
+                ..Default::default()
+            }],
+        }),
+        ..Default::default()
+    }
 }
 
 struct SignatureConstraint {
@@ -532,6 +514,68 @@ pub fn type_constraints(definition: &pb::Program, span: &Span) -> Box<dyn TypeCo
 }
 
 impl TypeInfo {
+    /// Installs a family's generated declaration at its native registration site.
+    /// Later fragments may assert the same arity without repeating its views.
+    pub fn register_builtin_family(&mut self, family: pb::HostSortFamily) -> Result<(), String> {
+        if let Some(sort) = self.sorts.get(&family.name) {
+            if sort.is_eq_sort() || sort.is_container_sort() || family.arity != 0 {
+                return Err(
+                    "builtin family disagrees with native sort kind or nullary arity".into(),
+                );
+            }
+        } else if !self.mksorts.contains_key(&family.name) {
+            return Err("builtin family has no native registration".into());
+        }
+        definitions::reconcile_declarations(
+            &pb::Program {
+                ir_version: 1,
+                declarations: vec![pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostSortFamily(family)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            &mut self.builtin_families,
+        )?;
+        Ok(())
+    }
+
+    /// Exports the exact definition and the authoritative family presentation
+    /// supplies needed by its sort arena. No source overload search is involved.
+    pub fn export_builtin_definition(
+        &self,
+        key: &str,
+        destination: &mut pb::Program,
+    ) -> Result<(), String> {
+        let definition = self
+            .builtin_definitions
+            .get(key)
+            .ok_or("unknown builtin definition")?;
+        let mut staged = destination.clone();
+        let families = pb::Program {
+            ir_version: 1,
+            declarations: self
+                .builtin_families
+                .declarations
+                .iter()
+                .filter(|d| {
+                    let Some(pb::declaration::Kind::HostSortFamily(f)) = &d.kind else {
+                        return false;
+                    };
+                    definition.sorts.iter().any(
+                        |s| matches!(&s.kind, Some(pb::sort::Kind::Family(s)) if s.name == f.name),
+                    )
+                })
+                .cloned()
+                .collect(),
+            ..Default::default()
+        };
+        definitions::reconcile_declarations(&families, &mut staged)?;
+        import_definition(definition, &mut staged)?;
+        *destination = staged;
+        Ok(())
+    }
+
     /// Registers the structural provenance of one native nominal family instance.
     pub fn register_builtin_sort(
         &mut self,
@@ -881,10 +925,7 @@ impl TypeInfo {
                 .mksorts
                 .keys()
                 .filter(|family| {
-                    !self
-                        .builtin_owners
-                        .values()
-                        .any(|owner| owner == &family.as_str())
+                    !self.builtin_families.declarations.iter().any(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(f)) if &f.name == *family))
                 })
                 .cloned()
                 .collect(),
@@ -894,10 +935,13 @@ impl TypeInfo {
         catalog.undescribed_primitives.sort();
         catalog.undescribed_families.sort();
         catalog.undescribed_family_primitives.sort();
+        let mut families = self.builtin_families.clone();
+        families.ir_version = 1;
+        definitions::reconcile_declarations(&families, &mut catalog.definitions)?;
         let mut keys = self.builtin_definitions.keys().collect::<Vec<_>>();
         keys.sort();
         for key in keys {
-            import_definition(&self.builtin_definitions[key], &mut catalog.definitions)?;
+            self.export_builtin_definition(key, &mut catalog.definitions)?;
         }
         catalog.undescribed_sorts = self.sorts.values().filter(|sort| {
             !sort.is_eq_sort() && !self.builtin_sorts.contains_key(sort.name()) && !catalog.definitions.declarations.iter().any(|declaration| matches!(&declaration.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.name == sort.name()))
@@ -906,13 +950,13 @@ impl TypeInfo {
         Ok(catalog)
     }
 
-    /// Checks a supplied definition against the exact registered key. Neither a
-    /// compatible signature nor an overloaded source alias can substitute for it.
-    pub fn check_builtin(
+    /// Checks the provider's exact key and signature, not presentation metadata.
+    /// Reconcile bindings against the full canonical declaration context first:
+    /// a default may refer to another builtin or a previously installed table.
+    pub fn check_builtin_signature(
         &self,
         program: &pb::Program,
         primitive: &pb::HostPrimitive,
-        bindings: Option<&pb::CallableBindings>,
     ) -> Result<(), String> {
         if !self.builtin_errors.is_empty() {
             return Err(self.builtin_errors.join("; "));
@@ -934,9 +978,6 @@ impl TypeInfo {
         let Some(pb::declaration::Kind::HostPrimitive(expected)) = &declaration.kind else {
             unreachable!()
         };
-        if bindings.is_some_and(|bindings| Some(bindings) != declaration.bindings.as_ref()) {
-            return Err(format!("conflicting builtin bindings {}", primitive.name));
-        }
         let mut sorts = vec![];
         if normalized_signature(program, primitive, &mut sorts)?
             != normalized_signature(definition, expected, &mut sorts)?

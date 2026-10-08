@@ -26,7 +26,15 @@ impl BaseSort for I64Sort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
-        add_literal_prim!(eg, "+" [id = "egglog.core.i64.add"] = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
+        eg.type_info().register_builtin_family(crate::proto::HostSortFamily {
+            name: "i64".into(), arity: 0,
+            bindings: Some(crate::proto::SortBindings {
+                python: Some(crate::proto::TypeBinding { path: vec!["egglog".into(), "builtins".into(), "i64".into()], type_params: vec![] }),
+                rust: Some(crate::proto::TypeBinding { path: vec!["egglog_experimental".into(), "typed".into(), "builtins".into(), "I64".into()], type_params: vec![] }),
+                ..Default::default()
+            }),
+        }).expect("invalid i64 family presentation");
+        add_literal_prim!(eg, "+" [id = "egglog.core.i64.add", bindings = crate::builtin::scalar_add_bindings] = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
         add_literal_prim!(eg, "-" = |a: i64, b: i64| -?> i64 { a.checked_sub(b) });
         add_literal_prim!(eg, "*" = |a: i64, b: i64| -?> i64 { a.checked_mul(b) });
         add_literal_prim!(eg, "/" = |a: i64, b: i64| -?> i64 { a.checked_div(b) });

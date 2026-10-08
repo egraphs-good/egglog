@@ -20,7 +20,15 @@ impl BaseSort for F64Sort {
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(&self, eg: &mut EGraph) {
-        add_literal_prim!(eg, "+" [id = "egglog.core.f64.add"] = |a: F, b: F| -> F { a + b });
+        eg.type_info().register_builtin_family(crate::proto::HostSortFamily {
+            name: "f64".into(), arity: 0,
+            bindings: Some(crate::proto::SortBindings {
+                python: Some(crate::proto::TypeBinding { path: vec!["egglog".into(), "builtins".into(), "f64".into()], type_params: vec![] }),
+                rust: Some(crate::proto::TypeBinding { path: vec!["egglog_experimental".into(), "typed".into(), "builtins".into(), "F64".into()], type_params: vec![] }),
+                ..Default::default()
+            }),
+        }).expect("invalid f64 family presentation");
+        add_literal_prim!(eg, "+" [id = "egglog.core.f64.add", bindings = crate::builtin::scalar_add_bindings] = |a: F, b: F| -> F { a + b });
         add_literal_prim!(eg, "-" = |a: F, b: F| -> F { a - b });
         add_literal_prim!(eg, "*" = |a: F, b: F| -> F { a * b });
         add_literal_prim!(eg, "/" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a / b) });
