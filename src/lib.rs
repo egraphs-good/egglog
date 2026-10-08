@@ -57,6 +57,7 @@ pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_
 
 /// Read-only proof reconstruction API.
 pub mod proof {
+    pub use crate::proofs::proof_extraction::ProveExistsError;
     pub use crate::proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition};
 }
 use scheduler::{SchedulerId, SchedulerRecord};
@@ -512,13 +513,6 @@ struct ResolvedNCommands {
     desugared_before_proofs: Vec<ResolvedNCommand>,
 }
 
-struct ResolvedNCommandsWithOutput {
-    outputs: Vec<CommandOutput>,
-    resolved: Vec<ResolvedNCommand>,
-    /// In proof mode, populated with the desugared program before instrumented with proofs
-    resolved_before_proofs: Vec<ResolvedNCommand>,
-}
-
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
 pub struct NotFoundError(String);
@@ -553,20 +547,23 @@ impl EGraph {
         egraph
     }
 
-    /// Enable the term-encoding pipeline on an existing `EGraph`.
+    /// Enable the term-encoding pipeline on a fresh, provider-registered e-graph.
     ///
-    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
-    #[cfg(feature = "bin")]
-    pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
+    /// Call this during initialization, after registering providers and before
+    /// resolving or executing user programs. The original typechecking state is
+    /// captured here: existing declarations and actions are not retroactively
+    /// instrumented, and later provider registrations are not copied into it.
+    pub fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self
     }
 
-    /// Enable proof generation on this e-graph.
-    /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
-    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
-    #[cfg(feature = "bin")]
-    pub(crate) fn with_proofs_enabled(mut self) -> Self {
+    /// Enable proof generation on a fresh, provider-registered e-graph.
+    ///
+    /// This has the same initialization precondition as
+    /// [`Self::with_term_encoding_enabled`]: register providers first and enable
+    /// proofs before resolving or executing user programs.
+    pub fn with_proofs_enabled(mut self) -> Self {
         self = self.with_term_encoding_enabled();
         self.proof_state.proofs_enabled = true;
         self
@@ -980,9 +977,9 @@ impl EGraph {
         if proof_testing {
             proof_check_eg = proof_check_eg.with_proof_testing();
         }
-        let resolved = proof_check_eg.process_program_internal(prog, false)?;
+        let resolved = proof_check_eg.process_program_internal(prog, false, &mut Vec::new())?;
 
-        self.proof_check_program = resolved.resolved_before_proofs;
+        self.proof_check_program = resolved.desugared_before_proofs;
         Ok(())
     }
 
@@ -2188,14 +2185,14 @@ impl EGraph {
         }
     }
 
-    /// Run a program, returning the desugared outputs as well as the CommandOutputs.
+    /// Run a program, returning the desugared commands and appending native outputs.
     /// Can optionally not run the commands, just adding type information.
     fn process_program_internal(
         &mut self,
         program: Vec<Command>,
         run_commands: bool,
-    ) -> Result<ResolvedNCommandsWithOutput, Error> {
-        let mut outputs = Vec::new();
+        outputs: &mut Vec<CommandOutput>,
+    ) -> Result<ResolvedNCommands, Error> {
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
 
@@ -2223,10 +2220,10 @@ impl EGraph {
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
                     // run program internal on these include commands
-                    let resolved = self.process_program_internal(included_program, run_commands)?;
-                    outputs.extend(resolved.outputs);
-                    desugared.extend(resolved.resolved);
-                    desugared_before_proofs.extend(resolved.resolved_before_proofs);
+                    let resolved =
+                        self.process_program_internal(included_program, run_commands, outputs)?;
+                    desugared.extend(resolved.desugared);
+                    desugared_before_proofs.extend(resolved.desugared_before_proofs);
                 } else {
                     let resolved = self.resolve_command(command)?;
                     if run_commands && self.are_proofs_enabled() {
@@ -2253,10 +2250,9 @@ impl EGraph {
             }
         }
 
-        Ok(ResolvedNCommandsWithOutput {
-            outputs,
-            resolved_before_proofs: desugared_before_proofs,
-            resolved: desugared,
+        Ok(ResolvedNCommands {
+            desugared_before_proofs,
+            desugared,
         })
     }
 
@@ -2267,9 +2263,29 @@ impl EGraph {
     /// completed before an error remain. After a rule-action error, a successful
     /// recovery rebuild leaves the database canonical and reusable. Rust panics
     /// in extension code unwind normally instead of becoming [`enum@Error`] values.
+    /// Outputs completed before an error are discarded; use
+    /// [`Self::run_program_with_outputs`] to retain them.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let res = self.process_program_internal(program, true)?;
-        Ok(res.outputs)
+        let mut outputs = Vec::new();
+        self.run_program_with_outputs(program, &mut outputs)?;
+        Ok(outputs)
+    }
+
+    /// Run a program, appending outputs in native completion order.
+    ///
+    /// Each completed native command's outputs are appended to `outputs`, also
+    /// through macro expansion, desugaring and nested includes. Existing entries
+    /// are preserved. On error, previously appended outputs and completed effects
+    /// remain; the failing command and later commands add no successful output.
+    /// Proof helper and maintenance outputs are included without filtering.
+    /// Error recovery and extension panics behave as in [`Self::run_program`].
+    pub fn run_program_with_outputs(
+        &mut self,
+        program: Vec<Command>,
+        outputs: &mut Vec<CommandOutput>,
+    ) -> Result<(), Error> {
+        self.process_program_internal(program, true, outputs)?;
+        Ok(())
     }
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
@@ -2281,8 +2297,8 @@ impl EGraph {
         input: &str,
     ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
-        let res = self.process_program_internal(parsed, false)?;
-        Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
+        let res = self.process_program_internal(parsed, false, &mut Vec::new())?;
+        Ok(res.desugared.into_iter().map(|c| c.to_command()).collect())
     }
 
     /// Takes a source program `input` and parses it into a list of [`Command`]s.
