@@ -9,20 +9,13 @@ pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 
 pub use egglog_ast::generic_ast_helpers::INTERNAL_SYMBOL_PREFIX;
 
-/// Generates fresh symbols for internal use during typechecking and flattening.
-/// Symbols have the form `<reserved prefix><hint><count>`, with a separate
-/// counter for each complete hint shared across all input types. An underscore
-/// separates hint and count when trimming trailing underscores from the hint
-/// leaves it empty or ending in an ASCII digit. The first symbol omits zero
-/// when the hint is nonempty and does not end in an ASCII digit, except that
-/// an empty prefix never produces the wildcard `_`.
-///
-/// After removing the prefix and trailing digits, trimming trailing underscores
-/// leaves an empty or digit-ending string exactly for separated hints. Bare
-/// names end in nondigits, and checked counters never repeat.
-/// A reserved prefix prevents collisions with user symbols.
-///
-/// Generating a symbol after its hint's counter is exhausted panics.
+/// Generates `<reserved prefix><hint><count>`, with a separate counter per hint.
+/// When a count is included, `_` separates it from hints that, after trimming
+/// trailing underscores, are empty or end in an ASCII digit.
+/// By default, the first name omits zero for nonempty hints not ending in an
+/// ASCII digit, unless an empty prefix and hint `_` would produce the wildcard.
+/// `include_zero(true)` disables zero omission.
+/// Panics when a hint's counter is exhausted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolGen {
     hint_to_count: HashMap<String, usize>,
