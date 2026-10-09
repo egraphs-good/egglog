@@ -6,6 +6,137 @@ use std::sync::{
 };
 
 #[test]
+fn set_catalog_precedes_instances_and_preserves_native_aliases() {
+    let mut graph = EGraph::default();
+    let before = graph.type_info().builtin_catalog().unwrap();
+    assert!(!before.undescribed_families.iter().any(|f| f == "Set"));
+    assert!(
+        !before
+            .undescribed_family_primitives
+            .iter()
+            .any(|f| f.starts_with("Set::"))
+    );
+    let family = before
+        .definitions
+        .declarations
+        .iter()
+        .find_map(|d| match &d.kind {
+            Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Set" => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(family.arity, 1);
+    let bindings = family.bindings.as_ref().unwrap();
+    assert_eq!(
+        bindings.python.as_ref().unwrap().path,
+        ["egglog", "builtins", "Set"]
+    );
+    assert_eq!(
+        bindings.rust.as_ref().unwrap().path,
+        ["egglog_experimental", "typed", "builtins", "Set"]
+    );
+    assert_eq!(before.definitions.declarations.iter().filter(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name.starts_with("egglog.core.set."))).count(), 11);
+    graph.parse_and_run_program(None, "(sort SI (Set i64)) (sort Other (Set i64)) (sort Math) (constructor A () Math) (sort SM (Set Math))").unwrap();
+    for (element, set) in [("i64", "SI"), ("Math", "SM")] {
+        for (key, alias, inputs, output) in [
+            ("empty", "set-empty", &[][..], set),
+            ("of", "set-of", &[element, element][..], set),
+            ("get", "set-get", &[set, "i64"][..], element),
+            ("insert", "set-insert", &[set, element][..], set),
+            ("remove", "set-remove", &[set, element][..], set),
+            ("length", "set-length", &[set][..], "i64"),
+            ("contains", "set-contains", &[set, element][..], "Unit"),
+            (
+                "not_contains",
+                "set-not-contains",
+                &[set, element][..],
+                "Unit",
+            ),
+            ("union", "set-union", &[set, set][..], set),
+            ("diff", "set-diff", &[set, set][..], set),
+            ("intersect", "set-intersect", &[set, set][..], set),
+        ] {
+            let key = format!("egglog.core.set.{key}");
+            let sorts = inputs
+                .iter()
+                .copied()
+                .chain([output])
+                .map(|name| graph.get_sort_by_name(name).unwrap().clone())
+                .collect::<Vec<_>>();
+            let d = before.definitions.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == key)).unwrap();
+            let Some(proto::declaration::Kind::HostPrimitive(p)) = &d.kind else {
+                unreachable!()
+            };
+            let Some(proto::host_primitive::Typing::Signature(s)) = &p.typing else {
+                unreachable!()
+            };
+            assert_eq!(s.type_params, ["T"]);
+            assert_eq!(s.varargs.len(), usize::from(alias == "set-of"));
+            assert_eq!(
+                s.inputs.len(),
+                if alias == "set-of" { 0 } else { inputs.len() }
+            );
+            let bindings = d.bindings.as_ref().unwrap();
+            assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
+            let rs = &bindings.rust.as_ref().unwrap().views[0];
+            assert_eq!(rs.path, [key.strip_prefix("egglog.core.set.").unwrap()]);
+            assert_eq!(bindings.python.is_some(), alias != "set-get");
+            if let Some(python) = &bindings.python {
+                let py = &python.views[0];
+                assert_eq!(py.owner, rs.owner);
+                assert_eq!(
+                    py.receiver,
+                    (!matches!(alias, "set-of" | "set-empty")).then_some(0)
+                );
+            }
+            for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+                let ResolvedCall::Primitive(a) = ResolvedCall::from_resolution(
+                    alias,
+                    &sorts,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic,
+                )
+                .unwrap() else {
+                    unreachable!()
+                };
+                let ResolvedCall::Primitive(b) = ResolvedCall::from_resolution(
+                    &key,
+                    &sorts,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic,
+                )
+                .unwrap() else {
+                    unreachable!()
+                };
+                assert_eq!(a, b);
+                assert_eq!(a.validator().is_some(), alias != "set-get");
+                let mut exported = proto::Program::default();
+                assert_eq!(a.export_builtin(&mut exported).unwrap(), key);
+            }
+        }
+    }
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before.definitions
+    );
+    graph.parse_and_run_program(None, "(function first () SI :merge new) (function second () Other :merge new) (set (first) (set-empty)) (set (second) (set-of)) (check (= (set-length (first)) 0)) (check (= (set-length (second)) 0))").unwrap();
+    for invalid in [
+        "(set-empty)",
+        "(set-union (first) (second))",
+        "(set (first) (set-of 1.0))",
+        "(set (first) (set-empty 1))",
+        "(set-get (first))",
+    ] {
+        assert!(
+            graph.parse_and_run_program(None, invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn exact_integer_families_and_constructors_use_actual_native_providers() {
     let mut graph = EGraph::default();
     assert!(graph.get_sort_by_name("Rational").is_none());
@@ -1372,11 +1503,11 @@ fn authoritative_family_exports_without_a_described_callable() {
     graph
         .type_info()
         .register_builtin_family(proto::HostSortFamily {
-            name: "Set".into(),
+            name: "MultiSet".into(),
             arity: 1,
             bindings: Some(proto::SortBindings {
                 python: Some(proto::TypeBinding {
-                    path: vec!["test".into(), "Set".into()],
+                    path: vec!["test".into(), "MultiSet".into()],
                     type_params: vec!["T".into()],
                 }),
                 ..Default::default()
@@ -1384,12 +1515,12 @@ fn authoritative_family_exports_without_a_described_callable() {
         })
         .unwrap();
     let catalog = graph.type_info().builtin_catalog().unwrap();
-    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Set" && f.bindings.is_some())));
+    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "MultiSet" && f.bindings.is_some())));
     assert!(
         !catalog
             .undescribed_families
             .iter()
-            .any(|name| name == "Set")
+            .any(|name| name == "MultiSet")
     );
 }
 
@@ -1535,7 +1666,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         catalog
             .undescribed_families
             .iter()
-            .any(|name| name == "Set")
+            .any(|name| name == "MultiSet")
     );
     assert!(catalog.undescribed_sorts.is_empty());
     let keys = catalog
@@ -1570,6 +1701,17 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.pair.first",
             "egglog.core.pair.make",
             "egglog.core.pair.second",
+            "egglog.core.set.contains",
+            "egglog.core.set.diff",
+            "egglog.core.set.empty",
+            "egglog.core.set.get",
+            "egglog.core.set.insert",
+            "egglog.core.set.intersect",
+            "egglog.core.set.length",
+            "egglog.core.set.not_contains",
+            "egglog.core.set.of",
+            "egglog.core.set.remove",
+            "egglog.core.set.union",
             "egglog.core.string.concat",
             "egglog.core.string.replace",
             "egglog.core.vec.empty",
