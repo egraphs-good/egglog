@@ -3626,4 +3626,45 @@ mod tests {
             )
             .unwrap();
     }
+
+    #[test]
+    fn test_fresh_symbols_remain_unique_after_pop() {
+        let mut egraph = EGraph::default();
+        let before = egraph.parser.symbol_gen.fresh("x");
+        egraph.push();
+        let during = egraph.parser.symbol_gen.fresh("x_0");
+        egraph.push();
+        let nested = egraph.parser.symbol_gen.fresh("x");
+        egraph.pop().unwrap();
+        let after_nested = egraph.parser.symbol_gen.fresh("x_0");
+        egraph.pop().unwrap();
+        let after = egraph.parser.symbol_gen.fresh("x");
+        let names = HashSet::from_iter([before, during, nested, after_nested, after]);
+        assert_eq!(names.len(), 5);
+    }
+
+    #[test]
+    fn test_fresh_anonymous_variables_survive_sanitize_and_reparse() {
+        let resolved = EGraph::default()
+            .resolve_program(
+                None,
+                r#"
+                (relation input_pair (i64 i64))
+                (relation seen (i64))
+                (input_pair 1 2)
+                (rule ((input_pair _ _)) ((seen 7)))
+                (run 1)
+                (check (seen 7))
+                "#,
+            )
+            .unwrap();
+        let rendered = ast::sanitize_internal_names(&resolved)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        EGraph::default()
+            .parse_and_run_program(None, &rendered)
+            .unwrap();
+    }
 }
