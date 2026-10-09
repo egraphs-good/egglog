@@ -1,4 +1,635 @@
-use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
+use egglog::{
+    builtin::definitions::{reconcile_declarations, reconcile_rulesets, retain_rulesets},
+    proto as pb,
+};
+
+// Ordered graph fixtures deliberately share the same rule body/index: only
+// ruleset occurrence topology distinguishes the negative cases.
+fn occurrence_fixture(children: &[&[u32]]) -> pb::Program {
+    let mut program = pb::Program {
+        ir_version: 1,
+        rules: vec![pb::RuleDecl {
+            kind: Some(pb::rule_decl::Kind::Rule(pb::Rule::default())),
+            eval_mode: pb::RuleEvalMode::Seminaive.into(),
+            ..Default::default()
+        }],
+        rulesets: (0..2)
+            .map(|_| pb::Ruleset {
+                kind: Some(pb::ruleset::Kind::Rules(pb::RuleList { rules: vec![0] })),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    for children in children {
+        program.rulesets.push(pb::Ruleset {
+            name: Some("parent".into()),
+            kind: Some(pb::ruleset::Kind::Combined(pb::CombinedRuleset {
+                rulesets: children
+                    .iter()
+                    .map(|i| pb::RulesetRef {
+                        kind: Some(pb::ruleset_ref::Kind::Index(*i)),
+                    })
+                    .collect(),
+            })),
+            ..Default::default()
+        });
+    }
+    program
+}
+
+#[test]
+fn ruleset_duplicate_presentations_preserve_global_topology() {
+    for children in [
+        vec![&[0, 1][..], &[1, 0][..]],
+        vec![&[0, 0][..], &[0, 1][..]],
+    ] {
+        let mut destination = pb::Program::default();
+        let previous = destination.clone();
+        assert!(reconcile_rulesets(&occurrence_fixture(&children), &mut destination).is_err());
+        assert_eq!(destination, previous);
+    }
+    for children in [vec![&[0, 1][..], &[0, 1][..]], vec![&[0][..], &[1][..]]] {
+        let mut destination = pb::Program::default();
+        let map = reconcile_rulesets(&occurrence_fixture(&children), &mut destination).unwrap();
+        assert_eq!(map.rulesets[2], map.rulesets[3]);
+        assert_eq!(destination.rules.len(), 1);
+        assert_eq!(map.rulesets[0] == map.rulesets[1], children[0].len() == 1);
+        let previous = destination.clone();
+        reconcile_rulesets(&occurrence_fixture(&children), &mut destination).unwrap();
+        assert_eq!(destination, previous);
+    }
+    let mut distinct_rules = occurrence_fixture(&[&[0], &[1]]);
+    distinct_rules.rules.push(distinct_rules.rules[0].clone());
+    let Some(pb::ruleset::Kind::Rules(b)) = &mut distinct_rules.rulesets[1].kind else {
+        unreachable!()
+    };
+    b.rules[0] = 1;
+    assert!(reconcile_rulesets(&distinct_rules, &mut pb::Program::default()).is_err());
+}
+
+#[test]
+fn ruleset_four_distinct_leaves_match_duplicate_presentations_in_both_orders() {
+    for reverse in [false, true] {
+        let mut source = occurrence_fixture(&[]);
+        source.rulesets.extend(source.rulesets.clone()); // distinct A, B, C, D
+        for children in [[0, 1], [2, 3]] {
+            source.rulesets.push(pb::Ruleset {
+                name: Some("parent".into()),
+                kind: Some(pb::ruleset::Kind::Combined(pb::CombinedRuleset {
+                    rulesets: children
+                        .into_iter()
+                        .map(|i| pb::RulesetRef {
+                            kind: Some(pb::ruleset_ref::Kind::Index(i)),
+                        })
+                        .collect(),
+                })),
+                ..Default::default()
+            });
+        }
+        if reverse {
+            source.rulesets.swap(4, 5);
+        }
+        let mut destination = pb::Program::default();
+        let map = reconcile_rulesets(&source, &mut destination).unwrap();
+        assert_eq!(map.rulesets[0], map.rulesets[2]);
+        assert_eq!(map.rulesets[1], map.rulesets[3]);
+        assert_ne!(map.rulesets[0], map.rulesets[1]);
+        assert_eq!(map.rulesets[4], map.rulesets[5]);
+        assert_eq!(destination.rulesets.len(), 3);
+        assert_eq!(destination.rules.len(), 1);
+        let previous = destination.clone();
+        source.rulesets.swap(4, 5);
+        let resent = reconcile_rulesets(&source, &mut destination).unwrap();
+        assert_eq!(resent.rulesets, map.rulesets);
+        assert_eq!(destination, previous);
+    }
+}
+
+#[test]
+fn ruleset_global_rule_sharing_rejects_split_and_merge_in_both_orders() {
+    let mut shared = occurrence_fixture(&[&[0], &[1]]);
+    shared.rulesets[3].name = Some("other".into());
+    let mut distinct = shared.clone();
+    distinct.rules.push(distinct.rules[0].clone());
+    let Some(pb::ruleset::Kind::Rules(b)) = &mut distinct.rulesets[1].kind else {
+        unreachable!()
+    };
+    b.rules[0] = 1;
+    for (installed, conflicting) in [(&shared, &distinct), (&distinct, &shared)] {
+        for reverse in [false, true] {
+            let mut destination = pb::Program::default();
+            let map = reconcile_rulesets(installed, &mut destination).unwrap();
+            assert_ne!(map.rulesets[0], map.rulesets[1]); // never a child-sharing mismatch
+            retain_rulesets(&mut destination, &[map.rulesets[2], map.rulesets[3]]).unwrap();
+            let previous = destination.clone();
+            let mut control = installed.clone();
+            let mut invalid = conflicting.clone();
+            if reverse {
+                control.rulesets.swap(2, 3);
+                invalid.rulesets.swap(2, 3);
+            }
+            reconcile_rulesets(&control, &mut destination).unwrap();
+            assert_eq!(destination, previous);
+            let error = reconcile_rulesets(&invalid, &mut destination).unwrap_err();
+            assert_eq!(error, "conflicting rule sharing");
+            assert_eq!(destination, previous);
+        }
+    }
+}
+
+#[test]
+fn ruleset_installed_roots_match_simultaneously_without_merging_or_splitting() {
+    let mut original = occurrence_fixture(&[&[0], &[0]]);
+    original.rulesets[3].name = Some("other".into());
+    let mut destination = pb::Program::default();
+    reconcile_rulesets(&original, &mut destination).unwrap();
+    let previous = destination.clone();
+    let mut split = original.clone();
+    let Some(pb::ruleset::Kind::Combined(c)) = &mut split.rulesets[3].kind else {
+        unreachable!()
+    };
+    c.rulesets[0].kind = Some(pb::ruleset_ref::Kind::Index(1));
+    assert!(reconcile_rulesets(&split, &mut destination).is_err());
+    assert_eq!(destination, previous);
+
+    let mut destination = pb::Program::default();
+    reconcile_rulesets(&split, &mut destination).unwrap();
+    let previous = destination.clone();
+    assert!(reconcile_rulesets(&original, &mut destination).is_err());
+    assert_eq!(destination, previous);
+    // Reversing the two submitted roots must not change either rejection.
+    original.rulesets.swap(2, 3);
+    assert!(reconcile_rulesets(&original, &mut destination).is_err());
+    assert_eq!(destination, previous);
+    let mut destination = pb::Program::default();
+    reconcile_rulesets(&original, &mut destination).unwrap();
+    let previous = destination.clone();
+    split.rulesets.swap(2, 3);
+    assert!(reconcile_rulesets(&split, &mut destination).is_err());
+    assert_eq!(destination, previous);
+}
+
+#[test]
+fn ruleset_retained_name_reference_and_matched_local_child_are_one_occurrence() {
+    let mut original = occurrence_fixture(&[&[0], &[0]]);
+    original.rulesets[0].name = Some("child".into());
+    original.rulesets[3].name = Some("other".into());
+    let mut destination = pb::Program::default();
+    let map = reconcile_rulesets(&original, &mut destination).unwrap();
+    retain_rulesets(
+        &mut destination,
+        &[map.rulesets[0], map.rulesets[2], map.rulesets[3]],
+    )
+    .unwrap();
+    let mut resupply = original;
+    resupply.rulesets[0].name = None;
+    let Some(pb::ruleset::Kind::Combined(other)) = &mut resupply.rulesets[3].kind else {
+        unreachable!()
+    };
+    other.rulesets[0].kind = Some(pb::ruleset_ref::Kind::Name("child".into()));
+    let map = reconcile_rulesets(&resupply, &mut destination).unwrap();
+    assert_eq!(
+        destination.rulesets[map.rulesets[0]].name.as_deref(),
+        Some("child")
+    );
+}
+
+#[test]
+fn ruleset_names_cycles_options_and_retention_obey_occurrence_contract() {
+    let source = occurrence_fixture(&[&[0]]);
+    let mut destination = pb::Program::default();
+    let map = reconcile_rulesets(&source, &mut destination).unwrap();
+    retain_rulesets(&mut destination, &[map.rulesets[2]]).unwrap();
+    assert_eq!(destination.rulesets.len(), 2); // unused anonymous B is transient
+    assert_eq!(destination.rules.len(), 1);
+    let retained_child = 0;
+
+    let mut named = source.clone();
+    named.rulesets[0].name = Some("child".into());
+    let map = reconcile_rulesets(&named, &mut destination).unwrap();
+    assert_eq!(map.rulesets[0], retained_child);
+    retain_rulesets(&mut destination, &[map.rulesets[0], map.rulesets[2]]).unwrap();
+    let previous = destination.clone();
+    let mut conflict = named.clone();
+    conflict.rulesets[0].name = Some("renamed".into());
+    assert!(reconcile_rulesets(&conflict, &mut destination).is_err());
+    assert_eq!(destination, previous);
+    for option in 0..3 {
+        let mut conflict = named.clone();
+        match option {
+            0 => conflict.rules[0].eval_mode = pb::RuleEvalMode::Naive.into(),
+            1 => conflict.rules[0].no_decomp = true,
+            _ => conflict.rules[0].include_subsumed = true,
+        }
+        assert!(reconcile_rulesets(&conflict, &mut destination).is_err());
+        assert_eq!(destination, previous);
+    }
+    let map = reconcile_rulesets(&source, &mut destination).unwrap();
+    assert_eq!(
+        destination.rulesets[map.rulesets[0]].name.as_deref(),
+        Some("child")
+    );
+    retain_rulesets(&mut destination, &[map.rulesets[0], map.rulesets[2]]).unwrap();
+    assert_eq!(destination, previous);
+
+    // Explicit retained-name references need no copied children or rules.
+    let mut by_name = pb::Program {
+        ir_version: 1,
+        rulesets: vec![pb::Ruleset {
+            name: Some("new".into()),
+            kind: Some(pb::ruleset::Kind::Combined(pb::CombinedRuleset {
+                rulesets: vec![pb::RulesetRef {
+                    kind: Some(pb::ruleset_ref::Kind::Name("child".into())),
+                }],
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    reconcile_rulesets(&by_name, &mut destination).unwrap();
+    let previous = destination.clone();
+    for name in ["missing", "new"] {
+        let Some(pb::ruleset::Kind::Combined(c)) = &mut by_name.rulesets[0].kind else {
+            unreachable!()
+        };
+        c.rulesets[0].kind = Some(pb::ruleset_ref::Kind::Name(name.into()));
+        assert!(reconcile_rulesets(&by_name, &mut destination).is_err());
+        assert_eq!(destination, previous);
+    }
+    let mut anonymous = occurrence_fixture(&[]);
+    anonymous.rulesets.truncate(1);
+    let first = reconcile_rulesets(&anonymous, &mut destination).unwrap();
+    let second = reconcile_rulesets(&anonymous, &mut destination).unwrap();
+    assert_ne!(first.rulesets, second.rulesets);
+    assert_ne!(first.rules, second.rules);
+
+    let mut two_names = occurrence_fixture(&[&[0], &[1]]);
+    two_names.rulesets[0].name = Some("a".into());
+    two_names.rulesets[1].name = Some("b".into());
+    assert!(reconcile_rulesets(&two_names, &mut pb::Program::default()).is_err());
+
+    let mut unanchored = source;
+    unanchored.rulesets.truncate(1);
+    unanchored.rulesets[0].name = Some("equal-but-new".into());
+    let new = reconcile_rulesets(&unanchored, &mut destination).unwrap();
+    assert_ne!(new.rulesets[0], retained_child);
+    assert_ne!(new.rules[0], 0);
+}
+
+#[test]
+fn ruleset_rule_bodies_compare_order_and_union_identity_after_relocation() {
+    let mut source = occurrence_fixture(&[&[0]]);
+    source.sorts.push(pb::Sort {
+        kind: Some(pb::sort::Kind::Eq("Value".into())),
+        ..Default::default()
+    });
+    source.nodes = (0..2)
+        .map(|_| pb::Node {
+            sort_id: 0,
+            kind: Some(pb::node::Kind::Union(pb::Union::default())),
+            ..Default::default()
+        })
+        .collect();
+    source.files.push(pb::SourceFile {
+        name: "rule.egg".into(),
+        contents: Some("rule".into()),
+    });
+    source.rules[0].span = Some(pb::Span {
+        file: 0,
+        start: 0,
+        end: 4,
+    });
+    let Some(pb::rule_decl::Kind::Rule(rule)) = &mut source.rules[0].kind else {
+        unreachable!()
+    };
+    rule.head = vec![
+        pb::Action {
+            kind: Some(pb::action::Kind::Term(0)),
+            ..Default::default()
+        },
+        pb::Action {
+            kind: Some(pb::action::Kind::Delete(pb::Call {
+                func: "F".into(),
+                args: vec![0],
+            })),
+            ..Default::default()
+        },
+    ];
+    let mut destination = pb::Program::default();
+    let map = reconcile_rulesets(&source, &mut destination).unwrap();
+    retain_rulesets(&mut destination, &[map.rulesets[2]]).unwrap();
+    let previous = destination.clone();
+    for change in 0..4 {
+        let mut changed = source.clone();
+        let Some(pb::rule_decl::Kind::Rule(rule)) = &mut changed.rules[0].kind else {
+            unreachable!()
+        };
+        match change {
+            0 => rule.head.reverse(),
+            1 => {
+                let Some(pb::action::Kind::Delete(call)) = &mut rule.head[1].kind else {
+                    unreachable!()
+                };
+                call.args[0] = 1;
+            }
+            2 => {
+                let Some(pb::action::Kind::Delete(call)) = &mut rule.head[1].kind else {
+                    unreachable!()
+                };
+                call.func = "G".into();
+            }
+            _ => {
+                changed.rules[0].kind = Some(pb::rule_decl::Kind::Rewrite(pb::Rewrite {
+                    lhs: 0,
+                    rhs: 0,
+                    ..Default::default()
+                }))
+            }
+        }
+        assert!(reconcile_rulesets(&changed, &mut destination).is_err());
+        assert_eq!(destination, previous);
+    }
+    // Ordinary syntax sharing may differ, but the single Union in both ordered
+    // actions must stay one identity. Diagnostics and arena indices may change.
+    let Some(pb::rule_decl::Kind::Rule(rule)) = &mut source.rules[0].kind else {
+        unreachable!()
+    };
+    rule.head[0].kind = Some(pb::action::Kind::Term(1));
+    let Some(pb::action::Kind::Delete(call)) = &mut rule.head[1].kind else {
+        unreachable!()
+    };
+    call.args[0] = 1;
+    source.files.insert(
+        0,
+        pb::SourceFile {
+            name: "unused".into(),
+            contents: None,
+        },
+    );
+    source.rules[0].span.as_mut().unwrap().file = 1;
+    source.rules[0].name = Some("new diagnostic".into());
+    let map = reconcile_rulesets(&source, &mut destination).unwrap();
+    retain_rulesets(&mut destination, &[map.rulesets[2]]).unwrap();
+    assert_eq!(destination, previous);
+    let mut reconstructed = pb::Program::default();
+    reconcile_rulesets(&destination, &mut reconstructed).unwrap();
+    assert_eq!(reconstructed, destination);
+    reconcile_rulesets(&reconstructed, &mut destination).unwrap();
+    assert_eq!(destination, previous);
+}
+
+#[test]
+fn ruleset_forward_names_default_name_and_invalid_edges_are_distinct() {
+    let mut forward = occurrence_fixture(&[&[0]]);
+    forward.rulesets[0].name = Some(String::new());
+    let Some(pb::ruleset::Kind::Combined(parent)) = &mut forward.rulesets[2].kind else {
+        unreachable!()
+    };
+    parent.rulesets[0].kind = Some(pb::ruleset_ref::Kind::Name(String::new()));
+    forward.rulesets.rotate_right(1); // parent refers forward to the default leaf
+    let mut destination = pb::Program::default();
+    let map = reconcile_rulesets(&forward, &mut destination).unwrap();
+    assert_ne!(map.rulesets[1], map.rulesets[2]); // empty name is not absence
+    let previous = destination.clone();
+    for kind in [
+        pb::ruleset_ref::Kind::Name("missing".into()),
+        pb::ruleset_ref::Kind::Name("parent".into()),
+        pb::ruleset_ref::Kind::Index(99),
+    ] {
+        let mut invalid = forward.clone();
+        let Some(pb::ruleset::Kind::Combined(parent)) = &mut invalid.rulesets[0].kind else {
+            unreachable!()
+        };
+        parent.rulesets[0].kind = Some(kind);
+        assert!(reconcile_rulesets(&invalid, &mut destination).is_err());
+        assert_eq!(destination, previous);
+    }
+}
+
+#[test]
+fn ruleset_and_existing_default_closures_relocate_and_retain_in_one_program() {
+    let mut declarations = box_definition();
+    declarations.files.push(pb::SourceFile {
+        name: "defaults.egg".into(),
+        contents: Some("default merge".into()),
+    });
+    let default_span = Some(pb::Span {
+        file: 0,
+        start: 0,
+        end: 7,
+    });
+    for declaration in &mut declarations.declarations {
+        declaration.span = default_span;
+    }
+    for sort in &mut declarations.sorts {
+        sort.span = default_span;
+    }
+    declarations.nodes[0].span = default_span;
+    declarations.nodes[2].span = Some(pb::Span {
+        file: 0,
+        start: 8,
+        end: 13,
+    });
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&declarations, &mut destination).unwrap();
+    let defaults = destination.clone();
+
+    let mut source = occurrence_fixture(&[&[0, 1]]);
+    source.files = vec![
+        pb::SourceFile {
+            name: "discarded.egg".into(),
+            contents: Some("unused".into()),
+        },
+        pb::SourceFile {
+            name: "rule.egg".into(),
+            contents: Some("rule".into()),
+        },
+    ];
+    let rule_span = Some(pb::Span {
+        file: 1,
+        start: 0,
+        end: 4,
+    });
+    source.sorts = vec![
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Eq("Unused".into())),
+            ..Default::default()
+        },
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Eq("Box".into())),
+            ..Default::default()
+        },
+        pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "i64".into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        },
+    ];
+    source.nodes = vec![
+        pb::Node {
+            sort_id: 2,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::I64(9)),
+            })),
+            span: Some(pb::Span {
+                file: 0,
+                start: 0,
+                end: 6,
+            }),
+        },
+        pb::Node {
+            sort_id: 2,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::I64(4)),
+            })),
+            span: rule_span,
+        },
+        pb::Node {
+            sort_id: 1,
+            kind: Some(pb::node::Kind::Call(pb::Call {
+                func: "Box".into(),
+                args: vec![1],
+            })),
+            span: rule_span,
+        },
+    ];
+    source.rules[0].span = rule_span;
+    source.rules[0].kind = Some(pb::rule_decl::Kind::Rule(pb::Rule {
+        query: vec![],
+        head: vec![pb::Action {
+            kind: Some(pb::action::Kind::Term(2)),
+            span: rule_span,
+        }],
+    }));
+    for ruleset in &mut source.rulesets {
+        ruleset.span = rule_span;
+    }
+    source.rules.push(pb::RuleDecl {
+        eval_mode: pb::RuleEvalMode::Seminaive.into(),
+        kind: Some(pb::rule_decl::Kind::Rule(pb::Rule {
+            query: vec![],
+            head: vec![pb::Action {
+                kind: Some(pb::action::Kind::Term(0)),
+                ..Default::default()
+            }],
+        })),
+        ..Default::default()
+    });
+    source.rulesets.push(pb::Ruleset {
+        kind: Some(pb::ruleset::Kind::Rules(pb::RuleList { rules: vec![1] })),
+        ..Default::default()
+    });
+    let map = reconcile_rulesets(&source, &mut destination).unwrap();
+    retain_rulesets(&mut destination, &[map.rulesets[2]]).unwrap();
+    assert_eq!(destination.declarations, defaults.declarations);
+    assert_eq!(&destination.nodes[..defaults.nodes.len()], defaults.nodes);
+    assert_eq!(destination.sorts, defaults.sorts);
+    assert_eq!(
+        destination.files,
+        [defaults.files[0].clone(), source.files[1].clone()]
+    );
+    assert_eq!(destination.nodes.len(), defaults.nodes.len() + 2);
+    assert_eq!(destination.rules.len(), 1);
+    assert_eq!(destination.rulesets.len(), 3); // distinct leaves, one shared rule
+    let installed = destination.clone();
+
+    // Resupply declarations/defaults and shared rules together, all three
+    // auxiliary arenas reversed. No parallel/default-only retention path.
+    let mut relocated = installed.clone();
+    let last_node = relocated.nodes.len() as u32 - 1;
+    relocated.sorts.reverse();
+    relocated.nodes.reverse();
+    relocated.files.reverse();
+    for sort in &mut relocated.sorts {
+        if let Some(span) = &mut sort.span {
+            span.file = 1 - span.file;
+        }
+    }
+    for node in &mut relocated.nodes {
+        node.sort_id = 1 - node.sort_id;
+        if let Some(span) = &mut node.span {
+            span.file = 1 - span.file;
+        }
+        if let Some(pb::node::Kind::Call(call)) = &mut node.kind {
+            for arg in &mut call.args {
+                *arg = last_node - *arg;
+            }
+        }
+    }
+    for declaration in &mut relocated.declarations {
+        if let Some(span) = &mut declaration.span {
+            span.file = 1 - span.file;
+        }
+        match declaration.kind.as_mut().unwrap() {
+            pb::declaration::Kind::Constructor(c) => {
+                c.inputs[0].sort = 1 - c.inputs[0].sort;
+                c.output = 1 - c.output;
+            }
+            pb::declaration::Kind::Function(f) => {
+                f.output = 1 - f.output;
+                f.merge = f.merge.map(|n| last_node - n);
+            }
+            pb::declaration::Kind::EqSort(_) => (),
+            _ => unreachable!(),
+        }
+        if let Some(bindings) = &mut declaration.bindings {
+            let python = &mut bindings.python.as_mut().unwrap().views[0];
+            let Some(pb::binding_owner::Kind::Sort(sort)) =
+                &mut python.owner.as_mut().unwrap().kind
+            else {
+                unreachable!()
+            };
+            *sort = 1 - *sort;
+            python.params[0].default_expr = python.params[0].default_expr.map(|n| last_node - n);
+            let rust = &mut bindings.rust.as_mut().unwrap().views[0];
+            let Some(pb::binding_owner::Kind::Sort(sort)) = &mut rust.owner.as_mut().unwrap().kind
+            else {
+                unreachable!()
+            };
+            *sort = 1 - *sort;
+        }
+    }
+    for rule in &mut relocated.rules {
+        if let Some(span) = &mut rule.span {
+            span.file = 1 - span.file;
+        }
+        let Some(pb::rule_decl::Kind::Rule(rule)) = &mut rule.kind else {
+            unreachable!()
+        };
+        for action in &mut rule.head {
+            if let Some(span) = &mut action.span {
+                span.file = 1 - span.file;
+            }
+            let Some(pb::action::Kind::Term(node)) = &mut action.kind else {
+                unreachable!()
+            };
+            *node = last_node - *node;
+        }
+    }
+    for ruleset in &mut relocated.rulesets {
+        if let Some(span) = &mut ruleset.span {
+            span.file = 1 - span.file;
+        }
+    }
+    assert_eq!(
+        reconcile_declarations(&relocated, &mut destination).unwrap(),
+        [false, false, false]
+    );
+    let map = reconcile_rulesets(&relocated, &mut destination).unwrap();
+    retain_rulesets(&mut destination, &[map.rulesets[2]]).unwrap();
+    assert_eq!(destination, installed);
+    let mut reconstructed = pb::Program::default();
+    reconcile_declarations(&relocated, &mut reconstructed).unwrap();
+    let map = reconcile_rulesets(&relocated, &mut reconstructed).unwrap();
+    retain_rulesets(&mut reconstructed, &[map.rulesets[2]]).unwrap();
+    reconcile_declarations(&reconstructed, &mut destination).unwrap();
+    let map = reconcile_rulesets(&reconstructed, &mut destination).unwrap();
+    retain_rulesets(&mut destination, &[map.rulesets[2]]).unwrap();
+    assert_eq!(destination, installed);
+}
 
 #[test]
 fn scalar_views_relocate_and_freeze_exact_tail_presence() {

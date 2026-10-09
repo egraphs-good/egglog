@@ -1,4 +1,4 @@
-//! Structural relocation and compatibility for canonical declaration records.
+//! Structural relocation and compatibility for canonical definition records.
 //! No native values, executable bodies, or second signature model live here.
 
 use crate::{HashMap, HashSet, proto as pb};
@@ -179,6 +179,581 @@ fn relocate_span(
         span.file = files[span.file as usize];
     }
     Ok(())
+}
+
+// Both declaration defaults and rule bodies live in the same canonical arenas.
+fn import_arenas(
+    source: &pb::Program,
+    destination: &mut pb::Program,
+) -> Result<(Vec<u32>, Vec<u32>), String> {
+    let mut files = Vec::new();
+    for file in &source.files {
+        let index = if let Some(index) = destination.files.iter().position(|old| old == file) {
+            index
+        } else {
+            destination.files.push(file.clone());
+            destination.files.len() - 1
+        };
+        files.push(u32::try_from(index).map_err(|_| "too many source files")?);
+    }
+    let mut input_sorts = source.sorts.clone();
+    for sort in &mut input_sorts {
+        relocate_span(&mut sort.span, source, &files)?;
+    }
+    let mut sorts = Vec::new();
+    for index in 0..input_sorts.len() {
+        sorts.push(super::import_sort(
+            &input_sorts,
+            index as u32,
+            &mut destination.sorts,
+        )?);
+    }
+    Ok((sorts, files))
+}
+
+// One reference visitor serves import, structural comparison and retention.
+fn rule_refs(
+    rule: &mut pb::RuleDecl,
+    mut node: impl FnMut(&mut u32) -> Result<(), String>,
+    mut span: impl FnMut(&mut Option<pb::Span>) -> Result<(), String>,
+) -> Result<(), String> {
+    span(&mut rule.span)?;
+    match rule.kind.as_mut().ok_or("missing rule kind")? {
+        pb::rule_decl::Kind::Rule(rule) => {
+            for root in &mut rule.query {
+                node(root)?;
+            }
+            for action in &mut rule.head {
+                span(&mut action.span)?;
+                let call = match action.kind.as_mut().ok_or("missing action kind")? {
+                    pb::action::Kind::Term(root) => {
+                        node(root)?;
+                        None
+                    }
+                    pb::action::Kind::Set(set) => {
+                        node(set.value.as_mut().ok_or("missing set value")?)?;
+                        Some(set.target.as_mut().ok_or("missing set target")?)
+                    }
+                    pb::action::Kind::SetCost(set) => {
+                        node(set.cost.as_mut().ok_or("missing set-cost value")?)?;
+                        Some(set.target.as_mut().ok_or("missing set-cost target")?)
+                    }
+                    pb::action::Kind::Delete(call) | pb::action::Kind::Subsume(call) => Some(call),
+                    pb::action::Kind::Panic(_) => None,
+                };
+                if let Some(call) = call {
+                    for arg in &mut call.args {
+                        node(arg)?;
+                    }
+                }
+            }
+        }
+        pb::rule_decl::Kind::Rewrite(rule) => {
+            node(&mut rule.lhs)?;
+            node(&mut rule.rhs)?;
+            for root in &mut rule.conditions {
+                node(root)?;
+            }
+        }
+        pb::rule_decl::Kind::Birewrite(rule) => {
+            node(&mut rule.lhs)?;
+            node(&mut rule.rhs)?;
+            for root in &mut rule.conditions {
+                node(root)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Request-local occurrences relocated into the candidate canonical Program.
+/// The candidate includes transient occurrences; retain only published named
+/// closures after native installation, not all of this request's arenas.
+#[derive(Debug)]
+pub struct RulesetReconciliation {
+    pub rulesets: Vec<usize>,
+    pub rules: Vec<usize>,
+}
+
+// Canonical references have already resolved names. Return children while
+// checking all occurrence edges, including unused leaves.
+fn ruleset_children(program: &pb::Program, index: usize) -> Result<Vec<usize>, String> {
+    match program
+        .rulesets
+        .get(index)
+        .ok_or("ruleset index out of bounds")?
+        .kind
+        .as_ref()
+        .ok_or("missing ruleset kind")?
+    {
+        pb::ruleset::Kind::Rules(list) => {
+            if list
+                .rules
+                .iter()
+                .any(|i| *i as usize >= program.rules.len())
+            {
+                return Err("rule index out of bounds".into());
+            }
+            Ok(Vec::new())
+        }
+        pb::ruleset::Kind::Combined(combined) => combined
+            .rulesets
+            .iter()
+            .map(|reference| {
+                let Some(pb::ruleset_ref::Kind::Index(index)) = reference.kind else {
+                    return Err("unresolved canonical ruleset reference".into());
+                };
+                if index as usize >= program.rulesets.len() {
+                    return Err("ruleset index out of bounds".into());
+                }
+                Ok(index as usize)
+            })
+            .collect(),
+    }
+}
+
+fn check_ruleset_cycles(program: &pb::Program) -> Result<(), String> {
+    let mut done = HashSet::default();
+    for root in 0..program.rulesets.len() {
+        let mut active = HashSet::default();
+        let mut pending = vec![(root, false)];
+        while let Some((index, leaving)) = pending.pop() {
+            if leaving {
+                active.remove(&index);
+                done.insert(index);
+                continue;
+            }
+            if done.contains(&index) {
+                continue;
+            }
+            if !active.insert(index) {
+                return Err("cyclic ruleset composition".into());
+            }
+            pending.push((index, true));
+            pending.extend(
+                ruleset_children(program, index)?
+                    .into_iter()
+                    .rev()
+                    .map(|child| (child, false)),
+            );
+        }
+    }
+    Ok(())
+}
+
+struct OccurrenceComparison<'a> {
+    program: &'a pb::Program,
+    representatives: &'a [usize],
+    old_rulesets: usize,
+    old_rules: usize,
+    local: bool,
+    sets: HashMap<usize, usize>,
+    reverse_sets: HashMap<usize, usize>,
+    rules: HashMap<usize, usize>,
+    reverse_rules: HashMap<usize, usize>,
+}
+
+impl OccurrenceComparison<'_> {
+    fn compare(&mut self, roots: Vec<(usize, usize)>) -> Result<(), String> {
+        let mut pending = roots;
+        while let Some((left, right)) = pending.pop() {
+            let (left, right) = (self.representatives[left], self.representatives[right]);
+            // An explicit retained name and a matched local presentation may
+            // both reach this occurrence. The retained reference isn't a second
+            // local occurrence subject to the local-to-retained injection.
+            if left == right && left < self.old_rulesets {
+                continue;
+            }
+            if self.sets.get(&left).is_some_and(|old| *old != right)
+                || self
+                    .reverse_sets
+                    .get(&right)
+                    .is_some_and(|old| *old != left)
+                || (left < self.old_rulesets && right < self.old_rulesets && left != right)
+            {
+                return Err("conflicting ruleset sharing".into());
+            }
+            if self.sets.insert(left, right).is_some() {
+                continue;
+            }
+            self.reverse_sets.insert(right, left);
+            match (
+                &self.program.rulesets[left].kind,
+                &self.program.rulesets[right].kind,
+            ) {
+                (Some(pb::ruleset::Kind::Rules(a)), Some(pb::ruleset::Kind::Rules(b)))
+                    if a.rules.len() == b.rules.len() =>
+                {
+                    for (&a, &b) in a.rules.iter().zip(&b.rules) {
+                        let (a, b) = (a as usize, b as usize);
+                        if self.rules.get(&a).is_some_and(|old| *old != b)
+                            || self.reverse_rules.get(&b).is_some_and(|old| *old != a)
+                            || (a < self.old_rules && b < self.old_rules && a != b)
+                            || (self.local && a >= self.old_rules && b >= self.old_rules && a != b)
+                        {
+                            return Err("conflicting rule sharing".into());
+                        }
+                        if self.rules.insert(a, b).is_some() {
+                            continue;
+                        }
+                        self.reverse_rules.insert(b, a);
+                        let mut pair =
+                            [self.program.rules[a].clone(), self.program.rules[b].clone()];
+                        let mut roots = [Vec::new(), Vec::new()];
+                        for (rule, roots) in pair.iter_mut().zip(&mut roots) {
+                            rule.name = None;
+                            rule.doc.clear();
+                            rule_refs(
+                                rule,
+                                |root| {
+                                    roots.push(*root);
+                                    *root = 0;
+                                    Ok(())
+                                },
+                                |span| {
+                                    *span = None;
+                                    Ok(())
+                                },
+                            )?;
+                        }
+                        if pair[0] != pair[1] || roots[0].len() != roots[1].len() {
+                            return Err("conflicting rule body or options".into());
+                        }
+                        let mut nodes = NodeComparison::default();
+                        for (&a, &b) in roots[0].iter().zip(&roots[1]) {
+                            if !nodes.equal(self.program, a, b)? {
+                                return Err("conflicting rule expressions".into());
+                            }
+                        }
+                    }
+                }
+                (Some(pb::ruleset::Kind::Combined(a)), Some(pb::ruleset::Kind::Combined(b)))
+                    if a.rulesets.len() == b.rulesets.len() =>
+                {
+                    pending.extend(
+                        ruleset_children(self.program, left)?
+                            .into_iter()
+                            .zip(ruleset_children(self.program, right)?),
+                    );
+                }
+                _ => return Err("conflicting ruleset body".into()),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Reconcile immutable occurrence graphs on a disposable candidate. Ordered
+/// correspondence is anchored by names, never by structural interning. No
+/// destination state changes on failure; native compilation is the caller's gate.
+pub fn reconcile_rulesets(
+    source: &pb::Program,
+    destination: &mut pb::Program,
+) -> Result<RulesetReconciliation, String> {
+    if source.ir_version != 1 {
+        return Err("unsupported ruleset IR version".into());
+    }
+    let mut staged = destination.clone();
+    staged.ir_version = 1;
+    let old_sets = staged.rulesets.len();
+    let old_rules = staged.rules.len();
+    let (sorts, files) = import_arenas(source, &mut staged)?;
+    let mut importer = NodeImport {
+        source,
+        sorts: &sorts,
+        files: &files,
+        nodes: &mut staged.nodes,
+        imported: HashMap::default(),
+        active: HashSet::default(),
+    };
+    for rule in &source.rules {
+        if !matches!(
+            pb::RuleEvalMode::try_from(rule.eval_mode),
+            Ok(pb::RuleEvalMode::Seminaive
+                | pb::RuleEvalMode::Naive
+                | pb::RuleEvalMode::UnsafeSeminaive)
+        ) {
+            return Err("invalid rule evaluation mode".into());
+        }
+        if rule.name.as_ref().is_some_and(String::is_empty) {
+            return Err("empty rule label".into());
+        }
+        let mut rule = rule.clone();
+        rule_refs(
+            &mut rule,
+            |root| {
+                *root = importer.import(*root)?;
+                Ok(())
+            },
+            |span| relocate_span(span, source, &files),
+        )?;
+        staged.rules.push(rule);
+    }
+    let installed_names: HashMap<_, _> = staged
+        .rulesets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| s.name.as_ref().map(|name| (name.clone(), i)))
+        .collect();
+    let mut local_names = HashMap::default();
+    let mut duplicates = Vec::new();
+    for (index, ruleset) in source.rulesets.iter().enumerate() {
+        if let Some(name) = &ruleset.name {
+            if name.is_empty() && !matches!(ruleset.kind, Some(pb::ruleset::Kind::Rules(_))) {
+                return Err("default ruleset must be a rule list".into());
+            }
+            if let Some(first) = local_names.get(name) {
+                duplicates.push((old_sets + index, *first));
+            } else {
+                local_names.insert(name.clone(), old_sets + index);
+            }
+        }
+    }
+    for ruleset in &source.rulesets {
+        let mut ruleset = ruleset.clone();
+        relocate_span(&mut ruleset.span, source, &files)?;
+        match ruleset.kind.as_mut().ok_or("missing ruleset kind")? {
+            pb::ruleset::Kind::Rules(list) => {
+                for rule in &mut list.rules {
+                    if *rule as usize >= source.rules.len() {
+                        return Err("rule index out of bounds".into());
+                    }
+                    *rule =
+                        u32::try_from(old_rules + *rule as usize).map_err(|_| "too many rules")?;
+                }
+            }
+            pb::ruleset::Kind::Combined(combined) => {
+                for reference in &mut combined.rulesets {
+                    let index = match reference.kind.as_ref().ok_or("missing ruleset reference")? {
+                        pb::ruleset_ref::Kind::Index(index) => {
+                            if *index as usize >= source.rulesets.len() {
+                                return Err("ruleset index out of bounds".into());
+                            }
+                            old_sets + *index as usize
+                        }
+                        pb::ruleset_ref::Kind::Name(name) => *local_names
+                            .get(name)
+                            .or_else(|| installed_names.get(name))
+                            .ok_or_else(|| format!("unknown ruleset {name}"))?,
+                    };
+                    reference.kind = Some(pb::ruleset_ref::Kind::Index(
+                        u32::try_from(index).map_err(|_| "too many rulesets")?,
+                    ));
+                }
+            }
+        }
+        staged.rulesets.push(ruleset);
+    }
+    check_ruleset_cycles(&staged)?;
+    let identity: Vec<_> = (0..staged.rulesets.len()).collect();
+    let mut representatives = identity.clone();
+    let mut anchors = Vec::new();
+    for pair in duplicates {
+        let mut comparison = OccurrenceComparison {
+            program: &staged,
+            representatives: &identity,
+            old_rulesets: old_sets,
+            old_rules,
+            local: true,
+            sets: HashMap::default(),
+            reverse_sets: HashMap::default(),
+            rules: HashMap::default(),
+            reverse_rules: HashMap::default(),
+        };
+        comparison.compare(vec![pair])?;
+        for (a, b) in comparison.sets {
+            if a < old_sets || b < old_sets {
+                anchors.push(if a < old_sets { (b, a) } else { (a, b) });
+            } else {
+                let (a, b) = (representatives[a], representatives[b]);
+                let (from, to) = (a.max(b), a.min(b));
+                for representative in &mut representatives {
+                    if *representative == from {
+                        *representative = to;
+                    }
+                }
+            }
+        }
+    }
+    // A locally valid positional bijection can become invalid after transitive
+    // identifications: P=[A,B], P=[B,A] must not collapse distinct A/B.
+    for root in old_sets..staged.rulesets.len() {
+        let mut seen = HashMap::default();
+        let mut pending = vec![root];
+        while let Some(index) = pending.pop() {
+            if let Some(previous) = seen.insert(representatives[index], index) {
+                if previous != index
+                    && (staged.rulesets[index].name.is_none()
+                        || staged.rulesets[previous].name != staged.rulesets[index].name)
+                {
+                    return Err("duplicate presentations collapse distinct ruleset children".into());
+                }
+                continue;
+            }
+            pending.extend(ruleset_children(&staged, index)?);
+        }
+    }
+    for (name, &local) in &local_names {
+        if let Some(&installed) = installed_names.get(name) {
+            anchors.push((local, installed));
+        }
+    }
+    let mut comparison = OccurrenceComparison {
+        program: &staged,
+        representatives: &representatives,
+        old_rulesets: old_sets,
+        old_rules,
+        local: false,
+        sets: HashMap::default(),
+        reverse_sets: HashMap::default(),
+        rules: HashMap::default(),
+        reverse_rules: HashMap::default(),
+    };
+    comparison.compare(anchors)?;
+    let mut set_map = representatives.clone();
+    for (index, representative) in set_map.iter_mut().enumerate() {
+        *representative = comparison
+            .sets
+            .get(&representatives[index])
+            .copied()
+            .unwrap_or(representatives[index]);
+    }
+    let mut rule_map: Vec<_> = (0..staged.rules.len())
+        .map(|i| comparison.rules.get(&i).copied().unwrap_or(i))
+        .collect();
+    let mut names = HashMap::default();
+    for (index, ruleset) in staged.rulesets.iter().enumerate() {
+        if let Some(name) = &ruleset.name
+            && names
+                .insert(set_map[index], name.clone())
+                .is_some_and(|old| old != *name)
+        {
+            return Err("conflicting ruleset name assignment".into());
+        }
+    }
+    let mut retained_sets = Vec::new();
+    let mut compact_sets = HashMap::default();
+    for &index in &set_map {
+        if compact_sets.contains_key(&index) {
+            continue;
+        }
+        compact_sets.insert(index, retained_sets.len());
+        let mut ruleset = staged.rulesets[index].clone();
+        ruleset.name = names.get(&index).cloned();
+        retained_sets.push(ruleset);
+    }
+    let mut retained_rules = Vec::new();
+    let mut compact_rules = HashMap::default();
+    for &index in &rule_map {
+        if compact_rules.contains_key(&index) {
+            continue;
+        }
+        compact_rules.insert(index, retained_rules.len());
+        retained_rules.push(staged.rules[index].clone());
+    }
+    for index in &mut set_map {
+        *index = compact_sets[index];
+    }
+    for index in &mut rule_map {
+        *index = compact_rules[index];
+    }
+    for ruleset in &mut retained_sets {
+        match ruleset.kind.as_mut().unwrap() {
+            pb::ruleset::Kind::Rules(list) => {
+                for index in &mut list.rules {
+                    *index = rule_map[*index as usize] as u32;
+                }
+            }
+            pb::ruleset::Kind::Combined(combined) => {
+                for reference in &mut combined.rulesets {
+                    let Some(pb::ruleset_ref::Kind::Index(index)) = &mut reference.kind else {
+                        unreachable!()
+                    };
+                    *index = set_map[*index as usize] as u32;
+                }
+            }
+        }
+    }
+    staged.rulesets = retained_sets;
+    staged.rules = retained_rules;
+    check_ruleset_cycles(&staged)?;
+    retain_imported_closures(&mut staged, destination)?;
+    *destination = staged;
+    Ok(RulesetReconciliation {
+        rulesets: set_map[old_sets..].to_vec(),
+        rules: rule_map[old_rules..].to_vec(),
+    })
+}
+
+/// Retain exactly the closures of successfully published bindings. Returns the
+/// old ruleset/rule indices in their new arena order so derived native handles
+/// can be retained with the same relocation. No native state is reconstructed.
+pub fn retain_rulesets(
+    program: &mut pb::Program,
+    published: &[usize],
+) -> Result<(Vec<usize>, Vec<usize>), String> {
+    let mut staged = program.clone();
+    let roots: HashSet<_> = published.iter().copied().collect();
+    let mut sets = HashSet::default();
+    let mut rules = HashSet::default();
+    let mut pending = published.to_vec();
+    while let Some(index) = pending.pop() {
+        if !sets.insert(index) {
+            continue;
+        }
+        pending.extend(ruleset_children(&staged, index)?);
+        if let Some(pb::ruleset::Kind::Rules(list)) = &staged.rulesets[index].kind {
+            rules.extend(list.rules.iter().map(|i| *i as usize));
+        }
+    }
+    let retained_sets: Vec<_> = (0..staged.rulesets.len())
+        .filter(|i| sets.contains(i))
+        .collect();
+    let retained_rules: Vec<_> = (0..staged.rules.len())
+        .filter(|i| rules.contains(i))
+        .collect();
+    let set_map: HashMap<_, _> = retained_sets
+        .iter()
+        .enumerate()
+        .map(|(new, old)| (*old, new))
+        .collect();
+    let rule_map: HashMap<_, _> = retained_rules
+        .iter()
+        .enumerate()
+        .map(|(new, old)| (*old, new))
+        .collect();
+    staged.rulesets = retained_sets
+        .iter()
+        .map(|&index| {
+            let mut ruleset = staged.rulesets[index].clone();
+            if !roots.contains(&index) {
+                ruleset.name = None;
+            }
+            match ruleset.kind.as_mut().unwrap() {
+                pb::ruleset::Kind::Rules(list) => {
+                    for index in &mut list.rules {
+                        *index = rule_map[&(*index as usize)] as u32;
+                    }
+                }
+                pb::ruleset::Kind::Combined(combined) => {
+                    for reference in &mut combined.rulesets {
+                        let Some(pb::ruleset_ref::Kind::Index(index)) = &mut reference.kind else {
+                            unreachable!()
+                        };
+                        *index = set_map[&(*index as usize)] as u32;
+                    }
+                }
+            }
+            ruleset
+        })
+        .collect();
+    staged.rules = retained_rules
+        .iter()
+        .map(|&i| staged.rules[i].clone())
+        .collect();
+    retain_imported_closures(&mut staged, &pb::Program::default())?;
+    *program = staged;
+    Ok((retained_sets, retained_rules))
 }
 
 struct NodeImport<'a> {
@@ -422,29 +997,7 @@ pub fn reconcile_declarations(
     }
     let mut staged = destination.clone();
     staged.ir_version = 1;
-    let mut files = vec![];
-    for file in &source.files {
-        let i = match staged.files.iter().position(|f| f == file) {
-            Some(i) => i,
-            None => {
-                staged.files.push(file.clone());
-                staged.files.len() - 1
-            }
-        };
-        files.push(i as u32);
-    }
-    let mut input_sorts = source.sorts.clone();
-    for s in &mut input_sorts {
-        relocate_span(&mut s.span, source, &files)?;
-    }
-    let mut sorts = vec![];
-    for i in 0..input_sorts.len() {
-        sorts.push(super::import_sort(
-            &input_sorts,
-            i as u32,
-            &mut staged.sorts,
-        )?);
-    }
+    let (sorts, files) = import_arenas(source, &mut staged)?;
     let mut importer = NodeImport {
         source,
         sorts: &sorts,
@@ -520,6 +1073,26 @@ fn retain_imported_closures(p: &mut pb::Program, previous: &pb::Program) -> Resu
                 Ok(())
             },
         )?;
+    }
+    for rule in &p.rules {
+        rule_refs(
+            &mut rule.clone(),
+            |root| {
+                pending.push(*root);
+                Ok(())
+            },
+            |span| {
+                if let Some(span) = span {
+                    files.insert(span.file);
+                }
+                Ok(())
+            },
+        )?;
+    }
+    for ruleset in &p.rulesets {
+        if let Some(span) = ruleset.span {
+            files.insert(span.file);
+        }
     }
     let mut walked = HashSet::default();
     while let Some(i) = pending.pop() {
@@ -621,6 +1194,26 @@ fn retain_imported_closures(p: &mut pb::Program, previous: &pb::Program) -> Resu
                 Ok(())
             },
         )?;
+    }
+    for rule in &mut p.rules {
+        rule_refs(
+            rule,
+            |root| {
+                *root = node_map[*root as usize].unwrap();
+                Ok(())
+            },
+            |span| {
+                if let Some(span) = span {
+                    span.file = file_map[span.file as usize].unwrap();
+                }
+                Ok(())
+            },
+        )?;
+    }
+    for ruleset in &mut p.rulesets {
+        if let Some(span) = &mut ruleset.span {
+            span.file = file_map[span.file as usize].unwrap();
+        }
     }
     Ok(())
 }
