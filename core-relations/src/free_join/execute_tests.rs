@@ -11,7 +11,7 @@ use crate::{
         AtomId, SubAtom, Variable,
         plan::{JoinStage, MatId, MatScanMode, ScanSpec, SingleScanSpec},
     },
-    numeric_id::NumericId,
+    numeric_id::{DenseIdMap, NumericId},
     offsets::Subset,
     row_buffer::RowBuffer,
     table_spec::ColumnId,
@@ -342,7 +342,13 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
     // still anchors the recursive ordering to stage 0 / atom 0. Using the
     // physical prefix here would instead promote stage 2 / atom 1.
     let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
-    sort_plan_by_size_inner(&mut order, 1..3, &stages, &mut binding_info);
+    sort_plan_by_size_inner(
+        &mut order,
+        1..3,
+        &stages,
+        &DenseIdMap::new(),
+        &mut binding_info,
+    );
 
     assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3].into_iter()));
 }

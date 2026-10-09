@@ -45,11 +45,11 @@ use super::{
     join_tail::{
         BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
-        materialization_is_live_in_tail, sort_plan_by_size,
+        for_each_bound_var, materialization_is_live_in_tail, sort_plan_by_size,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
-    plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
+    plan::{JoinHeader, JoinStage, JoinStageBlocks, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
         PreparedIndexRef, PreparedJoinIndexes, PreparedPlanIndexes, StageMask,
         columns_are_cacheable,
@@ -342,6 +342,11 @@ impl Database {
                                             binding_info
                                                 .materializations
                                                 .insert(mat_id, Arc::new(materialization));
+                                            run_projections(
+                                                &plan.stages,
+                                                mat_id,
+                                                &mut binding_info,
+                                            );
                                             materializations = Arc::new(materializations_dearc);
                                         }
                                         join_state.run_join_stages(
@@ -479,6 +484,7 @@ impl Database {
                                             materializer.materializations.take(mat_id).unwrap(),
                                         ),
                                     );
+                                    run_projections(&plan.stages, mat_id, &mut binding_info);
                                 }
                                 join_state.run_join_stages(
                                     &plan.result_block,
@@ -1260,7 +1266,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
-        sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
+        sort_plan_by_size(
+            &mut order,
+            &mut leaf_scans,
+            0,
+            &stages.instrs,
+            atoms,
+            binding_info,
+        );
         let all_stages = prepared.all_stage_mask::<M>();
         debug_assert!(
             all_stages.is_some()
@@ -1430,7 +1443,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
             // resulting atom-local successor choice safe to cache again.
-            sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
+            sort_plan_by_size(
+                instr_order,
+                leaf_scans,
+                cur,
+                &stages.instrs,
+                atoms,
+                binding_info,
+            );
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 
@@ -2148,7 +2168,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 }
                             }
                         }
-                        MatScanMode::Lookup(_) => unreachable!("guarded above"),
+                        _ => unreachable!("guarded above"),
                     }
                     if buf.is_empty() {
                         return;
@@ -2170,6 +2190,38 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 bind,
                 to_intersect,
             } => {
+                // The values of a `Semijoin`'s variables that the stages before
+                // it in the current order bound, by position in `bind`.
+                let bound: SmallVec<[Option<Value>; 4]> = if *mode == MatScanMode::Semijoin {
+                    debug_assert!(
+                        bind.iter()
+                            .enumerate()
+                            .all(|(j, (col, _))| col.index() == j)
+                    );
+                    bind.iter()
+                        .map(|(_, var)| {
+                            let mut bound = false;
+                            (0..cur).for_each(|position| {
+                                let stage = &stages.instrs[instr_order.get(position)];
+                                for_each_bound_var(stage, |bound_var| bound |= bound_var == *var)
+                            });
+                            bound.then(|| binding_info.bindings[*var])
+                        })
+                        .collect()
+                } else {
+                    SmallVec::new()
+                };
+                if !bound.is_empty() && bound.iter().all(Option::is_some) {
+                    // The stages that bound the variables refined every atom
+                    // holding them, so only membership is left to check.
+                    let key: SmallVec<[Value; 4]> = bound.iter().flatten().copied().collect();
+                    if binding_info.materializations[*cover].contains_key(key.as_slice()) {
+                        let mut updates = FrameUpdates::with_capacity(1);
+                        updates.finish_frame();
+                        drain_updates!(updates);
+                    }
+                    return;
+                }
                 let keep_for_tail =
                     materialization_is_live_in_tail(&stages.instrs, instr_order, cur + 1, *cover);
                 let restore_materialization = !keep_for_tail;
@@ -2181,10 +2233,16 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 (|| {
                     let mut updates: FrameUpdates<'rows, 'exec> =
                         FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    let probers: SmallVec<[Prober<'_, 'rows, 'exec>; 4]> = to_intersect
+                    // A `Semijoin` probes only the atoms holding a variable it binds.
+                    let probers: SmallVec<[(usize, Prober<'_, 'rows, 'exec>); 4]> = to_intersect
                         .iter()
                         .zip(prepared_indexes)
-                        .map(|((spec, _), prepared_slot)| {
+                        .enumerate()
+                        .filter(|(_, ((_, cols), _))| {
+                            cols.iter()
+                                .any(|col| bound.get(col.index()).is_none_or(Option::is_none))
+                        })
+                        .map(|(i, ((spec, _), prepared_slot))| {
                             let tail = atom_tail_use(
                                 spec.to_index.atom,
                                 &stages.instrs,
@@ -2193,7 +2251,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 instr_order,
                                 cur + 1,
                             );
-                            self.get_index(
+                            let prober = self.get_index(
                                 atoms,
                                 binding_info,
                                 ProbeRequest::tuple(
@@ -2202,7 +2260,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     tail.child_shape,
                                     prepared.resolve(prepared_slot),
                                 ),
-                            )
+                            );
+                            (i, prober)
                         })
                         .collect();
                     debug_assert!(to_intersect.iter().enumerate().all(|(i, (spec, _))| {
@@ -2215,7 +2274,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                              mat_key: Option<&[Value]>,
                                              mat_non_key: Option<&[Value]>|
                      -> bool {
-                        for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
+                        for (i, prober) in probers.iter() {
+                            let (spec, cols) = &to_intersect[*i];
                             key.clear();
                             for col in cols.iter() {
                                 let val = match mat_key {
@@ -2287,6 +2347,30 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 }
                             }
                         }
+                        MatScanMode::Semijoin => {
+                            for group_key in cover_mat.keys() {
+                                if bound
+                                    .iter()
+                                    .zip(group_key.iter())
+                                    .any(|(bound, val)| bound.is_some_and(|bound| bound != *val))
+                                {
+                                    continue;
+                                }
+                                for ((col, var), bound) in bind.iter().zip(bound.iter()) {
+                                    if bound.is_none() {
+                                        updates.push_binding(*var, group_key[col.index()]);
+                                    }
+                                }
+                                if prune_probers(&mut updates, Some(group_key), None) {
+                                    updates.finish_frame();
+                                } else {
+                                    updates.rollback();
+                                }
+                                if updates.frames() >= chunk_size {
+                                    drain_updates!(updates);
+                                }
+                            }
+                        }
                         MatScanMode::Value(index_vars) | MatScanMode::Lookup(index_vars) => {
                             let keys = index_vars
                                 .iter()
@@ -2324,8 +2408,8 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     }
 
                     drain_updates!(updates);
-                    for (spec, prober) in to_intersect.iter().zip(probers) {
-                        binding_info.move_back(spec.0.to_index.atom, prober);
+                    for (i, prober) in probers {
+                        binding_info.move_back(to_intersect[i].0.to_index.atom, prober);
                     }
                 })();
                 if restore_materialization {
@@ -2844,6 +2928,25 @@ fn flush_action_states(
             match_counter.inc_matches(action, succeeded);
             *len = 0;
         }
+    }
+}
+
+/// Store the projections of materialization `source` that later blocks scan:
+/// the distinct `key` columns of its keys, each with no rows, since only a
+/// `Semijoin` stage scans a projection and it reads the keys alone.
+fn run_projections(blocks: &JoinStageBlocks, source: MatId, binding_info: &mut BindingInfo) {
+    let materializations = &mut binding_info.materializations;
+    for projection in blocks.projections.iter().filter(|p| p.source == source) {
+        let mut projected = IndexMap::<Vec<Value>, RowBuffer>::default();
+        let mut scratch = Vec::with_capacity(projection.key.len());
+        for mat_key in materializations[source].keys() {
+            scratch.clear();
+            scratch.extend(projection.key.iter().map(|col| mat_key[col.index()]));
+            if !projected.contains_key(scratch.as_slice()) {
+                projected.insert(scratch.clone(), RowBuffer::new(1));
+            }
+        }
+        materializations.insert(projection.target, Arc::new(projected));
     }
 }
 

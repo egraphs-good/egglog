@@ -3,7 +3,7 @@
 use std::{iter::once, sync::Arc};
 
 use crate::{
-    free_join::plan::{DecomposedPlan, JoinStageBlocks, SinglePlan},
+    free_join::plan::{DecomposedPlan, SinglePlan},
     numeric_id::{DenseIdMap, IdVec, NumericId, define_id},
 };
 use smallvec::SmallVec;
@@ -212,7 +212,6 @@ impl<'outer> RuleSetBuilder<'outer> {
                 }))
             }
             Plan::DecomposedPlan(cached_plan) => {
-                let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
                 let mut headers = vec![];
                 self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
                 self.reprocess_existing_headers(
@@ -220,17 +219,12 @@ impl<'outer> RuleSetBuilder<'outer> {
                     &cached_plan.atoms,
                     &cached_plan.header,
                 )?;
-                for cached_block in cached_plan.stages.blocks.iter() {
-                    let stages = cached_block.0.clone();
-                    blocks.push((stages, cached_block.1.clone()));
-                }
-                let result_block = cached_plan.result_block.clone();
                 Some(Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
-                    stages: JoinStageBlocks { blocks },
+                    stages: cached_plan.stages.clone(),
                     actions: action_id,
-                    result_block,
+                    result_block: cached_plan.result_block.clone(),
                 }))
             }
         }
