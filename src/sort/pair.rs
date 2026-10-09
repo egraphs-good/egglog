@@ -103,7 +103,22 @@ impl Presort for PairSort {
                     kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
                         name: "Pair".into(),
                         arity: 2,
-                        bindings: None,
+                        bindings: Some(pb::SortBindings {
+                            python: Some(pb::TypeBinding {
+                                path: vec!["egglog".into(), "builtins".into(), "Pair".into()],
+                                type_params: vec!["L".into(), "R".into()],
+                            }),
+                            rust: Some(pb::TypeBinding {
+                                path: vec![
+                                    "egglog_experimental".into(),
+                                    "typed".into(),
+                                    "builtins".into(),
+                                    "Pair".into(),
+                                ],
+                                type_params: vec!["L".into(), "R".into()],
+                            }),
+                            ..Default::default()
+                        }),
                     })),
                     ..Default::default()
                 },
@@ -126,13 +141,71 @@ impl Presort for PairSort {
                         )),
                     })),
                     bindings: Some(pb::CallableBindings {
+                        python: Some(pb::PythonBindings {
+                            views: vec![pb::PythonCallable {
+                                kind: if key == "make" {
+                                    pb::PythonCallKind::Initializer
+                                } else {
+                                    pb::PythonCallKind::Property
+                                }
+                                .into(),
+                                path: match key {
+                                    "make" => vec![],
+                                    "first" => vec!["left".into()],
+                                    _ => vec!["right".into()],
+                                },
+                                owner: Some(pb::BindingOwner {
+                                    kind: Some(pb::binding_owner::Kind::Sort(2)),
+                                }),
+                                receiver: (key != "make").then_some(0),
+                                params: if key == "make" {
+                                    ["left", "right"]
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(i, name)| pb::PythonParameter {
+                                            core_input: Some(i as u32),
+                                            name: name.into(),
+                                            default_expr: None,
+                                        })
+                                        .collect()
+                                } else {
+                                    vec![]
+                                },
+                                mutates: None,
+                            }],
+                        }),
+                        rust: Some(pb::RustBindings {
+                            views: vec![pb::RustCallable {
+                                path: vec![if key == "make" { "new" } else { key }.into()],
+                                owner: Some(pb::BindingOwner {
+                                    kind: Some(pb::binding_owner::Kind::Sort(2)),
+                                }),
+                                receiver: (key != "make").then_some(pb::RustReceiver {
+                                    core_input: Some(0),
+                                    borrowed: true,
+                                }),
+                                params: if key == "make" {
+                                    ["left", "right"]
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(i, name)| pb::RustParameter {
+                                            core_input: Some(i as u32),
+                                            name: name.into(),
+                                            borrowed: false,
+                                        })
+                                        .collect()
+                                } else {
+                                    vec![]
+                                },
+                                ..Default::default()
+                            }],
+                        }),
                         egglog: Some(pb::EgglogBindings {
                             views: vec![pb::EgglogCallable {
                                 symbol: alias.into(),
                                 datatype_member: false,
                             }],
                         }),
-                        ..Default::default()
                     }),
                     ..Default::default()
                 },

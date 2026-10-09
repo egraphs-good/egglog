@@ -456,8 +456,35 @@ fn pair_definitions_precede_instances_and_preserve_nominal_overloads() {
             .iter()
             .any(|name| name.starts_with("Pair::"))
     );
-    assert!(before.definitions.declarations.iter().any(|d| matches!(&d.kind,
-        Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Pair" && f.arity == 2 && f.bindings.is_none())));
+    let family = before
+        .definitions
+        .declarations
+        .iter()
+        .find_map(|d| match &d.kind {
+            Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Pair" => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(family.arity, 2);
+    assert_eq!(
+        family.bindings,
+        Some(proto::SortBindings {
+            python: Some(proto::TypeBinding {
+                path: vec!["egglog".into(), "builtins".into(), "Pair".into()],
+                type_params: vec!["L".into(), "R".into()],
+            }),
+            rust: Some(proto::TypeBinding {
+                path: vec![
+                    "egglog_experimental".into(),
+                    "typed".into(),
+                    "builtins".into(),
+                    "Pair".into()
+                ],
+                type_params: vec!["L".into(), "R".into()],
+            }),
+            ..Default::default()
+        })
+    );
     for (key, alias, inputs, output) in [
         ("make", "pair", vec![0, 1], 2),
         ("first", "pair-first", vec![2], 0),
@@ -511,7 +538,74 @@ fn pair_definitions_precede_instances_and_preserve_nominal_overloads() {
         };
         assert_eq!(f.args, patterns[..2]);
         let bindings = d.bindings.as_ref().unwrap();
-        assert!(bindings.python.is_none() && bindings.rust.is_none());
+        assert_eq!(
+            s.inputs.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            if key == "make" {
+                vec!["first", "second"]
+            } else {
+                vec!["pair"]
+            }
+        );
+        let owner = Some(proto::BindingOwner {
+            kind: Some(proto::binding_owner::Kind::Sort(patterns[2])),
+        });
+        assert_eq!(
+            bindings.python.as_ref().unwrap().views,
+            [proto::PythonCallable {
+                kind: if key == "make" {
+                    proto::PythonCallKind::Initializer
+                } else {
+                    proto::PythonCallKind::Property
+                }
+                .into(),
+                path: match key {
+                    "make" => vec![],
+                    "first" => vec!["left".into()],
+                    _ => vec!["right".into()],
+                },
+                owner,
+                receiver: (key != "make").then_some(0),
+                params: if key == "make" {
+                    ["left", "right"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, name)| proto::PythonParameter {
+                            core_input: Some(i as u32),
+                            name: name.into(),
+                            default_expr: None,
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
+                mutates: None,
+            }]
+        );
+        assert_eq!(
+            bindings.rust.as_ref().unwrap().views,
+            [proto::RustCallable {
+                path: vec![if key == "make" { "new" } else { key }.into()],
+                owner,
+                receiver: (key != "make").then_some(proto::RustReceiver {
+                    core_input: Some(0),
+                    borrowed: true
+                }),
+                params: if key == "make" {
+                    ["left", "right"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, name)| proto::RustParameter {
+                            core_input: Some(i as u32),
+                            name: name.into(),
+                            borrowed: false,
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            }]
+        );
         assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
     }
     graph

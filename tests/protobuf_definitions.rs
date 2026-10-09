@@ -1,6 +1,228 @@
 use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
 
 #[test]
+fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
+    let mut graph = egglog::EGraph::default();
+    for key in ["make", "first", "second"] {
+        let mut source = pb::Program::default();
+        graph
+            .type_info()
+            .export_builtin_definition(&format!("egglog.core.pair.{key}"), &mut source)
+            .unwrap();
+        let mut absent = source.clone();
+        for d in &mut absent.declarations {
+            if let Some(pb::declaration::Kind::HostSortFamily(f)) = &mut d.kind {
+                f.bindings = None;
+            }
+            if let Some(b) = &mut d.bindings {
+                b.python = None;
+                b.rust = None;
+            }
+        }
+        let mut destination = pb::Program::default();
+        assert_eq!(
+            reconcile_declarations(&absent, &mut destination).unwrap(),
+            [true, true]
+        );
+        for python in [true, false] {
+            let mut language = source.clone();
+            for d in &mut language.declarations {
+                if let Some(pb::declaration::Kind::HostSortFamily(f)) = &mut d.kind {
+                    let b = f.bindings.as_mut().expect("Pair family language views");
+                    if python {
+                        b.rust = None;
+                    } else {
+                        b.python = None;
+                    }
+                }
+                if let Some(b) = &mut d.bindings {
+                    assert!(b.python.is_some() && b.rust.is_some());
+                    if python {
+                        b.rust = None;
+                    } else {
+                        b.python = None;
+                    }
+                }
+            }
+            assert_eq!(
+                reconcile_declarations(&language, &mut destination).unwrap(),
+                [false, false]
+            );
+        }
+        let installed = destination.clone();
+        let mut permuted = source.clone();
+        let remap = |i: u32| source.sorts.len() as u32 - 1 - i;
+        permuted.sorts.reverse();
+        for sort in &mut permuted.sorts {
+            if let Some(pb::sort::Kind::Family(f)) = &mut sort.kind {
+                for arg in &mut f.args {
+                    *arg = remap(*arg);
+                }
+            }
+        }
+        for d in &mut permuted.declarations {
+            if let Some(pb::declaration::Kind::HostPrimitive(p)) = &mut d.kind {
+                let Some(pb::host_primitive::Typing::Signature(s)) = &mut p.typing else {
+                    unreachable!()
+                };
+                for arg in &mut s.inputs {
+                    arg.sort = remap(arg.sort);
+                    arg.name = format!("diagnostic_{}", arg.name);
+                }
+                s.output = s.output.map(remap);
+            }
+            if let Some(b) = &mut d.bindings {
+                for owner in b
+                    .python
+                    .as_mut()
+                    .unwrap()
+                    .views
+                    .iter_mut()
+                    .map(|v| v.owner.as_mut().unwrap())
+                    .chain(
+                        b.rust
+                            .as_mut()
+                            .unwrap()
+                            .views
+                            .iter_mut()
+                            .map(|v| v.owner.as_mut().unwrap()),
+                    )
+                {
+                    let Some(pb::binding_owner::Kind::Sort(i)) = &mut owner.kind else {
+                        unreachable!()
+                    };
+                    *i = remap(*i);
+                }
+            }
+        }
+        permuted.declarations.reverse();
+        for _ in 0..3 {
+            assert_eq!(
+                reconcile_declarations(&permuted, &mut destination).unwrap(),
+                [false, false]
+            );
+            reconcile_declarations(&absent, &mut destination).unwrap();
+            assert_eq!(
+                destination, installed,
+                "metadata relocation/resupply for {key}"
+            );
+        }
+        for conflict in 0..4 {
+            let mut changed = source.clone();
+            for d in &mut changed.declarations {
+                if conflict < 2 {
+                    if let Some(pb::declaration::Kind::HostSortFamily(f)) = &mut d.kind {
+                        let b = f.bindings.as_mut().unwrap();
+                        let language = if conflict == 0 {
+                            &mut b.python
+                        } else {
+                            &mut b.rust
+                        };
+                        language.as_mut().unwrap().type_params[0] = "Renamed".into();
+                    }
+                } else if let Some(b) = &mut d.bindings {
+                    if conflict == 2 {
+                        let v = &mut b.python.as_mut().unwrap().views[0];
+                        if key == "make" {
+                            v.params[0].name = "renamed".into();
+                        } else {
+                            v.path[0] = "renamed".into();
+                        }
+                    } else {
+                        b.rust.as_mut().unwrap().views[0].path[0] = "renamed".into();
+                    }
+                }
+            }
+            assert!(
+                reconcile_declarations(&changed, &mut destination).is_err(),
+                "{key}, conflict {conflict}"
+            );
+            assert_eq!(destination, installed);
+        }
+    }
+}
+
+#[test]
+fn pair_language_views_reject_invalid_owners_and_receivers_transactionally() {
+    let mut graph = egglog::EGraph::default();
+    for key in ["make", "first", "second"] {
+        let mut source = pb::Program::default();
+        graph
+            .type_info()
+            .export_builtin_definition(&format!("egglog.core.pair.{key}"), &mut source)
+            .unwrap();
+        let variable = source
+            .sorts
+            .iter()
+            .position(|s| s.kind == Some(pb::sort::Kind::Var(0)))
+            .unwrap() as u32;
+        for invalid in 0..6 {
+            let mut changed = source.clone();
+            let unbound = changed.sorts.len() as u32;
+            changed.sorts.push(pb::Sort {
+                kind: Some(pb::sort::Kind::Var(2)),
+                ..Default::default()
+            });
+            let b = changed
+                .declarations
+                .iter_mut()
+                .find_map(|d| d.bindings.as_mut())
+                .unwrap();
+            match invalid {
+                0 => {
+                    b.python.as_mut().unwrap().views[0]
+                        .owner
+                        .as_mut()
+                        .unwrap()
+                        .kind = Some(pb::binding_owner::Kind::Sort(variable))
+                }
+                1 => {
+                    b.rust.as_mut().unwrap().views[0]
+                        .owner
+                        .as_mut()
+                        .unwrap()
+                        .kind = Some(pb::binding_owner::Kind::Sort(unbound))
+                }
+                2 => b.python.as_mut().unwrap().views[0].receiver = Some(1),
+                3 => {
+                    b.rust.as_mut().unwrap().views[0].receiver = Some(pb::RustReceiver {
+                        core_input: Some(1),
+                        borrowed: true,
+                    })
+                }
+                4 => {
+                    b.python.as_mut().unwrap().views[0]
+                        .owner
+                        .as_mut()
+                        .unwrap()
+                        .kind = Some(pb::binding_owner::Kind::Sort(u32::MAX))
+                }
+                _ => {
+                    b.rust.as_mut().unwrap().views[0]
+                        .owner
+                        .as_mut()
+                        .unwrap()
+                        .kind = Some(pb::binding_owner::Kind::Sort(u32::MAX))
+                }
+            }
+            let mut destination = graph.type_info().builtin_catalog().unwrap().definitions;
+            let before = destination.clone();
+            assert!(
+                reconcile_declarations(&changed, &mut destination).is_err(),
+                "{key}, invalid view {invalid}"
+            );
+            assert_eq!(destination, before);
+            let mut empty = pb::Program::default();
+            assert!(
+                reconcile_declarations(&changed, &mut empty).is_err(),
+                "{key}, invalid first supply {invalid}"
+            );
+            assert_eq!(empty, pb::Program::default());
+        }
+    }
+}
+
+#[test]
 fn declaration_namespaces_coexist_with_defaults_and_frozen_resupply() {
     let mut source = pair_default_definition();
     source.sorts[1].kind = Some(pb::sort::Kind::Eq("Pair".into()));
