@@ -75,6 +75,12 @@ impl FreshGen<str, String> for SymbolGen {
                 .as_bytes()
                 .last()
                 .is_some_and(|b| !b.is_ascii_digit());
+        // Bare names never end in an ASCII digit; numbered names always do.
+        // For numbered names, remove the fixed prefix and trailing ASCII digits.
+        // The remaining stem needs a separator removed exactly when trimming its
+        // trailing underscores leaves it empty or ending in an ASCII digit.
+        // Removing only that separator recovers the hint, so distinct hints cannot
+        // collide; checked per-hint counters never repeat.
         let needs_separator = !omit_zero
             && name_hint
                 .trim_end_matches('_')
