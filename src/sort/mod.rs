@@ -163,6 +163,12 @@ pub trait Presort {
     fn builtin_definitions() -> Vec<proto::Program> {
         vec![]
     }
+    /// Runtime container representation, when independent of type arguments.
+    /// Derive this from `ContainerSort::Container`; it checks conversions before
+    /// any nominal instance exists, not the family's structural type arguments.
+    fn container_type() -> Option<TypeId> {
+        None
+    }
     fn make_sort(
         typeinfo: &mut TypeInfo,
         name: String,
@@ -172,6 +178,12 @@ pub trait Presort {
 }
 
 pub type MkSort = fn(&mut TypeInfo, String, &[Expr], Span) -> Result<ArcSort, TypeError>;
+
+#[derive(Clone)]
+pub(crate) struct PresortProvider {
+    pub make_sort: MkSort,
+    pub container_type: Option<TypeId>,
+}
 
 #[derive(Debug)]
 pub struct EqSort {

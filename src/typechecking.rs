@@ -206,7 +206,7 @@ impl Debug for PrimitiveWithId {
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
-    pub(crate) mksorts: HashMap<String, MkSort>,
+    pub(crate) mksorts: HashMap<String, PresortProvider>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
@@ -255,7 +255,7 @@ impl EGraph {
             None => Arc::new(EqSort { name }),
             Some((presort, args)) => {
                 if let Some(mksort) = self.type_info.mksorts.get(presort) {
-                    mksort(&mut self.type_info, name, args, span.clone())?
+                    (mksort.make_sort)(&mut self.type_info, name, args, span.clone())?
                 } else {
                     return Err(TypeError::PresortNotFound(presort.clone(), span));
                 }
@@ -728,7 +728,10 @@ impl TypeInfo {
         match self.mksorts.entry(name.to_owned()) {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
-                e.insert(S::make_sort);
+                e.insert(PresortProvider {
+                    make_sort: S::make_sort,
+                    container_type: S::container_type(),
+                });
                 self.reserved_primitives.extend(S::reserved_primitives());
                 for definition in S::builtin_definitions() {
                     for declaration in &definition.declarations {

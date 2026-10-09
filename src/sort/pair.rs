@@ -71,6 +71,10 @@ impl PairSort {
 }
 
 impl Presort for PairSort {
+    fn container_type() -> Option<TypeId> {
+        Some(TypeId::of::<<Self as ContainerSort>::Container>())
+    }
+
     fn builtin_definitions() -> Vec<proto::Program> {
         use proto as pb;
         [

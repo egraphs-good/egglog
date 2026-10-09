@@ -31,7 +31,14 @@ pub struct BuiltinCatalog {
 pub struct BuiltinInstance {
     pub(crate) definition: Arc<pb::Program>,
     pub(crate) dispatch_name: String,
-    sorts: Vec<ArcSort>,
+    sorts: Vec<NativeSortBinding>,
+}
+
+#[derive(Clone)]
+enum NativeSortBinding {
+    Exact(ArcSort),
+    // The pattern stays in definition.sorts. This is only its representation ABI.
+    Foreign(std::any::TypeId),
 }
 
 impl BuiltinInstance {
@@ -70,11 +77,22 @@ impl BuiltinInstance {
             .chain(signature.output);
         for (index, cast) in indices.zip(inputs.iter().copied().chain([output])) {
             if let Some((ty, container)) = cast {
-                let sort = &self.sorts[index as usize];
-                if sort.value_type() != Some(ty) || sort.is_container_sort() != container {
+                let (expected, is_container, name) = match &self.sorts[index as usize] {
+                    NativeSortBinding::Exact(sort) => {
+                        (sort.value_type(), sort.is_container_sort(), sort.name())
+                    }
+                    NativeSortBinding::Foreign(carrier) => {
+                        let Some(pb::sort::Kind::Family(family)) =
+                            &self.definition.sorts[index as usize].kind
+                        else {
+                            unreachable!()
+                        };
+                        (Some(*carrier), true, family.name.as_str())
+                    }
+                };
+                if expected != Some(ty) || is_container != container {
                     return Err(format!(
-                        "builtin implementation conversion disagrees with {}",
-                        sort.name()
+                        "builtin implementation conversion disagrees with {name}"
                     ));
                 }
             }
@@ -97,17 +115,10 @@ impl BuiltinInstance {
             unreachable!()
         };
         Box::new(InstanceConstraint {
-            fixed: signature
-                .inputs
-                .iter()
-                .map(|a| self.sorts[a.sort as usize].clone())
-                .collect(),
-            tail: signature
-                .varargs
-                .iter()
-                .map(|a| self.sorts[a.sort as usize].clone())
-                .collect(),
-            output: self.sorts[signature.output.unwrap() as usize].clone(),
+            instance: self.clone(),
+            fixed: signature.inputs.iter().map(|a| a.sort).collect(),
+            tail: signature.varargs.iter().map(|a| a.sort).collect(),
+            output: signature.output.unwrap(),
             name: declaration
                 .bindings
                 .as_ref()
@@ -118,12 +129,42 @@ impl BuiltinInstance {
             span: span.clone(),
         })
     }
+
+    /// Match nested provenance against the canonical pattern while retaining
+    /// exact nominal bindings for the owner and its type parameters.
+    fn matches_sort(&self, index: u32, native: &ArcSort, types: &TypeInfo) -> bool {
+        match &self.sorts[index as usize] {
+            NativeSortBinding::Exact(sort) => sort.name() == native.name(),
+            NativeSortBinding::Foreign(carrier) => {
+                let Some(pb::sort::Kind::Family(pattern)) =
+                    &self.definition.sorts[index as usize].kind
+                else {
+                    unreachable!()
+                };
+                native.is_container_sort()
+                    && native.value_type() == Some(*carrier)
+                    && types
+                        .builtin_sorts
+                        .get(native.name())
+                        .is_some_and(|(family, args)| {
+                            *family == pattern.name
+                                && args.len() == pattern.args.len()
+                                && pattern
+                                    .args
+                                    .iter()
+                                    .zip(args)
+                                    .all(|(index, arg)| self.matches_sort(*index, arg, types))
+                        })
+            }
+        }
+    }
 }
 
 struct InstanceConstraint {
-    fixed: Vec<ArcSort>,
-    tail: Vec<ArcSort>,
-    output: ArcSort,
+    instance: BuiltinInstance,
+    fixed: Vec<u32>,
+    tail: Vec<u32>,
+    output: u32,
     name: String,
     span: Span,
 }
@@ -137,7 +178,7 @@ impl TypeConstraint for InstanceConstraint {
         let mut sorts = self.fixed.clone();
         if !self.tail.is_empty() {
             // Native arguments include the result. Only complete input groups
-            // count; SimpleTypeConstraint rejects any missing prefix or remainder.
+            // count; reject any missing prefix or remainder below.
             let groups = arguments.len().saturating_sub(self.fixed.len() + 1) / self.tail.len();
             sorts.extend(
                 self.tail
@@ -147,8 +188,38 @@ impl TypeConstraint for InstanceConstraint {
                     .take(groups * self.tail.len()),
             );
         }
-        sorts.push(self.output.clone());
-        SimpleTypeConstraint::new(&self.name, sorts, self.span.clone()).get(arguments, typeinfo)
+        sorts.push(self.output);
+        if arguments.len() != sorts.len() {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: core::Atom {
+                        span: self.span.clone(),
+                        head: self.name.clone(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: sorts.len(),
+                },
+            )];
+        }
+        arguments
+            .iter()
+            .zip(sorts)
+            .map(
+                |(argument, index)| match &self.instance.sorts[index as usize] {
+                    NativeSortBinding::Exact(sort) => {
+                        constraint::assign(argument.clone(), sort.clone())
+                    }
+                    NativeSortBinding::Foreign(_) => constraint::xor(
+                        typeinfo
+                            .sorts
+                            .values()
+                            .filter(|sort| self.instance.matches_sort(index, sort, typeinfo))
+                            .map(|sort| constraint::assign(argument.clone(), sort.clone()))
+                            .collect(),
+                    ),
+                },
+            )
+            .collect()
     }
 }
 
@@ -612,6 +683,17 @@ impl TypeInfo {
                 sort.name()
             ));
         }
+        if let Some(carrier) = self
+            .mksorts
+            .get(family)
+            .and_then(|provider| provider.container_type)
+            && (!sort.is_container_sort() || sort.value_type() != Some(carrier))
+        {
+            return Err(format!(
+                "family instance {} disagrees with its provider representation",
+                sort.name()
+            ));
+        }
         self.builtin_sorts
             .insert(sort.name().into(), (family, parameters));
         Ok(())
@@ -690,8 +772,8 @@ impl TypeInfo {
             family: &str,
             parameters: &[ArcSort],
             native: &ArcSort,
-            resolved: &mut [Option<ArcSort>],
-        ) -> Result<ArcSort, String> {
+            resolved: &mut [Option<NativeSortBinding>],
+        ) -> Result<NativeSortBinding, String> {
             if let Some(sort) = &resolved[index] {
                 return Ok(sort.clone());
             }
@@ -700,14 +782,18 @@ impl TypeInfo {
                 .as_ref()
                 .ok_or("missing sort pattern")?
             {
-                pb::sort::Kind::Var(i) => parameters
-                    .get(*i as usize)
-                    .ok_or("unbound type parameter")?
-                    .clone(),
-                pb::sort::Kind::Family(f) if f.args.is_empty() => types
-                    .get_sort_by_name(&f.name)
-                    .ok_or("unknown scalar signature sort")?
-                    .clone(),
+                pb::sort::Kind::Var(i) => NativeSortBinding::Exact(
+                    parameters
+                        .get(*i as usize)
+                        .ok_or("unbound type parameter")?
+                        .clone(),
+                ),
+                pb::sort::Kind::Family(f) if f.args.is_empty() => NativeSortBinding::Exact(
+                    types
+                        .get_sort_by_name(&f.name)
+                        .ok_or("unknown scalar signature sort")?
+                        .clone(),
+                ),
                 pb::sort::Kind::Family(f) if f.name == family => {
                     let args = f
                         .args
@@ -724,15 +810,26 @@ impl TypeInfo {
                             )
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    if args
-                        .iter()
-                        .map(|s| s.name())
-                        .ne(parameters.iter().map(|s| s.name()))
+                    if args.len() != parameters.len() || !args.iter().zip(parameters).all(|(arg, parameter)| {
+                        matches!(arg, NativeSortBinding::Exact(sort) if sort.name() == parameter.name())
+                    })
                     {
                         return Err("signature family application differs from its instance".into());
                     }
-                    native.clone()
+                    NativeSortBinding::Exact(native.clone())
                 }
+                pb::sort::Kind::Family(f) => NativeSortBinding::Foreign(
+                    types
+                        .mksorts
+                        .get(&f.name)
+                        .and_then(|provider| provider.container_type)
+                        .ok_or_else(|| {
+                            format!(
+                                "foreign family {} has no native container representation",
+                                f.name
+                            )
+                        })?,
+                ),
                 _ => return Err("unsupported native signature pattern".into()),
             };
             resolved[index] = Some(sort.clone());

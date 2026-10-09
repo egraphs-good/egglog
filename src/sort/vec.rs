@@ -56,6 +56,10 @@ fn vec_term(termdag: &mut TermDag, children: Vec<TermId>) -> TermId {
 }
 
 impl Presort for VecSort {
+    fn container_type() -> Option<TypeId> {
+        Some(TypeId::of::<<Self as ContainerSort>::Container>())
+    }
+
     fn builtin_definitions() -> Vec<proto::Program> {
         use proto as pb;
         [
