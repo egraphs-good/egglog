@@ -8,7 +8,7 @@ pub(crate) fn desugar_command(
     command: Command,
     parser: &mut Parser,
     proof_testing: bool,
-) -> Result<Vec<NCommand>, Error> {
+) -> Result<Vec<(NCommand, ExecutionOrigin)>, Error> {
     let res = match command {
         Command::Function {
             span,
@@ -168,7 +168,7 @@ pub(crate) fn desugar_command(
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => {
             if proof_testing {
-                desugar_prove(parser, span.clone(), facts.clone())
+                return Ok(desugar_prove(parser, span, facts));
             } else {
                 vec![NCommand::Check(span, facts)]
             }
@@ -195,13 +195,13 @@ pub(crate) fn desugar_command(
             }
             let mut desugared = desugar_command(*cmd, parser, proof_testing)?;
 
-            let Some(last) = desugared.pop() else {
+            let Some((last, origin)) = desugared.pop() else {
                 return Err(Error::DesugarError(
                     span.clone(),
                     "the command inside (fail ...) expands to no commands".to_string(),
                 ));
             };
-            desugared.push(NCommand::Fail(span, Box::new(last)));
+            desugared.push((NCommand::Fail(span, Box::new(last)), origin));
             return Ok(desugared);
         }
         Command::Input { span, name, file } => {
@@ -210,13 +210,16 @@ pub(crate) fn desugar_command(
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
-        Command::Prove(span, query) => desugar_prove(parser, span, query),
+        Command::Prove(span, query) => return Ok(desugar_prove(parser, span, query)),
         Command::ProveExists(span, constructor) => {
             vec![NCommand::ProveExists(span, constructor)]
         }
     };
 
-    Ok(res)
+    Ok(res
+        .into_iter()
+        .map(|command| (command, ExecutionOrigin::Requested))
+        .collect())
 }
 
 enum RuleLikeCommand<'a> {
@@ -263,12 +266,16 @@ impl std::fmt::Display for RuleLikeCommand<'_> {
 /// ```
 /// This creates a fresh constructor that can only be created if the query holds.
 /// Then `prove-exists` extracts a proof that the constructor exists.
-fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NCommand> {
+fn desugar_prove(
+    parser: &mut Parser,
+    span: Span,
+    query: Vec<Fact>,
+) -> Vec<(NCommand, ExecutionOrigin)> {
     let fresh_sort = parser.symbol_gen.fresh("ExistsSort");
     let constructor_name = parser.symbol_gen.fresh("ExistsConstructor");
     let ruleset = parser.symbol_gen.fresh("exists");
     let name = parser.symbol_gen.fresh("prove_exists_rule");
-    vec![
+    let mut commands = vec![
         NCommand::Sort {
             span: span.clone(),
             name: fresh_sort.clone(),
@@ -317,7 +324,13 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
         )),
         // get a proof for the constructor
         NCommand::ProveExists(span, constructor_name),
-    ]
+    ];
+    let anchor = commands.pop().unwrap();
+    commands
+        .into_iter()
+        .map(|command| (command, ExecutionOrigin::Internal))
+        .chain([(anchor, ExecutionOrigin::Requested)])
+        .collect()
 }
 
 fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {

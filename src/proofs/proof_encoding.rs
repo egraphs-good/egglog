@@ -64,8 +64,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
-        program: Vec<ResolvedNCommand>,
-    ) -> Vec<Command> {
+        program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
+    ) -> Vec<(Command, ExecutionOrigin)> {
         Self { egraph }.add_term_encoding_helper(program)
     }
 
@@ -1669,21 +1669,35 @@ impl<'a> ProofInstrumentor<'a> {
 
     pub(crate) fn add_term_encoding_helper(
         &mut self,
-        program: Vec<ResolvedNCommand>,
-    ) -> Vec<Command> {
+        program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
+    ) -> Vec<(Command, ExecutionOrigin)> {
         let mut res = vec![];
 
         if !self.egraph.proof_state.term_header_added {
             res.extend(self.term_header());
             if self.egraph.proof_state.proofs_enabled {
                 let proof_header = self.proof_header();
-                res.extend(self.parse_program(&proof_header));
+                res.extend(
+                    self.parse_program(&proof_header)
+                        .into_iter()
+                        .map(|command| (command, ExecutionOrigin::Internal)),
+                );
             }
             self.egraph.proof_state.term_header_added = true;
         }
 
-        for command in program {
-            self.term_encode_command(&command, &mut res);
+        for (command, origin) in program {
+            let mut encoded = vec![];
+            self.term_encode_command(&command, &mut encoded);
+            // Each transformation places the requested command's completion
+            // anchor last. Setup is internal; trailing rebuilding stays later.
+            let anchor = encoded.pop();
+            res.extend(
+                encoded
+                    .into_iter()
+                    .map(|command| (command, ExecutionOrigin::Internal)),
+            );
+            res.extend(anchor.map(|command| (command, origin)));
 
             // run rebuilding after every command except a few
             if let ResolvedNCommand::Function(..)
@@ -1691,7 +1705,10 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
-                res.push(Command::RunSchedule(self.rebuild()));
+                res.push((
+                    Command::RunSchedule(self.rebuild()),
+                    ExecutionOrigin::Internal,
+                ));
             }
         }
 

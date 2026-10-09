@@ -457,11 +457,11 @@ impl EGraph {
 impl EGraph {
     pub(crate) fn typecheck_program(
         &mut self,
-        program: &Vec<NCommand>,
-    ) -> Result<Vec<ResolvedNCommand>, TypeError> {
+        program: &[(NCommand, ExecutionOrigin)],
+    ) -> Result<Vec<(ResolvedNCommand, ExecutionOrigin)>, TypeError> {
         let mut result = vec![];
-        for command in program {
-            result.push(self.typecheck_command(command)?);
+        for (command, origin) in program {
+            result.push((self.typecheck_command(command)?, *origin));
         }
         Ok(result)
     }

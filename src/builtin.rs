@@ -782,6 +782,39 @@ impl TypeInfo {
 }
 
 impl EGraph {
+    /// Select an annotated builtin call in the captured authoring environment.
+    ///
+    /// `native_sort_names` lists the argument sorts followed by the result sort.
+    /// Names are bound to this compiler's registered sorts before the existing
+    /// canonical definition checks and exact-instance selection. This also works
+    /// after nonexecuting resolution, when the physical graph has not installed
+    /// the declarations or has proof-instrumented signatures. No body or validator
+    /// is invoked, and no mutable type environment escapes.
+    pub fn resolve_builtin_call(
+        &self,
+        program: &pb::Program,
+        name: &str,
+        arguments: &[u32],
+        output: u32,
+        native_sort_names: &[&str],
+    ) -> Result<String, String> {
+        let types = self
+            .proof_state
+            .original_typechecking
+            .as_ref()
+            .map_or(&self.type_info, |original| &original.type_info);
+        let sorts = native_sort_names
+            .iter()
+            .map(|name| {
+                types
+                    .get_sort_by_name(name)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown authoring sort {name}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        types.resolve_builtin(program, name, arguments, output, &sorts)
+    }
+
     /// Exports structural sorts from registered family provenance, never from a
     /// native alias spelling or Rust value TypeId. Equality sorts stay nominal.
     pub fn export_sort(

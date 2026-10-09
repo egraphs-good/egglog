@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, TypeInfo,
+    EGraph, ExecutionOrigin, TypeInfo,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, ResolvedFact, Schedule,
@@ -149,7 +149,7 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Header commands for term encoding, setting up rulesets.
-    pub(crate) fn term_header(&mut self) -> Vec<Command> {
+    pub(crate) fn term_header(&mut self) -> Vec<(Command, ExecutionOrigin)> {
         let str = format!(
             "(ruleset {})
              (ruleset {})
@@ -165,6 +165,9 @@ impl ProofInstrumentor<'_> {
             self.proof_names().delete_subsume_ruleset_name
         );
         self.parse_program(&str)
+            .into_iter()
+            .map(|command| (command, ExecutionOrigin::Internal))
+            .collect()
     }
 
     /// Internal parse helper for term encoding- parse and crash on failure.

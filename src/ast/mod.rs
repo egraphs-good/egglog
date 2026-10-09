@@ -69,9 +69,9 @@ pub(crate) struct CompiledRule {
 #[derive(Clone, Debug)]
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
-    Rules(IndexMap<String, CompiledRule>),
+    Rules(IndexMap<String, CompiledRule>, crate::ExecutionOrigin),
     /// A combined ruleset may contain other rulesets.
-    Combined(Vec<String>),
+    Combined(Vec<String>, crate::ExecutionOrigin),
 }
 
 pub type NCommand = GenericNCommand<String, String>;

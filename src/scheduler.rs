@@ -254,12 +254,12 @@ impl EGraph {
                 return Err(Error::BackendError(format!("no such ruleset: {ruleset}")));
             };
             match r {
-                Ruleset::Rules(rules) => {
+                Ruleset::Rules(rules, _) => {
                     for (rule_name, rule) in rules.iter() {
                         ids.push((rule_name.clone(), rule));
                     }
                 }
-                Ruleset::Combined(sub_rulesets) => {
+                Ruleset::Combined(sub_rulesets, _) => {
                     for sub_ruleset in sub_rulesets {
                         collect_rules(sub_ruleset, rulesets, ids)?;
                     }

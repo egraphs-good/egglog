@@ -6,6 +6,95 @@ use std::sync::{
 };
 
 #[test]
+fn annotated_builtins_resolve_in_the_nonexecuting_authoring_context() {
+    use ast::{Action, Command, Expr, Literal};
+    for mode in 0..4 {
+        let mut graph = match mode {
+            0 => EGraph::default(),
+            1 => EGraph::new_with_term_encoding(),
+            2 => EGraph::new_with_proofs(),
+            _ => EGraph::new_with_proofs().with_proof_testing(),
+        };
+        let declarations = graph
+            .parse_program(None, "(sort V (Vec i64)) (relation Values (V))")
+            .unwrap();
+        for declaration in declarations {
+            graph.resolve_command_before_proofs(declaration).unwrap();
+        }
+        // The logical sort exists, while the encoded runtime has not installed
+        // this family instance. Selecting only from runtime TypeInfo cannot work.
+        assert_eq!(graph.get_sort_by_name("V").is_none(), mode > 0);
+        let program = proto::Program {
+            ir_version: 1,
+            sorts: vec![
+                proto::Sort {
+                    kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                        name: "i64".into(),
+                        args: vec![],
+                    })),
+                    ..Default::default()
+                },
+                proto::Sort {
+                    kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                        name: "Vec".into(),
+                        args: vec![0],
+                    })),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let add = graph
+            .resolve_builtin_call(
+                &program,
+                "egglog.core.i64.add",
+                &[0, 0],
+                0,
+                &["i64", "i64", "i64"],
+            )
+            .unwrap();
+        let empty = graph
+            .resolve_builtin_call(&program, "egglog.core.vec.empty", &[], 1, &["V"])
+            .unwrap();
+        let span = ast::Span::Panic;
+        let plus = Expr::Call(
+            span.clone(),
+            add,
+            vec![
+                Expr::Lit(span.clone(), Literal::Int(1)),
+                Expr::Lit(span.clone(), Literal::Int(2)),
+            ],
+        );
+        graph
+            .resolve_command_before_proofs(Command::Action(Action::Expr(span.clone(), plus)))
+            .unwrap();
+        let empty = Expr::Call(
+            span.clone(),
+            "Values".into(),
+            vec![Expr::Call(span.clone(), empty, vec![])],
+        );
+        graph
+            .resolve_command_before_proofs(Command::Action(Action::Expr(span, empty)))
+            .unwrap();
+        assert!(
+            graph
+                .resolve_builtin_call(&program, "egglog.core.i64.add", &[0], 0, &["i64", "i64"])
+                .is_err()
+        );
+        assert!(
+            graph
+                .resolve_builtin_call(&program, "egglog.core.vec.empty", &[], 1, &["i64"])
+                .is_err()
+        );
+        assert!(
+            graph
+                .resolve_builtin_call(&program, "egglog.core.vec.empty", &[], 1, &["missing"])
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn flat_map_export_packs_existing_refs_without_native_pair_vec_aliases() {
     let mut graph = EGraph::default();
     graph

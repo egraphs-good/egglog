@@ -42,6 +42,95 @@ impl PurePrim for ProofIdentity {
 }
 
 #[test]
+fn compile_only_validation_registers_and_compiles_without_execution() {
+    for mode in 0..4 {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let validations = Arc::new(AtomicUsize::new(0));
+        let counted_validations = validations.clone();
+        let mut graph = EGraph::default();
+        graph.add_pure_primitive(
+            ProofIdentity(calls.clone()),
+            Some(Arc::new(move |_, args| {
+                counted_validations.fetch_add(1, Ordering::SeqCst);
+                args.first().copied()
+            })),
+        );
+        let mut graph = match mode {
+            0 => graph,
+            1 => graph.with_term_encoding_enabled(),
+            2 => graph.with_proofs_enabled(),
+            _ => graph.with_proofs_enabled().with_proof_testing(),
+        };
+        graph
+            .parse_and_run_program(None, "(datatype Num (N i64)) (N 1)")
+            .unwrap();
+        let source = "
+            (ruleset fresh)
+            (constructor Goal (i64) Num)
+            (function score () i64 :merge (+ old new))
+            (rule ((N x) (= y (proof-identity x))) ((Goal y)) :ruleset fresh)
+            (N (proof-identity 9))
+            (run fresh 1)
+            (prove (N 1))
+        ";
+        for suffix in [
+            "(unknown)",
+            "(prove-exists missing)",
+            "(prove-exists score)",
+            "",
+        ] {
+            let program = graph
+                .parse_program(None, &format!("{source} {suffix}"))
+                .unwrap();
+            let result = graph.validate_program(program);
+            assert_eq!(result.is_ok(), suffix.is_empty(), "mode {mode}: {result:?}");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(validations.load(Ordering::SeqCst), 0);
+            assert!(graph.get_function("Goal").is_none());
+            let run = graph.parse_program(None, "(run fresh 1)").unwrap();
+            assert!(
+                matches!(graph.validate_program(run), Err(Error::NoSuchRuleset(name, _)) if name == "fresh")
+            );
+        }
+        let ungrounded = graph
+            .parse_program(
+                None,
+                "
+            (ruleset fresh)
+            (rule ((= (proof-identity x) 1)) ((N x)) :ruleset fresh)
+        ",
+            )
+            .unwrap();
+        let mut resolve_only = graph.clone();
+        for command in ungrounded.clone() {
+            resolve_only.resolve_command_before_proofs(command).unwrap();
+        }
+        let error = graph.validate_program(ungrounded).unwrap_err();
+        assert!(
+            matches!(error, Error::TypeError(egglog::TypeError::Ungrounded(_, _))),
+            "{error}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(validations.load(Ordering::SeqCst), 0);
+        // The live graph still installs exactly the same definitions and IDs
+        // afresh, and the previously validated action really runs only now.
+        let result = graph.parse_and_run_program(None, source);
+        if mode >= 2 {
+            result.unwrap();
+        } else {
+            assert!(matches!(
+                result,
+                Err(Error::ProofError {
+                    error: ProveExistsError::ProofsNotEnabled,
+                    ..
+                })
+            ));
+        }
+        assert!(calls.load(Ordering::SeqCst) > 0);
+    }
+}
+
+#[test]
 fn canonical_map_scalar_source_equivalence_proofs() {
     for mode in ["terms", "proofs", "proof-testing"] {
         for constructor in ["(map-of 1 7)", "(map-from-pairs (vec-of (pair 1 7)))"] {
