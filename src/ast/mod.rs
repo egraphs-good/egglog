@@ -1647,6 +1647,9 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
         if !ruleset.is_empty() {
             write!(f, " :ruleset {ruleset}")?;
         }
+        if !self.name.is_empty() {
+            write!(f, " :name {}", Literal::String(self.name.clone()))?;
+        }
         write!(f, ")")
     }
 }

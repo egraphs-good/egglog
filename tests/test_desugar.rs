@@ -42,6 +42,72 @@ fn rule_names_are_stable() {
 }
 
 #[test]
+fn rule_labels_survive_source_display_and_resolution() {
+    use egglog::ast::Command;
+    for (option, expected) in [
+        ("", ""),
+        (r#":name """#, ""),
+        (r#":name "named""#, "named"),
+        (
+            ":name \"quote\\\"slash\\\\line\nnext\"",
+            "quote\"slash\\line\nnext",
+        ),
+    ] {
+        for body in [
+            "rule ((= x (Wrap (Var \"x\")))) ((union x (Var \"x\")))",
+            "rewrite (Wrap (Var \"x\")) (Var \"x\") :subsume :when ((= (Var \"x\") (Var \"x\")))",
+            "birewrite (Wrap (Var \"x\")) (Var \"x\") :when ((= (Var \"x\") (Var \"x\")))",
+        ] {
+            let source = format!(
+                "(datatype Math (Var String) (Wrap Math)) (ruleset r) ({body} :ruleset r {option})"
+            );
+            let parsed = EGraph::default().parse_program(None, &source).unwrap();
+            let rendered = parsed
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let reparsed = EGraph::default().parse_program(None, &rendered).unwrap();
+            for commands in [&parsed, &reparsed] {
+                let name = match commands.last().unwrap() {
+                    Command::Rule { rule } => &rule.name,
+                    Command::Rewrite(_, rewrite, _) | Command::BiRewrite(_, rewrite) => {
+                        &rewrite.name
+                    }
+                    other => panic!("unexpected {other:?}"),
+                };
+                assert_eq!(name, expected, "{source}\nrendered: {rendered}");
+            }
+            let names: Vec<Vec<_>> = [&source, &rendered]
+                .into_iter()
+                .map(|text| {
+                    EGraph::default()
+                        .resolve_program(None, text)
+                        .unwrap()
+                        .into_iter()
+                        .filter_map(|command| match command {
+                            egglog::ast::GenericCommand::Rule { rule } => Some(rule.name),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .collect();
+            assert_eq!(names[0], names[1], "{source}\nrendered: {rendered}");
+            if !expected.is_empty() {
+                assert_eq!(
+                    names[0],
+                    if body.starts_with("birewrite") {
+                        vec![format!("{expected}=>"), format!("{expected}<=")]
+                    } else {
+                        vec![expected.to_owned()]
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn test_desugar_includes() {
     let mut egraph = EGraph::default();
 
