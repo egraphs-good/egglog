@@ -6,6 +6,143 @@ use std::sync::{
 };
 
 #[test]
+fn exact_integer_families_and_constructors_use_actual_native_providers() {
+    let mut graph = EGraph::default();
+    assert!(graph.get_sort_by_name("Rational").is_none());
+    let catalog = graph.type_info().builtin_catalog().unwrap();
+    assert!(!catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name.starts_with("egglog.experimental.rational."))));
+    for name in ["BigInt", "BigRat"] {
+        let family = catalog
+            .definitions
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == name => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(family.arity, 0);
+        let bindings = family.bindings.as_ref().unwrap();
+        assert_eq!(
+            bindings.python.as_ref().unwrap().path,
+            ["egglog", "builtins", name]
+        );
+        assert_eq!(
+            bindings.rust.as_ref().unwrap().path,
+            ["egglog_experimental", "typed", "builtins", name]
+        );
+    }
+    for (key, alias, inputs, output, python_kind, python_path, rust_path) in [
+        (
+            "egglog.core.bigint.from_i64",
+            "bigint",
+            &["i64"][..],
+            "BigInt",
+            proto::PythonCallKind::Initializer,
+            &[][..],
+            "new",
+        ),
+        (
+            "egglog.core.bigint.from_string",
+            "from-string",
+            &["String"][..],
+            "BigInt",
+            proto::PythonCallKind::ClassMethod,
+            &["from_string"][..],
+            "from_string",
+        ),
+        (
+            "egglog.core.bigrat.make",
+            "bigrat",
+            &["BigInt", "BigInt"][..],
+            "BigRat",
+            proto::PythonCallKind::Initializer,
+            &[][..],
+            "new",
+        ),
+    ] {
+        let d = catalog.definitions.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == key)).unwrap();
+        let Some(proto::declaration::Kind::HostPrimitive(p)) = &d.kind else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(s)) = &p.typing else {
+            unreachable!()
+        };
+        assert!(s.type_params.is_empty() && s.varargs.is_empty());
+        assert_eq!(s.inputs.len(), inputs.len());
+        for (sort, name) in s
+            .inputs
+            .iter()
+            .map(|arg| arg.sort)
+            .chain(s.output)
+            .zip(inputs.iter().copied().chain([output]))
+        {
+            assert!(
+                matches!(&catalog.definitions.sorts[sort as usize].kind, Some(proto::sort::Kind::Family(f)) if f.name == name && f.args.is_empty())
+            );
+        }
+        let b = d.bindings.as_ref().unwrap();
+        assert_eq!(b.egglog.as_ref().unwrap().views[0].symbol, alias);
+        let py = &b.python.as_ref().unwrap().views[0];
+        let rs = &b.rust.as_ref().unwrap().views[0];
+        assert_eq!(py.kind, i32::from(python_kind));
+        assert_eq!(py.path, python_path);
+        assert_eq!(rs.path, [rust_path]);
+        assert_eq!(
+            py.owner.as_ref().unwrap().kind,
+            Some(proto::binding_owner::Kind::Sort(s.output.unwrap()))
+        );
+        assert_eq!(rs.owner, py.owner);
+        assert_eq!(py.receiver, None);
+        assert_eq!(rs.receiver, None);
+        assert_eq!(
+            py.params
+                .iter()
+                .map(|p| p.core_input.unwrap())
+                .collect::<Vec<_>>(),
+            (0..inputs.len() as u32).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rs.params
+                .iter()
+                .map(|p| p.core_input.unwrap())
+                .collect::<Vec<_>>(),
+            (0..inputs.len() as u32).collect::<Vec<_>>()
+        );
+        let sorts = inputs
+            .iter()
+            .chain([&output])
+            .map(|name| graph.get_sort_by_name(name).unwrap().clone())
+            .collect::<Vec<_>>();
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let ResolvedCall::Primitive(alias) = ResolvedCall::from_resolution(
+                alias,
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            let ResolvedCall::Primitive(canonical) = ResolvedCall::from_resolution(
+                key,
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            assert_eq!(alias, canonical); // same concrete sorts and native context IDs
+            assert!(alias.validator().is_none() && canonical.validator().is_none());
+        }
+    }
+    graph.parse_and_run_program(None, "(check (= (bigint 7) (from-string \"7\"))) (check (= (bigrat (bigint 2) (bigint -4)) (bigrat (bigint -1) (bigint 2)))) (fail (from-string \"not-an-integer\")) (fail (bigrat (bigint 1) (bigint 0)))").unwrap();
+}
+
+#[test]
 fn annotated_builtins_resolve_in_the_nonexecuting_authoring_context() {
     use ast::{Action, Command, Expr, Literal};
     for mode in 0..4 {
@@ -1235,24 +1372,24 @@ fn authoritative_family_exports_without_a_described_callable() {
     graph
         .type_info()
         .register_builtin_family(proto::HostSortFamily {
-            name: "BigRat".into(),
-            arity: 0,
+            name: "Set".into(),
+            arity: 1,
             bindings: Some(proto::SortBindings {
                 python: Some(proto::TypeBinding {
-                    path: vec!["test".into(), "BigRat".into()],
-                    ..Default::default()
+                    path: vec!["test".into(), "Set".into()],
+                    type_params: vec!["T".into()],
                 }),
                 ..Default::default()
             }),
         })
         .unwrap();
     let catalog = graph.type_info().builtin_catalog().unwrap();
-    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "BigRat" && f.bindings.is_some())));
+    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Set" && f.bindings.is_some())));
     assert!(
         !catalog
-            .undescribed_sorts
+            .undescribed_families
             .iter()
-            .any(|name| name == "BigRat")
+            .any(|name| name == "Set")
     );
 }
 
@@ -1400,12 +1537,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             .iter()
             .any(|name| name == "Set")
     );
-    assert!(
-        catalog
-            .undescribed_sorts
-            .iter()
-            .any(|name| name == "BigRat")
-    );
+    assert!(catalog.undescribed_sorts.is_empty());
     let keys = catalog
         .definitions
         .declarations
@@ -1420,6 +1552,9 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
     assert_eq!(
         keys,
         [
+            "egglog.core.bigint.from_i64",
+            "egglog.core.bigint.from_string",
+            "egglog.core.bigrat.make",
             "egglog.core.bool.and",
             "egglog.core.bool.implies",
             "egglog.core.bool.not",

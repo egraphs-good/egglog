@@ -19,6 +19,14 @@ impl BaseSort for BigRatSort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
+        eg.type_info().register_builtin_family(crate::proto::HostSortFamily {
+            name: "BigRat".into(), arity: 0,
+            bindings: Some(crate::proto::SortBindings {
+                python: Some(crate::proto::TypeBinding { path: vec!["egglog".into(), "builtins".into(), "BigRat".into()], type_params: vec![] }),
+                rust: Some(crate::proto::TypeBinding { path: vec!["egglog_experimental".into(), "typed".into(), "builtins".into(), "BigRat".into()], type_params: vec![] }),
+                ..Default::default()
+            }),
+        }).expect("invalid BigRat family presentation");
         add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b).map(Q::new) });
         add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b).map(Q::new) });
         add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b).map(Q::new) });
@@ -32,7 +40,23 @@ impl BaseSort for BigRatSort {
         add_primitive!(eg, "ceil" = |a: Q| -> Q { Q::new(a.0.ceil()) });
         add_primitive!(eg, "round" = |a: Q| -> Q { Q::new(a.round()) });
 
-        add_primitive!(eg, "bigrat" = |a: Z, b: Z| -?> Q { (!b.0.is_zero()).then(|| Q::new(BigRational::new(a.0, b.0))) });
+        add_primitive!(eg, "bigrat" [id = "egglog.core.bigrat.make", bindings = |s: &crate::proto::GenericSignature| {
+            use crate::proto as pb;
+            let owner = Some(pb::BindingOwner { kind: Some(pb::binding_owner::Kind::Sort(s.output.unwrap())) });
+            pb::CallableBindings {
+                python: Some(pb::PythonBindings { views: vec![pb::PythonCallable {
+                    kind: pb::PythonCallKind::Initializer.into(), owner,
+                    params: ["num", "den"].iter().enumerate().map(|(i, name)| pb::PythonParameter { core_input: Some(i as u32), name: (*name).into(), default_expr: None }).collect(),
+                    ..Default::default()
+                }] }),
+                rust: Some(pb::RustBindings { views: vec![pb::RustCallable {
+                    path: vec!["new".into()], owner,
+                    params: ["num", "den"].iter().enumerate().map(|(i, name)| pb::RustParameter { core_input: Some(i as u32), name: (*name).into(), borrowed: false }).collect(),
+                    ..Default::default()
+                }] }),
+                ..Default::default()
+            }
+        }] = |a: Z, b: Z| -?> Q { (!b.0.is_zero()).then(|| Q::new(BigRational::new(a.0, b.0))) });
         add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new(a.numer().clone()) });
         add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new(a.denom().clone()) });
         add_primitive!(eg, "to-f64" = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
