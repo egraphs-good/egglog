@@ -63,6 +63,54 @@ impl SpecializedPrimitive {
         crate::builtin::import_definition(definition, destination)
     }
 
+    /// Composes a canonical call from valid, already-lowered child closures.
+    /// Checks direct refs and their closed structural annotations against this
+    /// specialization, using its originating coherent graph. This does not
+    /// validate entire child closures or recover erased nominal alias identity.
+    /// On error the caller must discard the incomplete source phase.
+    pub fn export_builtin_call(
+        &self,
+        graph: &EGraph,
+        args: &[u32],
+        span: Option<proto::Span>,
+        destination: &mut proto::Program,
+    ) -> Result<proto::Call, String> {
+        if args.len() != self.input.len() {
+            return Err("resolved builtin call arity mismatch".into());
+        }
+        let mut normalized = vec![];
+        for (arg, expected) in args.iter().zip(&self.input) {
+            let node = destination
+                .nodes
+                .get(*arg as usize)
+                .ok_or("builtin argument out of bounds")?;
+            let actual = builtin::import_sort(&destination.sorts, node.sort_id, &mut normalized)?;
+            if actual != graph.export_sort(expected, &mut normalized)? {
+                return Err("builtin argument annotation differs from resolved sort".into());
+            }
+        }
+        let output = graph.export_sort(&self.output, &mut destination.sorts)?;
+        if let Some(call) = self.prim_with_id.primitive.lower_builtin_call(
+            &graph.type_info,
+            args,
+            output,
+            span,
+            destination,
+        )? {
+            return Ok(call);
+        }
+        // Preserve the exact registration before enriching authoritative family
+        // presentation; a stale registration must not silently export by key.
+        let func = self.export_builtin(destination)?;
+        graph
+            .type_info
+            .export_builtin_definition(&func, destination)?;
+        Ok(proto::Call {
+            func,
+            args: args.to_vec(),
+        })
+    }
+
     /// Get the name of this primitive
     pub fn name(&self) -> &str {
         self.prim_with_id.primitive.name()

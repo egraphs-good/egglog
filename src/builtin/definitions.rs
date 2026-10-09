@@ -780,6 +780,34 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                         })?;
                         continue;
                     }
+                    V::Map(v) => {
+                        let Some(pb::sort::Kind::Family(f)) = &p.sorts[n.sort_id as usize].kind
+                        else {
+                            return Err("default Map sort mismatch".into());
+                        };
+                        if f.name != "Map" || f.args.len() != 2 {
+                            return Err("default Map sort mismatch".into());
+                        }
+                        for entry in &v.entries {
+                            for (member, expected) in
+                                [entry.key, entry.value].into_iter().zip(&f.args)
+                            {
+                                if p.nodes
+                                    .get(member.ok_or("missing default Map child")? as usize)
+                                    .ok_or("default Map child out of bounds")?
+                                    .sort_id
+                                    != *expected
+                                {
+                                    return Err("default Map child sort mismatch".into());
+                                }
+                            }
+                        }
+                        node_edges(&mut kind, |i| {
+                            pending.push(*i);
+                            Ok(())
+                        })?;
+                        continue;
+                    }
                     V::Pair(v) => {
                         let Some(pb::sort::Kind::Family(f)) = &p.sorts[n.sort_id as usize].kind
                         else {

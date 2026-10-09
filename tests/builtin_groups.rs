@@ -8,6 +8,34 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+// Reuse actual Map storage without installing Map's own provenance/primitives
+// for these distinct test providers. Their canonical signatures stay independent.
+#[derive(Debug)]
+struct FixtureMap(ArcSort);
+impl sort::Sort for FixtureMap {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> sort::ColumnTy {
+        self.0.column_ty(backend)
+    }
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        self.0.inner_sorts()
+    }
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        self.0.register_type(backend)
+    }
+    fn as_arc_any(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+    fn is_container_sort(&self) -> bool {
+        true
+    }
+    fn value_type(&self) -> Option<TypeId> {
+        self.0.value_type()
+    }
+}
+
 // Test-only native family: reuse Map storage, not its handwritten constraints.
 // Production Map registration and catalog definitions remain untouched.
 struct Grouped;
@@ -106,7 +134,8 @@ impl Presort for Grouped {
         args: &[ast::Expr],
         span: ast::Span,
     ) -> Result<ArcSort, TypeError> {
-        let native = MapSort::make_sort(types, name, args, span)?;
+        let native: ArcSort =
+            std::sync::Arc::new(FixtureMap(MapSort::make_sort(types, name, args, span)?));
         types
             .register_builtin_sort(Self::presort_name(), native.clone(), native.inner_sorts())
             .unwrap();
@@ -188,7 +217,8 @@ impl<const INPUT: u32, const SWAP: bool> Presort for Foreign<INPUT, SWAP> {
         args: &[ast::Expr],
         span: ast::Span,
     ) -> Result<ArcSort, TypeError> {
-        let native = MapSort::make_sort(types, name, args, span)?;
+        let native: ArcSort =
+            std::sync::Arc::new(FixtureMap(MapSort::make_sort(types, name, args, span)?));
         types
             .register_builtin_sort(Self::presort_name(), native.clone(), native.inner_sorts())
             .unwrap();
@@ -269,14 +299,18 @@ fn foreign_computed_aliases_resolve_in_both_declaration_orders() {
             if !owner_first {
                 graph.parse_and_run_program(None, aliases).unwrap();
             }
-            graph.parse_and_run_program(None, "(sort G (TestForeign i64 f64)) (function seed () G :merge new) (set (seed) (map-empty))").unwrap();
+            graph.parse_and_run_program(None, "(sort G (TestForeign i64 f64)) (function seed () G :merge new) (sort SeedMap (Map i64 f64)) (function raw-seed () SeedMap :merge new) (set (raw-seed) (map-empty))").unwrap();
             let native = graph.get_sort_by_name("G").unwrap().clone();
             let instance = graph
                 .type_info()
                 .instantiate_builtin("test.foreign", &native)
                 .unwrap();
             let (_, seed) = graph
-                .eval_expr(&ast::Expr::Call(ast::Span::Panic, "seed".into(), vec![]))
+                .eval_expr(&ast::Expr::Call(
+                    ast::Span::Panic,
+                    "raw-seed".into(),
+                    vec![],
+                ))
                 .unwrap();
             let seed = graph
                 .value_to_container::<MapContainer>(seed)
@@ -299,6 +333,7 @@ fn foreign_computed_aliases_resolve_in_both_declaration_orders() {
                 (function b () B :merge new)
                 (set (a) (vec-of (pair 1 2.0)))
                 (set (b) (vec-of (pair 3 4.0) (pair 5 6.0)))
+                (set (seed) (foreign (a)))
                 (check (= (foreign (a)) (seed)))
                 (check (= (foreign (b)) (seed)))
                 (set (a) (vec-empty))

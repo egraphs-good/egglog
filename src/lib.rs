@@ -119,6 +119,22 @@ pub trait Primitive: Send + Sync + 'static {
     fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
         None
     }
+
+    /// Lowers a resolved source-only facade using already-lowered argument refs.
+    /// Implementations may import definitions and append helper nodes, but must
+    /// not execute native bodies, validators, queries, or sort providers. `None`
+    /// must leave the destination unchanged. On error the caller discards the
+    /// incomplete source phase; this interface does not promise rollback.
+    fn lower_builtin_call(
+        &self,
+        _types: &TypeInfo,
+        _args: &[u32],
+        _output: u32,
+        _span: Option<proto::Span>,
+        _destination: &mut proto::Program,
+    ) -> Result<Option<proto::Call>, String> {
+        Ok(None)
+    }
 }
 
 /// A primitive whose body sees a [`PureState`]. Register via
@@ -452,12 +468,12 @@ impl Default for EGraph {
         add_base_sort(&mut eg, F64Sort, span!()).unwrap();
         add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
         add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
-        eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
         eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
         eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
         eg.type_info.add_presort::<PairSort>(span!()).unwrap();
+        eg.type_info.add_presort::<MapSort>(span!()).unwrap();
 
         // Add != with a validator that computes inequality result
         let neq_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {

@@ -6,7 +6,444 @@ use std::sync::{
 };
 
 #[test]
-fn vec_catalog_has_generic_rust_views_without_python_views() {
+fn flat_map_export_packs_existing_refs_without_native_pair_vec_aliases() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(
+            None,
+            "(datatype Pair (Z)) (sort Vec) (sort Map) (sort M (Map Pair Pair))",
+        )
+        .unwrap();
+    let n = graph.get_sort_by_name("Pair").unwrap().clone();
+    let m = graph.get_sort_by_name("M").unwrap().clone();
+    for count in [0, 1, 3] {
+        let mut sorts = vec![n.clone(); count * 2];
+        sorts.push(m.clone());
+        let ResolvedCall::Primitive(primitive) = ResolvedCall::from_resolution(
+            "map-of",
+            &sorts,
+            graph.type_info(),
+            Context::Pure,
+            &ast::Span::Panic,
+        )
+        .unwrap() else {
+            panic!("primitive")
+        };
+        let mut program = proto::Program {
+            ir_version: 1,
+            files: vec![proto::SourceFile {
+                name: "map.egg".into(),
+                contents: None,
+            }],
+            ..Default::default()
+        };
+        assert!(primitive.export_builtin(&mut program).is_err());
+        let sort_id = graph.export_sort(&n, &mut program.sorts).unwrap();
+        for offset in [0, 2] {
+            program.nodes.push(proto::Node {
+                sort_id,
+                kind: Some(proto::node::Kind::Union(proto::Union::default())),
+                span: Some(proto::Span {
+                    file: 0,
+                    start: offset,
+                    end: offset + 1,
+                }),
+            });
+        }
+        let original = program.nodes.clone();
+        let args = [0, 1, 0, 0, 1, 0][..count * 2].to_vec();
+        let span = Some(proto::Span {
+            file: 0,
+            start: 0,
+            end: 10,
+        });
+        let call = primitive
+            .export_builtin_call(&graph, &args, span, &mut program)
+            .unwrap();
+        assert_eq!(call.func, "egglog.core.map.of");
+        assert_eq!(call.args.len(), 1);
+        assert_eq!(&program.nodes[..2], original);
+        assert_eq!(program.nodes.len(), count + 3);
+        for (pair, fields) in program.nodes[2..2 + count].iter().zip(args.chunks_exact(2)) {
+            let Some(proto::node::Kind::Call(call)) = &pair.kind else {
+                panic!("pair call")
+            };
+            assert_eq!(call.func, "egglog.core.pair.make");
+            assert_eq!(call.args, fields);
+            assert_eq!(pair.span, span);
+        }
+        let Some(proto::node::Kind::Call(vector)) =
+            &program.nodes[*call.args.first().unwrap() as usize].kind
+        else {
+            panic!("vector call")
+        };
+        assert_eq!(
+            vector.func,
+            if count == 0 {
+                "egglog.core.vec.empty"
+            } else {
+                "egglog.core.vec.of"
+            }
+        );
+        assert_eq!(vector.args, (2..2 + count as u32).collect::<Vec<_>>());
+        assert_eq!(program.nodes.last().unwrap().span, span);
+    }
+}
+
+#[test]
+fn map_catalog_precedes_instances_and_uses_one_vec_of_pairs_input() {
+    let mut graph = EGraph::default();
+    let before = graph.type_info().builtin_catalog().unwrap().definitions;
+    let family = before
+        .declarations
+        .iter()
+        .find_map(|d| match &d.kind {
+            Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "Map" => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(family.arity, 2);
+    let bindings = family.bindings.as_ref().unwrap();
+    assert_eq!(
+        bindings.python.as_ref().unwrap(),
+        &proto::TypeBinding {
+            path: vec!["egglog".into(), "builtins".into(), "Map".into()],
+            type_params: vec!["K".into(), "V".into()]
+        }
+    );
+    assert_eq!(
+        bindings.rust.as_ref().unwrap(),
+        &proto::TypeBinding {
+            path: vec![
+                "egglog_experimental".into(),
+                "typed".into(),
+                "builtins".into(),
+                "Map".into()
+            ],
+            type_params: vec!["K".into(), "V".into()]
+        }
+    );
+    for method in ["empty", "of", "get", "insert"] {
+        let declaration = before.declarations.iter().find(|d| matches!(&d.kind,
+            Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.map.{method}")
+        )).expect("canonical Map provider must exist before instances");
+        let views = declaration.bindings.as_ref().unwrap();
+        let python = &views.python.as_ref().unwrap().views[0];
+        let rust = &views.rust.as_ref().unwrap().views[0];
+        assert_eq!(python.owner, rust.owner);
+        let owner = match python.owner.as_ref().unwrap().kind {
+            Some(proto::binding_owner::Kind::Sort(i)) => i,
+            _ => panic!("owner"),
+        };
+        let Some(proto::sort::Kind::Family(owner)) = &before.sorts[owner as usize].kind else {
+            panic!("family")
+        };
+        assert_eq!(owner.name, "Map");
+        assert_eq!(
+            owner
+                .args
+                .iter()
+                .map(|i| before.sorts[*i as usize].kind.clone())
+                .collect::<Vec<_>>(),
+            [
+                Some(proto::sort::Kind::Var(0)),
+                Some(proto::sort::Kind::Var(1))
+            ]
+        );
+        let receiver = matches!(method, "get" | "insert");
+        assert_eq!(
+            python.kind,
+            if receiver {
+                proto::PythonCallKind::Method
+            } else {
+                proto::PythonCallKind::ClassMethod
+            } as i32
+        );
+        assert_eq!(
+            python.path,
+            [match method {
+                "of" => "from_pairs",
+                "get" => "__getitem__",
+                _ => method,
+            }]
+        );
+        assert_eq!(python.receiver, receiver.then_some(0));
+        assert!(python.mutates.is_none());
+        assert_eq!(
+            rust.path,
+            [if method == "of" { "from_pairs" } else { method }]
+        );
+        assert_eq!(
+            rust.receiver,
+            receiver.then_some(proto::RustReceiver {
+                core_input: Some(0),
+                borrowed: true
+            })
+        );
+        assert!(rust.trait_impl.is_none() && !rust.borrowed_self);
+        let expected: &[(&str, u32)] = match method {
+            "empty" => &[],
+            "of" => &[("entries", 0)],
+            "get" => &[("key", 1)],
+            _ => &[("key", 1), ("value", 2)],
+        };
+        assert_eq!(
+            python
+                .params
+                .iter()
+                .map(|p| (p.name.as_str(), p.core_input.unwrap()))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(python.params.iter().all(|p| p.default_expr.is_none()));
+        assert_eq!(
+            rust.params
+                .iter()
+                .map(|p| (p.name.as_str(), p.core_input.unwrap()))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(rust.params.iter().all(|p| !p.borrowed));
+        if method == "of" {
+            let Some(proto::declaration::Kind::HostPrimitive(p)) = &declaration.kind else {
+                unreachable!()
+            };
+            let Some(proto::host_primitive::Typing::Signature(signature)) = &p.typing else {
+                unreachable!()
+            };
+            assert_eq!(signature.inputs.len(), 1);
+            assert!(signature.varargs.is_empty());
+            let Some(proto::sort::Kind::Family(vec)) =
+                &before.sorts[signature.inputs[0].sort as usize].kind
+            else {
+                panic!("Vec")
+            };
+            assert_eq!(vec.name, "Vec");
+            let Some(proto::sort::Kind::Family(pair)) = &before.sorts[vec.args[0] as usize].kind
+            else {
+                panic!("Pair")
+            };
+            assert_eq!(pair.name, "Pair");
+            assert_eq!(
+                declaration
+                    .bindings
+                    .as_ref()
+                    .unwrap()
+                    .egglog
+                    .as_ref()
+                    .unwrap()
+                    .views[0]
+                    .symbol,
+                "map-from-pairs"
+            );
+        }
+    }
+    graph
+        .parse_and_run_program(None, "(sort M (Map i64 f64))")
+        .unwrap();
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before
+    );
+}
+
+#[test]
+fn map_from_computed_pairs_preserves_flat_construction_and_duplicates() {
+    EGraph::default()
+        .parse_and_run_program(
+            None,
+            "
+        (sort M (Map i64 f64))
+        (sort P (Pair i64 f64)) (sort V (Vec P))
+        (function entries () V :merge new)
+        (set (entries) (vec-of (pair 1 2.0) (pair 3 4.0) (pair 1 5.0)))
+        (check (= (map-from-pairs (entries)) (map-of 1 2.0 3 4.0 1 5.0)))
+        (check (= (map-get (map-from-pairs (entries)) 1) 5.0))
+        (check (= (map-get (map-insert (map-empty) 1 6.0) 1) 6.0))
+        (set (entries) (vec-empty))
+        (check (= (map-from-pairs (entries)) (map-of)))
+        (check (= (map-of) (map-empty)))
+    ",
+        )
+        .unwrap();
+}
+
+#[test]
+fn real_map_accepts_both_foreign_aliases_and_rejects_wrong_nested_sorts() {
+    for owner_first in [false, true] {
+        let mut graph = EGraph::default();
+        if owner_first {
+            graph
+                .parse_and_run_program(None, "(sort M (Map i64 f64))")
+                .unwrap();
+        }
+        graph
+            .parse_and_run_program(
+                None,
+                "
+            (sort P (Pair i64 f64)) (sort Q (Pair i64 f64))
+            (sort VP (Vec P)) (sort VQ (Vec Q))
+            (sort BadP (Pair f64 i64)) (sort BadV (Vec BadP))
+            (sort ScalarV (Vec i64))
+            (function p () VP :merge new) (function q () VQ :merge new)
+            (function bad () BadV :merge new) (function scalar () ScalarV :merge new)
+            (set (p) (vec-of (pair 1 2.0))) (set (q) (vec-of (pair 3 4.0)))
+        ",
+            )
+            .unwrap();
+        if !owner_first {
+            graph
+                .parse_and_run_program(None, "(sort M (Map i64 f64))")
+                .unwrap();
+        }
+        graph
+            .parse_and_run_program(
+                None,
+                "
+            (check (= (map-get (map-from-pairs (p)) 1) 2.0))
+            (check (= (map-get (map-from-pairs (q)) 3) 4.0))
+        ",
+            )
+            .unwrap();
+        for invalid in [
+            "(map-from-pairs (bad))",
+            "(map-from-pairs (scalar))",
+            "(map-from-pairs)",
+            "(map-from-pairs (p) (q))",
+            "(map-from-pairs (vec-empty))",
+        ] {
+            assert!(
+                graph.parse_and_run_program(None, invalid).is_err(),
+                "{invalid}"
+            );
+        }
+        let error = graph
+            .parse_and_run_program(None, "(map-of 1 2.0 3)")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("map-of"), "{error}");
+        assert!(!error.contains("egglog.core.map"), "{error}");
+    }
+}
+
+#[test]
+fn resolved_call_export_checks_direct_annotations_and_preserves_ordinary_calls() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(
+            None,
+            "(sort P (Pair i64 i64)) (sort V (Vec i64)) (sort M (Map i64 i64))",
+        )
+        .unwrap();
+    let i = graph.get_sort_by_name("i64").unwrap().clone();
+    for (name, output, count, key) in [
+        ("+", "i64", 2, "egglog.core.i64.add"),
+        ("pair", "P", 2, "egglog.core.pair.make"),
+        ("vec-of", "V", 2, "egglog.core.vec.of"),
+        ("map-of", "M", 2, "egglog.core.map.of"),
+    ] {
+        let mut native = vec![i.clone(); count];
+        native.push(graph.get_sort_by_name(output).unwrap().clone());
+        let ResolvedCall::Primitive(primitive) = ResolvedCall::from_resolution(
+            name,
+            &native,
+            graph.type_info(),
+            Context::Pure,
+            &ast::Span::Panic,
+        )
+        .unwrap() else {
+            unreachable!()
+        };
+        let mut source = proto::Program::default();
+        let sort_id = graph.export_sort(&i, &mut source.sorts).unwrap();
+        source.nodes.push(proto::Node {
+            sort_id,
+            kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                value: Some(proto::primitive_value::Value::I64(2)),
+            })),
+            ..Default::default()
+        });
+        let call = primitive
+            .export_builtin_call(&graph, &[0, 0], None, &mut source.clone())
+            .unwrap();
+        assert_eq!(call.func, key);
+        if name != "map-of" {
+            assert_eq!(call.args, [0, 0]);
+        }
+        for args in [&[0][..], &[0, 9][..], &[0, 0, 0][..]] {
+            assert!(
+                primitive
+                    .export_builtin_call(&graph, args, None, &mut source.clone())
+                    .is_err()
+            );
+        }
+        for wrong in [
+            proto::sort::Kind::Eq("i64".into()),
+            proto::sort::Kind::Var(0),
+            proto::sort::Kind::Family(proto::HostSort {
+                name: "f64".into(),
+                args: vec![],
+            }),
+            proto::sort::Kind::Family(proto::HostSort {
+                name: "Vec".into(),
+                args: vec![0],
+            }),
+        ] {
+            let mut bad = source.clone();
+            bad.sorts[0].kind = Some(wrong);
+            assert!(
+                primitive
+                    .export_builtin_call(&graph, &[0, 0], None, &mut bad)
+                    .is_err()
+            );
+        }
+        let mut relocated = source.clone();
+        relocated.sorts.insert(
+            0,
+            proto::Sort {
+                kind: Some(proto::sort::Kind::Eq("Other".into())),
+                ..Default::default()
+            },
+        );
+        relocated.nodes[0].sort_id += 1;
+        primitive
+            .export_builtin_call(&graph, &[0, 0], None, &mut relocated)
+            .unwrap();
+    }
+    let ResolvedCall::Primitive(unsupported) = ResolvedCall::from_resolution(
+        "-",
+        &[i.clone(), i.clone(), i],
+        graph.type_info(),
+        Context::Pure,
+        &ast::Span::Panic,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let mut source = proto::Program {
+        sorts: vec![proto::Sort {
+            kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                name: "i64".into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        }],
+        nodes: vec![proto::Node {
+            sort_id: 0,
+            kind: Some(proto::node::Kind::Var("x".into())),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(
+        unsupported
+            .export_builtin_call(&graph, &[0, 0], None, &mut source)
+            .is_err()
+    );
+}
+
+#[test]
+fn vec_catalog_has_generic_language_views() {
     let catalog = EGraph::default()
         .type_info()
         .builtin_catalog()
@@ -21,7 +458,9 @@ fn vec_catalog_has_generic_rust_views_without_python_views() {
         })
         .unwrap();
     let binding = family.bindings.as_ref().expect("Vec family presentation");
-    assert!(binding.python.is_none());
+    let python = binding.python.as_ref().expect("Vec Python binding");
+    assert_eq!(python.path, ["egglog", "builtins", "Vec"]);
+    assert_eq!(python.type_params, ["T"]);
     let rust = binding.rust.as_ref().unwrap();
     assert_eq!(
         rust.path,
@@ -31,7 +470,41 @@ fn vec_catalog_has_generic_rust_views_without_python_views() {
     for method in ["empty", "of", "get"] {
         let declaration = catalog.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.vec.{method}"))).unwrap();
         let bindings = declaration.bindings.as_ref().unwrap();
-        assert!(bindings.python.is_none());
+        let python = &bindings.python.as_ref().unwrap().views[0];
+        assert_eq!(
+            python.kind,
+            match method {
+                "of" => proto::PythonCallKind::Initializer,
+                "empty" => proto::PythonCallKind::ClassMethod,
+                _ => proto::PythonCallKind::Method,
+            } as i32
+        );
+        assert_eq!(
+            python.path,
+            match method {
+                "of" => vec![],
+                "empty" => vec!["empty"],
+                _ => vec!["__getitem__"],
+            }
+        );
+        assert_eq!(python.receiver, (method == "get").then_some(0));
+        assert_eq!(
+            python.params,
+            match method {
+                "of" => vec![proto::PythonParameter {
+                    core_input: Some(0),
+                    name: "args".into(),
+                    default_expr: None
+                }],
+                "get" => vec![proto::PythonParameter {
+                    core_input: Some(1),
+                    name: "index".into(),
+                    default_expr: None
+                }],
+                _ => vec![],
+            }
+        );
+        assert!(python.mutates.is_none());
         assert_eq!(
             bindings.egglog.as_ref().unwrap().views[0].symbol,
             format!("vec-{method}")
@@ -41,6 +514,7 @@ fn vec_catalog_has_generic_rust_views_without_python_views() {
             .as_ref()
             .expect("Vec callable presentation")
             .views[0];
+        assert_eq!(python.owner, rust.owner);
         assert_eq!(rust.path, [method]);
         let Some(proto::binding_owner::Kind::Sort(owner)) = rust.owner.unwrap().kind else {
             panic!("sort owner")
@@ -119,6 +593,27 @@ fn constant_catalog_export_does_not_execute_the_body_or_validator() {
     );
     assert_eq!(BODY.load(Ordering::SeqCst), 0);
     assert_eq!(VALIDATOR.load(Ordering::SeqCst), 0);
+    let i = graph.get_sort_by_name("i64").unwrap().clone();
+    let ResolvedCall::Primitive(primitive) = ResolvedCall::from_resolution(
+        "constant",
+        &[i],
+        graph.type_info(),
+        Context::Pure,
+        &ast::Span::Panic,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let mut exported = proto::Program::default();
+    assert_eq!(
+        primitive
+            .export_builtin_call(&graph, &[], None, &mut exported)
+            .unwrap()
+            .func,
+        "test.constant"
+    );
+    assert_eq!(BODY.load(Ordering::SeqCst), 0);
+    assert_eq!(VALIDATOR.load(Ordering::SeqCst), 0);
     graph
         .parse_and_run_program(None, "(check (= (constant) 7))")
         .unwrap();
@@ -127,6 +622,79 @@ fn constant_catalog_export_does_not_execute_the_body_or_validator() {
         graph.type_info().builtin_catalog().unwrap().definitions,
         catalog
     );
+}
+
+#[test]
+fn map_constructor_validator_consumes_canonical_values_and_keeps_flat_normal_form() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(
+            None,
+            "(sort M (Map i64 i64)) (sort P (Pair i64 i64)) (sort V (Vec P))",
+        )
+        .unwrap();
+    let m = graph.get_sort_by_name("M").unwrap().clone();
+    let v = graph.get_sort_by_name("V").unwrap().clone();
+    let ResolvedCall::Primitive(primitive) = ResolvedCall::from_resolution(
+        "map-from-pairs",
+        &[v, m],
+        graph.type_info(),
+        Context::Pure,
+        &ast::Span::Panic,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let validate = primitive.validator().unwrap();
+    let mut terms = TermDag::default();
+    let one = terms.lit(1.into());
+    let two = terms.lit(2.into());
+    let three = terms.lit(3.into());
+    let a = terms.app("pair".into(), vec![one, two]);
+    let b = terms.app("pair".into(), vec![one, three]);
+    let entries = terms.app("vec-of".into(), vec![a, b]);
+    let expected = terms.app("map-of".into(), vec![one, three]);
+    assert_eq!(validate(&mut terms, &[entries]), Some(expected));
+    let empty = terms.app("map-of".into(), vec![]);
+    for name in ["vec-of", "vec-empty"] {
+        let entries = terms.app(name.into(), vec![]);
+        assert_eq!(validate(&mut terms, &[entries]), Some(empty));
+    }
+    let short = terms.app("pair".into(), vec![one]);
+    let malformed = terms.app("vec-of".into(), vec![short]);
+    let wrong = terms.app("vec-empty".into(), vec![a]);
+    let raw = terms.app("vec-of".into(), vec![one]);
+    for bad in [one, a, malformed, wrong, raw] {
+        assert_eq!(validate(&mut terms, &[bad]), None);
+    }
+    assert_eq!(validate(&mut terms, &[]), None);
+    assert_eq!(validate(&mut terms, &[entries, entries]), None);
+}
+
+#[test]
+fn map_packing_preserves_ordered_failing_child_evaluation() {
+    for packed in [false, true] {
+        let calls = Arc::new(std::sync::Mutex::new(vec![]));
+        let observed = calls.clone();
+        let mut graph = EGraph::default();
+        add_primitive!(&mut graph, "observe" = {observed: Arc<std::sync::Mutex<Vec<i64>>>} |x: i64| -?> i64 {{
+            self.ctx.lock().unwrap().push(x);
+            (x != 3).then_some(x)
+        }});
+        graph
+            .parse_and_run_program(
+                None,
+                "(sort M (Map i64 i64)) (sort P (Pair i64 i64)) (sort V (Vec P))",
+            )
+            .unwrap();
+        let expr = if packed {
+            "(map-from-pairs (vec-of (pair (observe 1) (observe 2)) (pair (observe 3) (observe 4))))"
+        } else {
+            "(map-of (observe 1) (observe 2) (observe 3) (observe 4))"
+        };
+        assert!(graph.parse_and_run_program(None, expr).is_err());
+        assert_eq!(*calls.lock().unwrap(), [1, 2, 3]);
+    }
 }
 
 #[test]
@@ -401,7 +969,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         catalog
             .undescribed_families
             .iter()
-            .any(|name| name == "Map")
+            .any(|name| name == "Set")
     );
     assert!(
         catalog
@@ -425,6 +993,10 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         [
             "egglog.core.f64.add",
             "egglog.core.i64.add",
+            "egglog.core.map.empty",
+            "egglog.core.map.get",
+            "egglog.core.map.insert",
+            "egglog.core.map.of",
             "egglog.core.pair.first",
             "egglog.core.pair.make",
             "egglog.core.pair.second",
@@ -996,7 +1568,16 @@ fn empty_definition_keys_are_rejected_by_import_and_registration() {
             ..Default::default()
         },
     );
-    graph.add_pure_primitive(Invalid(definition), None);
+    let primitive = Invalid(definition);
+    let mut destination = proto::Program::default();
+    assert_eq!(
+        primitive
+            .lower_builtin_call(graph.type_info(), &[], 0, None, &mut destination)
+            .unwrap(),
+        None
+    );
+    assert_eq!(destination, proto::Program::default());
+    graph.add_pure_primitive(primitive, None);
     assert!(imported.is_err(), "empty key must not import");
     assert!(
         graph.type_info().builtin_catalog().is_err(),

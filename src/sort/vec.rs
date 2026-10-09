@@ -118,6 +118,10 @@ impl Presort for VecSort {
                         name: "Vec".into(),
                         arity: 1,
                         bindings: Some(pb::SortBindings {
+                            python: Some(pb::TypeBinding {
+                                path: vec!["egglog".into(), "builtins".into(), "Vec".into()],
+                                type_params: vec!["T".into()],
+                            }),
                             rust: Some(pb::TypeBinding {
                                 path: vec![
                                     "egglog_experimental".into(),
@@ -153,6 +157,39 @@ impl Presort for VecSort {
                         )),
                     })),
                     bindings: Some(pb::CallableBindings {
+                        python: Some(pb::PythonBindings {
+                            views: vec![pb::PythonCallable {
+                                kind: match key {
+                                    "of" => pb::PythonCallKind::Initializer,
+                                    "empty" => pb::PythonCallKind::ClassMethod,
+                                    _ => pb::PythonCallKind::Method,
+                                }
+                                .into(),
+                                path: match key {
+                                    "of" => vec![],
+                                    "empty" => vec!["empty".into()],
+                                    _ => vec!["__getitem__".into()],
+                                },
+                                owner: Some(pb::BindingOwner {
+                                    kind: Some(pb::binding_owner::Kind::Sort(1)),
+                                }),
+                                receiver: (key == "get").then_some(0),
+                                params: match key {
+                                    "of" => vec![pb::PythonParameter {
+                                        core_input: Some(0),
+                                        name: "args".into(),
+                                        default_expr: None,
+                                    }],
+                                    "get" => vec![pb::PythonParameter {
+                                        core_input: Some(1),
+                                        name: "index".into(),
+                                        default_expr: None,
+                                    }],
+                                    _ => vec![],
+                                },
+                                mutates: None,
+                            }],
+                        }),
                         rust: Some(pb::RustBindings {
                             views: vec![pb::RustCallable {
                                 path: vec![key.into()],
@@ -185,7 +222,6 @@ impl Presort for VecSort {
                                 datatype_member: false,
                             }],
                         }),
-                        ..Default::default()
                     }),
                     ..Default::default()
                 },

@@ -1,6 +1,6 @@
 //! Engine-owned protobuf builtin definitions and derived native constraints.
 //!
-//! This migration covers scalar signatures, Pair and selected Vec operations, not a
+//! This migration covers scalar signatures, Pair and selected Vec/Map operations, not a
 //! complete generic catalog. Opaque registrations and family gaps remain visible in
 //! the inventory. Export never calls an implementation or a proof validator.
 
@@ -119,6 +119,7 @@ impl BuiltinInstance {
             fixed: signature.inputs.iter().map(|a| a.sort).collect(),
             tail: signature.varargs.iter().map(|a| a.sort).collect(),
             output: signature.output.unwrap(),
+            round_tail_up: false,
             name: declaration
                 .bindings
                 .as_ref()
@@ -128,6 +129,79 @@ impl BuiltinInstance {
                 .clone(),
             span: span.clone(),
         })
+    }
+
+    /// Derive the legacy flat facade from one fixed Vec-of-Pair argument.
+    /// The original definition/dispatch identity is never changed or exported
+    /// as an alternating-tail callable.
+    pub(crate) fn vec_pair_facade_constraints(
+        &self,
+        name: &str,
+        span: &Span,
+    ) -> Box<dyn TypeConstraint> {
+        let [key, value, _, _, output] =
+            self.vec_pair_facade_pattern().expect("fixed Map signature");
+        Box::new(InstanceConstraint {
+            instance: self.clone(),
+            fixed: vec![],
+            tail: vec![key, value],
+            output,
+            name: name.into(),
+            span: span.clone(),
+            round_tail_up: true,
+        })
+    }
+
+    /// Validate the complete canonical recipe before deriving either native
+    /// flat constraints or source-call packing. Indices stay in the descriptor.
+    pub(crate) fn vec_pair_facade_pattern(&self) -> Result<[u32; 5], String> {
+        let primitive = self
+            .definition
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                Some(pb::declaration::Kind::HostPrimitive(p)) => Some(p),
+                _ => None,
+            })
+            .ok_or("missing Map definition")?;
+        let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            return Err("expected fixed Map signature".into());
+        };
+        let [input] = signature.inputs.as_slice() else {
+            return Err("expected one Vec argument".into());
+        };
+        if signature.type_params.len() != 2 || !signature.varargs.is_empty() {
+            return Err("expected two Map type parameters and no tail".into());
+        }
+        let Some(pb::sort::Kind::Family(vector)) = &self.definition.sorts[input.sort as usize].kind
+        else {
+            return Err("expected Vec".into());
+        };
+        if vector.name != "Vec" {
+            return Err("expected Vec".into());
+        }
+        let [element] = vector.args.as_slice() else {
+            return Err("expected one Vec type argument".into());
+        };
+        let Some(pb::sort::Kind::Family(pair)) = &self.definition.sorts[*element as usize].kind
+        else {
+            return Err("expected Pair".into());
+        };
+        let output = signature.output.ok_or("missing Map output")?;
+        let Some(pb::sort::Kind::Family(map)) = &self.definition.sorts[output as usize].kind else {
+            return Err("expected Map result".into());
+        };
+        if pair.name != "Pair"
+            || pair.args.len() != 2
+            || map.name != "Map"
+            || map.args != pair.args
+            || pair.args.iter().enumerate().any(|(i, arg)| {
+                self.definition.sorts[*arg as usize].kind != Some(pb::sort::Kind::Var(i as u32))
+            })
+        {
+            return Err("expected Vec<Pair<K,V>> -> Map<K,V>".into());
+        }
+        Ok([pair.args[0], pair.args[1], *element, input.sort, output])
     }
 
     /// Match nested provenance against the canonical pattern while retaining
@@ -165,6 +239,8 @@ struct InstanceConstraint {
     fixed: Vec<u32>,
     tail: Vec<u32>,
     output: u32,
+    // Flat compatibility constructors historically report the next full group.
+    round_tail_up: bool,
     name: String,
     span: Span,
 }
@@ -179,7 +255,12 @@ impl TypeConstraint for InstanceConstraint {
         if !self.tail.is_empty() {
             // Native arguments include the result. Only complete input groups
             // count; reject any missing prefix or remainder below.
-            let groups = arguments.len().saturating_sub(self.fixed.len() + 1) / self.tail.len();
+            let inputs = arguments.len().saturating_sub(self.fixed.len() + 1);
+            let groups = if self.round_tail_up {
+                inputs.div_ceil(self.tail.len())
+            } else {
+                inputs / self.tail.len()
+            };
             sorts.extend(
                 self.tail
                     .iter()
@@ -282,7 +363,7 @@ pub fn import_sort(
     )
 }
 
-fn normalized_signature(
+pub(crate) fn normalized_signature(
     program: &pb::Program,
     primitive: &pb::HostPrimitive,
     sorts: &mut Vec<pb::Sort>,

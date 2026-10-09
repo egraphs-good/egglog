@@ -42,6 +42,74 @@ impl PurePrim for ProofIdentity {
 }
 
 #[test]
+fn canonical_map_scalar_source_equivalence_proofs() {
+    for mode in ["terms", "proofs", "proof-testing"] {
+        for constructor in ["(map-of 1 7)", "(map-from-pairs (vec-of (pair 1 7)))"] {
+            let mut graph = match mode {
+                "terms" => EGraph::new_with_term_encoding(),
+                "proofs" => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(
+                    None,
+                    &format!(
+                        "
+                    (sort M (Map i64 i64)) (sort P (Pair i64 i64)) (sort V (Vec P))
+                    (relation Result (i64))
+                    (Result (map-get {constructor} 1))
+                    (check (Result 7))
+                "
+                    ),
+                )
+                .unwrap();
+            if mode != "terms" {
+                graph
+                    .parse_and_run_program(None, "(prove (Result 7))")
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_map_from_computed_pairs_keeps_lookup_proofs() {
+    for mode in ["terms", "proofs", "proof-testing"] {
+        let mut graph = match mode {
+            "terms" => EGraph::new_with_term_encoding(),
+            "proofs" => EGraph::new_with_proofs(),
+            _ => EGraph::new_with_proofs().with_proof_testing(),
+        };
+        graph
+            .parse_and_run_program(
+                None,
+                "
+            (datatype N (Z) (S N))
+            (sort M (Map N N)) (sort P (Pair N N)) (sort V (Vec P))
+            (relation Entries (V)) (relation Maps (M)) (relation Result (N))
+            (Entries (vec-of (pair (Z) (Z)) (pair (Z) (S (Z)))))
+            (rule ((Entries v)) ((Maps (map-from-pairs v))))
+            (rule ((Maps m) (= w (map-get m (Z)))) ((Result w)))
+            (run 1)
+            (run 1)
+            (check (Result (S (Z))))
+        ",
+            )
+            .unwrap();
+        if mode != "terms" {
+            let outputs = graph
+                .parse_and_run_program(None, "(prove (Result (S (Z))))")
+                .unwrap();
+            assert!(
+                outputs
+                    .iter()
+                    .any(|o| matches!(o, CommandOutput::ProveExists { .. }))
+            );
+        }
+    }
+}
+
+#[test]
 fn canonical_pair_instances_keep_nested_projection_proofs() {
     for mode in ["terms", "proofs", "proof-testing"] {
         let graph = EGraph::default();

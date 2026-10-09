@@ -401,3 +401,30 @@ fn map_rebuild_collapse_proof_mode() {
         )
         .unwrap();
 }
+
+#[test]
+fn map_from_pairs_keeps_native_rebuild_normalization() {
+    for proof in [false, true] {
+        let mut graph = if proof {
+            EGraph::new_with_proofs().with_proof_testing()
+        } else {
+            EGraph::new_with_term_encoding()
+        };
+        graph
+            .parse_and_run_program(
+                None,
+                "
+            (datatype N (A) (B) (V))
+            (sort M (Map N N)) (sort P (Pair N N)) (sort VP (Vec P))
+            (constructor Holds (M) N)
+            (Holds (map-from-pairs (vec-of (pair (A) (V)) (pair (B) (V)))))
+            (Holds (map-of (B) (V)))
+            (union (A) (B))
+            (run 1)
+            (check (= (Holds (map-from-pairs (vec-of (pair (A) (V)) (pair (B) (V)))))
+                      (Holds (map-of (B) (V)))))
+        ",
+            )
+            .unwrap();
+    }
+}

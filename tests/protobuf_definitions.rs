@@ -1,13 +1,24 @@
 use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
 
 #[test]
-fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
+fn container_language_views_relocate_enrich_and_freeze_without_growth() {
     let mut graph = egglog::EGraph::default();
-    for key in ["make", "first", "second"] {
+    for key in [
+        "pair.make",
+        "pair.first",
+        "pair.second",
+        "vec.empty",
+        "vec.of",
+        "vec.get",
+        "map.empty",
+        "map.of",
+        "map.get",
+        "map.insert",
+    ] {
         let mut source = pb::Program::default();
         graph
             .type_info()
-            .export_builtin_definition(&format!("egglog.core.pair.{key}"), &mut source)
+            .export_builtin_definition(&format!("egglog.core.{key}"), &mut source)
             .unwrap();
         let mut absent = source.clone();
         for d in &mut absent.declarations {
@@ -22,13 +33,13 @@ fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
         let mut destination = pb::Program::default();
         assert_eq!(
             reconcile_declarations(&absent, &mut destination).unwrap(),
-            [true, true]
+            vec![true; source.declarations.len()]
         );
         for python in [true, false] {
             let mut language = source.clone();
             for d in &mut language.declarations {
                 if let Some(pb::declaration::Kind::HostSortFamily(f)) = &mut d.kind {
-                    let b = f.bindings.as_mut().expect("Pair family language views");
+                    let b = f.bindings.as_mut().expect("family language views");
                     if python {
                         b.rust = None;
                     } else {
@@ -46,7 +57,7 @@ fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
             }
             assert_eq!(
                 reconcile_declarations(&language, &mut destination).unwrap(),
-                [false, false]
+                vec![false; source.declarations.len()]
             );
         }
         let installed = destination.clone();
@@ -65,7 +76,7 @@ fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
                 let Some(pb::host_primitive::Typing::Signature(s)) = &mut p.typing else {
                     unreachable!()
                 };
-                for arg in &mut s.inputs {
+                for arg in s.inputs.iter_mut().chain(&mut s.varargs) {
                     arg.sort = remap(arg.sort);
                     arg.name = format!("diagnostic_{}", arg.name);
                 }
@@ -99,7 +110,7 @@ fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
         for _ in 0..3 {
             assert_eq!(
                 reconcile_declarations(&permuted, &mut destination).unwrap(),
-                [false, false]
+                vec![false; source.declarations.len()]
             );
             reconcile_declarations(&absent, &mut destination).unwrap();
             assert_eq!(
@@ -118,12 +129,17 @@ fn pair_language_views_relocate_enrich_and_freeze_without_growth() {
                         } else {
                             &mut b.rust
                         };
-                        language.as_mut().unwrap().type_params[0] = "Renamed".into();
+                        let language = language.as_mut().unwrap();
+                        if let Some(parameter) = language.type_params.first_mut() {
+                            *parameter = "Renamed".into();
+                        } else {
+                            language.path[0] = "renamed".into();
+                        }
                     }
                 } else if let Some(b) = &mut d.bindings {
                     if conflict == 2 {
                         let v = &mut b.python.as_mut().unwrap().views[0];
-                        if key == "make" {
+                        if v.path.is_empty() {
                             v.params[0].name = "renamed".into();
                         } else {
                             v.path[0] = "renamed".into();
@@ -934,6 +950,77 @@ fn pair_defaults_validate_order_presence_and_structural_child_sorts() {
             assert_eq!(destination, frozen);
         }
     }
+}
+
+#[test]
+fn map_defaults_validate_ordered_entries_and_closed_child_sorts() {
+    let mut source = pair_default_definition();
+    let Some(pb::sort::Kind::Family(f)) = &mut source.sorts[3].kind else {
+        unreachable!()
+    };
+    f.name = "Map".into();
+    let Some(pb::declaration::Kind::HostSortFamily(f)) =
+        &mut source.declarations.last_mut().unwrap().kind
+    else {
+        unreachable!()
+    };
+    f.name = "Map".into();
+    source.nodes[2].kind = Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+        value: Some(pb::primitive_value::Value::Map(pb::MapValue {
+            entries: vec![
+                pb::MapEntry {
+                    key: Some(0),
+                    value: Some(1),
+                },
+                pb::MapEntry {
+                    key: Some(0),
+                    value: Some(1),
+                },
+            ],
+        })),
+    }));
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    let frozen = destination.clone();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    assert_eq!(destination, frozen);
+    assert!(destination.nodes.iter().any(|n| matches!(&n.kind,
+        Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue { value: Some(pb::primitive_value::Value::Map(m)) }))
+        if m.entries.len() == 2 && m.entries[0] == m.entries[1] && m.entries[0].key == Some(0))));
+    for bad in 0..10 {
+        let mut invalid = source.clone();
+        let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+            value: Some(pb::primitive_value::Value::Map(m)),
+        })) = &mut invalid.nodes[2].kind
+        else {
+            unreachable!()
+        };
+        match bad {
+            0 => m.entries[0].key = None,
+            1 => m.entries[0].value = None,
+            2 => m.entries[0].key = Some(999),
+            3 => m.entries[0].value = Some(999),
+            4 => m.entries[0].key = Some(1),
+            5 => m.entries[0].value = Some(0),
+            6 => m.entries[0].value = Some(2),
+            7 => invalid.nodes[0].kind = Some(pb::node::Kind::Var("free".into())),
+            8 => invalid.nodes[2].sort_id = 0,
+            _ => invalid.sorts[0].kind = Some(pb::sort::Kind::Var(0)),
+        }
+        assert!(
+            reconcile_declarations(&invalid, &mut destination).is_err(),
+            "bad {bad}"
+        );
+        assert_eq!(destination, frozen);
+    }
+    let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+        value: Some(pb::primitive_value::Value::Map(m)),
+    })) = &mut source.nodes[2].kind
+    else {
+        unreachable!()
+    };
+    m.entries.clear();
+    reconcile_declarations(&source, &mut pb::Program::default()).unwrap();
 }
 
 fn pair_default_definition() -> pb::Program {
