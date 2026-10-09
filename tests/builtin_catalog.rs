@@ -816,6 +816,12 @@ fn scalar_catalog_has_authoritative_language_views() {
         );
         let declaration = catalog.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.{scalar}.add"))).unwrap();
         let bindings = declaration.bindings.as_ref().unwrap();
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
         let python = &bindings.python.as_ref().unwrap().views[0];
         assert_eq!(python.kind, proto::PythonCallKind::Method as i32);
         assert_eq!(python.path, ["__add__"]);
@@ -837,7 +843,335 @@ fn scalar_catalog_has_authoritative_language_views() {
             Some("Output")
         );
         assert_eq!(python.owner, rust.owner);
+        // Preserve the complete previously supplied Add blocks, including
+        // parameter labels and absent specialization fields.
+        assert_eq!(
+            bindings.python,
+            Some(proto::PythonBindings {
+                views: vec![proto::PythonCallable {
+                    kind: proto::PythonCallKind::Method.into(),
+                    path: vec!["__add__".into()],
+                    owner: python.owner,
+                    receiver: Some(0),
+                    params: vec![proto::PythonParameter {
+                        core_input: Some(1),
+                        name: "other".into(),
+                        default_expr: None,
+                    }],
+                    ..Default::default()
+                }],
+            })
+        );
+        assert_eq!(
+            bindings.rust,
+            Some(proto::RustBindings {
+                views: vec![proto::RustCallable {
+                    path: vec!["add".into()],
+                    owner: rust.owner,
+                    receiver: Some(proto::RustReceiver {
+                        core_input: Some(0),
+                        borrowed: false
+                    }),
+                    params: vec![proto::RustParameter {
+                        core_input: Some(1),
+                        name: "rhs".into(),
+                        borrowed: false,
+                    }],
+                    trait_impl: Some(proto::RustTrait {
+                        path: vec!["core".into(), "ops".into(), "Add".into()],
+                        args: vec![proto::RustType {
+                            sort: Some(signature.inputs[1].sort),
+                            borrowed: false,
+                        }],
+                        output_associated_type: Some("Output".into()),
+                    }),
+                    ..Default::default()
+                }],
+            })
+        );
     }
+}
+
+#[test]
+fn scalar_families_and_actual_operation_views_are_complete() {
+    let catalog = EGraph::default().type_info().builtin_catalog().unwrap();
+    for (family, name) in [("String", "String"), ("bool", "Bool"), ("Unit", "Unit")] {
+        let declaration = catalog
+            .definitions
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == family => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(declaration.arity, 0);
+        let bindings = declaration.bindings.as_ref().unwrap();
+        assert_eq!(
+            bindings.python.as_ref().unwrap().path,
+            ["egglog", "builtins", name]
+        );
+        assert_eq!(
+            bindings.rust.as_ref().unwrap().path,
+            ["egglog_experimental", "typed", "builtins", name]
+        );
+        assert!(!catalog.undescribed_sorts.iter().any(|s| s == family));
+    }
+    for (key, alias, fixed, python_name, rust_name, trait_name) in [
+        ("string.concat", "+", 0, "__add__", "add", Some("Add")),
+        ("string.replace", "replace", 3, "replace", "replace", None),
+        ("bool.not", "not", 1, "__invert__", "not", Some("Not")),
+        ("bool.and", "and", 2, "__and__", "bitand", Some("BitAnd")),
+        ("bool.or", "or", 0, "__or__", "bitor", Some("BitOr")),
+        ("bool.xor", "xor", 2, "__xor__", "bitxor", Some("BitXor")),
+        ("bool.implies", "=>", 2, "implies", "implies", None),
+        (
+            "i64.to_string",
+            "to-string",
+            1,
+            "to_string",
+            "to_string",
+            None,
+        ),
+    ] {
+        let d = catalog.definitions.declarations.iter().find(|d| matches!(&d.kind,
+            Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.{key}"))).unwrap();
+        let Some(proto::declaration::Kind::HostPrimitive(p)) = &d.kind else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(s)) = &p.typing else {
+            unreachable!()
+        };
+        assert!(s.type_params.is_empty());
+        assert_eq!(s.inputs.len(), fixed);
+        assert_eq!(s.varargs.len(), usize::from(fixed == 0));
+        let b = d.bindings.as_ref().unwrap();
+        assert_eq!(b.egglog.as_ref().unwrap().views[0].symbol, alias);
+        let py_views = &b.python.as_ref().unwrap().views;
+        let rs_views = &b.rust.as_ref().unwrap().views;
+        if key == "string.concat" {
+            assert_eq!(py_views.len(), 2);
+            assert_eq!(rs_views.len(), 2);
+            assert_eq!(py_views[0].kind, proto::PythonCallKind::Function as i32);
+            assert_eq!(py_views[0].path, ["egglog", "builtins", "join"]);
+            assert_eq!(
+                rs_views[0].path,
+                ["egglog_experimental", "typed", "builtins", "join"]
+            );
+            assert_eq!(py_views[0].tail_repetitions, None);
+            assert_eq!(rs_views[0].tail_repetitions, None);
+            assert_eq!(py_views[0].params[0].core_input, Some(0));
+            assert_eq!(rs_views[0].params[0].core_input, Some(0));
+        } else {
+            assert_eq!(py_views.len(), 1);
+            assert_eq!(rs_views.len(), 1);
+        }
+        let py = py_views.last().unwrap();
+        let rs = rs_views.last().unwrap();
+        assert_eq!(py.path, [python_name]);
+        assert_eq!(rs.path, [rust_name]);
+        assert_eq!(py.owner, rs.owner);
+        assert_eq!(py.receiver, Some(0));
+        assert_eq!(rs.receiver.unwrap().core_input, Some(0));
+        assert_eq!(py.tail_repetitions, (fixed == 0).then_some(2));
+        assert_eq!(rs.tail_repetitions, (fixed == 0).then_some(2));
+        assert_eq!(
+            rs.trait_impl.as_ref().map(|t| t.path[2].as_str()),
+            trait_name
+        );
+        if key == "bool.not" {
+            assert!(py.params.is_empty());
+            assert!(rs.trait_impl.as_ref().unwrap().args.is_empty());
+        }
+    }
+    for deferred in ["guard", "count-matches", "bool-<"] {
+        assert!(
+            catalog
+                .undescribed_primitives
+                .iter()
+                .any(|name| name == deferred)
+        );
+    }
+}
+
+#[test]
+fn scalar_variadic_aliases_share_resolved_provider_contexts_and_validators() {
+    let mut graph = EGraph::default();
+    for (family, alias, key) in [
+        ("String", "+", "egglog.core.string.concat"),
+        ("bool", "or", "egglog.core.bool.or"),
+        ("i64", "+", "egglog.core.i64.add"),
+        ("f64", "+", "egglog.core.f64.add"),
+    ] {
+        let sort = graph.get_sort_by_name(family).unwrap().clone();
+        for count in [0, 1, 2, 5] {
+            let sorts = vec![sort.clone(); count + 1];
+            for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+                let alias_result = ResolvedCall::from_resolution(
+                    alias,
+                    &sorts,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic,
+                );
+                let key_result = ResolvedCall::from_resolution(
+                    key,
+                    &sorts,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic,
+                );
+                if matches!(family, "i64" | "f64") && count != 2 {
+                    assert!(alias_result.is_err());
+                    assert!(key_result.is_err());
+                    continue;
+                }
+                let ResolvedCall::Primitive(alias_prim) = alias_result.unwrap() else {
+                    unreachable!()
+                };
+                let ResolvedCall::Primitive(key_prim) = key_result.unwrap() else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    alias_prim, key_prim,
+                    "same context-ID set and concrete sorts"
+                );
+                assert!(Arc::ptr_eq(
+                    alias_prim.validator().unwrap(),
+                    key_prim.validator().unwrap()
+                ));
+                let mut exported = proto::Program {
+                    ir_version: 1,
+                    ..Default::default()
+                };
+                let sort_id = graph.export_sort(&sort, &mut exported.sorts).unwrap();
+                for index in 0..count {
+                    use proto::primitive_value::Value as V;
+                    let value = match family {
+                        "String" => V::String(format!("s{index}\0\n☃")),
+                        "bool" => V::Bool(index % 2 == 0),
+                        "i64" => V::I64(index as i64),
+                        "f64" => V::F64Bits((index as f64).to_bits()),
+                        _ => unreachable!(),
+                    };
+                    exported.nodes.push(proto::Node {
+                        sort_id,
+                        kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                            value: Some(value),
+                        })),
+                        ..Default::default()
+                    });
+                }
+                let args = (0..count as u32).rev().collect::<Vec<_>>();
+                let call = alias_prim
+                    .export_builtin_call(&graph, &args, None, &mut exported)
+                    .unwrap();
+                assert_eq!(call.func, key);
+                assert_eq!(call.args, args);
+                assert_eq!(key_prim.export_builtin(&mut exported).unwrap(), key);
+                let native_key = graph
+                    .type_info()
+                    .resolve_builtin(&exported, key, &vec![sort_id; count], sort_id, &sorts)
+                    .unwrap();
+                assert_eq!(native_key, key);
+            }
+        }
+    }
+}
+
+#[test]
+fn scalar_variadic_validators_preserve_empty_many_utf8_and_truth_tables() {
+    let mut graph = EGraph::default();
+    for (name, family) in [("+", "String"), ("or", "bool")] {
+        let sort = graph.get_sort_by_name(family).unwrap().clone();
+        for count in [0, 1, 2, 5] {
+            let ResolvedCall::Primitive(p) = ResolvedCall::from_resolution(
+                name,
+                &vec![sort.clone(); count + 1],
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            let mut terms = TermDag::default();
+            let mut args = vec![];
+            for index in 0..count {
+                args.push(terms.lit(if family == "String" {
+                    ast::Literal::String(format!("{index}\0\n☃"))
+                } else {
+                    ast::Literal::Bool(index == 1)
+                }));
+            }
+            let expected = terms.lit(if family == "String" {
+                ast::Literal::String((0..count).map(|index| format!("{index}\0\n☃")).collect())
+            } else {
+                ast::Literal::Bool(count > 1)
+            });
+            assert_eq!(p.validator().unwrap()(&mut terms, &args), Some(expected));
+            let invalid = terms.app("not-a-literal".into(), vec![]);
+            assert_eq!(p.validator().unwrap()(&mut terms, &[invalid]), None);
+        }
+    }
+    for a in [false, true] {
+        graph
+            .parse_and_run_program(None, &format!("(check (= (not {a}) {}))", !a))
+            .unwrap();
+        for b in [false, true] {
+            for (op, expected) in [
+                ("and", a && b),
+                ("or", a || b),
+                ("xor", a ^ b),
+                ("=>", !a || b),
+            ] {
+                graph
+                    .parse_and_run_program(None, &format!("(check (= ({op} {a} {b}) {expected}))"))
+                    .unwrap();
+            }
+        }
+    }
+    graph
+        .parse_and_run_program(
+            None,
+            r#"
+        (check (= (+) ""))
+        (check (= (+ "☃") "☃"))
+        (check (= (+ "a" "b" "☃" "c") "ab☃c"))
+        (check (= (replace "ababa" "ba" "☃") "a☃☃"))
+        (check (= (to-string -42) "-42"))
+        (check (= (or) false))
+        (check (= (or false) false))
+        (check (= (or false true false false) true))
+        (check (= () ()))
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn scalar_catalog_operations_preserve_native_proofs() {
+    EGraph::new_with_proofs()
+        .with_proof_testing()
+        .parse_and_run_program(
+            None,
+            r#"
+        (datatype E (Text String) (Truth bool) (Number i64))
+        (Text "") (Text "a") (Text "ab") (Text "abc")
+        (Truth false) (Truth true) (Number 3)
+        (prove (= (Text (+)) (Text "")))
+        (prove (= (Text (+ "a")) (Text "a")))
+        (prove (= (Text (+ "a" "b")) (Text "ab")))
+        (prove (= (Text (+ "a" "b" "c")) (Text "abc")))
+        (prove (= (Truth (or)) (Truth false)))
+        (prove (= (Truth (or true)) (Truth true)))
+        (prove (= (Truth (or false true)) (Truth true)))
+        (prove (= (Truth (or false true false)) (Truth true)))
+        (prove (= (Truth (not false)) (Truth true)))
+        (prove (= (Number (+ 1 2)) (Number 3)))
+    "#,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -848,6 +1182,7 @@ fn family_metadata_is_optional_and_frozen_per_language() {
         "test.identity",
         "identity",
         &[("x", scalar.clone())],
+        &[],
         scalar,
     )
     .unwrap();
@@ -900,11 +1235,11 @@ fn authoritative_family_exports_without_a_described_callable() {
     graph
         .type_info()
         .register_builtin_family(proto::HostSortFamily {
-            name: "bool".into(),
+            name: "BigRat".into(),
             arity: 0,
             bindings: Some(proto::SortBindings {
                 python: Some(proto::TypeBinding {
-                    path: vec!["test".into(), "Bool".into()],
+                    path: vec!["test".into(), "BigRat".into()],
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -912,8 +1247,13 @@ fn authoritative_family_exports_without_a_described_callable() {
         })
         .unwrap();
     let catalog = graph.type_info().builtin_catalog().unwrap();
-    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "bool" && f.bindings.is_some())));
-    assert!(!catalog.undescribed_sorts.iter().any(|name| name == "bool"));
+    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "BigRat" && f.bindings.is_some())));
+    assert!(
+        !catalog
+            .undescribed_sorts
+            .iter()
+            .any(|name| name == "BigRat")
+    );
 }
 
 #[test]
@@ -1064,7 +1404,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
         catalog
             .undescribed_sorts
             .iter()
-            .any(|name| name == "String")
+            .any(|name| name == "BigRat")
     );
     let keys = catalog
         .definitions
@@ -1080,8 +1420,14 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
     assert_eq!(
         keys,
         [
+            "egglog.core.bool.and",
+            "egglog.core.bool.implies",
+            "egglog.core.bool.not",
+            "egglog.core.bool.or",
+            "egglog.core.bool.xor",
             "egglog.core.f64.add",
             "egglog.core.i64.add",
+            "egglog.core.i64.to_string",
             "egglog.core.map.empty",
             "egglog.core.map.get",
             "egglog.core.map.insert",
@@ -1089,6 +1435,8 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.pair.first",
             "egglog.core.pair.make",
             "egglog.core.pair.second",
+            "egglog.core.string.concat",
+            "egglog.core.string.replace",
             "egglog.core.vec.empty",
             "egglog.core.vec.get",
             "egglog.core.vec.of",
@@ -1240,6 +1588,7 @@ fn pair_definitions_precede_instances_and_preserve_nominal_overloads() {
                     vec![]
                 },
                 mutates: None,
+                tail_repetitions: None,
             }]
         );
         assert_eq!(
@@ -1641,6 +1990,7 @@ fn empty_definition_keys_are_rejected_by_import_and_registration() {
         "test.valid",
         "invalid-definition",
         &[("value", sort.clone())],
+        &[],
         sort,
     )
     .unwrap();
@@ -1701,6 +2051,7 @@ fn canonical_signature_drives_native_checking_and_export() {
             "test.identity",
             "identity",
             &[("value", sort.clone())],
+            &[],
             sort.clone(),
         )
         .unwrap();
@@ -1802,9 +2153,14 @@ fn native_builtin_arity_errors_keep_source_aliases() {
 fn imported_definitions_keep_namespaces_and_diagnostic_labels_separate() {
     let graph = EGraph::default();
     let sort = graph.get_sort_by_name("i64").unwrap().clone();
-    let definition =
-        builtin::closed_signature("i64", "identity", &[("value", sort.clone())], sort.clone())
-            .unwrap();
+    let definition = builtin::closed_signature(
+        "i64",
+        "identity",
+        &[("value", sort.clone())],
+        &[],
+        sort.clone(),
+    )
+    .unwrap();
     let mut destination = proto::Program {
         ir_version: 1,
         ..Default::default()
@@ -1820,6 +2176,7 @@ fn imported_definitions_keep_namespaces_and_diagnostic_labels_separate() {
         "test.identity",
         "identity",
         &[("value", sort.clone())],
+        &[],
         sort,
     )
     .unwrap();

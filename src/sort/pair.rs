@@ -176,6 +176,7 @@ impl Presort for PairSort {
                                     vec![]
                                 },
                                 mutates: None,
+                                tail_repetitions: None,
                             }],
                         }),
                         rust: Some(pb::RustBindings {

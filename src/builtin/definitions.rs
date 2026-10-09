@@ -900,6 +900,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 pb::PythonCallKind::try_from(v.kind).map_err(|_| "invalid Python call kind")?;
             use pb::PythonCallKind as K;
             if kind == K::Unspecified
+                || (v.tail_repetitions.is_some() && !matches!(kind, K::Function | K::Method))
                 || matches!(kind, K::Function | K::Constant) == v.owner.is_some()
                 || matches!(kind, K::Method | K::Property) != v.receiver.is_some()
                 || v.path.iter().enumerate().any(|(i, component)| {
@@ -921,32 +922,36 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 .as_ref()
                 .map(|o| owner_sort(p, o, parameters))
                 .transpose()?;
-            if kind == K::Initializer && owner != Some(output) {
-                return Err("initializer result differs from owner".into());
-            }
-            if let Some(r) = v.receiver
-                && inputs.get(r as usize).map(|a| a.sort) != owner
-            {
-                return Err("receiver differs from owner".into());
-            }
             let slots = v
                 .params
                 .iter()
                 .map(|p| p.core_input)
                 .chain(v.receiver.map(Some))
                 .collect::<Vec<_>>();
-            validate_slots(&slots, inputs.len(), !tail.is_empty())?;
+            let effective = view_inputs(inputs, tail, v.tail_repetitions, &slots)?;
+            if kind == K::Initializer && owner != Some(output) {
+                return Err("initializer result differs from owner".into());
+            }
+            if let Some(r) = v.receiver
+                && effective.get(r as usize).copied() != owner
+            {
+                return Err("receiver differs from owner".into());
+            }
             for (position, param) in v.params.iter().enumerate() {
                 let slot = param.core_input.unwrap() as usize;
                 if param.name.is_empty() {
                     return Err("empty Python parameter".into());
                 }
-                if slot == inputs.len()
+                if v.tail_repetitions.is_none()
+                    && slot == inputs.len()
                     && (position + 1 != v.params.len() || param.default_expr.is_some())
                 {
                     return Err("invalid Python tail parameter".into());
                 }
                 if let Some(root) = param.default_expr {
+                    if slot >= inputs.len() {
+                        return Err("expanded tail inputs cannot have defaults".into());
+                    }
                     closed_default(p, root)?;
                     let expected = inputs[slot].sort;
                     let actual = p.nodes[root as usize].sort_id;
@@ -975,22 +980,23 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 .as_ref()
                 .map(|o| owner_sort(p, o, parameters))
                 .transpose()?;
-            if let Some(r) = v.receiver
-                && (r.core_input.is_none()
-                    || inputs.get(r.core_input.unwrap() as usize).map(|a| a.sort) != owner)
-            {
-                return Err("Rust receiver differs from owner".into());
-            }
             let slots = v
                 .params
                 .iter()
                 .map(|p| p.core_input)
                 .chain(v.receiver.map(|r| r.core_input))
                 .collect::<Vec<_>>();
-            validate_slots(&slots, inputs.len(), !tail.is_empty())?;
+            let effective = view_inputs(inputs, tail, v.tail_repetitions, &slots)?;
+            if let Some(r) = v.receiver
+                && (r.core_input.is_none()
+                    || effective.get(r.core_input.unwrap() as usize).copied() != owner)
+            {
+                return Err("Rust receiver differs from owner".into());
+            }
             for (position, param) in v.params.iter().enumerate() {
                 if param.name.is_empty()
-                    || (param.core_input == Some(inputs.len() as u32)
+                    || (v.tail_repetitions.is_none()
+                        && param.core_input == Some(inputs.len() as u32)
                         && position + 1 != v.params.len())
                 {
                     return Err("invalid Rust parameter".into());
@@ -1036,16 +1042,53 @@ fn validate_sort_bindings(b: Option<&pb::SortBindings>, arity: usize) -> Result<
     Ok(())
 }
 
-fn validate_slots(slots: &[Option<u32>], fixed: usize, tail: bool) -> Result<(), String> {
-    let count = fixed + usize::from(tail);
-    let set = slots.iter().copied().collect::<HashSet<_>>();
-    if slots.len() != count
-        || set.len() != count
-        || slots.iter().any(|s| s.is_none_or(|s| s as usize >= count))
-    {
+/// Validate a view's complete mapping before allocating expanded tail inputs.
+/// Sorts are interned structurally by reconciliation; their indices compare
+/// invariantly, including nested family arguments and bound variables.
+fn view_inputs(
+    inputs: &[pb::Arg],
+    tail: &[pb::Arg],
+    repetitions: Option<u32>,
+    slots: &[Option<u32>],
+) -> Result<Vec<u32>, String> {
+    let fixed = u32::try_from(inputs.len()).map_err(|_| "too many fixed inputs")?;
+    let count = match repetitions {
+        Some(repetitions) => {
+            if tail.is_empty() {
+                return Err("tail repetitions require a variadic host signature".into());
+            }
+            let width = u32::try_from(tail.len()).map_err(|_| "too many tail inputs")?;
+            fixed
+                .checked_add(
+                    repetitions
+                        .checked_mul(width)
+                        .ok_or("view input count overflow")?,
+                )
+                .ok_or("view input count overflow")?
+        }
+        None => fixed
+            .checked_add(u32::from(!tail.is_empty()))
+            .ok_or("view input count overflow")?,
+    };
+    if slots.len() != count as usize {
         return Err("presentation must cover each core input exactly once".into());
     }
-    Ok(())
+    let set = slots.iter().copied().collect::<HashSet<_>>();
+    if set.len() != slots.len() || slots.iter().any(|s| s.is_none_or(|s| s >= count)) {
+        return Err("presentation must cover each core input exactly once".into());
+    }
+    // An unspecialized tail is one logical parameter, never a receiver sort.
+    let effective = if repetitions.is_some() {
+        count as usize
+    } else {
+        inputs.len()
+    };
+    Ok(inputs
+        .iter()
+        .chain(tail.iter().cycle())
+        .take(effective)
+        .map(|a| a.sort)
+        .collect())
 }
 
 fn match_pattern(

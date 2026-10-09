@@ -34,7 +34,7 @@ impl BaseSort for I64Sort {
                 ..Default::default()
             }),
         }).expect("invalid i64 family presentation");
-        add_literal_prim!(eg, "+" [id = "egglog.core.i64.add", bindings = crate::builtin::scalar_add_bindings] = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
+        add_literal_prim!(eg, "+" [id = "egglog.core.i64.add", bindings = |s| crate::builtin::scalar_member_bindings(s, "__add__", "add", &["other"], Some("Add"), None)] = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
         add_literal_prim!(eg, "-" = |a: i64, b: i64| -?> i64 { a.checked_sub(b) });
         add_literal_prim!(eg, "*" = |a: i64, b: i64| -?> i64 { a.checked_mul(b) });
         add_literal_prim!(eg, "/" = |a: i64, b: i64| -?> i64 { a.checked_div(b) });
@@ -65,7 +65,7 @@ impl BaseSort for I64Sort {
         add_literal_prim!(eg, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_literal_prim!(eg, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
-        add_literal_prim!(eg, "to-string" = |a: i64| -> S { S::new(a.to_string()) });
+        add_literal_prim!(eg, "to-string" [id = "egglog.core.i64.to_string", bindings = |s| crate::builtin::scalar_member_bindings(s, "to_string", "to_string", &[], None, None)] = |a: i64| -> S { S::new(a.to_string()) });
 
         // Must be in the i64 sort register function because
         // the string sort is registered before the i64 sort.

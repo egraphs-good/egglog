@@ -246,6 +246,7 @@ impl Presort for MapSort {
                                         })
                                         .collect(),
                                     mutates: None,
+                                    tail_repetitions: None,
                                 }],
                             }),
                             rust: Some(pb::RustBindings {

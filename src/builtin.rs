@@ -245,31 +245,42 @@ struct InstanceConstraint {
     span: Span,
 }
 
+/// Expand only complete tail groups, retaining the legacy flat-facade rounding
+/// rule. Native arguments include the result; the caller reports any mismatch.
+fn expand_signature<T: Clone>(
+    fixed: &[T],
+    tail: &[T],
+    output: &T,
+    argument_count: usize,
+    round_tail_up: bool,
+) -> Vec<T> {
+    let mut sorts = fixed.to_vec();
+    if !tail.is_empty() {
+        let inputs = argument_count.saturating_sub(fixed.len() + 1);
+        let groups = if round_tail_up {
+            inputs.div_ceil(tail.len())
+        } else {
+            inputs / tail.len()
+        };
+        sorts.extend(tail.iter().cloned().cycle().take(groups * tail.len()));
+    }
+    sorts.push(output.clone());
+    sorts
+}
+
 impl TypeConstraint for InstanceConstraint {
     fn get(
         &self,
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn constraint::Constraint<AtomTerm, ArcSort>>> {
-        let mut sorts = self.fixed.clone();
-        if !self.tail.is_empty() {
-            // Native arguments include the result. Only complete input groups
-            // count; reject any missing prefix or remainder below.
-            let inputs = arguments.len().saturating_sub(self.fixed.len() + 1);
-            let groups = if self.round_tail_up {
-                inputs.div_ceil(self.tail.len())
-            } else {
-                inputs / self.tail.len()
-            };
-            sorts.extend(
-                self.tail
-                    .iter()
-                    .cloned()
-                    .cycle()
-                    .take(groups * self.tail.len()),
-            );
-        }
-        sorts.push(self.output);
+        let sorts = expand_signature(
+            &self.fixed,
+            &self.tail,
+            &self.output,
+            arguments.len(),
+            self.round_tail_up,
+        );
         if arguments.len() != sorts.len() {
             return vec![constraint::impossible(
                 constraint::ImpossibleConstraint::ArityMismatch {
@@ -422,6 +433,7 @@ pub fn closed_signature(
     key: &str,
     alias: &str,
     inputs: &[(&str, ArcSort)],
+    varargs: &[(&str, ArcSort)],
     output: ArcSort,
 ) -> Result<pb::Program, String> {
     if key.is_empty() || alias.is_empty() || key == alias {
@@ -434,6 +446,7 @@ pub fn closed_signature(
     let mut indices = vec![];
     for sort in inputs
         .iter()
+        .chain(varargs)
         .map(|(_, sort)| sort)
         .chain(std::iter::once(&output))
     {
@@ -484,6 +497,14 @@ pub fn closed_signature(
                             sort: *sort,
                         })
                         .collect(),
+                    varargs: varargs
+                        .iter()
+                        .zip(&indices[inputs.len()..])
+                        .map(|((name, _), sort)| pb::Arg {
+                            name: (*name).into(),
+                            sort: *sort,
+                        })
+                        .collect(),
                     output: indices.last().copied(),
                     ..Default::default()
                 },
@@ -504,7 +525,8 @@ pub fn closed_signature(
 }
 
 /// Validates and normalizes the currently supported closed signature into native
-/// sort names, including its result. This does not execute or inspect a body.
+/// sort names: fixed inputs, tail pattern, then result. This does not execute
+/// or inspect a body.
 pub fn signature_sorts(
     program: &pb::Program,
     primitive: &pb::HostPrimitive,
@@ -512,15 +534,10 @@ pub fn signature_sorts(
     let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
         return Err("function-application builtin typing is not implemented yet".into());
     };
-    if primitive.name.is_empty()
-        || !signature.type_params.is_empty()
-        || !signature.varargs.is_empty()
-    {
-        return Err(
-            "builtin typing currently requires a named closed fixed-arity signature".into(),
-        );
+    if primitive.name.is_empty() || !signature.type_params.is_empty() {
+        return Err("builtin typing currently requires a named closed signature".into());
     }
-    signature.inputs.iter().map(|arg| arg.sort).chain(std::iter::once(signature.output.ok_or("missing builtin result sort")?)).map(|index| {
+    signature.inputs.iter().chain(&signature.varargs).map(|arg| arg.sort).chain(std::iter::once(signature.output.ok_or("missing builtin result sort")?)).map(|index| {
         let sort = program.sorts.get(index as usize).ok_or("builtin signature sort index out of bounds")?;
         match &sort.kind {
             Some(pb::sort::Kind::Family(family)) if family.args.is_empty() && !family.name.is_empty() => Ok(family.name.clone()),
@@ -572,48 +589,96 @@ pub fn import_definition(
     Ok(key)
 }
 
-/// The scalar addition surface views, with owners and trait types derived from
-/// the canonical signature, never from a separately maintained type scheme.
-pub fn scalar_add_bindings(signature: &pb::GenericSignature) -> pb::CallableBindings {
+/// Build closed scalar member/operator views from the canonical signature.
+/// Specialized tail slots have ordinary required parameters in these views.
+pub fn scalar_member_bindings(
+    signature: &pb::GenericSignature,
+    python: &str,
+    rust: &str,
+    params: &[&str],
+    rust_trait: Option<&str>,
+    tail_repetitions: Option<u32>,
+) -> pb::CallableBindings {
+    assert!(signature.type_params.is_empty());
+    let count = match tail_repetitions {
+        Some(repetitions) => {
+            assert!(!signature.varargs.is_empty());
+            signature
+                .inputs
+                .len()
+                .checked_add(
+                    signature
+                        .varargs
+                        .len()
+                        .checked_mul(repetitions as usize)
+                        .unwrap(),
+                )
+                .unwrap()
+        }
+        None => {
+            assert!(signature.varargs.is_empty());
+            signature.inputs.len()
+        }
+    };
+    assert_eq!(count, params.len() + 1);
+    let inputs = signature
+        .inputs
+        .iter()
+        .chain(signature.varargs.iter().cycle())
+        .take(count)
+        .collect::<Vec<_>>();
     let owner = Some(pb::BindingOwner {
-        kind: Some(pb::binding_owner::Kind::Sort(signature.inputs[0].sort)),
+        kind: Some(pb::binding_owner::Kind::Sort(inputs[0].sort)),
     });
     pb::CallableBindings {
         python: Some(pb::PythonBindings {
             views: vec![pb::PythonCallable {
                 kind: pb::PythonCallKind::Method.into(),
-                path: vec!["__add__".into()],
+                path: vec![python.into()],
                 owner,
                 receiver: Some(0),
-                params: vec![pb::PythonParameter {
-                    core_input: Some(1),
-                    name: "other".into(),
-                    default_expr: None,
-                }],
+                params: params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| pb::PythonParameter {
+                        core_input: Some(index as u32 + 1),
+                        name: (*name).into(),
+                        default_expr: None,
+                    })
+                    .collect(),
+                tail_repetitions,
                 ..Default::default()
             }],
         }),
         rust: Some(pb::RustBindings {
             views: vec![pb::RustCallable {
-                path: vec!["add".into()],
+                path: vec![rust.into()],
                 owner,
                 receiver: Some(pb::RustReceiver {
                     core_input: Some(0),
                     borrowed: false,
                 }),
-                params: vec![pb::RustParameter {
-                    core_input: Some(1),
-                    name: "rhs".into(),
-                    borrowed: false,
-                }],
-                trait_impl: Some(pb::RustTrait {
-                    path: vec!["core".into(), "ops".into(), "Add".into()],
-                    args: vec![pb::RustType {
-                        sort: Some(signature.inputs[1].sort),
+                params: params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| pb::RustParameter {
+                        core_input: Some(index as u32 + 1),
+                        name: if rust_trait.is_some() { "rhs" } else { name }.to_string(),
                         borrowed: false,
-                    }],
+                    })
+                    .collect(),
+                trait_impl: rust_trait.map(|name| pb::RustTrait {
+                    path: vec!["core".into(), "ops".into(), name.into()],
+                    args: inputs[1..]
+                        .iter()
+                        .map(|arg| pb::RustType {
+                            sort: Some(arg.sort),
+                            borrowed: false,
+                        })
+                        .collect(),
                     output_associated_type: Some("Output".into()),
                 }),
+                tail_repetitions,
                 ..Default::default()
             }],
         }),
@@ -622,7 +687,9 @@ pub fn scalar_add_bindings(signature: &pb::GenericSignature) -> pb::CallableBind
 }
 
 struct SignatureConstraint {
-    sorts: Vec<String>,
+    fixed: Vec<String>,
+    tail: Vec<String>,
+    output: String,
     name: String,
     span: Span,
 }
@@ -633,16 +700,21 @@ impl TypeConstraint for SignatureConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn constraint::Constraint<AtomTerm, ArcSort>>> {
-        let sorts = self
-            .sorts
-            .iter()
-            .map(|name| {
-                typeinfo
-                    .get_sort_by_name(name)
-                    .unwrap_or_else(|| panic!("registered builtin sort {name} is absent"))
-                    .clone()
-            })
-            .collect();
+        let sorts = expand_signature(
+            &self.fixed,
+            &self.tail,
+            &self.output,
+            arguments.len(),
+            false,
+        )
+        .iter()
+        .map(|name| {
+            typeinfo
+                .get_sort_by_name(name)
+                .unwrap_or_else(|| panic!("registered builtin sort {name} is absent"))
+                .clone()
+        })
+        .collect();
         SimpleTypeConstraint::new(&self.name, sorts, self.span.clone()).get(arguments, typeinfo)
     }
 }
@@ -668,8 +740,16 @@ pub fn type_constraints(definition: &pb::Program, span: &Span) -> Box<dyn TypeCo
             _ => None,
         })
         .unwrap();
+    let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+        unreachable!()
+    };
+    let mut fixed = signature_sorts(definition, primitive).unwrap();
+    let output = fixed.pop().unwrap();
+    let tail = fixed.split_off(signature.inputs.len());
     Box::new(SignatureConstraint {
-        sorts: signature_sorts(definition, primitive).unwrap(),
+        fixed,
+        tail,
+        output,
         name: diagnostic_name.into(),
         span: span.clone(),
     })

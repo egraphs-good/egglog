@@ -188,6 +188,7 @@ impl Presort for VecSort {
                                     _ => vec![],
                                 },
                                 mutates: None,
+                                tail_repetitions: None,
                             }],
                         }),
                         rust: Some(pb::RustBindings {

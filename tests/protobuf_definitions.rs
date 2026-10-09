@@ -1,6 +1,471 @@
 use egglog::{builtin::definitions::reconcile_declarations, proto as pb};
 
 #[test]
+fn scalar_views_relocate_and_freeze_exact_tail_presence() {
+    let mut graph = egglog::EGraph::default();
+    for key in [
+        "string.concat",
+        "string.replace",
+        "bool.or",
+        "bool.not",
+        "i64.to_string",
+    ] {
+        let mut source = pb::Program::default();
+        graph
+            .type_info()
+            .export_builtin_definition(&format!("egglog.core.{key}"), &mut source)
+            .unwrap();
+        let mut destination = pb::Program {
+            ir_version: 1,
+            sorts: vec![pb::Sort {
+                kind: Some(pb::sort::Kind::Eq("Unrelated".into())),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        reconcile_declarations(&source, &mut destination).unwrap();
+        let installed = destination.clone();
+        for _ in 0..3 {
+            reconcile_declarations(&source, &mut destination).unwrap();
+            reconcile_declarations(&installed, &mut destination).unwrap();
+            assert_eq!(destination, installed);
+        }
+        let mut absent = source.clone();
+        for d in &mut absent.declarations {
+            d.bindings = None;
+            if let Some(pb::declaration::Kind::HostSortFamily(f)) = &mut d.kind {
+                f.bindings = None;
+            }
+        }
+        reconcile_declarations(&absent, &mut destination).unwrap();
+        assert_eq!(destination, installed);
+        if key == "string.concat" {
+            // Some(1) and None have the same mapped-slot shape but different
+            // surface arities. First supply freezes each language's presence.
+            for python in [false, true] {
+                let mut changed = source.clone();
+                let bindings = changed
+                    .declarations
+                    .iter_mut()
+                    .find_map(|d| d.bindings.as_mut())
+                    .unwrap();
+                if python {
+                    bindings.python.as_mut().unwrap().views[0].tail_repetitions = Some(1);
+                } else {
+                    bindings.rust.as_mut().unwrap().views[0].tail_repetitions = Some(1);
+                }
+                reconcile_declarations(&changed, &mut pb::Program::default()).unwrap();
+                assert!(reconcile_declarations(&changed, &mut destination).is_err());
+                assert_eq!(destination, installed);
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_tail_views_accept_zero_and_swapped_receiver_slots() {
+    let mut graph = egglog::EGraph::default();
+    let mut source = pb::Program::default();
+    graph
+        .type_info()
+        .export_builtin_definition("egglog.core.string.concat", &mut source)
+        .unwrap();
+    for count in [0, 1, 2, 5] {
+        let mut changed = source.clone();
+        let bindings = changed
+            .declarations
+            .iter_mut()
+            .find_map(|d| d.bindings.as_mut())
+            .unwrap();
+        let py = bindings.python.as_mut().unwrap();
+        py.views.truncate(1);
+        py.views[0].tail_repetitions = Some(count);
+        py.views[0].params = (0..count)
+            .map(|i| pb::PythonParameter {
+                core_input: Some(i),
+                name: format!("arg{i}"),
+                default_expr: None,
+            })
+            .collect();
+        let rs = bindings.rust.as_mut().unwrap();
+        rs.views.truncate(1);
+        rs.views[0].tail_repetitions = Some(count);
+        rs.views[0].params = (0..count)
+            .map(|i| pb::RustParameter {
+                core_input: Some(i),
+                name: format!("arg{i}"),
+                borrowed: false,
+            })
+            .collect();
+        let mut installed = pb::Program::default();
+        reconcile_declarations(&changed, &mut installed).unwrap();
+        let bindings = installed
+            .declarations
+            .iter()
+            .find_map(|d| d.bindings.as_ref())
+            .unwrap();
+        assert_eq!(
+            bindings.python.as_ref().unwrap().views[0].tail_repetitions,
+            Some(count)
+        );
+        assert_eq!(
+            bindings.rust.as_ref().unwrap().views[0].tail_repetitions,
+            Some(count)
+        );
+    }
+    let b = source
+        .declarations
+        .iter_mut()
+        .find_map(|d| d.bindings.as_mut())
+        .unwrap();
+    let py = &mut b.python.as_mut().unwrap().views[1];
+    py.receiver = Some(1);
+    py.params[0].core_input = Some(0);
+    let rs = &mut b.rust.as_mut().unwrap().views[1];
+    rs.receiver.as_mut().unwrap().core_input = Some(1);
+    rs.params[0].core_input = Some(0);
+    reconcile_declarations(&source, &mut pb::Program::default()).unwrap();
+}
+
+#[test]
+fn fixed_tail_python_forms_reject_first_supply_and_absent_block_enrichment() {
+    use pb::PythonCallKind as K;
+    let mut graph = egglog::EGraph::default();
+    let mut source = pb::Program::default();
+    graph
+        .type_info()
+        .export_builtin_definition("egglog.core.bool.or", &mut source)
+        .unwrap();
+    let index = source
+        .declarations
+        .iter()
+        .position(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.bool.or"))
+        .unwrap();
+    let owner = source.declarations[index]
+        .bindings
+        .as_ref()
+        .unwrap()
+        .python
+        .as_ref()
+        .unwrap()
+        .views[0]
+        .owner;
+    let mut absent = source.clone();
+    absent.declarations[index].bindings.as_mut().unwrap().python = None;
+    let mut accepted = vec![];
+    for kind in [
+        K::Constant,
+        K::Property,
+        K::Initializer,
+        K::ClassMethod,
+        K::ClassVariable,
+    ] {
+        let mut changed = source.clone();
+        changed.declarations[index]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python = Some(pb::PythonBindings {
+            views: vec![pb::PythonCallable {
+                kind: kind.into(),
+                path: match kind {
+                    K::Constant => vec!["test".into(), "C".into()],
+                    K::Initializer => vec![],
+                    _ => vec!["value".into()],
+                },
+                owner: if kind == K::Constant { None } else { owner },
+                receiver: (kind == K::Property).then_some(0),
+                tail_repetitions: Some(u32::from(kind == K::Property)),
+                ..Default::default()
+            }],
+        });
+        for enrich in [false, true] {
+            let mut destination = pb::Program::default();
+            if enrich {
+                reconcile_declarations(&absent, &mut destination).unwrap();
+            }
+            let before = destination.clone();
+            let rejected = reconcile_declarations(&changed, &mut destination).is_err();
+            if !rejected || destination != before {
+                accepted.push((kind, enrich));
+            }
+        }
+        // A preexisting language block already rejects a changed view on
+        // conflict; this alone cannot test first-supply form validation.
+        let mut frozen = pb::Program::default();
+        reconcile_declarations(&source, &mut frozen).unwrap();
+        let before = frozen.clone();
+        assert!(reconcile_declarations(&changed, &mut frozen).is_err());
+        assert_eq!(frozen, before);
+    }
+    assert!(
+        accepted.is_empty(),
+        "unsupported (kind, enrichment) accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn fixed_tail_views_derive_prefix_and_pattern_types_and_keep_fixed_defaults() {
+    let mut graph = egglog::EGraph::default();
+    let mut source = pb::Program::default();
+    graph
+        .type_info()
+        .export_builtin_definition("egglog.core.bool.or", &mut source)
+        .unwrap();
+    graph
+        .type_info()
+        .export_builtin_definition("egglog.core.i64.add", &mut source)
+        .unwrap();
+    let integer = source
+        .sorts
+        .iter()
+        .position(|s| {
+            matches!(&s.kind,
+        Some(pb::sort::Kind::Family(f)) if f.name == "i64")
+        })
+        .unwrap() as u32;
+    let boolean = source
+        .sorts
+        .iter()
+        .position(|s| {
+            matches!(&s.kind,
+        Some(pb::sort::Kind::Family(f)) if f.name == "bool")
+        })
+        .unwrap() as u32;
+    source.nodes.push(pb::Node {
+        sort_id: boolean,
+        kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+            value: Some(pb::primitive_value::Value::Bool(false)),
+        })),
+        ..Default::default()
+    });
+    let index = source
+        .declarations
+        .iter()
+        .position(|d| {
+            matches!(&d.kind,
+        Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.bool.or")
+        })
+        .unwrap();
+    let declaration = &mut source.declarations[index];
+    let Some(pb::declaration::Kind::HostPrimitive(p)) = &mut declaration.kind else {
+        unreachable!()
+    };
+    let Some(pb::host_primitive::Typing::Signature(s)) = &mut p.typing else {
+        unreachable!()
+    };
+    // Shape-only mutation of the exported record: bool, (i64, bool)* -> bool.
+    // R=2 makes slots [bool, i64, bool, i64, bool], with receiver slot 3.
+    s.inputs = vec![pb::Arg {
+        name: "fixed".into(),
+        sort: boolean,
+    }];
+    s.varargs = vec![
+        pb::Arg {
+            name: "key".into(),
+            sort: integer,
+        },
+        pb::Arg {
+            name: "value".into(),
+            sort: boolean,
+        },
+    ];
+    let b = declaration.bindings.as_mut().unwrap();
+    let py = &mut b.python.as_mut().unwrap().views[0];
+    py.owner.as_mut().unwrap().kind = Some(pb::binding_owner::Kind::Sort(integer));
+    py.receiver = Some(3);
+    py.params = [1, 2, 4, 0]
+        .into_iter()
+        .map(|i| pb::PythonParameter {
+            core_input: Some(i),
+            name: format!("arg{i}"),
+            default_expr: (i == 0).then_some(0),
+        })
+        .collect();
+    py.mutates = Some(0);
+    let rs = &mut b.rust.as_mut().unwrap().views[0];
+    rs.owner = py.owner;
+    rs.receiver.as_mut().unwrap().core_input = Some(3);
+    rs.params = [0, 1, 2, 4]
+        .into_iter()
+        .map(|i| pb::RustParameter {
+            core_input: Some(i),
+            name: format!("arg{i}"),
+            borrowed: false,
+        })
+        .collect();
+    rs.trait_impl = None;
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    let installed = destination.clone();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    assert_eq!(destination, installed);
+    for invalid in 0..4 {
+        let mut changed = source.clone();
+        let b = changed.declarations[index].bindings.as_mut().unwrap();
+        match invalid {
+            0 => {
+                b.python.as_mut().unwrap().views[0]
+                    .owner
+                    .as_mut()
+                    .unwrap()
+                    .kind = Some(pb::binding_owner::Kind::Sort(boolean))
+            }
+            1 => {
+                b.rust.as_mut().unwrap().views[0]
+                    .owner
+                    .as_mut()
+                    .unwrap()
+                    .kind = Some(pb::binding_owner::Kind::Sort(boolean))
+            }
+            2 => b.python.as_mut().unwrap().views[0].mutates = Some(2),
+            _ => b.python.as_mut().unwrap().views[0].params[2].default_expr = Some(0),
+        }
+        assert!(
+            reconcile_declarations(&changed, &mut pb::Program::default()).is_err(),
+            "case={invalid}"
+        );
+    }
+}
+
+#[test]
+fn fixed_tail_views_reject_invalid_counts_slots_types_and_defaults_transactionally() {
+    let mut graph = egglog::EGraph::default();
+    let mut source = pb::Program::default();
+    graph
+        .type_info()
+        .export_builtin_definition("egglog.core.bool.or", &mut source)
+        .unwrap();
+    // A real second scalar family supplies the wrong-sort owner control.
+    graph
+        .type_info()
+        .export_builtin_definition("egglog.core.i64.add", &mut source)
+        .unwrap();
+    let integer = source
+        .sorts
+        .iter()
+        .position(|s| {
+            matches!(&s.kind,
+        Some(pb::sort::Kind::Family(f)) if f.name == "i64")
+        })
+        .unwrap() as u32;
+    let boolean = source
+        .sorts
+        .iter()
+        .position(|s| {
+            matches!(&s.kind,
+        Some(pb::sort::Kind::Family(f)) if f.name == "bool")
+        })
+        .unwrap() as u32;
+    source.nodes.push(pb::Node {
+        sort_id: boolean,
+        kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+            value: Some(pb::primitive_value::Value::Bool(false)),
+        })),
+        ..Default::default()
+    });
+    for python in [false, true] {
+        for invalid in 0..10 {
+            let mut changed = source.clone();
+            let d = changed
+                .declarations
+                .iter_mut()
+                .find(|d| {
+                    matches!(&d.kind,
+                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.bool.or")
+                })
+                .unwrap();
+            let b = d.bindings.as_mut().unwrap();
+            if python {
+                let v = &mut b.python.as_mut().unwrap().views[0];
+                match invalid {
+                    0 => v.tail_repetitions = None,
+                    1 => v.tail_repetitions = Some(0),
+                    2 => v.tail_repetitions = Some(u32::MAX),
+                    3 => v.params[0].core_input = Some(0),
+                    4 => v.params.clear(),
+                    5 => v.params[0].core_input = None,
+                    6 => {
+                        v.owner.as_mut().unwrap().kind =
+                            Some(pb::binding_owner::Kind::Sort(integer))
+                    }
+                    7 => v.params[0].default_expr = Some(0),
+                    8 => v.mutates = Some(0),
+                    _ => v.receiver = Some(2),
+                }
+            } else {
+                let v = &mut b.rust.as_mut().unwrap().views[0];
+                match invalid {
+                    0 => v.tail_repetitions = None,
+                    1 => v.tail_repetitions = Some(0),
+                    2 => v.tail_repetitions = Some(u32::MAX),
+                    3 => v.params[0].core_input = Some(0),
+                    4 => v.params.clear(),
+                    5 => v.params[0].core_input = None,
+                    6 => {
+                        v.owner.as_mut().unwrap().kind =
+                            Some(pb::binding_owner::Kind::Sort(integer))
+                    }
+                    7 => v.receiver.as_mut().unwrap().core_input = None,
+                    8 => v.params.push(v.params[0].clone()),
+                    _ => v.receiver.as_mut().unwrap().core_input = Some(2),
+                }
+            }
+            let mut destination = source.clone();
+            let before = destination.clone();
+            assert!(
+                reconcile_declarations(&changed, &mut destination).is_err(),
+                "python={python}, case={invalid}"
+            );
+            assert_eq!(destination, before);
+            let mut empty = pb::Program::default();
+            assert!(
+                reconcile_declarations(&changed, &mut empty).is_err(),
+                "first supply: python={python}, case={invalid}"
+            );
+            assert_eq!(empty, pb::Program::default());
+        }
+    }
+    for invalid in 0..3 {
+        let mut changed = source.clone();
+        let d = changed
+            .declarations
+            .iter_mut()
+            .find(|d| {
+                matches!(&d.kind,
+            Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.bool.or")
+            })
+            .unwrap();
+        let Some(pb::declaration::Kind::HostPrimitive(p)) = &mut d.kind else {
+            unreachable!()
+        };
+        if invalid == 2 {
+            p.typing = Some(pb::host_primitive::Typing::Application(
+                pb::FunctionApplication {},
+            ));
+        } else {
+            let Some(pb::host_primitive::Typing::Signature(s)) = &mut p.typing else {
+                unreachable!()
+            };
+            if invalid == 0 {
+                // Keep two fixed slots to isolate the empty-tail guard.
+                s.inputs = vec![s.varargs[0].clone(); 2];
+                s.varargs.clear();
+            } else {
+                s.varargs.push(s.varargs[0].clone());
+                let b = d.bindings.as_mut().unwrap();
+                b.python.as_mut().unwrap().views[0].tail_repetitions = Some(u32::MAX);
+                b.rust.as_mut().unwrap().views[0].tail_repetitions = Some(u32::MAX);
+            }
+        }
+        assert!(
+            reconcile_declarations(&changed, &mut pb::Program::default()).is_err(),
+            "signature case={invalid}"
+        );
+    }
+}
+
+#[test]
 fn container_language_views_relocate_enrich_and_freeze_without_growth() {
     let mut graph = egglog::EGraph::default();
     for key in [

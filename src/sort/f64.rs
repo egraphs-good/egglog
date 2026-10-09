@@ -28,7 +28,7 @@ impl BaseSort for F64Sort {
                 ..Default::default()
             }),
         }).expect("invalid f64 family presentation");
-        add_literal_prim!(eg, "+" [id = "egglog.core.f64.add", bindings = crate::builtin::scalar_add_bindings] = |a: F, b: F| -> F { a + b });
+        add_literal_prim!(eg, "+" [id = "egglog.core.f64.add", bindings = |s| crate::builtin::scalar_member_bindings(s, "__add__", "add", &["other"], Some("Add"), None)] = |a: F, b: F| -> F { a + b });
         add_literal_prim!(eg, "-" = |a: F, b: F| -> F { a - b });
         add_literal_prim!(eg, "*" = |a: F, b: F| -> F { a * b });
         add_literal_prim!(eg, "/" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a / b) });
