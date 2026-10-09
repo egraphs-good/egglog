@@ -241,10 +241,10 @@ fn observed_leaves_partition_inline_and_trailing_work_in_every_mode() {
                 &mut |cause, event| {
                     assert_eq!(cause, 0);
                     match event {
-                        ExecutionEvent::RunStarted { origin } => {
+                        ExecutionEvent::RunStarted { origin, .. } => {
                             entered[usize::from(origin == ExecutionOrigin::Internal)] += 1
                         }
-                        ExecutionEvent::RunFinished { origin, result } => {
+                        ExecutionEvent::RunFinished { origin, result, .. } => {
                             finished[usize::from(origin == ExecutionOrigin::Internal)] += 1;
                             leaf_iterations.extend(result.unwrap().iterations.iter().cloned());
                         }
@@ -330,9 +330,20 @@ fn prove_helpers_are_internal_and_fail_keeps_output_suppression() {
                     }
                 },
                 &mut |_, event| {
-                    if let ExecutionEvent::RunStarted { origin } = event {
+                    if let ExecutionEvent::RunStarted { origin, schedule } = event {
                         assert_eq!(origin, ExecutionOrigin::Internal);
+                        assert!(
+                            schedule.is_none(),
+                            "proof/check helper has no submitted schedule: {schedule:?}"
+                        );
                         helper_entries += 1;
+                    } else if let ExecutionEvent::RunFinished { schedule, .. }
+                    | ExecutionEvent::LoopFinished { schedule, .. } = event
+                    {
+                        assert!(
+                            schedule.is_none(),
+                            "proof/check helper completion has no submitted schedule"
+                        );
                     }
                 },
             )
@@ -370,11 +381,11 @@ fn failed_entries_have_no_fabricated_measurements_and_checks_are_internal() {
                 program,
                 &mut |_, _, _| panic!("failed command produced an output"),
                 &mut |_, event| match event {
-                    ExecutionEvent::RunStarted { origin } => {
+                    ExecutionEvent::RunStarted { origin, .. } => {
                         assert_eq!(origin, expected_origin);
                         entries += 1;
                     }
-                    ExecutionEvent::RunFinished { origin, result } => {
+                    ExecutionEvent::RunFinished { origin, result, .. } => {
                         assert_eq!(origin, expected_origin);
                         assert_eq!(result.is_ok(), measured);
                         completions += 1;
@@ -397,7 +408,7 @@ fn until_query_is_measured_separately_from_the_skipped_authored_leaf() {
     let mut measured = vec![];
     graph
         .run_program_observed(program, &mut |_, _, _| {}, &mut |_, event| {
-            if let ExecutionEvent::RunFinished { origin, result } = event {
+            if let ExecutionEvent::RunFinished { origin, result, .. } = event {
                 measured.push((origin, result.unwrap().iterations.len()));
             }
         })
@@ -450,7 +461,7 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
         config.ruleset = maintenance.clone();
         let mut entries = 0;
         copy.run_program_observed(schedule, &mut |_, _, _| {}, &mut |_, event| {
-            if let ExecutionEvent::RunStarted { origin } = event {
+            if let ExecutionEvent::RunStarted { origin, .. } = event {
                 assert_eq!(origin, ExecutionOrigin::Internal);
                 entries += 1;
             }
@@ -488,11 +499,11 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
                         origin: ExecutionOrigin::Requested,
                         command: ResolvedNCommand::AddRuleset(_, name),
                     } => installed.push((cause, name.clone())),
-                    ExecutionEvent::RunStarted { origin } => {
+                    ExecutionEvent::RunStarted { origin, .. } => {
                         assert_eq!(origin, ExecutionOrigin::Internal);
                         entered += 1;
                     }
-                    ExecutionEvent::RunFinished { origin, result } => {
+                    ExecutionEvent::RunFinished { origin, result, .. } => {
                         assert_eq!(origin, ExecutionOrigin::Internal);
                         if result.is_ok() {
                             completed += 1;

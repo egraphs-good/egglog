@@ -102,6 +102,22 @@ pub enum ExecutionOrigin {
     Internal,
 }
 
+/// Location in the schedule before proof instrumentation. Iterations address
+/// its enclosing loops, not any generated maintenance loops.
+#[derive(Clone, Copy, Debug)]
+pub struct ScheduleLocation<'a> {
+    pub path: &'a [usize],
+    pub iterations: &'a [usize],
+}
+
+/// The actual branch which completed a native loop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeLoopStop {
+    CountReached,
+    CanStop,
+    Unchanged,
+}
+
 /// Synchronous observations from the existing native interpreter.
 ///
 /// Observers can aggregate leaf reports without retaining an event history. A
@@ -118,9 +134,18 @@ pub enum ExecutionEvent<'a> {
     },
     RunStarted {
         origin: ExecutionOrigin,
+        schedule: Option<ScheduleLocation<'a>>,
     },
     RunFinished {
         origin: ExecutionOrigin,
+        schedule: Option<ScheduleLocation<'a>>,
+        result: Result<&'a RunReport, &'a Error>,
+    },
+    LoopFinished {
+        origin: ExecutionOrigin,
+        schedule: Option<ScheduleLocation<'a>>,
+        completed: usize,
+        stop: Option<NativeLoopStop>,
         result: Result<&'a RunReport, &'a Error>,
     },
 }
@@ -555,8 +580,106 @@ impl Default for EGraph {
     }
 }
 
+#[derive(Clone)]
+struct OriginatedCommand<C> {
+    command: C,
+    origin: ExecutionOrigin,
+    schedule: Option<ScheduleProvenance>,
+}
+
+/// Flat correspondence only: no executable schedule or retained event history.
+#[derive(Clone, Default)]
+struct ScheduleProvenance {
+    nodes: HashMap<Vec<usize>, ScheduleSite>,
+}
+
+#[derive(Clone)]
+struct ScheduleSite {
+    path: Vec<usize>,
+    internal: bool,
+    // Checks that the remaining compiler passes preserve the instrumented
+    // topology. This is a node tag, not another schedule representation.
+    kind: u8,
+}
+
+impl ScheduleProvenance {
+    fn validate(&self, command: &ResolvedNCommand) -> Result<(), Error> {
+        let mut command = command;
+        while let ResolvedNCommand::Fail(_, child) = command {
+            command = child;
+        }
+        let ResolvedNCommand::RunSchedule(schedule) = command else {
+            return Err(Error::BackendError(
+                "schedule provenance lost its command".into(),
+            ));
+        };
+        let mut pending = vec![(schedule, vec![])];
+        let mut seen = 0;
+        while let Some((schedule, path)) = pending.pop() {
+            let kind = match schedule {
+                ResolvedSchedule::Run(..) => 0,
+                ResolvedSchedule::Repeat(..) => 1,
+                ResolvedSchedule::Saturate(..) => 2,
+                ResolvedSchedule::Sequence(..) => 3,
+            };
+            if self.nodes.get(&path).is_none_or(|site| site.kind != kind) {
+                return Err(Error::BackendError(
+                    "schedule provenance topology changed".into(),
+                ));
+            }
+            seen += 1;
+            let children = match schedule {
+                ResolvedSchedule::Run(..) => &[][..],
+                ResolvedSchedule::Repeat(_, _, child) | ResolvedSchedule::Saturate(_, child) => {
+                    std::slice::from_ref(child.as_ref())
+                }
+                ResolvedSchedule::Sequence(_, children) => children.as_slice(),
+            };
+            for (i, child) in children.iter().enumerate() {
+                let mut child_path = path.clone();
+                child_path.push(i);
+                pending.push((child, child_path));
+            }
+        }
+        if seen != self.nodes.len() {
+            return Err(Error::BackendError(
+                "schedule provenance contains stale nodes".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+struct ScheduleObservation<'a> {
+    provenance: Option<&'a ScheduleProvenance>,
+    // Uninstrumented requested schedules need no correspondence table.
+    identity: bool,
+    path: Vec<usize>,
+    iterations: Vec<usize>,
+}
+
+impl ScheduleObservation<'_> {
+    fn site(&self) -> Option<(ScheduleLocation<'_>, bool)> {
+        let (path, internal) = if let Some(provenance) = self.provenance {
+            let site = &provenance.nodes[&self.path];
+            (site.path.as_slice(), site.internal)
+        } else if self.identity {
+            (self.path.as_slice(), false)
+        } else {
+            return None;
+        };
+        Some((
+            ScheduleLocation {
+                path,
+                iterations: &self.iterations,
+            },
+            internal,
+        ))
+    }
+}
+
 struct ResolvedNCommands {
-    desugared: Vec<(ResolvedNCommand, ExecutionOrigin)>,
+    desugared: Vec<OriginatedCommand<ResolvedNCommand>>,
     /// In proof mode, populated with the desugared program before instrumented with proofs
     desugared_before_proofs: Vec<ResolvedNCommand>,
 }
@@ -1105,6 +1228,7 @@ impl EGraph {
         &mut self,
         sched: &ResolvedSchedule,
         origin: ExecutionOrigin,
+        observation: &mut ScheduleObservation<'_>,
         observer: &mut dyn FnMut(ExecutionEvent<'_>),
     ) -> Result<RunReport, Error> {
         match sched {
@@ -1114,55 +1238,94 @@ impl EGraph {
                         Ruleset::Rules(_, ExecutionOrigin::Internal)
                         | Ruleset::Combined(_, ExecutionOrigin::Internal),
                     ) => ExecutionOrigin::Internal,
+                    _ if observation.site().is_some_and(|(_, internal)| internal) => {
+                        ExecutionOrigin::Internal
+                    }
                     _ => origin,
                 };
-                observer(ExecutionEvent::RunStarted { origin });
+                observer(ExecutionEvent::RunStarted {
+                    origin,
+                    schedule: observation.site().map(|(site, _)| site),
+                });
                 let result = self.run_rules(span, config, observer);
                 observer(ExecutionEvent::RunFinished {
                     origin,
+                    schedule: observation.site().map(|(site, _)| site),
                     result: result.as_ref(),
                 });
                 result
             }
-            ResolvedSchedule::Repeat(_span, limit, sched) => {
-                let mut report = RunReport::default();
-                for _i in 0..*limit {
-                    let rec = self.run_schedule(sched, origin, observer)?;
-                    let can_stop = rec.can_stop;
-                    report.union(rec);
-                    if can_stop {
-                        break;
+            ResolvedSchedule::Repeat(_, _, child) | ResolvedSchedule::Saturate(_, child) => {
+                let limit = match sched {
+                    ResolvedSchedule::Repeat(_, count, _) => Some(*count),
+                    _ => None,
+                };
+                let source_loop = observation.site().is_some_and(|(_, internal)| !internal);
+                let mut completed = 0;
+                let mut stop = NativeLoopStop::CountReached;
+                let result = (|| {
+                    let mut report = RunReport::default();
+                    while limit.is_none_or(|limit| completed < limit) {
+                        if limit.is_none() {
+                            log::debug!(
+                                "Saturate iteration {} start: {}",
+                                completed + 1,
+                                Self::schedule_for_log(child)
+                            );
+                        }
+                        observation.path.push(0);
+                        if source_loop {
+                            observation.iterations.push(completed);
+                        }
+                        let rec = self.run_schedule(child, origin, observation, observer);
+                        observation.path.pop();
+                        if source_loop {
+                            observation.iterations.pop();
+                        }
+                        let rec = rec?;
+                        completed += 1;
+                        let can_stop = rec.can_stop;
+                        let updated = rec.updated;
+                        if limit.is_none() {
+                            log::debug!(
+                                "Saturate iteration {completed} end: {}",
+                                Self::run_report_debug_summary(&rec)
+                            );
+                        }
+                        report.union(rec);
+                        if limit.is_some() && can_stop {
+                            stop = NativeLoopStop::CanStop;
+                            break;
+                        }
+                        if limit.is_none() && !updated {
+                            log::debug!("Saturate reached fixpoint after {completed} iteration(s)");
+                            stop = NativeLoopStop::Unchanged;
+                            break;
+                        }
                     }
-                }
-                Ok(report)
-            }
-            ResolvedSchedule::Saturate(_span, sched) => {
-                let mut report = RunReport::default();
-                let mut i = 0usize;
-                loop {
-                    i += 1;
-                    log::debug!(
-                        "Saturate iteration {i} start: {}",
-                        Self::schedule_for_log(sched)
-                    );
-                    let rec = self.run_schedule(sched, origin, observer)?;
-                    let updated = rec.updated;
-                    log::debug!(
-                        "Saturate iteration {i} end: {}",
-                        Self::run_report_debug_summary(&rec)
-                    );
-                    report.union(rec);
-                    if !updated {
-                        log::debug!("Saturate reached fixpoint after {i} iteration(s)");
-                        break;
-                    }
-                }
-                Ok(report)
+                    Ok(report)
+                })();
+                let site = observation.site();
+                observer(ExecutionEvent::LoopFinished {
+                    origin: if site.is_some_and(|(_, internal)| internal) {
+                        ExecutionOrigin::Internal
+                    } else {
+                        origin
+                    },
+                    schedule: site.filter(|(_, internal)| !internal).map(|(site, _)| site),
+                    completed,
+                    stop: result.as_ref().ok().map(|_| stop),
+                    result: result.as_ref(),
+                });
+                result
             }
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
-                for sched in scheds {
-                    report.union(self.run_schedule(sched, origin, observer)?);
+                for (index, sched) in scheds.iter().enumerate() {
+                    observation.path.push(index);
+                    let result = self.run_schedule(sched, origin, observation, observer);
+                    observation.path.pop();
+                    report.union(result?);
                 }
                 Ok(report)
             }
@@ -1495,7 +1658,11 @@ impl EGraph {
                 "eval_expr expects a single resolved command".to_string(),
             ));
         }
-        let Some((resolved_command, _)) = resolved_commands.into_iter().next() else {
+        let Some(OriginatedCommand {
+            command: resolved_command,
+            ..
+        }) = resolved_commands.into_iter().next()
+        else {
             return Err(Error::BackendError(
                 "eval_expr expects a single resolved command".to_string(),
             ));
@@ -1774,6 +1941,7 @@ impl EGraph {
         let id = translator.build();
         observer(ExecutionEvent::RunStarted {
             origin: ExecutionOrigin::Internal,
+            schedule: None,
         });
         let run_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
@@ -1783,6 +1951,7 @@ impl EGraph {
             .map_err(|e| Error::BackendError(e.to_string()));
         observer(ExecutionEvent::RunFinished {
             origin: ExecutionOrigin::Internal,
+            schedule: None,
             result: run_result.as_ref(),
         });
         run_result?;
@@ -1804,6 +1973,7 @@ impl EGraph {
         &mut self,
         command: ResolvedNCommand,
         origin: ExecutionOrigin,
+        provenance: Option<&ScheduleProvenance>,
         observer: &mut dyn FnMut(ExecutionEvent<'_>),
     ) -> Result<Vec<CommandOutput>, Error> {
         match command {
@@ -1861,7 +2031,17 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                let report = self.run_schedule(&sched, origin, observer)?;
+                let report = self.run_schedule(
+                    &sched,
+                    origin,
+                    &mut ScheduleObservation {
+                        provenance,
+                        identity: provenance.is_none() && origin == ExecutionOrigin::Requested,
+                        path: vec![],
+                        iterations: vec![],
+                    },
+                    observer,
+                )?;
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
@@ -1983,7 +2163,7 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
-                let result = self.run_command(*c, origin, observer);
+                let result = self.run_command(*c, origin, provenance, observer);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {e}");
                 } else {
@@ -2298,7 +2478,14 @@ impl EGraph {
         // Add term encoding when it is enabled
         if self.proof_state.original_typechecking.is_none() {
             Ok(ResolvedNCommands {
-                desugared: resolved_before_proofs,
+                desugared: resolved_before_proofs
+                    .into_iter()
+                    .map(|(command, origin)| OriginatedCommand {
+                        command,
+                        origin,
+                        schedule: None,
+                    })
+                    .collect(),
                 desugared_before_proofs: vec![],
             })
         } else {
@@ -2321,7 +2508,12 @@ impl EGraph {
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
             let mut new_typechecked = vec![];
-            for (new_cmd, origin) in term_encoding_added {
+            for OriginatedCommand {
+                command: new_cmd,
+                origin,
+                schedule,
+            } in term_encoding_added
+            {
                 let mut desugared =
                     desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
                 for (cmd, child_origin) in &mut desugared {
@@ -2346,7 +2538,29 @@ impl EGraph {
                             .map(move |command| (command, origin))
                         });
 
-                new_typechecked.extend(desugared_typechecked);
+                let mut schedule = schedule;
+                let desugared_typechecked: Vec<_> = desugared_typechecked.collect();
+                let last = desugared_typechecked.len().checked_sub(1);
+                for (i, (command, origin)) in desugared_typechecked.into_iter().enumerate() {
+                    let mapping = if Some(i) == last {
+                        schedule.take()
+                    } else {
+                        None
+                    };
+                    if let Some(mapping) = &mapping {
+                        mapping.validate(&command)?;
+                    }
+                    new_typechecked.push(OriginatedCommand {
+                        command,
+                        origin,
+                        schedule: mapping,
+                    });
+                }
+                if schedule.is_some() {
+                    return Err(Error::BackendError(
+                        "schedule provenance lost during desugaring".into(),
+                    ));
+                }
             }
             Ok(ResolvedNCommands {
                 desugared: new_typechecked,
@@ -2373,7 +2587,7 @@ impl EGraph {
             | ResolvedNCommand::NormRule { .. }
             | ResolvedNCommand::Push(_)
             | ResolvedNCommand::Pop(..)) => {
-                self.run_command(command, origin, &mut |_| {})?;
+                self.run_command(command, origin, None, &mut |_| {})?;
             }
             ResolvedNCommand::CoreAction(action) => {
                 self.eval_actions(&ResolvedActions::singleton(action), false)?;
@@ -2493,7 +2707,15 @@ impl EGraph {
                     let start = desugared.len();
                     desugared.extend(resolved.desugared.clone());
 
-                    for (index, (processed, origin)) in resolved.desugared.into_iter().enumerate() {
+                    for (
+                        index,
+                        OriginatedCommand {
+                            command: processed,
+                            origin,
+                            schedule,
+                        },
+                    ) in resolved.desugared.into_iter().enumerate()
+                    {
                         if mode == ProcessingMode::Compile {
                             self.compile_command(processed, origin)?;
                             continue;
@@ -2505,14 +2727,17 @@ impl EGraph {
                                 ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
                             )
                         {
-                            let result = self.run_command(processed, origin, &mut |event| {
-                                observer(cause, event)
-                            })?;
+                            let result = self.run_command(
+                                processed,
+                                origin,
+                                schedule.as_ref(),
+                                &mut |event| observer(cause, event),
+                            )?;
                             observer(
                                 cause,
                                 ExecutionEvent::CommandCompleted {
                                     origin,
-                                    command: &desugared[start + index].0,
+                                    command: &desugared[start + index].command,
                                 },
                             );
                             for output in result {
@@ -2624,7 +2849,7 @@ impl EGraph {
         Ok(res
             .desugared
             .into_iter()
-            .map(|(c, _)| c.to_command())
+            .map(|c| c.command.to_command())
             .collect())
     }
 
@@ -2849,6 +3074,7 @@ impl EGraph {
         self.run_command(
             ResolvedNCommand::UserDefined(span!(), name.to_string(), args.to_vec()),
             ExecutionOrigin::Requested,
+            None,
             &mut |_| {},
         )
     }

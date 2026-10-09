@@ -16,6 +16,103 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+#[test]
+fn schedule_observation_keeps_source_paths_through_proof_helpers() {
+    use egglog::{ExecutionEvent, ExecutionOrigin, NativeLoopStop};
+    for mode in 0..4 {
+        let mut graph = match mode {
+            0 => EGraph::default(),
+            1 => EGraph::default().with_term_encoding_enabled(),
+            2 => EGraph::default().with_proofs_enabled(),
+            _ => EGraph::default().with_proofs_enabled().with_proof_testing(),
+        };
+        graph.parse_and_run_program(None, "(ruleset r)").unwrap();
+        // The text parser inserts implicit Sequence nodes around schedule
+        // bodies. Author the actual native AST to fix the tested coordinates.
+        let leaf = egglog::ast::Schedule::Run(
+            egglog::span!(),
+            egglog::ast::RunConfig {
+                ruleset: "r".into(),
+                until: None,
+            },
+        );
+        let commands = vec![egglog::ast::Command::RunSchedule(
+            egglog::ast::Schedule::Sequence(
+                egglog::span!(),
+                vec![
+                    egglog::ast::Schedule::Repeat(egglog::span!(), 0, Box::new(leaf.clone())),
+                    egglog::ast::Schedule::Repeat(egglog::span!(), 1, Box::new(leaf.clone())),
+                    egglog::ast::Schedule::Saturate(egglog::span!(), Box::new(leaf)),
+                ],
+            ),
+        )];
+        let mut runs = vec![];
+        let mut loops = vec![];
+        let mut inline_helpers = 0;
+        let mut trailing_helpers = 0;
+        let mut outputs = 0;
+        graph
+            .run_program_observed(
+                commands,
+                &mut |_, origin, _| {
+                    if origin == ExecutionOrigin::Requested {
+                        outputs += 1;
+                    }
+                },
+                &mut |_, event| match event {
+                    ExecutionEvent::RunStarted { origin, schedule } => match (origin, schedule) {
+                        (ExecutionOrigin::Requested, Some(site)) => {
+                            runs.push((site.path.to_vec(), site.iterations.to_vec()))
+                        }
+                        (ExecutionOrigin::Internal, Some(site)) => {
+                            inline_helpers += 1;
+                            assert!(matches!(site.path, [1, 0] | [2, 0]), "{site:?}");
+                            assert_eq!(
+                                site.iterations.len(),
+                                1,
+                                "helper loops are not source loops"
+                            );
+                        }
+                        (ExecutionOrigin::Internal, None) => trailing_helpers += 1,
+                        _ => panic!("requested leaf lost source location"),
+                    },
+                    ExecutionEvent::LoopFinished {
+                        schedule: Some(site),
+                        completed,
+                        stop,
+                        result,
+                        ..
+                    } => {
+                        assert!(result.is_ok());
+                        assert!(site.iterations.is_empty());
+                        loops.push((site.path.to_vec(), completed, stop));
+                    }
+                    _ => {}
+                },
+            )
+            .unwrap();
+        assert_eq!(outputs, 1);
+        assert_eq!(
+            loops.len(),
+            3,
+            "mode {mode}: only authored loops produce source completions"
+        );
+        assert_eq!(loops[0], (vec![0], 0, Some(NativeLoopStop::CountReached)));
+        assert_eq!(loops[1].0, [1]);
+        assert_eq!(loops[1].1, 1);
+        assert_eq!(loops[2].0, [2]);
+        assert_eq!(loops[2].2, Some(NativeLoopStop::Unchanged));
+        assert_eq!(runs[0], (vec![1, 0], vec![0]));
+        assert_eq!(runs.len(), 1 + loops[2].1);
+        for (iteration, (path, iterations)) in runs[1..].iter().enumerate() {
+            assert_eq!(path, &[2, 0]);
+            assert_eq!(iterations, &[iteration]);
+        }
+        assert_eq!(inline_helpers > 0, mode > 0);
+        assert_eq!(trailing_helpers > 0, mode > 0);
+    }
+}
+
 #[derive(Clone)]
 struct ProofIdentity(Arc<AtomicUsize>);
 

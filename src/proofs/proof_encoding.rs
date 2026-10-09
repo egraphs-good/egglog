@@ -65,7 +65,7 @@ impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
         program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
-    ) -> Vec<(Command, ExecutionOrigin)> {
+    ) -> Vec<OriginatedCommand<Command>> {
         Self { egraph }.add_term_encoding_helper(program)
     }
 
@@ -1472,7 +1472,25 @@ impl<'a> ProofInstrumentor<'a> {
         ))
     }
 
-    fn instrument_schedule(&mut self, schedule: &ResolvedSchedule) -> Schedule {
+    fn instrument_schedule(
+        &mut self,
+        schedule: &ResolvedSchedule,
+        source_path: &mut Vec<usize>,
+        native_path: &mut Vec<usize>,
+        provenance: &mut ScheduleProvenance,
+    ) -> Schedule {
+        provenance.nodes.insert(
+            native_path.clone(),
+            ScheduleSite {
+                path: source_path.clone(),
+                internal: false,
+                kind: match schedule {
+                    ResolvedSchedule::Run(..) | ResolvedSchedule::Sequence(..) => 3,
+                    ResolvedSchedule::Repeat(..) => 1,
+                    ResolvedSchedule::Saturate(..) => 2,
+                },
+            },
+        );
         match schedule {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
@@ -1495,27 +1513,82 @@ impl<'a> ProofInstrumentor<'a> {
                         },
                     ),
                 };
-                Schedule::Sequence(span.clone(), vec![new_run, self.rebuild()])
+                native_path.push(0);
+                provenance.nodes.insert(
+                    native_path.clone(),
+                    ScheduleSite {
+                        path: source_path.clone(),
+                        internal: false,
+                        kind: 0,
+                    },
+                );
+                native_path.pop();
+                let rebuild = self.rebuild();
+                native_path.push(1);
+                let mut pending = vec![(&rebuild, native_path.clone())];
+                while let Some((schedule, path)) = pending.pop() {
+                    let (kind, children) = match schedule {
+                        Schedule::Run(..) => (0, &[][..]),
+                        Schedule::Repeat(_, _, child) => (1, std::slice::from_ref(child.as_ref())),
+                        Schedule::Saturate(_, child) => (2, std::slice::from_ref(child.as_ref())),
+                        Schedule::Sequence(_, children) => (3, children.as_slice()),
+                    };
+                    provenance.nodes.insert(
+                        path.clone(),
+                        ScheduleSite {
+                            path: source_path.clone(),
+                            internal: true,
+                            kind,
+                        },
+                    );
+                    for (i, child) in children.iter().enumerate() {
+                        let mut child_path = path.clone();
+                        child_path.push(i);
+                        pending.push((child, child_path));
+                    }
+                }
+                native_path.pop();
+                Schedule::Sequence(span.clone(), vec![new_run, rebuild])
             }
             ResolvedSchedule::Sequence(span, schedules) => Schedule::Sequence(
                 span.clone(),
                 schedules
                     .iter()
-                    .map(|s| self.instrument_schedule(s))
+                    .enumerate()
+                    .map(|(i, s)| {
+                        source_path.push(i);
+                        native_path.push(i);
+                        let result =
+                            self.instrument_schedule(s, source_path, native_path, provenance);
+                        source_path.pop();
+                        native_path.pop();
+                        result
+                    })
                     .collect(),
             ),
-            ResolvedSchedule::Saturate(span, schedule) => {
-                Schedule::Saturate(span.clone(), Box::new(self.instrument_schedule(schedule)))
+            ResolvedSchedule::Saturate(span, child) | ResolvedSchedule::Repeat(span, _, child) => {
+                source_path.push(0);
+                native_path.push(0);
+                let child =
+                    Box::new(self.instrument_schedule(child, source_path, native_path, provenance));
+                source_path.pop();
+                native_path.pop();
+                match schedule {
+                    ResolvedSchedule::Repeat(_, count, _) => {
+                        Schedule::Repeat(span.clone(), *count, child)
+                    }
+                    _ => Schedule::Saturate(span.clone(), child),
+                }
             }
-            GenericSchedule::Repeat(span, n, schedule) => Schedule::Repeat(
-                span.clone(),
-                *n,
-                Box::new(self.instrument_schedule(schedule)),
-            ),
         }
     }
 
-    fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
+    fn term_encode_command(
+        &mut self,
+        command: &ResolvedNCommand,
+        res: &mut Vec<Command>,
+        provenance: &mut Option<ScheduleProvenance>,
+    ) {
         log::trace!("Term encoding for {command}");
         match &command {
             ResolvedNCommand::Sort {
@@ -1603,10 +1676,14 @@ impl<'a> ProofInstrumentor<'a> {
                 ));
             }
             ResolvedNCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
+                let mut mapping = ScheduleProvenance::default();
+                let schedule =
+                    self.instrument_schedule(schedule, &mut vec![], &mut vec![], &mut mapping);
+                *provenance = Some(mapping);
+                res.push(Command::RunSchedule(schedule));
             }
             ResolvedNCommand::Fail(span, cmd) => {
-                self.term_encode_command(cmd, res);
+                self.term_encode_command(cmd, res, provenance);
                 // Every term-encodable inner command pushes at least one command, so
                 // this pop cannot fail; an empty `res` would be an egglog bug.
                 let last = res
@@ -1670,17 +1747,29 @@ impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn add_term_encoding_helper(
         &mut self,
         program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
-    ) -> Vec<(Command, ExecutionOrigin)> {
+    ) -> Vec<OriginatedCommand<Command>> {
         let mut res = vec![];
 
         if !self.egraph.proof_state.term_header_added {
-            res.extend(self.term_header());
+            res.extend(
+                self.term_header()
+                    .into_iter()
+                    .map(|(command, origin)| OriginatedCommand {
+                        command,
+                        origin,
+                        schedule: None,
+                    }),
+            );
             if self.egraph.proof_state.proofs_enabled {
                 let proof_header = self.proof_header();
                 res.extend(
                     self.parse_program(&proof_header)
                         .into_iter()
-                        .map(|command| (command, ExecutionOrigin::Internal)),
+                        .map(|command| OriginatedCommand {
+                            command,
+                            origin: ExecutionOrigin::Internal,
+                            schedule: None,
+                        }),
                 );
             }
             self.egraph.proof_state.term_header_added = true;
@@ -1688,16 +1777,24 @@ impl<'a> ProofInstrumentor<'a> {
 
         for (command, origin) in program {
             let mut encoded = vec![];
-            self.term_encode_command(&command, &mut encoded);
+            let mut schedule = None;
+            self.term_encode_command(&command, &mut encoded, &mut schedule);
             // Each transformation places the requested command's completion
             // anchor last. Setup is internal; trailing rebuilding stays later.
             let anchor = encoded.pop();
-            res.extend(
-                encoded
-                    .into_iter()
-                    .map(|command| (command, ExecutionOrigin::Internal)),
-            );
-            res.extend(anchor.map(|command| (command, origin)));
+            res.extend(encoded.into_iter().map(|command| OriginatedCommand {
+                command,
+                origin: ExecutionOrigin::Internal,
+                schedule: None,
+            }));
+            res.extend(anchor.map(|command| OriginatedCommand {
+                command,
+                origin,
+                // Prove/ProofTesting Check introduce internal schedules, but
+                // there is no submitted schedule for them to address. This
+                // does not strip a requested Run selecting an internal ruleset.
+                schedule: schedule.filter(|_| origin == ExecutionOrigin::Requested),
+            }));
 
             // run rebuilding after every command except a few
             if let ResolvedNCommand::Function(..)
@@ -1705,10 +1802,11 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
-                res.push((
-                    Command::RunSchedule(self.rebuild()),
-                    ExecutionOrigin::Internal,
-                ));
+                res.push(OriginatedCommand {
+                    command: Command::RunSchedule(self.rebuild()),
+                    origin: ExecutionOrigin::Internal,
+                    schedule: None,
+                });
             }
         }
 
