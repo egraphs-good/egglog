@@ -2370,7 +2370,7 @@ impl EGraph {
             ResolvedNCommand::CoreAction(action) => {
                 self.eval_actions(&ResolvedActions::singleton(action), false)?;
             }
-            ResolvedNCommand::Check(span, facts) => {
+            ResolvedNCommand::Check(span, facts) if origin == ExecutionOrigin::Internal => {
                 let rule = ResolvedRule {
                     span,
                     head: ResolvedActions::default(),
@@ -2581,7 +2581,10 @@ impl EGraph {
     /// Validate a program on a disposable compiler clone, then discard it.
     ///
     /// This registers declarations and fully compiles rules (including native
-    /// groundedness checks), actions and queries. It executes no actions, runs,
+    /// groundedness checks), actions and internal queries. Requested Checks are
+    /// typechecked, but their query planning remains at the execution boundary,
+    /// where native Fail can catch it. Proof/term expansion and internal helper
+    /// validation are unchanged. It executes no actions, runs,
     /// primitive bodies, proof validators, maintenance or user-defined commands.
     /// No backend IDs or speculative definitions are transferred to this graph.
     /// Runtime errors such as a missing witness are left to actual execution.

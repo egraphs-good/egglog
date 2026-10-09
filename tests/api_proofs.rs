@@ -131,6 +131,65 @@ fn compile_only_validation_registers_and_compiles_without_execution() {
 }
 
 #[test]
+fn validation_defers_requested_check_planning_but_not_internal_queries() {
+    for mode in 0..4 {
+        let mut graph = match mode {
+            0 => EGraph::default(),
+            1 => EGraph::new_with_term_encoding(),
+            2 => EGraph::new_with_proofs(),
+            _ => EGraph::new_with_proofs().with_proof_testing(),
+        };
+        graph
+            .parse_and_run_program(None, "(datatype Mark (M i64)) (M 5)")
+            .unwrap();
+        for source in ["(check (= (+ x 1) 2))", "(fail (check (= (+ x 1) 2)))"] {
+            let program = graph.parse_program(None, source).unwrap();
+            let result = graph.validate_program(program);
+            // ProofTesting puts this query in an internal helper rule; the
+            // requested ProveExists anchor cannot catch its planning failure.
+            assert_eq!(result.is_ok(), mode != 3, "mode {mode}: {result:?}");
+        }
+        for source in [
+            "(check (= 1 \"wrong sort\"))",
+            "(fail (check (missing-function)))",
+            "(run-schedule (run :until (= (+ x 1) 2)))",
+            "(rule ((= (+ x 1) 2)) ((M x)))",
+        ] {
+            let program = graph.parse_program(None, source).unwrap();
+            assert!(
+                graph.validate_program(program).is_err(),
+                "mode {mode}: {source}"
+            );
+        }
+        let mut plain = graph.clone();
+        assert!(
+            plain
+                .parse_and_run_program(None, "(M 10) (check (= (+ x 1) 2)) (M 20)")
+                .is_err()
+        );
+        plain
+            .parse_and_run_program(None, "(check (M 10)) (fail (check (M 20)))")
+            .unwrap();
+        let result =
+            graph.parse_and_run_program(None, "(M 10) (fail (check (= (+ x 1) 2))) (M 20)");
+        assert_eq!(result.is_ok(), mode != 3, "mode {mode}: {result:?}");
+        graph
+            .parse_and_run_program(None, "(check (M 5)) (check (M 10))")
+            .unwrap();
+        graph
+            .parse_and_run_program(
+                None,
+                if mode == 3 {
+                    "(fail (check (M 20)))"
+                } else {
+                    "(check (M 20))"
+                },
+            )
+            .unwrap();
+    }
+}
+
+#[test]
 fn canonical_map_scalar_source_equivalence_proofs() {
     for mode in ["terms", "proofs", "proof-testing"] {
         for constructor in ["(map-of 1 7)", "(map-from-pairs (vec-of (pair 1 7)))"] {
