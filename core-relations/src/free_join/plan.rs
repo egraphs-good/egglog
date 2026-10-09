@@ -925,6 +925,56 @@ fn count_variable_usage_per_bag(bags: &[PlanningContext]) -> DenseIdMap<Variable
     n_used_in_bag
 }
 
+/// A stage scanning `cover` in `mode` that binds `vars` from its key columns in
+/// order and intersects every atom of `bag` holding one of them.
+fn mat_stage(
+    bag: &PlanningContext,
+    cover: MatId,
+    mode: MatScanMode,
+    vars: &[Variable],
+) -> JoinStage {
+    let bind = vars
+        .iter()
+        .enumerate()
+        .map(|(j, var)| (ColumnId::from_usize(j), *var))
+        .collect();
+    let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
+    for (col, var) in vars.iter().enumerate() {
+        let vinfo = &bag.vars[*var];
+        for occ in vinfo.occurrences.iter() {
+            let isect = match to_intersect
+                .iter_mut()
+                .find(|(spec, _)| spec.to_index.atom == occ.atom)
+            {
+                Some(isect) => isect,
+                None => {
+                    to_intersect.push((
+                        ScanSpec {
+                            to_index: SubAtom {
+                                atom: occ.atom,
+                                vars: smallvec![],
+                            },
+                            constraints: vec![],
+                        },
+                        smallvec![],
+                    ));
+                    to_intersect.last_mut().unwrap()
+                }
+            };
+            isect.0.to_index.vars.extend(occ.vars.iter().copied());
+            isect
+                .1
+                .extend(occ.vars.iter().map(|_| ColumnId::from_usize(col)));
+        }
+    }
+    JoinStage::FusedIntersectMat {
+        cover,
+        mode,
+        bind,
+        to_intersect,
+    }
+}
+
 /// Plans the execution stages for a single bag.
 ///
 /// This involves:
@@ -987,50 +1037,12 @@ fn plan_single_bag(
         {
             has_block_contributed[i] = true;
             if prologue.is_none() {
-                let bind = prev_block
-                    .1
-                    .msg_vars
-                    .iter()
-                    .enumerate()
-                    .map(|(j, var)| (ColumnId::from_usize(j), *var))
-                    .collect();
-                let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
-                for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
-                    let vinfo = &bag.vars[*var];
-                    for occ in vinfo.occurrences.iter() {
-                        let isect = match to_intersect
-                            .iter_mut()
-                            .find(|(spec, _)| spec.to_index.atom == occ.atom)
-                        {
-                            Some(isect) => isect,
-                            None => {
-                                to_intersect.push((
-                                    ScanSpec {
-                                        to_index: SubAtom {
-                                            atom: occ.atom,
-                                            vars: smallvec![],
-                                        },
-                                        constraints: vec![],
-                                    },
-                                    smallvec![],
-                                ));
-                                to_intersect.last_mut().unwrap()
-                            }
-                        };
-                        isect.0.to_index.vars.extend(occ.vars.iter().copied());
-                        isect
-                            .1
-                            .extend(occ.vars.iter().map(|_| ColumnId::from_usize(col)));
-                    }
-                }
-
-                prologue = Some(JoinStage::FusedIntersectMat {
-                    cover: MatId::from_usize(i),
-                    mode: MatScanMode::KeyOnly,
-                    bind,
-                    to_intersect,
-                });
-
+                prologue = Some(mat_stage(
+                    bag,
+                    MatId::from_usize(i),
+                    MatScanMode::KeyOnly,
+                    &prev_block.1.msg_vars,
+                ));
                 stripped_bag
                     .vars
                     .retain(|var, _vinfo| !prev_block.1.msg_vars.contains(&var));
