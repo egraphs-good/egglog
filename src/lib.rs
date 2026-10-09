@@ -798,21 +798,29 @@ impl EGraph {
 
     /// Pop the current egraph off the stack, replacing
     /// it with the previously pushed egraph.
-    /// It preserves the run report and messages from the popped
-    /// egraph.
+    /// It preserves the cumulative run report and complete symbol generator
+    /// from the popped egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.pushed_egraph.take() {
-            Some(mut e) => {
-                // Preserve the overall report from the popped egraph
-                std::mem::swap(&mut self.overall_run_report, &mut e.overall_run_report);
-                // Preserve the symbol generator so that fresh symbols
-                // generated after pop don't collide with ones generated before pop.
-                std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
-                *self = *e;
+            Some(saved) => {
+                self.restore_from(*saved);
                 Ok(())
             }
             None => Err(Error::Pop(span!())),
         }
+    }
+
+    /// Restore a saved graph with the same retained-state invariant as [`Self::pop`].
+    ///
+    /// The current cumulative report replaces the saved report (it already
+    /// includes that prefix). Keep the complete current symbol generator so
+    /// future fresh symbols cannot collide with names minted in the scope.
+    /// All other state, including resources and the push stack, comes from saved.
+    /// Callers owning external snapshots must validate their lifecycle pairing.
+    pub fn restore_from(&mut self, mut saved: Self) {
+        std::mem::swap(&mut self.overall_run_report, &mut saved.overall_run_report);
+        std::mem::swap(&mut self.parser.symbol_gen, &mut saved.parser.symbol_gen);
+        *self = saved;
     }
 
     fn translate_expr_to_mergefn(
@@ -3806,6 +3814,72 @@ mod tests {
         egraph.pop().unwrap();
 
         assert_eq!(egraph.extension_state::<usize>(), Some(&1));
+    }
+
+    #[test]
+    fn scope_restore_preserves_native_pop_fields_and_saved_state() {
+        for use_pop in [false, true] {
+            let mut graph = EGraph::default();
+            let saved_threads = if cfg!(target_family = "wasm") { 1 } else { 2 };
+            graph.set_num_threads(saved_threads);
+            graph.set_report_level(ReportLevel::WithPlan);
+            *graph.extension_state_or_default::<usize>() = 1;
+            graph.parse_and_run_program(None, "(datatype M (N i64) (Box M)) (ruleset r) (rewrite (Box x) x :ruleset r) (Box (N 1)) (run r 1)").unwrap();
+            assert!(!graph.overall_run_report.iterations.is_empty());
+            let saved = graph.clone();
+            if use_pop {
+                graph.push();
+            }
+            graph.set_num_threads(1);
+            graph.set_report_level(ReportLevel::TimeOnly);
+            *graph.extension_state_or_default::<usize>() = 2;
+            graph.parser.ensure_no_reserved_symbols = false;
+            graph.seminaive = !saved.seminaive;
+            graph
+                .parse_and_run_program(None, "(Box (N 2)) (run r 1)")
+                .unwrap();
+            graph.parser.symbol_gen.include_zero(true);
+            let minted = graph.parser.symbol_gen.fresh("scope");
+            let symbols = graph.parser.symbol_gen.clone();
+            let report = serde_json::to_value(&graph.overall_run_report).unwrap();
+            assert!(
+                graph.overall_run_report.iterations.len()
+                    > saved.overall_run_report.iterations.len()
+            );
+            let seminaive = saved.seminaive;
+            if use_pop {
+                graph.pop().unwrap();
+            } else {
+                graph.restore_from(saved);
+            }
+            assert_eq!(
+                serde_json::to_value(&graph.overall_run_report).unwrap(),
+                report
+            );
+            assert_eq!(graph.parser.symbol_gen, symbols);
+            assert_ne!(graph.parser.symbol_gen.fresh("scope"), minted);
+            assert_eq!(graph.extension_state::<usize>(), Some(&1));
+            assert_eq!(graph.num_threads(), saved_threads);
+            assert!(graph.parser.ensure_no_reserved_symbols);
+            assert_eq!(graph.seminaive, seminaive);
+            graph
+                .parse_and_run_program(None, "(fail (check (N 2)))")
+                .unwrap();
+            let outputs = graph
+                .parse_and_run_program(None, "(Box (N 3)) (run r 1)")
+                .unwrap();
+            let CommandOutput::RunSchedule(report) = outputs.last().unwrap() else {
+                panic!("missing run")
+            };
+            let rules: Vec<_> = report
+                .iterations
+                .iter()
+                .flat_map(|i| i.rule_set_report.rule_reports.values())
+                .flatten()
+                .collect();
+            assert!(!rules.is_empty());
+            assert!(rules.iter().all(|rule| rule.plan.is_some()));
+        }
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
