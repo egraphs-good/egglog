@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    AtomId,
+    AtomId, Variable,
     numeric_id::{DenseIdMap, IdVec},
 };
 use fixedbitset::FixedBitSet;
@@ -438,6 +438,7 @@ pool_set! {
         shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
         instr_indexes: Vec<u32> [ 1 << 20 ],
         intersected_on: DenseIdMap<AtomId, i64> [ 1 << 20 ],
+        stage_of_var: DenseIdMap<Variable, usize> [ 1 << 20 ],
     }
 }
 

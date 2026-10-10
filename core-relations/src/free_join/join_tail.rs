@@ -16,6 +16,8 @@ use crate::{
     common::{IndexMap, Value},
     numeric_id::{DenseIdMap, IdVec},
     offsets::Subset,
+    pool::Pooled,
+    query::Atom,
     row_buffer::{RowBuffer, SmallValueVec, TaggedRowBuffer},
 };
 
@@ -24,7 +26,7 @@ use super::{
     frame_update::FrameUpdates,
     packed_cache::OwnedAtomRows,
     packed_trie::ChildShape,
-    plan::{JoinStage, MatId, MatScanMode},
+    plan::{JoinStage, MatId, MatScanMode, ScanSpec},
     prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes, StageMask},
     probe::{AtomRows, Prober},
     with_pool_set,
@@ -378,6 +380,20 @@ pub(super) fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo<'
     }
 }
 
+/// Calls `f` on each variable `stage` binds.
+pub(super) fn for_each_bound_var(stage: &JoinStage, mut f: impl FnMut(Variable)) {
+    match stage {
+        JoinStage::Intersect { var, .. } => f(*var),
+        JoinStage::FusedIntersect { bind, .. } | JoinStage::FusedIntersectMat { bind, .. } => {
+            bind.iter().for_each(|(_, var)| f(*var))
+        }
+    }
+}
+
+fn is_semijoin(stage: &JoinStage) -> bool {
+    matches!(stage, JoinStage::FusedIntersectMat { mode, .. } if *mode == MatScanMode::Semijoin)
+}
+
 fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
@@ -408,16 +424,17 @@ pub(super) fn sort_plan_by_size(
     leaf_scans: &mut LeafScans,
     start: usize,
     instrs: &[JoinStage],
+    atoms: &DenseIdMap<AtomId, Atom>,
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
     let mut last_pos = start;
     for i in start..instrs.len() {
         if is_reorder_barrier(&instrs[i]) {
-            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
+            sort_plan_by_size_inner(order, last_pos..i, instrs, atoms, binding_info);
             last_pos = i + 1;
         }
     }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
+    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, atoms, binding_info);
     recompute_leaf_scans(order, leaf_scans, instrs, start);
 }
 
@@ -434,8 +451,9 @@ pub(super) fn sort_plan_by_size(
 /// `FusedIntersect` or `FusedIntersectMat { mode: Full | KeyOnly | Value }`,
 /// has an empty `to_intersect`, and no later stage either (a) references the
 /// same cover atom for `FusedIntersect`, or (b) reads one of its bound variables
-/// as a scalar through `FusedIntersectMat { mode: Value | Lookup }`.
-/// `FusedIntersectMat::Lookup` binds nothing itself and is never a leaf scan.
+/// as a scalar through `FusedIntersectMat { mode: Value | Lookup | Semijoin }`.
+/// `FusedIntersectMat::Lookup` binds nothing itself and is never a leaf scan;
+/// nor is a `Semijoin`, whose variables may already be bound.
 pub(super) fn recompute_leaf_scans(
     order: &InstrOrder,
     leaf_scans: &mut LeafScans,
@@ -497,7 +515,10 @@ pub(super) fn recompute_leaf_scans(
                     }
                 }
                 JoinStage::FusedIntersectMat {
-                    mode, to_intersect, ..
+                    mode,
+                    bind,
+                    to_intersect,
+                    ..
                 } => {
                     if let Some(ca) = cover_atom
                         && to_intersect.iter().any(|(s, _)| s.to_index.atom == ca)
@@ -505,9 +526,14 @@ pub(super) fn recompute_leaf_scans(
                         blocked = true;
                         break;
                     }
-                    if let MatScanMode::Value(vars) | MatScanMode::Lookup(vars) = mode
-                        && vars.iter().any(|v| bind_vars.contains(v))
-                    {
+                    let reads_bound = match mode {
+                        MatScanMode::Value(vars) | MatScanMode::Lookup(vars) => {
+                            vars.iter().any(|v| bind_vars.contains(v))
+                        }
+                        MatScanMode::Semijoin => bind.iter().any(|(_, v)| bind_vars.contains(v)),
+                        MatScanMode::Full | MatScanMode::KeyOnly => false,
+                    };
+                    if reads_bound {
                         blocked = true;
                         break;
                     }
@@ -518,10 +544,71 @@ pub(super) fn recompute_leaf_scans(
     }
 }
 
+/// A column whose variable an earlier counted stage bound adds no
+/// refinement. Only a `Semijoin` stage binds a variable another stage also
+/// binds, so a plan without one skips this bookkeeping. `binders` maps each
+/// variable to the first stage counted binding it; `bound` maps it to the
+/// first stage binding it in the physical prefix and the stages placed
+/// since. A stage that has not run has bound nothing: a `Semijoin` counts
+/// where it runs, for the variables still free there.
+struct SemijoinCredit {
+    binders: Pooled<DenseIdMap<Variable, usize>>,
+    bound: Pooled<DenseIdMap<Variable, usize>>,
+}
+
+impl SemijoinCredit {
+    fn new() -> SemijoinCredit {
+        let map = || with_pool_set(|ps| ps.get::<DenseIdMap<Variable, usize>>());
+        SemijoinCredit {
+            binders: map(),
+            bound: map(),
+        }
+    }
+
+    /// Records the variables the stage at `stage_index` binds as it runs.
+    fn mark_bound(&mut self, stage_index: usize, stage: &JoinStage) {
+        for_each_bound_var(stage, |var| {
+            self.bound.get_or_insert(var, || stage_index);
+        });
+    }
+
+    /// Counts the stage at `stage_index` as the binder of each variable it
+    /// binds that is not stale there.
+    fn count(&mut self, stage_index: usize, stage: &JoinStage) -> &SemijoinCredit {
+        for_each_bound_var(stage, |var| {
+            if !self.stale(stage_index, stage, var) {
+                self.binders.get_or_insert(var, || stage_index);
+            }
+        });
+        self
+    }
+
+    /// Whether another stage bound `var` first: one counted before the stage
+    /// at `stage_index`, or, at a `Semijoin`, one that ran before it.
+    fn stale(&self, stage_index: usize, stage: &JoinStage, var: Variable) -> bool {
+        let other = |first: &usize| *first != stage_index;
+        (is_semijoin(stage) && self.bound.get(var).is_some_and(other))
+            || self.binders.get(var).is_some_and(other)
+    }
+
+    /// How many columns of `spec` hold a variable not stale at the stage at
+    /// `stage_index`. An atom holding a variable in several columns is keyed
+    /// on each.
+    fn fresh(&self, stage_index: usize, stage: &JoinStage, atom: &Atom, spec: &ScanSpec) -> i64 {
+        let stale = |var| self.stale(stage_index, stage, var);
+        spec.to_index
+            .vars
+            .iter()
+            .filter(|col| !atom.get_var(**col).is_some_and(stale))
+            .count() as i64
+    }
+}
+
 pub(super) fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
     instrs: &[JoinStage],
+    atoms: &DenseIdMap<AtomId, Atom>,
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
     // Nothing to sort if there's 0 or 1 element.
@@ -530,36 +617,56 @@ pub(super) fn sort_plan_by_size_inner(
     }
     // How many times an atom has been intersected/joined
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
-    let update_refinements =
-        |stage: &JoinStage, refinements: &mut DenseIdMap<AtomId, i64>| match stage {
-            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *refinements.get_or_default(scan.atom) += 1;
-            }),
+    let semijoins = instrs.iter().any(is_semijoin);
+    let mut credit = semijoins.then(SemijoinCredit::new);
+    let update_refinements = |stage_index: usize,
+                              refinements: &mut DenseIdMap<AtomId, i64>,
+                              credit: Option<&mut SemijoinCredit>| {
+        let stage = &instrs[stage_index];
+        let credit = credit.map(|credit| credit.count(stage_index, stage));
+        let fresh = |spec: &ScanSpec| {
+            credit.map_or(spec.to_index.vars.len() as i64, |credit| {
+                credit.fresh(stage_index, stage, &atoms[spec.to_index.atom], spec)
+            })
+        };
+        match stage {
+            JoinStage::Intersect { var, scans } => {
+                if !credit.is_some_and(|credit| credit.stale(stage_index, stage, *var)) {
+                    scans.iter().for_each(|scan| {
+                        *refinements.get_or_default(scan.atom) += 1;
+                    })
+                }
+            }
             JoinStage::FusedIntersect {
                 cover,
                 to_intersect,
                 ..
             } => {
-                *refinements.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
+                *refinements.get_or_default(cover.to_index.atom) += fresh(cover);
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *refinements.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
+                    *refinements.get_or_default(spec.to_index.atom) += fresh(spec);
                 });
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *refinements.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
+                    *refinements.get_or_default(spec.to_index.atom) += fresh(spec);
                 });
             }
-        };
+        }
+    };
 
-    // Count how many times each atom has been refined in the logical plan
-    // prefix, as the DVO heuristic does.
-    for stage in &instrs[..range.start] {
-        update_refinements(stage, &mut times_refined);
+    if let Some(credit) = &mut credit {
+        for stage in (0..range.start).map(|position| order.get(position)) {
+            credit.mark_bound(stage, &instrs[stage]);
+        }
     }
+    // Count how many times each atom has been refined in the logical plan
+    // prefix, as the DVO heuristic does, after the `Semijoin` stages that ran.
+    (0..range.start)
+        .map(|position| order.get(position))
+        .filter(|stage| semijoins && is_semijoin(&instrs[*stage]))
+        .chain((0..range.start).filter(|stage| !is_semijoin(&instrs[*stage])))
+        .for_each(|stage| update_refinements(stage, &mut times_refined, credit.as_mut()));
 
     // We prioritize stages by
     //
@@ -570,9 +677,13 @@ pub(super) fn sort_plan_by_size_inner(
     // Estimate size is second so that very small inputs (e.g. FunDep
     // consequents with exactly one value) run before multi-relation stages
     // that happen to have a larger current estimate.
+    //
+    // A `Semijoin` ranks by how many of its variables are bound, and is a
+    // size-1 lookup once all are.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo<'_, '_>,
-                  refinements: &DenseIdMap<AtomId, i64>| {
+                  refinements: &DenseIdMap<AtomId, i64>,
+                  credit: Option<&SemijoinCredit>| {
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
@@ -583,6 +694,16 @@ pub(super) fn sort_plan_by_size_inner(
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
+            JoinStage::FusedIntersectMat { mode, bind, .. } if *mode == MatScanMode::Semijoin => {
+                let refine = bind
+                    .iter()
+                    .filter(|(_, var)| credit.is_some_and(|credit| credit.bound.contains_key(*var)))
+                    .count();
+                if refine == bind.len() {
+                    return (-(refine as i64), 1, -num_intersected_rels(join_stage));
+                }
+                refine as _
+            }
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
         (
@@ -593,16 +714,30 @@ pub(super) fn sort_plan_by_size_inner(
     };
 
     for i in range.clone() {
-        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
+        let mut key_i = key_fn(
+            &instrs[order.get(i)],
+            binding_info,
+            &times_refined,
+            credit.as_ref(),
+        );
         for j in (i + 1)..range.end {
-            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
+            let key_j = key_fn(
+                &instrs[order.get(j)],
+                binding_info,
+                &times_refined,
+                credit.as_ref(),
+            );
             if key_j < key_i {
                 order.data.swap(i, j);
                 key_i = key_j;
             }
         }
         // Update the counts after a new instruction is selected.
-        update_refinements(&instrs[order.get(i)], &mut times_refined);
+        let stage = order.get(i);
+        update_refinements(stage, &mut times_refined, credit.as_mut());
+        if let Some(credit) = &mut credit {
+            credit.mark_bound(stage, &instrs[stage]);
+        }
     }
 }
 

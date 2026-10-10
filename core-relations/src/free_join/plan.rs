@@ -92,6 +92,11 @@ define_id!(pub(crate) MatId, u32, "An identifier for materialization within a de
 pub(crate) enum MatScanMode {
     Full,
     KeyOnly,
+    /// Like `KeyOnly`, but a variable of `bind` may already be bound when the
+    /// stage runs: keys must match the bound values and bind the rest, and the
+    /// stage is a membership test once all are bound. `to_intersect` holds
+    /// every atom with a variable of `bind`. Not a reorder barrier.
+    Semijoin,
     Value(SmallVec<[Variable; 16]>),
     Lookup(SmallVec<[Variable; 16]>),
 }
@@ -358,10 +363,22 @@ pub(crate) struct MatSpec {
     pub val_vars: SmallVec<[Variable; 16]>,
 }
 
+/// The distinct `key` columns of materialization `source`'s keys, stored as
+/// materialization `target`.
+#[derive(Debug, Clone)]
+pub(crate) struct MatProjection {
+    pub source: MatId,
+    pub target: MatId,
+    pub key: SmallVec<[ColumnId; 4]>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStageBlocks {
     // each block is a list of instructions and how to yield
     pub blocks: Vec<(JoinStages, MatSpec)>,
+    /// Computed when their source block is materialized, before the next block
+    /// runs.
+    pub projections: Vec<MatProjection>,
 }
 
 #[derive(Debug, Clone)]
@@ -925,6 +942,56 @@ fn count_variable_usage_per_bag(bags: &[PlanningContext]) -> DenseIdMap<Variable
     n_used_in_bag
 }
 
+/// A stage scanning `cover` in `mode` that binds `vars` from its key columns in
+/// order and intersects every atom of `bag` holding one of them.
+fn mat_stage(
+    bag: &PlanningContext,
+    cover: MatId,
+    mode: MatScanMode,
+    vars: &[Variable],
+) -> JoinStage {
+    let bind = vars
+        .iter()
+        .enumerate()
+        .map(|(j, var)| (ColumnId::from_usize(j), *var))
+        .collect();
+    let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
+    for (col, var) in vars.iter().enumerate() {
+        let vinfo = &bag.vars[*var];
+        for occ in vinfo.occurrences.iter() {
+            let isect = match to_intersect
+                .iter_mut()
+                .find(|(spec, _)| spec.to_index.atom == occ.atom)
+            {
+                Some(isect) => isect,
+                None => {
+                    to_intersect.push((
+                        ScanSpec {
+                            to_index: SubAtom {
+                                atom: occ.atom,
+                                vars: smallvec![],
+                            },
+                            constraints: vec![],
+                        },
+                        smallvec![],
+                    ));
+                    to_intersect.last_mut().unwrap()
+                }
+            };
+            isect.0.to_index.vars.extend(occ.vars.iter().copied());
+            isect
+                .1
+                .extend(occ.vars.iter().map(|_| ColumnId::from_usize(col)));
+        }
+    }
+    JoinStage::FusedIntersectMat {
+        cover,
+        mode,
+        bind,
+        to_intersect,
+    }
+}
+
 /// Plans the execution stages for a single bag.
 ///
 /// This involves:
@@ -940,6 +1007,8 @@ fn plan_single_bag(
     // If this bag has been used to prune its parent
     has_block_contributed: &mut [bool],
     n_used_in_bag: &mut DenseIdMap<Variable, usize>,
+    first_projection: usize,
+    projections: &mut Vec<MatProjection>,
     strat: PlanStrategy,
 ) -> (Vec<JoinHeader>, JoinStages, MatSpec) {
     let mut msg_vars = smallvec![];
@@ -970,9 +1039,10 @@ fn plan_single_bag(
     let mut stripped_bag = bag.clone();
 
     // Add prologue and epilogue instructions to look up previous materialized bags
-    // These are constraints from children blocks. If there's only one such block, it can be the header.
-    // Otherwise, they have to be epilogue instructions doing filtering at the end, which is less efficient.
+    // These are constraints from children blocks. The first such block is the prologue; each
+    // later one is a `Semijoin` stage that dynamic variable ordering places among the bag's own.
     let mut prologue = None;
+    let mut semijoins = Vec::new();
     let mut epilogue = Vec::new();
     for (i, prev_block) in blocks.iter().enumerate().rev() {
         if prev_block.1.msg_vars.is_empty() {
@@ -987,57 +1057,52 @@ fn plan_single_bag(
         {
             has_block_contributed[i] = true;
             if prologue.is_none() {
-                let bind = prev_block
-                    .1
-                    .msg_vars
-                    .iter()
-                    .enumerate()
-                    .map(|(j, var)| (ColumnId::from_usize(j), *var))
-                    .collect();
-                let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
-                for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
-                    let vinfo = &bag.vars[*var];
-                    for occ in vinfo.occurrences.iter() {
-                        let isect = match to_intersect
-                            .iter_mut()
-                            .find(|(spec, _)| spec.to_index.atom == occ.atom)
-                        {
-                            Some(isect) => isect,
-                            None => {
-                                to_intersect.push((
-                                    ScanSpec {
-                                        to_index: SubAtom {
-                                            atom: occ.atom,
-                                            vars: smallvec![],
-                                        },
-                                        constraints: vec![],
-                                    },
-                                    smallvec![],
-                                ));
-                                to_intersect.last_mut().unwrap()
-                            }
-                        };
-                        isect.0.to_index.vars.extend(occ.vars.iter().copied());
-                        isect
-                            .1
-                            .extend(occ.vars.iter().map(|_| ColumnId::from_usize(col)));
-                    }
-                }
-
-                prologue = Some(JoinStage::FusedIntersectMat {
-                    cover: MatId::from_usize(i),
-                    mode: MatScanMode::KeyOnly,
-                    bind,
-                    to_intersect,
-                });
-
+                prologue = Some(mat_stage(
+                    bag,
+                    MatId::from_usize(i),
+                    MatScanMode::KeyOnly,
+                    &prev_block.1.msg_vars,
+                ));
                 stripped_bag
                     .vars
                     .retain(|var, _vinfo| !prev_block.1.msg_vars.contains(&var));
             } else {
+                // The `Semijoin` stage binds the variables of the message the prologue left
+                // free, from the message itself or, when the prologue binds part of it, from
+                // its projection onto them. That projection loses their correlation with the
+                // variables the prologue binds; the lookup checks the whole message.
+                let msg = &prev_block.1.msg_vars;
+                let free: SmallVec<[Variable; 4]> = msg
+                    .iter()
+                    .copied()
+                    .filter(|var| stripped_bag.vars.contains_key(*var))
+                    .collect();
+                if free.len() == msg.len() {
+                    semijoins.push(mat_stage(
+                        bag,
+                        MatId::from_usize(i),
+                        MatScanMode::Semijoin,
+                        &free,
+                    ));
+                    continue;
+                }
+                if !free.is_empty() {
+                    let target = MatId::from_usize(first_projection + projections.len());
+                    projections.push(MatProjection {
+                        source: MatId::from_usize(i),
+                        target,
+                        key: msg
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, var)| free.contains(var))
+                            .map(|(col, _)| ColumnId::from_usize(col))
+                            .collect(),
+                    });
+                    semijoins.push(mat_stage(bag, target, MatScanMode::Semijoin, &free));
+                }
                 epilogue.push(JoinStage::FusedIntersectMat {
                     cover: MatId::from_usize(i),
-                    mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),
+                    mode: MatScanMode::Lookup(msg.clone()),
                     bind: smallvec![],
                     to_intersect: vec![],
                 });
@@ -1046,7 +1111,7 @@ fn plan_single_bag(
     }
 
     let (header, mut instrs) = plan_stages(&stripped_bag, strat);
-    instrs.splice(0..0, prologue);
+    instrs.splice(0..0, prologue.into_iter().chain(semijoins));
     instrs.extend(epilogue);
 
     let stages = JoinStages::new(instrs);
@@ -1219,12 +1284,16 @@ pub(crate) fn tree_decompose_and_plan(
     // Step 4: Plan each bag and create materialization blocks
     let mut blocks = Vec::new();
     let mut header = vec![];
+    let mut projections = vec![];
+    let first_projection = bags.len();
     for bag in bags.iter_mut() {
         let (bag_header, stages, mat_spec) = plan_single_bag(
             bag,
             &blocks,
             &mut has_block_contributed,
             &mut n_used_in_bag,
+            first_projection,
+            &mut projections,
             strat,
         );
         blocks.push((stages, mat_spec));
@@ -1247,7 +1316,10 @@ pub(crate) fn tree_decompose_and_plan(
     Plan::DecomposedPlan(DecomposedPlan {
         atoms: Arc::new(ctx.atoms),
         header,
-        stages: JoinStageBlocks { blocks },
+        stages: JoinStageBlocks {
+            blocks,
+            projections,
+        },
         result_block,
         actions,
     })

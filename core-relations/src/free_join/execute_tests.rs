@@ -8,19 +8,21 @@ use smallvec::{SmallVec, smallvec};
 use crate::{
     common::{IndexMap, Value},
     free_join::{
-        AtomId, SubAtom, Variable,
+        AtomId, ProcessedConstraints, SubAtom, TableId, Variable,
         plan::{JoinStage, MatId, MatScanMode, ScanSpec, SingleScanSpec},
     },
-    numeric_id::NumericId,
+    numeric_id::{DenseIdMap, NumericId},
     offsets::Subset,
+    query::{Atom, VarColumnMap},
     row_buffer::RowBuffer,
     table_spec::ColumnId,
 };
 
 use crate::free_join::{
     join_tail::{
-        BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
-        packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
+        BindingInfo, InstrOrder, LeafScans, for_each_stage_atom, materialization_is_live_in_tail,
+        packed_child_shape_in_tail, recompute_leaf_scans, scan_atom_tail_use,
+        sort_plan_by_size_inner, suffix_stage_mask,
     },
     packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
@@ -342,9 +344,141 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
     // still anchors the recursive ordering to stage 0 / atom 0. Using the
     // physical prefix here would instead promote stage 2 / atom 1.
     let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
-    sort_plan_by_size_inner(&mut order, 1..3, &stages, &mut binding_info);
+    sort_plan_by_size_inner(
+        &mut order,
+        1..3,
+        &stages,
+        &DenseIdMap::new(),
+        &mut binding_info,
+    );
 
     assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3].into_iter()));
+}
+
+/// Atom k holds variable k in column k. Stage 0 is the prologue over a
+/// (variable 0); stage 1, logically second, is the semijoin over a message
+/// keyed on x and y (variables 1 and 2), probing atoms 1 and 2; the rest are
+/// the atoms' own stages. Atom 2 holds only y. Atom 3 has 10 rows, the other
+/// atoms 100, and the message 50 keys.
+fn deferred_semijoin_fixture() -> (
+    Vec<JoinStage>,
+    DenseIdMap<AtomId, Atom>,
+    BindingInfo<'static, 'static>,
+) {
+    let var = Variable::from_usize;
+    let col = ColumnId::from_usize;
+    let probe = |atom: usize| ScanSpec {
+        to_index: SubAtom {
+            atom: AtomId::from_usize(atom),
+            vars: smallvec![col(atom)],
+        },
+        constraints: Vec::new(),
+    };
+    let stages = vec![
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(0),
+            mode: MatScanMode::KeyOnly,
+            bind: smallvec![(col(0), var(0))],
+            to_intersect: vec![(probe(0), smallvec![col(0)])],
+        },
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(1),
+            mode: MatScanMode::Semijoin,
+            bind: smallvec![(col(0), var(1)), (col(1), var(2))],
+            to_intersect: vec![(probe(1), smallvec![col(0)]), (probe(2), smallvec![col(1)])],
+        },
+        intersect_stage(4, 4),
+        intersect_stage(5, 5),
+        intersect_stage(2, 2),
+        intersect_stage(3, 3),
+        intersect_stage(6, 6),
+        intersect_stage(1, 1),
+    ];
+    let mut atoms = DenseIdMap::new();
+    let mut binding_info = BindingInfo::default();
+    for k in 0..7 {
+        let mut var_columns = VarColumnMap::default();
+        var_columns.insert(var(k), col(k));
+        atoms.insert(
+            AtomId::from_usize(k),
+            Atom {
+                table: TableId::dummy(),
+                var_columns,
+                constraints: ProcessedConstraints::dummy(),
+            },
+        );
+        let rows = if k == 3 { 10 } else { 100 };
+        binding_info.insert_subset(
+            AtomId::from_usize(k),
+            Subset::Dense(crate::OffsetRange::new(
+                crate::RowId::from_usize(0),
+                crate::RowId::from_usize(rows),
+            )),
+        );
+    }
+    let message = (0..50)
+        .map(|k| (vec![Value::from_usize(k); 2], RowBuffer::new(1)))
+        .collect();
+    binding_info
+        .materializations
+        .insert(MatId::from_usize(1), Arc::new(message));
+    (stages, atoms, binding_info)
+}
+
+#[test]
+fn a_deferred_semijoin_does_not_anchor_refinement() {
+    let (stages, atoms, mut binding_info) = deferred_semijoin_fixture();
+
+    // The prologue and the stages of variables 4, 5 and 6 have run; the
+    // semijoin, logically second, has not. Nothing has bound y, so atom 2
+    // has not been refined, and the smallest unrefined atom (atom 3, 10 rows)
+    // goes first. Crediting the unrun semijoin with binding y would refine
+    // atom 2 and promote its stage (stage 4) ahead of it.
+    let mut order = InstrOrder::from_iter([0, 2, 3, 6, 4, 5, 1, 7].into_iter());
+    sort_plan_by_size_inner(&mut order, 4..8, &stages, &atoms, &mut binding_info);
+
+    assert_eq!(order.get(4), 5);
+}
+
+#[test]
+fn rebinding_a_semijoin_variable_adds_no_refinement() {
+    let (stages, atoms, mut binding_info) = deferred_semijoin_fixture();
+
+    // The semijoin ran second and bound x and y. The stages of y (stage 4) and
+    // of variable 3 (stage 5) are logically in the prefix but have not run.
+    // The semijoin bound y first, so stage 4 refines atom 2 no further: atoms
+    // 2 and 3 are each refined once, and atom 3, smaller, goes first.
+    // Crediting stage 4 for y as well would refine atom 2 twice and put it
+    // first.
+    let mut order = InstrOrder::from_iter([0, 1, 2, 3, 6, 7, 4, 5].into_iter());
+    sort_plan_by_size_inner(&mut order, 6..8, &stages, &atoms, &mut binding_info);
+
+    assert_eq!(order.get(6), 5);
+}
+
+#[test]
+fn a_semijoin_blocks_an_earlier_leaf_binding_its_variables() {
+    // Stage 8 scans atom 7 alone and binds y. Before the semijoin, which reads
+    // y as a scalar once it is bound, it is not a leaf; last, it is.
+    let (mut stages, _, _) = deferred_semijoin_fixture();
+    stages.push(JoinStage::FusedIntersect {
+        cover: scan(7),
+        bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(2))],
+        to_intersect: Vec::new(),
+    });
+    let leaf_at = |order: [usize; 9], position: usize| {
+        let mut leaf_scans: LeafScans = smallvec![false; 9];
+        recompute_leaf_scans(
+            &InstrOrder::from_iter(order.into_iter()),
+            &mut leaf_scans,
+            &stages,
+            0,
+        );
+        leaf_scans[position]
+    };
+
+    assert!(!leaf_at([0, 8, 1, 2, 3, 4, 5, 6, 7], 1));
+    assert!(leaf_at([0, 1, 2, 3, 4, 5, 6, 7, 8], 8));
 }
 
 fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
