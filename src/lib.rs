@@ -132,6 +132,14 @@ pub enum ExecutionEvent<'a> {
         origin: ExecutionOrigin,
         command: &'a ResolvedNCommand,
     },
+    /// A resolved command returned an execution error. Resolution errors and
+    /// inner errors caught by `Fail` do not emit this event. A failure in later
+    /// maintenance remains separate from an earlier requested completion.
+    CommandFailed {
+        origin: ExecutionOrigin,
+        command: &'a ResolvedNCommand,
+        error: &'a Error,
+    },
     RunStarted {
         origin: ExecutionOrigin,
         schedule: Option<ScheduleLocation<'a>>,
@@ -2727,12 +2735,20 @@ impl EGraph {
                                 ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
                             )
                         {
-                            let result = self.run_command(
-                                processed,
-                                origin,
-                                schedule.as_ref(),
-                                &mut |event| observer(cause, event),
-                            )?;
+                            let result = self
+                                .run_command(processed, origin, schedule.as_ref(), &mut |event| {
+                                    observer(cause, event)
+                                })
+                                .inspect_err(|error| {
+                                    observer(
+                                        cause,
+                                        ExecutionEvent::CommandFailed {
+                                            origin,
+                                            command: &desugared[start + index].command,
+                                            error,
+                                        },
+                                    );
+                                })?;
                             observer(
                                 cause,
                                 ExecutionEvent::CommandCompleted {

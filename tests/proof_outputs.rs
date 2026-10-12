@@ -65,6 +65,109 @@ fn resolution_failure_does_not_discard_a_completed_output() {
 }
 
 #[test]
+fn command_failure_witnesses_only_escaping_execution_errors() {
+    for (source, expected_failure) in [
+        ("(check (= 0 1))", Some("check")),
+        ("(panic \"stop here\")", Some("panic")),
+        ("(check (unknown))", None),
+        ("(fail (check (= 0 1)))", None),
+        ("(fail (fail (check (= 0 1))))", Some("fail")),
+        ("(fail (check (= 0 0)))", Some("fail")),
+        ("(fail (fail (check (= 0 0))))", None),
+    ] {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(None, "(datatype Num (N i64))")
+            .unwrap();
+        let program = graph
+            .parse_program(None, &format!("(N 1) (print-size N) {source} (N 2)"))
+            .unwrap();
+        let mut baseline = graph.clone();
+        let mut expected_outputs = vec![];
+        let expected = baseline.run_program_with_outputs(program.clone(), &mut expected_outputs);
+        let mut outputs = vec![];
+        let mut failures = vec![];
+        let mut completed = vec![];
+        let result = graph.run_program_observed(
+            program,
+            &mut |cause, origin, output| {
+                assert_eq!((cause, origin), (1, ExecutionOrigin::Requested));
+                outputs.push(output);
+            },
+            &mut |cause, event| match event {
+                ExecutionEvent::CommandCompleted {
+                    origin: ExecutionOrigin::Requested,
+                    ..
+                } => {
+                    completed.push(cause);
+                }
+                ExecutionEvent::CommandFailed {
+                    origin,
+                    command,
+                    error,
+                } => {
+                    assert_eq!(completed, [0, 1]);
+                    let kind = match command {
+                        ResolvedNCommand::Check(..) => {
+                            assert!(matches!(error, Error::CheckError(..)));
+                            "check"
+                        }
+                        ResolvedNCommand::CoreAction(egglog::ast::GenericAction::Panic(..)) => {
+                            "panic"
+                        }
+                        ResolvedNCommand::Fail(..) => {
+                            assert!(matches!(error, Error::ExpectFail(..)));
+                            "fail"
+                        }
+                        command => panic!("unexpected failed resolved command: {command:?}"),
+                    };
+                    failures.push((cause, origin, kind, error.to_string()));
+                }
+                _ => (),
+            },
+        );
+        assert_eq!(
+            result.as_ref().err().map(ToString::to_string),
+            expected.as_ref().err().map(ToString::to_string)
+        );
+        assert_eq!(
+            CommandOutput::snapshot_stable_under_proof_encoding(&outputs),
+            CommandOutput::snapshot_stable_under_proof_encoding(&expected_outputs)
+        );
+        assert!(matches!(
+            outputs.as_slice(),
+            [CommandOutput::PrintFunctionSize(1)]
+        ));
+        if let Some(kind) = expected_failure {
+            assert_eq!(
+                failures,
+                [(
+                    2,
+                    ExecutionOrigin::Requested,
+                    kind,
+                    result.as_ref().unwrap_err().to_string()
+                )]
+            );
+        } else {
+            assert!(failures.is_empty(), "{source}: {failures:?}");
+        }
+        assert_eq!(
+            completed,
+            if result.is_ok() {
+                vec![0, 1, 2, 3]
+            } else {
+                vec![0, 1]
+            }
+        );
+        graph.parse_and_run_program(None, "(check (N 1))").unwrap();
+        assert_eq!(
+            graph.parse_and_run_program(None, "(check (N 2))").is_ok(),
+            result.is_ok()
+        );
+    }
+}
+
+#[test]
 fn failed_prove_retains_successful_proof_and_completed_helper_runs() {
     let mut graph = EGraph::new_with_proofs();
     graph
@@ -169,6 +272,7 @@ fn nested_includes_preserve_all_completed_outputs_on_error() {
     let mut observed = EGraph::default();
     let program = observed.parse_program(None, &source).unwrap();
     let mut causes = vec![];
+    let mut failures = vec![];
     let error = observed
         .run_program_observed(
             program,
@@ -177,11 +281,28 @@ fn nested_includes_preserve_all_completed_outputs_on_error() {
                 assert!(matches!(output, CommandOutput::PrintFunctionSize(_)));
                 causes.push(cause);
             },
-            &mut |_, _| {},
+            &mut |cause, event| {
+                if let ExecutionEvent::CommandFailed {
+                    origin,
+                    command,
+                    error,
+                } = event
+                {
+                    assert!(matches!(
+                        command,
+                        ResolvedNCommand::CoreAction(egglog::ast::GenericAction::Panic(..))
+                    ));
+                    failures.push((cause, origin, error.to_string()));
+                }
+            },
         )
         .unwrap_err();
     assert!(error.to_string().contains("inside include"));
     assert_eq!(causes, [1, 2, 2]);
+    assert_eq!(
+        failures,
+        [(2, ExecutionOrigin::Requested, error.to_string())]
+    );
 }
 
 #[test]
@@ -490,6 +611,7 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
         let mut entered = 0;
         let mut completed = 0;
         let mut failed = 0;
+        let mut command_failures = vec![];
         let error = definitions
             .run_program_observed(
                 program,
@@ -511,6 +633,15 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
                             failed += 1;
                         }
                     }
+                    ExecutionEvent::CommandFailed {
+                        origin,
+                        command,
+                        error,
+                    } => {
+                        assert_eq!(installed, [(0, "first".into())]);
+                        assert!(matches!(command, ResolvedNCommand::RunSchedule(_)));
+                        command_failures.push((cause, origin, error.to_string()));
+                    }
                     _ => {}
                 },
             )
@@ -518,6 +649,10 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
         assert!(error.to_string().contains("maintenance failed"));
         assert_eq!(installed, [(0, "first".into())]);
         assert_eq!(failed, 1);
+        assert_eq!(
+            command_failures,
+            [(0, ExecutionOrigin::Internal, error.to_string())]
+        );
         assert_eq!(entered, completed + failed);
         assert!(completed > 0);
         let first = definitions.parse_program(None, "(run first 1)").unwrap();
@@ -531,6 +666,7 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
             .parse_program(None, "(prove-exists Goal) (N 2)")
             .unwrap();
         let mut outputs = vec![];
+        let mut proof_events = vec![];
         let error = copy
             .run_program_observed(
                 program,
@@ -540,10 +676,35 @@ fn ruleset_identity_survives_clone_and_push_pop_and_completed_prefixes() {
                         outputs.push(output);
                     }
                 },
-                &mut |_, _| {},
+                &mut |cause, event| match event {
+                    ExecutionEvent::CommandCompleted {
+                        origin: ExecutionOrigin::Requested,
+                        command,
+                    } => {
+                        assert!(matches!(command, ResolvedNCommand::ProveExists(..)));
+                        proof_events.push((cause, ExecutionOrigin::Requested, false));
+                    }
+                    ExecutionEvent::CommandFailed {
+                        origin,
+                        command,
+                        error,
+                    } => {
+                        assert!(matches!(command, ResolvedNCommand::RunSchedule(_)));
+                        assert!(error.to_string().contains("maintenance failed"));
+                        proof_events.push((cause, origin, true));
+                    }
+                    _ => (),
+                },
             )
             .unwrap_err();
         assert!(error.to_string().contains("maintenance failed"));
+        assert_eq!(
+            proof_events,
+            [
+                (0, ExecutionOrigin::Requested, false),
+                (0, ExecutionOrigin::Internal, true)
+            ]
+        );
         drop(copy);
         let [
             CommandOutput::ProveExists {
