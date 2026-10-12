@@ -6,6 +6,170 @@ use std::sync::{
 };
 
 #[test]
+fn closed_i64_catalog_preserves_signatures_aliases_and_borrowed_views() {
+    let mut graph = EGraph::default();
+    let program = graph.type_info().builtin_catalog().unwrap().definitions;
+    let float = program
+        .sorts
+        .iter()
+        .position(|s| matches!(&s.kind, Some(proto::sort::Kind::Family(f)) if f.name == "f64"))
+        .unwrap() as u32;
+    for (key, alias, python, method, trait_name, output) in [
+        ("sub", "-", "__sub__", "sub", Some("Sub"), "i64"),
+        ("mul", "*", "__mul__", "mul", Some("Mul"), "i64"),
+        ("div", "/", "__truediv__", "div", Some("Div"), "i64"),
+        ("rem", "%", "__mod__", "rem", Some("Rem"), "i64"),
+        ("bitand", "&", "__and__", "bitand", Some("BitAnd"), "i64"),
+        ("lt", "<", "__lt__", "lt", None, "Unit"),
+        ("ge", ">=", "__ge__", "ge", None, "Unit"),
+        ("min", "min", "min", "min", None, "i64"),
+        ("max", "max", "max", "max", None, "i64"),
+    ] {
+        let key = format!("egglog.core.i64.{key}");
+        let definitions: Vec<_> = program
+            .declarations
+            .iter()
+            .filter(|d| {
+                matches!(
+                    &d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == key
+                )
+            })
+            .collect();
+        assert_eq!(definitions.len(), 1, "{key}");
+        let declaration = definitions[0];
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            builtin::signature_sorts(&program, primitive).unwrap(),
+            ["i64", "i64", output]
+        );
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
+        assert!(signature.type_params.is_empty());
+        assert!(signature.varargs.is_empty());
+        let bindings = declaration.bindings.as_ref().unwrap();
+        assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
+        assert_eq!(bindings.python.as_ref().unwrap().views[0].path, [python]);
+        let rust = &bindings.rust.as_ref().unwrap().views[0];
+        assert_eq!(rust.path, [method]);
+        assert_eq!(rust.receiver.as_ref().unwrap().core_input, Some(0));
+        assert_eq!(
+            rust.receiver.as_ref().unwrap().borrowed,
+            trait_name.is_none()
+        );
+        assert_eq!(rust.params.len(), 1);
+        assert_eq!(rust.params[0].core_input, Some(1));
+        assert!(!rust.params[0].borrowed);
+        assert_eq!(
+            rust.trait_impl.as_ref().map(|t| t.path.join("::")),
+            trait_name.map(|t| format!("core::ops::{t}"))
+        );
+        let sorts = ["i64", "i64", output].map(|s| graph.get_sort_by_name(s).unwrap().clone());
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let ResolvedCall::Primitive(source) = ResolvedCall::from_resolution(
+                alias,
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            let ResolvedCall::Primitive(canonical) = ResolvedCall::from_resolution(
+                &key,
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            assert_eq!(source, canonical);
+            assert!(canonical.validator().is_some());
+        }
+        for corrupt_output in [false, true] {
+            let mut wrong = primitive.clone();
+            let Some(proto::host_primitive::Typing::Signature(signature)) = &mut wrong.typing
+            else {
+                unreachable!()
+            };
+            if corrupt_output {
+                signature.output = Some(float);
+            } else {
+                signature.inputs[0].sort = float;
+            }
+            assert!(
+                graph
+                    .type_info()
+                    .check_builtin_signature(&program, &wrong)
+                    .is_err()
+            );
+        }
+        let mut unknown = primitive.clone();
+        unknown.name = format!("test.unregistered.{key}");
+        assert!(
+            graph
+                .type_info()
+                .check_builtin_signature(&program, &unknown)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn closed_i64_native_partiality_and_signed_extrema() {
+    let mut graph = EGraph::default();
+    for (expression, expected) in [
+        ("(- -13 5)", -18),
+        ("(* -13 5)", -65),
+        ("(/ -13 5)", -2),
+        ("(% -13 5)", -3),
+        ("(& -13 5)", 1),
+        ("(min -9223372036854775808 9223372036854775807)", i64::MIN),
+        ("(max -9223372036854775808 9223372036854775807)", i64::MAX),
+    ] {
+        graph
+            .parse_and_run_program(None, &format!("(check (= {expression} {expected}))"))
+            .unwrap();
+    }
+    for (fact, matches) in [
+        ("(< -13 5)", true),
+        ("(< 5 -13)", false),
+        ("(>= -13 5)", false),
+        ("(>= 5 -13)", true),
+        ("(< 5 5)", false),
+        ("(>= 5 5)", true),
+    ] {
+        assert_eq!(
+            graph
+                .parse_and_run_program(None, &format!("(check {fact})"))
+                .is_ok(),
+            matches,
+            "{fact}"
+        );
+    }
+    for expression in [
+        "(/ 1 0)",
+        "(% 1 0)",
+        "(/ -9223372036854775808 -1)",
+        "(% -9223372036854775808 -1)",
+        "(- -9223372036854775808 1)",
+        "(* 9223372036854775807 2)",
+    ] {
+        assert!(
+            EGraph::default()
+                .parse_and_run_program(None, &format!("(let invalid {expression})"))
+                .is_err(),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
 fn set_catalog_precedes_instances_and_preserves_native_aliases() {
     let mut graph = EGraph::default();
     let before = graph.type_info().builtin_catalog().unwrap();
@@ -768,7 +932,7 @@ fn resolved_call_export_checks_direct_annotations_and_preserves_ordinary_calls()
             .unwrap();
     }
     let ResolvedCall::Primitive(unsupported) = ResolvedCall::from_resolution(
-        "-",
+        "|",
         &[i.clone(), i.clone(), i],
         graph.type_info(),
         Context::Pure,
@@ -1693,6 +1857,15 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.bool.xor",
             "egglog.core.f64.add",
             "egglog.core.i64.add",
+            "egglog.core.i64.bitand",
+            "egglog.core.i64.div",
+            "egglog.core.i64.ge",
+            "egglog.core.i64.lt",
+            "egglog.core.i64.max",
+            "egglog.core.i64.min",
+            "egglog.core.i64.mul",
+            "egglog.core.i64.rem",
+            "egglog.core.i64.sub",
             "egglog.core.i64.to_string",
             "egglog.core.map.empty",
             "egglog.core.map.get",
