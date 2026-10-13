@@ -6,6 +6,152 @@ use std::sync::{
 };
 
 #[test]
+fn inequality_native_baseline() {
+    let text = r#"
+        (check (!= 1 2) (!= true false))
+        (fail (check (!= 1 1)))
+        (fail (check (!= false false)))
+        (datatype Item (A) (B))
+        (sort Items (Vec Item))
+        (sort Ints (Vec i64))
+        (A) (B)
+        (check (!= (A) (B)) (!= (vec-of (A)) (vec-of (B))) (!= (vec-of 1) (vec-of 2)))
+        (fail (check (!= (vec-of (A)) (vec-of (A)))))
+        (union (A) (B))
+        (check (= (A) (B)) (= (vec-of (A)) (vec-of (B))))
+        (fail (check (!= (A) (B))))
+        (fail (check (!= (vec-of (A)) (vec-of (B)))))
+    "#;
+    for mode in 0..3 {
+        let mut graph = match mode {
+            0 => EGraph::default(),
+            1 => EGraph::new_with_proofs(),
+            _ => EGraph::new_with_proofs().with_proof_testing(),
+        };
+        graph
+            .parse_and_run_program(None, text)
+            .unwrap_or_else(|error| panic!("mode {mode}: {error}"));
+        if mode > 0 {
+            graph
+                .parse_and_run_program(None, "(datatype Witness (Wrap)) (rule ((!= 1 2)) ((Wrap))) (run 1) (prove-exists Wrap)")
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn inequality_catalog_uses_one_generic_registration() {
+    let mut graph = EGraph::default();
+    let catalog = graph.type_info().builtin_catalog().unwrap();
+    let declaration = catalog.definitions.declarations.iter().find(|d| {
+        matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.ne")
+    }).expect("native inequality is missing its canonical descriptor");
+    let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+        unreachable!()
+    };
+    let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+        unreachable!()
+    };
+    assert_eq!(signature.type_params.len(), 1);
+    assert_eq!(signature.inputs.len(), 2);
+    assert!(signature.varargs.is_empty());
+    assert_eq!(signature.inputs[0].sort, signature.inputs[1].sort);
+    assert_eq!(
+        catalog.definitions.sorts[signature.inputs[0].sort as usize].kind,
+        Some(proto::sort::Kind::Var(0))
+    );
+    assert!(
+        matches!(&catalog.definitions.sorts[signature.output.unwrap() as usize].kind,
+        Some(proto::sort::Kind::Family(f)) if f.name == "Unit" && f.args.is_empty())
+    );
+    let bindings = declaration.bindings.as_ref().unwrap();
+    assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, "!=");
+    assert!(bindings.python.is_none() && bindings.rust.is_none());
+    assert!(
+        !catalog
+            .undescribed_primitives
+            .iter()
+            .any(|name| name == "!=")
+    );
+    graph.parse_and_run_program(None, "(datatype Item (A) (B)) (sort Items (Vec Item)) (sort Ints (Vec i64)) (sort Pairs (Pair Item i64)) (sort Sets (Set Item)) (sort Maps (Map i64 Item))").unwrap();
+    for name in [
+        "i64", "bool", "f64", "String", "BigInt", "BigRat", "Unit", "Item", "Items", "Ints",
+        "Pairs", "Sets", "Maps",
+    ] {
+        let sort = graph.get_sort_by_name(name).unwrap().clone();
+        let sorts = [
+            sort.clone(),
+            sort,
+            graph.get_sort_by_name("Unit").unwrap().clone(),
+        ];
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let alias = ResolvedCall::from_resolution(
+                "!=",
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            let canonical = ResolvedCall::from_resolution(
+                "egglog.core.ne",
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            assert_eq!(alias, canonical);
+            let ResolvedCall::Primitive(primitive) = canonical else {
+                unreachable!()
+            };
+            assert!(primitive.validator().is_some());
+        }
+        let mut program = proto::Program {
+            ir_version: 1,
+            ..Default::default()
+        };
+        let input = graph.export_sort(&sorts[0], &mut program.sorts).unwrap();
+        let output = graph.export_sort(&sorts[2], &mut program.sorts).unwrap();
+        assert_eq!(
+            graph
+                .type_info()
+                .resolve_builtin(&program, "egglog.core.ne", &[input, input], output, &sorts)
+                .unwrap(),
+            "egglog.core.ne"
+        );
+    }
+    for text in ["(!= 1)", "(!= 1 2 3)"] {
+        let error = graph
+            .parse_and_run_program(None, text)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("!="), "{error}");
+        assert!(!error.contains("egglog.core.ne"), "{error}");
+    }
+    let error = graph
+        .parse_and_run_program(None, "(!= 1 true)")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("bool") && error.contains("i64"), "{error}");
+}
+
+#[test]
+fn inequality_catalog_export_does_not_execute_generic_provider() {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    let mut graph = EGraph::default();
+    add_primitive_with_validator!(&mut graph, "counted-generic" [id = "test.counted-generic"] = |a: #, b: #| -?> () {
+        { CALLS.fetch_add(1, Ordering::SeqCst); (a != b).then_some(()) }
+    }, |_: &mut TermDag, _: &[TermId]| { CALLS.fetch_add(1, Ordering::SeqCst); None });
+    let before = graph.type_info().builtin_catalog().unwrap().definitions;
+    let after = graph.type_info().builtin_catalog().unwrap().definitions;
+    assert_eq!(before, after);
+    assert!(before.declarations.iter().any(|d| matches!(&d.kind,
+        Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == "test.counted-generic")));
+    assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn bigrat_properties_export_actual_signatures_and_views() {
     let mut graph = EGraph::default();
     let program = graph.type_info().builtin_catalog().unwrap().definitions;
@@ -2113,6 +2259,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.map.get",
             "egglog.core.map.insert",
             "egglog.core.map.of",
+            "egglog.core.ne",
             "egglog.core.pair.first",
             "egglog.core.pair.make",
             "egglog.core.pair.second",

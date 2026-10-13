@@ -524,6 +524,42 @@ pub fn closed_signature(
     Ok(program)
 }
 
+/// Derive one shared sort parameter from fixed homogeneous `#` macro inputs.
+/// The closed result retains the scalar representation checks and provenance.
+pub fn homogeneous_signature(
+    key: &str,
+    alias: &str,
+    inputs: &[&str],
+    output: ArcSort,
+) -> Result<pb::Program, String> {
+    if inputs.is_empty() {
+        return Err("a homogeneous signature needs at least one input".into());
+    }
+    let mut program = closed_signature(key, alias, &[], &[], output)?;
+    let variable = program.sorts.len() as u32;
+    program.sorts.push(pb::Sort {
+        kind: Some(pb::sort::Kind::Var(0)),
+        ..Default::default()
+    });
+    let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
+        &mut program.declarations.last_mut().unwrap().kind
+    else {
+        unreachable!()
+    };
+    let Some(pb::host_primitive::Typing::Signature(signature)) = &mut primitive.typing else {
+        unreachable!()
+    };
+    signature.type_params.push("T".into());
+    signature.inputs = inputs
+        .iter()
+        .map(|name| pb::Arg {
+            name: (*name).into(),
+            sort: variable,
+        })
+        .collect();
+    Ok(program)
+}
+
 /// Validates and normalizes the currently supported closed signature into native
 /// sort names: fixed inputs, tail pattern, then result. This does not execute
 /// or inspect a body.
@@ -694,6 +730,31 @@ struct SignatureConstraint {
     span: Span,
 }
 
+struct HomogeneousConstraint {
+    input_count: usize,
+    output: String,
+    name: String,
+    span: Span,
+}
+
+impl TypeConstraint for HomogeneousConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn constraint::Constraint<AtomTerm, ArcSort>>> {
+        constraint::AllEqualTypeConstraint::new(&self.name, self.span.clone())
+            .with_exact_length(self.input_count + 1)
+            .with_output_sort(
+                typeinfo
+                    .get_sort_by_name(&self.output)
+                    .unwrap_or_else(|| panic!("registered builtin sort {} is absent", self.output))
+                    .clone(),
+            )
+            .get(arguments, typeinfo)
+    }
+}
+
 impl TypeConstraint for SignatureConstraint {
     fn get(
         &self,
@@ -743,6 +804,33 @@ pub fn type_constraints(definition: &pb::Program, span: &Span) -> Box<dyn TypeCo
     let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
         unreachable!()
     };
+    if !signature.type_params.is_empty() {
+        assert_eq!(
+            signature.type_params.len(),
+            1,
+            "unsupported generic signature"
+        );
+        assert!(
+            !signature.inputs.is_empty() && signature.varargs.is_empty(),
+            "generic constraints require fixed nonempty inputs"
+        );
+        assert!(signature.inputs.iter().all(|arg| definition.sorts[arg.sort as usize].kind == Some(pb::sort::Kind::Var(0))), "generic constraints require homogeneous inputs");
+        let Some(pb::sort::Kind::Family(output)) =
+            &definition.sorts[signature.output.unwrap() as usize].kind
+        else {
+            panic!("generic constraints require a closed scalar result");
+        };
+        assert!(
+            output.args.is_empty(),
+            "generic constraints require a closed scalar result"
+        );
+        return Box::new(HomogeneousConstraint {
+            input_count: signature.inputs.len(),
+            output: output.name.clone(),
+            name: diagnostic_name.into(),
+            span: span.clone(),
+        });
+    }
     let mut fixed = signature_sorts(definition, primitive).unwrap();
     let output = fixed.pop().unwrap();
     let tail = fixed.split_off(signature.inputs.len());

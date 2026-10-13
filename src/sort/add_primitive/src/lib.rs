@@ -72,7 +72,8 @@ impl Parse for AddPrimitiveWithValidator {
 ///
 /// - Catalog: `"alias" [id = "provider.definition"] = ...` retains the
 ///   signature as protobuf and derives native constraints from that definition.
-///   This form requires closed scalar types, with optional uniform varargs.
+///   This form supports closed scalar types (with optional uniform varargs),
+///   or fixed homogeneous `#` inputs with a closed scalar result.
 ///   `[instance = binding]` instead uses a presort-owned generic definition.
 ///   Its annotations describe runtime representations only: explicit sort
 ///   expressions are rejected, and casts/arity are checked against the record.
@@ -118,12 +119,14 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         return syn::Error::new_spanned(&name, "instance macros take runtime representations only; sorts come from the canonical definition").to_compile_error().into();
     }
 
-    // List out the sorts that we need to store.
-    if builtin_id.is_some() && (args.iter().any(|arg| arg.t.field.is_none()) || ret.field.is_none())
+    let generic_inputs = args.iter().any(|arg| arg.t.field.is_none());
+    if builtin_id.is_some()
+        && (ret.field.is_none()
+            || generic_inputs && (is_varargs || args.iter().any(|arg| arg.t.field.is_some())))
     {
         return syn::Error::new_spanned(
             &name,
-            "catalog macros currently require closed signatures",
+            "catalog macros require closed signatures or fixed homogeneous # inputs with a closed result",
         )
         .to_compile_error()
         .into();
@@ -146,16 +149,22 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         })
         .unzip();
     if let Some(key) = &builtin_id {
-        let inputs = args.iter().map(|arg| {
-            let label = arg.x.to_string();
-            let expr = &arg.t.field.as_ref().unwrap().1;
-            quote!((#label, (#expr).clone() as ArcSort))
-        });
         let output = &ret.field.as_ref().unwrap().1;
-        let (fixed, tail) = if is_varargs {
-            (quote!(&[]), quote!(&[#(#inputs),*]))
+        let definition = if generic_inputs {
+            let names = args.iter().map(|arg| arg.x.to_string());
+            quote!(::egglog::builtin::homogeneous_signature(#key, #name, &[#(#names),*], (#output).clone() as ArcSort))
         } else {
-            (quote!(&[#(#inputs),*]), quote!(&[]))
+            let inputs = args.iter().map(|arg| {
+                let label = arg.x.to_string();
+                let expr = &arg.t.field.as_ref().unwrap().1;
+                quote!((#label, (#expr).clone() as ArcSort))
+            });
+            let (fixed, tail) = if is_varargs {
+                (quote!(&[]), quote!(&[#(#inputs),*]))
+            } else {
+                (quote!(&[#(#inputs),*]), quote!(&[]))
+            };
+            quote!(::egglog::builtin::closed_signature(#key, #name, #fixed, #tail, (#output).clone() as ArcSort))
         };
         field_defs.push(quote!(__definition: Arc<::egglog::proto::Program>));
         let bindings = builtin_bindings.map(|bindings| quote! {
@@ -168,7 +177,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         });
         field_uses.push(quote!(__definition: {
             #[allow(unused_mut)]
-            let mut definition = ::egglog::builtin::closed_signature(#key, #name, #fixed, #tail, (#output).clone() as ArcSort).expect("invalid builtin macro signature");
+            let mut definition = #definition.expect("invalid builtin macro signature");
             #bindings
             Arc::new(definition)
         }));

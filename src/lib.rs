@@ -549,7 +549,7 @@ impl Default for EGraph {
         };
         add_primitive_with_validator!(
             &mut eg,
-            "!=" = |a: #, b: #| -?> () {
+            "!=" [id = "egglog.core.ne"] = |a: #, b: #| -?> () {
                 (a != b).then_some(())
             },
             neq_validator
