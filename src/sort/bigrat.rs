@@ -27,18 +27,18 @@ impl BaseSort for BigRatSort {
                 ..Default::default()
             }),
         }).expect("invalid BigRat family presentation");
-        add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b).map(Q::new) });
-        add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b).map(Q::new) });
-        add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b).map(Q::new) });
-        add_primitive!(eg, "/" = |a: Q, b: Q| -?> Q { a.checked_div(&b).map(Q::new) });
+        add_primitive!(eg, "+" [id = "egglog.core.bigrat.add", bindings = |s| crate::builtin::scalar_member_bindings(s, "__add__", "add", &["other"], Some("Add"), None)] = |a: Q, b: Q| -?> Q { a.checked_add(&b).map(Q::new) });
+        add_primitive!(eg, "-" [id = "egglog.core.bigrat.sub", bindings = |s| crate::builtin::scalar_member_bindings(s, "__sub__", "sub", &["other"], Some("Sub"), None)] = |a: Q, b: Q| -?> Q { a.checked_sub(&b).map(Q::new) });
+        add_primitive!(eg, "*" [id = "egglog.core.bigrat.mul", bindings = |s| crate::builtin::scalar_member_bindings(s, "__mul__", "mul", &["other"], Some("Mul"), None)] = |a: Q, b: Q| -?> Q { a.checked_mul(&b).map(Q::new) });
+        add_primitive!(eg, "/" [id = "egglog.core.bigrat.div", bindings = |s| crate::builtin::scalar_member_bindings(s, "__truediv__", "div", &["other"], Some("Div"), None)] = |a: Q, b: Q| -?> Q { a.checked_div(&b).map(Q::new) });
 
-        add_primitive!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
-        add_primitive!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
-        add_primitive!(eg, "neg" = |a: Q| -> Q { Q::new(-a.0) });
-        add_primitive!(eg, "abs" = |a: Q| -> Q { Q::new(a.0.abs()) });
-        add_primitive!(eg, "floor" = |a: Q| -> Q { Q::new(a.0.floor()) });
-        add_primitive!(eg, "ceil" = |a: Q| -> Q { Q::new(a.0.ceil()) });
-        add_primitive!(eg, "round" = |a: Q| -> Q { Q::new(a.round()) });
+        add_primitive!(eg, "min" [id = "egglog.core.bigrat.min", bindings = |s| crate::builtin::scalar_member_bindings(s, "min", "min", &["other"], None, None)] = |a: Q, b: Q| -> Q { a.min(b) });
+        add_primitive!(eg, "max" [id = "egglog.core.bigrat.max", bindings = |s| crate::builtin::scalar_member_bindings(s, "max", "max", &["other"], None, None)] = |a: Q, b: Q| -> Q { a.max(b) });
+        add_primitive!(eg, "neg" [id = "egglog.core.bigrat.neg", bindings = |s| crate::builtin::scalar_member_bindings(s, "__neg__", "neg", &[], Some("Neg"), None)] = |a: Q| -> Q { Q::new(-a.0) });
+        add_primitive!(eg, "abs" [id = "egglog.core.bigrat.abs", bindings = |s| crate::builtin::scalar_member_bindings(s, "__abs__", "abs", &[], None, None)] = |a: Q| -> Q { Q::new(a.0.abs()) });
+        add_primitive!(eg, "floor" [id = "egglog.core.bigrat.floor", bindings = |s| crate::builtin::scalar_member_bindings(s, "floor", "floor", &[], None, None)] = |a: Q| -> Q { Q::new(a.0.floor()) });
+        add_primitive!(eg, "ceil" [id = "egglog.core.bigrat.ceil", bindings = |s| crate::builtin::scalar_member_bindings(s, "ceil", "ceil", &[], None, None)] = |a: Q| -> Q { Q::new(a.0.ceil()) });
+        add_primitive!(eg, "round" [id = "egglog.core.bigrat.round", bindings = |s| crate::builtin::scalar_member_bindings(s, "round", "round", &[], None, None)] = |a: Q| -> Q { Q::new(a.round()) });
 
         add_primitive!(eg, "bigrat" [id = "egglog.core.bigrat.make", bindings = |s: &crate::proto::GenericSignature| {
             use crate::proto as pb;
@@ -57,12 +57,20 @@ impl BaseSort for BigRatSort {
                 ..Default::default()
             }
         }] = |a: Z, b: Z| -?> Q { (!b.0.is_zero()).then(|| Q::new(BigRational::new(a.0, b.0))) });
-        add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new(a.numer().clone()) });
-        add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new(a.denom().clone()) });
-        add_primitive!(eg, "to-f64" = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
-        add_primitive!(eg, "to-i64" = |a: Q| -?> i64 { a.is_integer().then(|| a.to_integer()).and_then(|a| a.to_i64()) });
+        add_primitive!(eg, "numer" [id = "egglog.core.bigrat.numer", bindings = |s| {
+            let mut bindings = crate::builtin::scalar_member_bindings(s, "numer", "numer", &[], None, None);
+            bindings.python.as_mut().unwrap().views[0].kind = crate::proto::PythonCallKind::Property.into();
+            bindings
+        }] = |a: Q| -> Z { Z::new(a.numer().clone()) });
+        add_primitive!(eg, "denom" [id = "egglog.core.bigrat.denom", bindings = |s| {
+            let mut bindings = crate::builtin::scalar_member_bindings(s, "denom", "denom", &[], None, None);
+            bindings.python.as_mut().unwrap().views[0].kind = crate::proto::PythonCallKind::Property.into();
+            bindings
+        }] = |a: Q| -> Z { Z::new(a.denom().clone()) });
+        add_primitive!(eg, "to-f64" [id = "egglog.core.bigrat.to_f64", bindings = |s| crate::builtin::scalar_member_bindings(s, "to_f64", "to_f64", &[], None, None)] = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
+        add_primitive!(eg, "to-i64" [id = "egglog.core.bigrat.to_i64", bindings = |s| crate::builtin::scalar_member_bindings(s, "to_i64", "to_i64", &[], None, None)] = |a: Q| -?> i64 { a.is_integer().then(|| a.to_integer()).and_then(|a| a.to_i64()) });
 
-        add_primitive!(eg, "pow" = |a: Q, b: Q| -?> Q {
+        add_primitive!(eg, "pow" [id = "egglog.core.bigrat.pow", bindings = |s| crate::builtin::scalar_member_bindings(s, "__pow__", "pow", &["other"], None, None)] = |a: Q, b: Q| -?> Q {
             if !b.is_integer() {
                 // fractional powers are forbidden.
                 // reject this even for the zero case
@@ -95,14 +103,14 @@ impl BaseSort for BigRatSort {
                 num::traits::checked_pow(adj_base.into_inner(), adj_exp_usize).map(Q::new)
             }
         });
-        add_primitive!(eg, "log" = |a: Q| -?> Q {
+        add_primitive!(eg, "log" [id = "egglog.core.bigrat.log", bindings = |s| crate::builtin::scalar_member_bindings(s, "log", "log", &[], None, None)] = |a: Q| -?> Q {
             if a.is_one() {
                 Some(Q::new(BigRational::zero()))
             } else {
                 todo!("log of bigrat")
             }
         });
-        add_primitive!(eg, "sqrt" = |a: Q| -?> Q {
+        add_primitive!(eg, "sqrt" [id = "egglog.core.bigrat.sqrt", bindings = |s| crate::builtin::scalar_member_bindings(s, "sqrt", "sqrt", &[], None, None)] = |a: Q| -?> Q {
             if a.numer().is_positive() && a.denom().is_positive() {
                 let s1 = a.numer().sqrt();
                 let s2 = a.denom().sqrt();
@@ -116,7 +124,7 @@ impl BaseSort for BigRatSort {
                 None
             }
         });
-        add_primitive!(eg, "cbrt" = |a: Q| -?> Q {
+        add_primitive!(eg, "cbrt" [id = "egglog.core.bigrat.cbrt", bindings = |s| crate::builtin::scalar_member_bindings(s, "cbrt", "cbrt", &[], None, None)] = |a: Q| -?> Q {
             if a.is_one() {
                 Some(Q::new(BigRational::one()))
             } else {
@@ -124,10 +132,10 @@ impl BaseSort for BigRatSort {
             }
         });
 
-        add_primitive!(eg, "<" = |a: Q, b: Q| -?> () { if a < b {Some(())} else {None} });
-        add_primitive!(eg, ">" = |a: Q, b: Q| -?> () { if a > b {Some(())} else {None} });
-        add_primitive!(eg, "<=" = |a: Q, b: Q| -?> () { if a <= b {Some(())} else {None} });
-        add_primitive!(eg, ">=" = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
+        add_primitive!(eg, "<" [id = "egglog.core.bigrat.lt", bindings = |s| crate::builtin::scalar_member_bindings(s, "__lt__", "lt", &["other"], None, None)] = |a: Q, b: Q| -?> () { if a < b {Some(())} else {None} });
+        add_primitive!(eg, ">" [id = "egglog.core.bigrat.gt", bindings = |s| crate::builtin::scalar_member_bindings(s, "__gt__", "gt", &["other"], None, None)] = |a: Q, b: Q| -?> () { if a > b {Some(())} else {None} });
+        add_primitive!(eg, "<=" [id = "egglog.core.bigrat.le", bindings = |s| crate::builtin::scalar_member_bindings(s, "__le__", "le", &["other"], None, None)] = |a: Q, b: Q| -?> () { if a <= b {Some(())} else {None} });
+        add_primitive!(eg, ">=" [id = "egglog.core.bigrat.ge", bindings = |s| crate::builtin::scalar_member_bindings(s, "__ge__", "ge", &["other"], None, None)] = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
     }
 
     fn reconstruct_termdag(

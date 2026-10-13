@@ -6,6 +6,201 @@ use std::sync::{
 };
 
 #[test]
+fn bigrat_properties_export_actual_signatures_and_views() {
+    let mut graph = EGraph::default();
+    let program = graph.type_info().builtin_catalog().unwrap().definitions;
+    for name in ["numer", "denom"] {
+        let key = format!("egglog.core.bigrat.{name}");
+        let declaration = program
+            .declarations
+            .iter()
+            .find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == key))
+            .unwrap_or_else(|| panic!("missing native catalog definition {key}"));
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            builtin::signature_sorts(&program, primitive).unwrap(),
+            ["BigRat", "BigInt"]
+        );
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
+        let bindings = declaration.bindings.as_ref().unwrap();
+        let python = &bindings.python.as_ref().unwrap().views[0];
+        let rust = &bindings.rust.as_ref().unwrap().views[0];
+        assert_eq!(python.path, [name]);
+        assert_eq!(python.kind, i32::from(proto::PythonCallKind::Property));
+        assert_eq!(python.receiver, Some(0));
+        assert!(python.params.is_empty());
+        assert_eq!(
+            python.owner.as_ref().unwrap().kind,
+            Some(proto::binding_owner::Kind::Sort(signature.inputs[0].sort))
+        );
+        assert_eq!(rust.path, [name]);
+        assert_eq!(rust.owner, python.owner);
+        assert_eq!(rust.receiver.as_ref().unwrap().core_input, Some(0));
+        assert!(rust.params.is_empty());
+        let sorts = ["BigRat", "BigInt"].map(|s| graph.get_sort_by_name(s).unwrap().clone());
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let ResolvedCall::Primitive(alias) = ResolvedCall::from_resolution(
+                name,
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            let ResolvedCall::Primitive(canonical) = ResolvedCall::from_resolution(
+                &key,
+                &sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            assert_eq!(alias, canonical);
+            assert!(canonical.validator().is_none());
+        }
+    }
+}
+
+#[test]
+fn numeric_catalog_members_preserve_native_providers_and_typed_views() {
+    let mut graph = EGraph::default();
+    let program = graph.type_info().builtin_catalog().unwrap().definitions;
+    let mut count = 0;
+    for declaration in &program.declarations {
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+            continue;
+        };
+        let owner = if primitive.name.starts_with("egglog.core.bigint.") {
+            "BigInt"
+        } else if primitive.name.starts_with("egglog.core.bigrat.") {
+            "BigRat"
+        } else {
+            continue;
+        };
+        let member = primitive.name.rsplit('.').next().unwrap();
+        if matches!(member, "from_i64" | "from_string" | "make") {
+            continue; // Constructor contracts are checked separately.
+        }
+        count += 1;
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
+        assert!(signature.type_params.is_empty() && signature.varargs.is_empty());
+        let sort_names = builtin::signature_sorts(&program, primitive).unwrap();
+        assert_eq!(sort_names[0], owner);
+        match member {
+            "numer" | "denom" => assert_eq!(sort_names, ["BigRat", "BigInt"]),
+            "shl" | "shr" => assert_eq!(sort_names, ["BigInt", "i64", "BigInt"]),
+            "lt" | "gt" | "le" | "ge" => assert_eq!(sort_names, [owner, owner, "Unit"]),
+            "bool_eq" | "bool_lt" | "bool_gt" | "bool_le" | "bool_ge" => {
+                assert_eq!(sort_names, ["BigInt", "BigInt", "bool"]);
+            }
+            "to_string" => assert_eq!(sort_names, ["BigInt", "String"]),
+            "to_i64" => assert_eq!(sort_names, ["BigRat", "i64"]),
+            "to_f64" => assert_eq!(sort_names, ["BigRat", "f64"]),
+            _ => assert!(sort_names.iter().all(|name| name == owner)),
+        }
+        let bindings = declaration.bindings.as_ref().unwrap();
+        let alias = &bindings.egglog.as_ref().unwrap().views[0].symbol;
+        let python = &bindings.python.as_ref().unwrap().views[0];
+        let rust = &bindings.rust.as_ref().unwrap().views[0];
+        assert_eq!(python.receiver, Some(0));
+        assert_eq!(
+            python.owner.as_ref().unwrap().kind,
+            Some(proto::binding_owner::Kind::Sort(signature.inputs[0].sort))
+        );
+        assert_eq!(rust.owner, python.owner);
+        assert_eq!(rust.path, [member]);
+        assert_eq!(rust.receiver.as_ref().unwrap().core_input, Some(0));
+        let expected_slots = (1..signature.inputs.len() as u32).collect::<Vec<_>>();
+        assert_eq!(
+            python
+                .params
+                .iter()
+                .map(|p| p.core_input.unwrap())
+                .collect::<Vec<_>>(),
+            expected_slots
+        );
+        assert_eq!(
+            rust.params
+                .iter()
+                .map(|p| p.core_input.unwrap())
+                .collect::<Vec<_>>(),
+            expected_slots
+        );
+        let expected_trait = match member {
+            "add" => Some("Add"),
+            "sub" => Some("Sub"),
+            "mul" => Some("Mul"),
+            "div" => Some("Div"),
+            "rem" => Some("Rem"),
+            "bitand" => Some("BitAnd"),
+            "bitor" => Some("BitOr"),
+            "bitxor" => Some("BitXor"),
+            "shl" => Some("Shl"),
+            "shr" => Some("Shr"),
+            "not" => Some("Not"),
+            "neg" => Some("Neg"),
+            _ => None,
+        };
+        assert_eq!(
+            rust.trait_impl.as_ref().map(|t| t.path.join("::")),
+            expected_trait.map(|name| format!("core::ops::{name}"))
+        );
+        if let Some(trait_impl) = &rust.trait_impl {
+            assert_eq!(
+                trait_impl
+                    .args
+                    .iter()
+                    .map(|a| a.sort.unwrap())
+                    .collect::<Vec<_>>(),
+                signature.inputs[1..]
+                    .iter()
+                    .map(|p| p.sort)
+                    .collect::<Vec<_>>()
+            );
+        }
+        let native_sorts = sort_names
+            .iter()
+            .map(|name| graph.get_sort_by_name(name).unwrap().clone())
+            .collect::<Vec<_>>();
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let ResolvedCall::Primitive(source) = ResolvedCall::from_resolution(
+                alias,
+                &native_sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            let ResolvedCall::Primitive(canonical) = ResolvedCall::from_resolution(
+                &primitive.name,
+                &native_sorts,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap() else {
+                unreachable!()
+            };
+            assert_eq!(source, canonical);
+            assert!(source.validator().is_none() && canonical.validator().is_none());
+        }
+    }
+    assert_eq!(count, 47);
+}
+
+#[test]
 fn closed_i64_catalog_preserves_signatures_aliases_and_borrowed_views() {
     let mut graph = EGraph::default();
     let program = graph.type_info().builtin_catalog().unwrap().definitions;
@@ -1847,9 +2042,56 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
     assert_eq!(
         keys,
         [
+            "egglog.core.bigint.add",
+            "egglog.core.bigint.bitand",
+            "egglog.core.bigint.bitor",
+            "egglog.core.bigint.bits",
+            "egglog.core.bigint.bitxor",
+            "egglog.core.bigint.bool_eq",
+            "egglog.core.bigint.bool_ge",
+            "egglog.core.bigint.bool_gt",
+            "egglog.core.bigint.bool_le",
+            "egglog.core.bigint.bool_lt",
+            "egglog.core.bigint.div",
             "egglog.core.bigint.from_i64",
             "egglog.core.bigint.from_string",
+            "egglog.core.bigint.ge",
+            "egglog.core.bigint.gt",
+            "egglog.core.bigint.le",
+            "egglog.core.bigint.lt",
+            "egglog.core.bigint.max",
+            "egglog.core.bigint.min",
+            "egglog.core.bigint.mul",
+            "egglog.core.bigint.not",
+            "egglog.core.bigint.rem",
+            "egglog.core.bigint.shl",
+            "egglog.core.bigint.shr",
+            "egglog.core.bigint.sub",
+            "egglog.core.bigint.to_string",
+            "egglog.core.bigrat.abs",
+            "egglog.core.bigrat.add",
+            "egglog.core.bigrat.cbrt",
+            "egglog.core.bigrat.ceil",
+            "egglog.core.bigrat.denom",
+            "egglog.core.bigrat.div",
+            "egglog.core.bigrat.floor",
+            "egglog.core.bigrat.ge",
+            "egglog.core.bigrat.gt",
+            "egglog.core.bigrat.le",
+            "egglog.core.bigrat.log",
+            "egglog.core.bigrat.lt",
             "egglog.core.bigrat.make",
+            "egglog.core.bigrat.max",
+            "egglog.core.bigrat.min",
+            "egglog.core.bigrat.mul",
+            "egglog.core.bigrat.neg",
+            "egglog.core.bigrat.numer",
+            "egglog.core.bigrat.pow",
+            "egglog.core.bigrat.round",
+            "egglog.core.bigrat.sqrt",
+            "egglog.core.bigrat.sub",
+            "egglog.core.bigrat.to_f64",
+            "egglog.core.bigrat.to_i64",
             "egglog.core.bool.and",
             "egglog.core.bool.implies",
             "egglog.core.bool.not",
