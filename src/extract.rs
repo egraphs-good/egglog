@@ -314,101 +314,69 @@ struct FuncData<'a> {
 }
 
 /// The rows reading each eq value as a child, directly or inside a container.
+///
+/// Eq-sort ids come from one backend counter, so a value alone names its class.
 struct ChildIndex {
-    packed: Vec<u64>,
-    start: HashMap<Value, u32>,
-    row_base: Vec<u32>,
-    table_of_word: Vec<u32>,
+    /// Each read value's local id, an index into `offsets`.
+    ids: HashMap<Value, u32>,
+    /// `offsets[l]..offsets[l + 1]` is the run in `readers` for local id `l`.
+    offsets: Vec<u32>,
+    /// `(function, row)` pairs, one run per value.
+    readers: Vec<(u32, u32)>,
 }
 
 impl ChildIndex {
-    // Every eq-sort id comes from one backend counter, so a value names its
-    // class without its sort.
-    fn pack(value: Value, row: u32) -> u64 {
-        ((value.index() as u64) << 32) | row as u64
-    }
-
-    /// Row bases for tables of the given row counts, each aligned to 64 rows.
-    fn row_bases(row_counts: impl Iterator<Item = usize>) -> Vec<u32> {
-        std::iter::once(0)
-            .chain(row_counts.scan(0u32, |base, rows| {
-                *base = u32::try_from(rows.next_multiple_of(64))
-                    .ok()
-                    .and_then(|rows| base.checked_add(rows))
-                    .expect("extraction tables exceed 2^32 rows");
-                Some(*base)
-            }))
-            .collect()
-    }
-
-    fn new(mut packed: Vec<u64>, row_base: Vec<u32>) -> Self {
+    /// Indexes the `(value, function, row)` triples that `reads` yields. Each
+    /// call to `reads` must yield the same triples in the same order. Panics
+    /// past 2^32 triples.
+    fn new<I: Iterator<Item = (Value, u32, u32)>>(reads: impl Fn() -> I) -> Self {
+        // `locals` holds each read's value, then its local id. A value's offset
+        // counts its reads, then holds its run's end; the fill pass moves it back
+        // to the run's start.
+        let mut ids: HashMap<Value, u32> = HashMap::default();
+        let mut offsets: Vec<u32> = Vec::new();
+        let mut locals: Vec<u32> = Vec::new();
+        reads().for_each(|(value, _, _)| locals.push(value.rep()));
+        for read in &mut locals {
+            let local = *ids.entry(Value::new(*read)).or_insert_with(|| {
+                offsets.push(0);
+                (offsets.len() - 1) as u32
+            });
+            offsets[local as usize] += 1;
+            *read = local;
+        }
         assert!(
-            u32::try_from(packed.len()).is_ok(),
+            u32::try_from(locals.len()).is_ok(),
             "extraction index exceeds 2^32 child reads"
         );
-        packed.shrink_to_fit();
-        Self::sort_by_value(&mut packed);
-        let mut start = HashMap::default();
-        for (i, &p) in packed.iter().enumerate() {
-            if i == 0 || packed[i - 1] >> 32 != p >> 32 {
-                start.insert(Value::from_usize((p >> 32) as usize), i as u32);
-            }
+        let mut end = 0;
+        for offset in offsets.iter_mut() {
+            end += *offset;
+            *offset = end;
         }
-        let table_of_word = row_base
-            .windows(2)
-            .enumerate()
-            .flat_map(|(fi, range)| {
-                std::iter::repeat_n(fi as u32, (range[1] - range[0]) as usize / 64)
-            })
-            .collect();
+        offsets.reserve_exact(1);
+        offsets.push(end);
+        let mut readers = vec![(0, 0); locals.len()];
+        let mut read = 0;
+        reads().for_each(|(_, function, row)| {
+            let start = &mut offsets[locals[read] as usize];
+            read += 1;
+            *start -= 1;
+            readers[*start as usize] = (function, row);
+        });
         ChildIndex {
-            packed,
-            start,
-            row_base,
-            table_of_word,
+            ids,
+            offsets,
+            readers,
         }
     }
 
-    /// Sorts by the value half of each word; rows keep their registration order
-    /// within a value.
-    fn sort_by_value(packed: &mut Vec<u64>) {
-        const BITS: u32 = 11;
-        let widest = packed.iter().map(|&p| p >> 32).max().unwrap_or(0);
-        let mut scratch = vec![0u64; packed.len()];
-        for shift in (32..64).step_by(BITS as usize) {
-            if widest >> (shift - 32) == 0 {
-                break;
-            }
-            let mut offsets = [0usize; 1 << BITS];
-            for &p in packed.iter() {
-                offsets[((p >> shift) & ((1 << BITS) - 1)) as usize] += 1;
-            }
-            let mut total = 0;
-            for slot in offsets.iter_mut() {
-                total += std::mem::replace(slot, total);
-            }
-            for &p in packed.iter() {
-                let slot = &mut offsets[((p >> shift) & ((1 << BITS) - 1)) as usize];
-                scratch[*slot] = p;
-                *slot += 1;
-            }
-            std::mem::swap(packed, &mut scratch);
-        }
-    }
-
-    /// The (table, row) pairs reading `value`, in row order.
-    fn readers(&self, value: Value) -> impl Iterator<Item = (usize, usize)> + '_ {
-        let run = match self.start.get(&value) {
-            Some(&start) => &self.packed[start as usize..],
-            None => &[],
-        };
-        run.iter()
-            .take_while(move |&&p| p >> 32 == value.index() as u64)
-            .map(|&p| {
-                let row = p as u32;
-                let fi = self.table_of_word[row as usize / 64] as usize;
-                (fi, (row - self.row_base[fi]) as usize)
-            })
+    /// The `(function, row)` pairs reading `value`, in no particular order.
+    fn readers(&self, value: Value) -> &[(u32, u32)] {
+        self.ids.get(&value).map_or(&[], |&local| {
+            let local = local as usize;
+            &self.readers[self.offsets[local] as usize..self.offsets[local + 1] as usize]
+        })
     }
 }
 
@@ -712,6 +680,50 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
     }
 
+    /// Builds the [`ChildIndex`] of `func_data`.
+    fn child_index(&self, egraph: &EGraph, func_data: &[FuncData]) -> ChildIndex {
+        // Walking a container allocates, so each is walked once and its reads kept.
+        let mut container_reads = Vec::new();
+        for (fi, f) in func_data.iter().enumerate() {
+            if !f
+                .child_kinds
+                .iter()
+                .any(|k| matches!(k, ChildKind::Container(_)))
+            {
+                continue;
+            }
+            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
+                for (kind, value) in f.child_kinds.iter().zip(row) {
+                    if let ChildKind::Container(sort) = kind {
+                        self.register_container_deps(egraph, sort, *value, &mut |v| {
+                            container_reads.push((v, fi as u32, ri as u32))
+                        });
+                    }
+                }
+            }
+        }
+        ChildIndex::new(|| {
+            func_data
+                .iter()
+                .enumerate()
+                .flat_map(|(fi, f)| {
+                    f.rows
+                        .chunks_exact(f.arity)
+                        .enumerate()
+                        .flat_map(move |(ri, row)| {
+                            f.child_kinds
+                                .iter()
+                                .zip(row)
+                                .filter_map(move |(kind, value)| {
+                                    matches!(kind, ChildKind::EqSort(Some(_)))
+                                        .then_some((*value, fi as u32, ri as u32))
+                                })
+                        })
+                })
+                .chain(container_reads.iter().copied())
+        })
+    }
+
     /// We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
     /// [Bellman-Ford](https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm) is a shortest path algorithm.
     /// The version implemented here computes the shortest path from any node in a set of sources to all the reachable nodes.
@@ -773,64 +785,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             })
             .collect();
 
-        // Reverse dependency index from each eq child value to the rows reading it,
-        // directly or inside a container child.
-        let row_base = ChildIndex::row_bases(func_data.iter().map(|f| f.rows.len() / f.arity));
-        let eq_reads: usize = func_data
-            .iter()
-            .map(|f| {
-                f.child_kinds
-                    .iter()
-                    .filter(|k| matches!(k, ChildKind::EqSort(Some(_))))
-                    .count()
-                    * (f.rows.len() / f.arity)
-            })
-            .sum();
-        // Container children are registered first, since only walking them tells how
-        // many eq values they hold; they fill the eq reservation's slack. After one
-        // exact re-reservation they move to the tail and are merged back in row order
-        // as the eq children fill the front, so each value's readers stay sorted by
-        // row. The write cursor never passes the read cursor.
-        let mut packed: Vec<u64> = Vec::with_capacity(eq_reads);
-        for (f, base) in func_data.iter().zip(&row_base) {
-            if !f
-                .child_kinds
-                .iter()
-                .any(|k| matches!(k, ChildKind::Container(_)))
-            {
-                continue;
-            }
-            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
-                for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
-                    if let ChildKind::Container(sort) = kind {
-                        self.register_container_deps(egraph, sort, *value, &mut |v| {
-                            packed.push(ChildIndex::pack(v, base + ri as u32))
-                        });
-                    }
-                }
-            }
-        }
-        let containers = packed.len();
-        packed.reserve_exact(eq_reads);
-        packed.resize(containers + eq_reads, 0);
-        packed.copy_within(..containers, eq_reads);
-        let (mut write, mut read) = (0, eq_reads);
-        for (f, base) in func_data.iter().zip(&row_base) {
-            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
-                let global_row = base + ri as u32;
-                while read < packed.len() && packed[read] as u32 == global_row {
-                    packed[write] = packed[read];
-                    (write, read) = (write + 1, read + 1);
-                }
-                for (kind, value) in f.child_kinds.iter().zip(row.iter()) {
-                    if let ChildKind::EqSort(Some(_)) = kind {
-                        packed[write] = ChildIndex::pack(*value, global_row);
-                        write += 1;
-                    }
-                }
-            }
-        }
-        let child_index = ChildIndex::new(packed, row_base);
+        let child_index = self.child_index(egraph, &func_data);
 
         let mut topo_rnk_cnt = 0usize;
         // Semi-naive relaxation: a row recomputes exactly the same cost against a
@@ -875,8 +830,8 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         cost: new_cost,
                         rank: topo_rnk_cnt,
                     });
-                    for (dfi, dri) in child_index.readers(target) {
-                        dirty[dfi].insert(dri);
+                    for &(dfi, dri) in child_index.readers(target) {
+                        dirty[dfi as usize].insert(dri as usize);
                     }
                 }
             }
@@ -1360,39 +1315,36 @@ mod tests {
     }
 
     #[test]
-    fn child_index_sorts_by_value_and_decodes_tables() {
-        let row_base = ChildIndex::row_bases([3, 0, 70].into_iter());
-        assert_eq!(row_base, vec![0, 64, 64, 192]);
-        let values = [7u32, 0, 1 << 22, 7, u32::MAX - 1, 0, 7];
-        let rows = [0u32, 1, 2, 64, 65, 130, 133];
-        let packed: Vec<u64> = values
-            .iter()
-            .zip(rows)
-            .map(|(&v, row)| ChildIndex::pack(Value::from_usize(v as usize), row))
+    fn child_index_groups_every_read_under_its_value() {
+        // A fixed linear congruential stream, so values repeat across functions.
+        let mut state = 12345u64;
+        let mut next = |bound: u64| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((state >> 33) % bound) as u32
+        };
+        let reads: Vec<(Value, u32, u32)> = (0..2000)
+            .map(|_| (Value::new_const(next(300)), next(5), next(400)))
             .collect();
-        let index = ChildIndex::new(packed, row_base);
-        let unpacked: Vec<(u32, u32)> = index
-            .packed
-            .iter()
-            .map(|&p| ((p >> 32) as u32, p as u32))
-            .collect();
-        assert_eq!(
-            unpacked,
-            vec![
-                (0, 1),
-                (0, 130),
-                (7, 0),
-                (7, 64),
-                (7, 133),
-                (1 << 22, 2),
-                (u32::MAX - 1, 65)
-            ]
+        let index = ChildIndex::new(|| reads.iter().copied());
+        let mut expected: HashMap<Value, Vec<(u32, u32)>> = HashMap::default();
+        for &(value, function, row) in &reads {
+            expected.entry(value).or_default().push((function, row));
+        }
+        for v in 0..310 {
+            let value = Value::new_const(v);
+            let mut got = index.readers(value).to_vec();
+            got.sort_unstable();
+            let mut want = expected.remove(&value).unwrap_or_default();
+            want.sort_unstable();
+            assert_eq!(got, want, "readers of {v}");
+        }
+        assert!(expected.is_empty());
+        assert_eq!(index.readers.len(), reads.len());
+        assert!(
+            ChildIndex::new(std::iter::empty)
+                .readers(Value::new_const(0))
+                .is_empty()
         );
-        assert_eq!(
-            index.readers(Value::from_usize(7)).collect::<Vec<_>>(),
-            vec![(0, 0), (2, 0), (2, 69)]
-        );
-        assert_eq!(index.readers(Value::from_usize(8)).count(), 0);
     }
 
     #[test]
