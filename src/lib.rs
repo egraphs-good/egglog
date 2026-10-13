@@ -557,7 +557,7 @@ impl Default for EGraph {
 
         add_primitive_with_validator!(
             &mut eg,
-            "bool-!=" = |a: #, b: #| -> bool {
+            "bool-!=" [id = "egglog.core.bool_ne"] = |a: #, b: #| -> bool {
                 (a != b)
             },
             |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
@@ -569,7 +569,7 @@ impl Default for EGraph {
             }
         );
 
-        add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
+        add_primitive!(&mut eg, "value-eq" [id = "egglog.core.value_eq"] = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
         add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {

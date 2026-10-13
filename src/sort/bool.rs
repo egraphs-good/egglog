@@ -38,7 +38,7 @@ impl BaseSort for BoolSort {
         add_literal_prim!(eg, "xor" [id = "egglog.core.bool.xor", bindings = |s| crate::builtin::scalar_member_bindings(s, "__xor__", "bitxor", &["other"], Some("BitXor"), None)] = |a: bool, b: bool| -> bool { a ^ b });
         add_literal_prim!(eg, "=>" [id = "egglog.core.bool.implies", bindings = |s| crate::builtin::scalar_member_bindings(s, "implies", "implies", &["other"], None, None)] = |a: bool, b: bool| -> bool { !a || b });
         // A guard primitive that fails the query if the boolean is false
-        add_literal_prim!(eg, "guard" = |a: bool| -?> () { a.then_some(()) });
+        add_literal_prim!(eg, "guard" [id = "egglog.core.bool.guard"] = |a: bool| -?> () { a.then_some(()) });
     }
 
     fn reconstruct_termdag(
