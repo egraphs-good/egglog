@@ -836,9 +836,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         // Semi-naive relaxation: a row recomputes exactly the same cost against a
         // never-increasing target unless one of its child (sort, value) costs
         // changed since the row was last evaluated, so only such "dirty" rows are
-        // (re)visited. Rows are swept in the same (function, row) order as the
-        // naive pass loop, so the update trace — and hence topo ranks and
-        // extracted terms — is unchanged.
+        // (re)visited.
         let mut dirty: Vec<DirtyRows> = func_data
             .iter()
             .map(|f| DirtyRows::full(f.rows.len() / f.arity))
