@@ -88,13 +88,29 @@ impl Presort for VecSort {
                 ],
                 vec![],
             ),
+            (
+                "range",
+                "vec-range",
+                vec![pb::Arg {
+                    name: "end".into(),
+                    sort: 2,
+                }],
+                vec![],
+            ),
         ]
         .into_iter()
         .map(|(key, alias, inputs, varargs)| pb::Program {
             ir_version: 1,
             sorts: vec![
                 pb::Sort {
-                    kind: Some(pb::sort::Kind::Var(0)),
+                    kind: Some(if key == "range" {
+                        pb::sort::Kind::Family(pb::HostSort {
+                            name: "i64".into(),
+                            args: vec![],
+                        })
+                    } else {
+                        pb::sort::Kind::Var(0)
+                    }),
                     ..Default::default()
                 },
                 pb::Sort {
@@ -149,7 +165,11 @@ impl Presort for VecSort {
                         name: format!("egglog.core.vec.{key}"),
                         typing: Some(pb::host_primitive::Typing::Signature(
                             pb::GenericSignature {
-                                type_params: vec!["T".into()],
+                                type_params: if key == "range" {
+                                    vec![]
+                                } else {
+                                    vec!["T".into()]
+                                },
                                 inputs,
                                 output: Some(if key == "get" { 0 } else { 1 }),
                                 varargs,
@@ -168,12 +188,17 @@ impl Presort for VecSort {
                                 path: match key {
                                     "of" => vec![],
                                     "empty" => vec!["empty".into()],
+                                    "range" => vec!["range".into()],
                                     _ => vec!["__getitem__".into()],
                                 },
                                 owner: Some(pb::BindingOwner {
-                                    kind: Some(pb::binding_owner::Kind::Sort(1)),
+                                    kind: Some(pb::binding_owner::Kind::Sort(if key == "range" {
+                                        2
+                                    } else {
+                                        1
+                                    })),
                                 }),
-                                receiver: (key == "get").then_some(0),
+                                receiver: matches!(key, "get" | "range").then_some(0),
                                 params: match key {
                                     "of" => vec![pb::PythonParameter {
                                         core_input: Some(0),
@@ -195,12 +220,18 @@ impl Presort for VecSort {
                             views: vec![pb::RustCallable {
                                 path: vec![key.into()],
                                 owner: Some(pb::BindingOwner {
-                                    kind: Some(pb::binding_owner::Kind::Sort(1)),
+                                    kind: Some(pb::binding_owner::Kind::Sort(if key == "range" {
+                                        2
+                                    } else {
+                                        1
+                                    })),
                                 }),
-                                receiver: (key == "get").then_some(pb::RustReceiver {
-                                    core_input: Some(0),
-                                    borrowed: true,
-                                }),
+                                receiver: matches!(key, "get" | "range").then_some(
+                                    pb::RustReceiver {
+                                        core_input: Some(0),
+                                        borrowed: key == "get",
+                                    },
+                                ),
                                 params: match key {
                                     "of" => vec![pb::RustParameter {
                                         core_input: Some(0),
@@ -396,7 +427,11 @@ impl ContainerSort for VecSort {
         }
         // vec-range
         if self.element.name() == "i64" {
-            add_primitive!(eg, "vec-range" = {self.clone(): VecSort} |end: i64| -> @VecContainer (arc) { VecContainer {
+            let range = eg
+                .type_info
+                .instantiate_builtin("egglog.core.vec.range", &arc)
+                .unwrap();
+            add_primitive!(eg, "vec-range" [instance = range] = {self.clone(): VecSort} |end: i64| -> @VecContainer { VecContainer {
                 do_rebuild: self.ctx.is_eq_container_sort(),
                 data: {
                     let end: usize = end.try_into().unwrap_or(0);

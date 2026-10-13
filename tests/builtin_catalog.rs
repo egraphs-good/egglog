@@ -1679,7 +1679,7 @@ fn resolved_call_export_checks_direct_annotations_and_preserves_ordinary_calls()
 }
 
 #[test]
-fn vec_catalog_has_generic_language_views() {
+fn vec_catalog_has_generic_and_closed_language_views() {
     let catalog = EGraph::default()
         .type_info()
         .builtin_catalog()
@@ -1703,7 +1703,7 @@ fn vec_catalog_has_generic_language_views() {
         ["egglog_experimental", "typed", "builtins", "Vec"]
     );
     assert_eq!(rust.type_params, ["T"]);
-    for method in ["empty", "of", "get"] {
+    for method in ["empty", "of", "get", "range"] {
         let declaration = catalog.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == format!("egglog.core.vec.{method}"))).unwrap();
         let bindings = declaration.bindings.as_ref().unwrap();
         let python = &bindings.python.as_ref().unwrap().views[0];
@@ -1720,10 +1720,14 @@ fn vec_catalog_has_generic_language_views() {
             match method {
                 "of" => vec![],
                 "empty" => vec!["empty"],
+                "range" => vec!["range"],
                 _ => vec!["__getitem__"],
             }
         );
-        assert_eq!(python.receiver, (method == "get").then_some(0));
+        assert_eq!(
+            python.receiver,
+            matches!(method, "get" | "range").then_some(0)
+        );
         assert_eq!(
             python.params,
             match method {
@@ -1758,11 +1762,41 @@ fn vec_catalog_has_generic_language_views() {
         let Some(proto::sort::Kind::Family(owner)) = &catalog.sorts[owner as usize].kind else {
             panic!("Vec owner")
         };
-        assert_eq!(owner.name, "Vec");
-        assert!(matches!(
-            catalog.sorts[owner.args[0] as usize].kind,
-            Some(proto::sort::Kind::Var(0))
-        ));
+        if method == "range" {
+            assert_eq!(owner.name, "i64");
+            assert!(owner.args.is_empty());
+            let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+                unreachable!()
+            };
+            let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing
+            else {
+                unreachable!()
+            };
+            assert!(signature.type_params.is_empty());
+            assert!(signature.varargs.is_empty());
+            assert_eq!(signature.inputs.len(), 1);
+            assert_eq!(
+                catalog.sorts[signature.inputs[0].sort as usize].kind,
+                Some(proto::sort::Kind::Family(owner.clone()))
+            );
+            let Some(proto::sort::Kind::Family(output)) =
+                &catalog.sorts[signature.output.unwrap() as usize].kind
+            else {
+                unreachable!()
+            };
+            assert_eq!(output.name, "Vec");
+            assert_eq!(output.args.len(), 1);
+            assert_eq!(
+                catalog.sorts[output.args[0] as usize].kind,
+                Some(proto::sort::Kind::Family(owner.clone()))
+            );
+        } else {
+            assert_eq!(owner.name, "Vec");
+            assert!(matches!(
+                catalog.sorts[owner.args[0] as usize].kind,
+                Some(proto::sort::Kind::Var(0))
+            ));
+        }
         let expected = match method {
             "empty" => (None, vec![]),
             "of" => (
@@ -1772,6 +1806,13 @@ fn vec_catalog_has_generic_language_views() {
                     name: "values".into(),
                     borrowed: false,
                 }],
+            ),
+            "range" => (
+                Some(proto::RustReceiver {
+                    core_input: Some(0),
+                    borrowed: false,
+                }),
+                vec![],
             ),
             _ => (
                 Some(proto::RustReceiver {
@@ -2690,6 +2731,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.vec.empty",
             "egglog.core.vec.get",
             "egglog.core.vec.of",
+            "egglog.core.vec.range",
             "test.counted"
         ]
     );
@@ -3047,12 +3089,13 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
         !before
             .undescribed_family_primitives
             .iter()
-            .any(|name| name == "Vec::vec-of")
+            .any(|name| matches!(name.as_str(), "Vec::vec-of" | "Vec::vec-range"))
     );
     for key in [
         "egglog.core.vec.empty",
         "egglog.core.vec.of",
         "egglog.core.vec.get",
+        "egglog.core.vec.range",
     ] {
         assert!(before.definitions.declarations.iter().any(|declaration| matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)));
     }
@@ -3060,12 +3103,14 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
         .parse_and_run_program(
             None,
             r#"
-        (sort V (Vec i64)) (sort W (Vec i64)) (sort Nested (Vec V))
+        (sort V (Vec i64)) (sort W (Vec i64)) (sort Nested (Vec V)) (sort F (Vec f64))
         (function v () V :merge new) (function w () W :merge new)
         (function nested () Nested :merge new)
         (set (v) (vec-empty)) (set (w) (vec-of 3 4))
         (set (nested) (vec-of (v)))
         (check (= (vec-get (w) 1) 4) (= (vec-get (nested) 0) (v)))
+        (set (v) (vec-range 1)) (set (w) (vec-range 5))
+        (check (= (vec-get (v) 0) 0) (= (vec-get (w) 4) 4))
     "#,
         )
         .unwrap();
@@ -3079,11 +3124,36 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
             .parse_and_run_program(None, "(set (v) (vec-of 1.0))")
             .is_err()
     );
-    let v = graph.get_sort_by_name("V").unwrap();
-    let i = graph.get_sort_by_name("i64").unwrap();
+    let v = graph.get_sort_by_name("V").unwrap().clone();
+    let i = graph.get_sort_by_name("i64").unwrap().clone();
+    let w = graph.get_sort_by_name("W").unwrap().clone();
+    let f = graph.get_sort_by_name("F").unwrap().clone();
+    let float = graph.get_sort_by_name("f64").unwrap().clone();
+    assert!(
+        graph
+            .type_info()
+            .instantiate_builtin("egglog.core.vec.range", &f)
+            .is_err()
+    );
+    assert!(
+        graph
+            .type_info()
+            .instantiate_builtin("egglog.core.vec.range", &i)
+            .is_err()
+    );
     for (alias, key, types) in [
         ("vec-empty", "egglog.core.vec.empty", vec![v.clone()]),
         ("vec-of", "egglog.core.vec.of", vec![i.clone(), v.clone()]),
+        (
+            "vec-range",
+            "egglog.core.vec.range",
+            vec![i.clone(), v.clone()],
+        ),
+        (
+            "vec-range",
+            "egglog.core.vec.range",
+            vec![i.clone(), w.clone()],
+        ),
         (
             "vec-get",
             "egglog.core.vec.get",
@@ -3091,6 +3161,20 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
         ),
     ] {
         for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let canonical = ResolvedCall::from_resolution(
+                key,
+                &types,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            if key == "egglog.core.vec.range" {
+                let ResolvedCall::Primitive(primitive) = &canonical else {
+                    unreachable!()
+                };
+                assert!(primitive.validator().is_none());
+            }
             assert_eq!(
                 ResolvedCall::from_resolution(
                     alias,
@@ -3100,14 +3184,27 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
                     &ast::Span::Panic
                 )
                 .unwrap(),
+                canonical,
+            );
+        }
+    }
+    for types in [
+        vec![v.clone()],
+        vec![i.clone(), i.clone(), v.clone()],
+        vec![f.clone(), v.clone()],
+        vec![float, v.clone()],
+        vec![i.clone(), f.clone()],
+    ] {
+        for alias in ["vec-range", "egglog.core.vec.range"] {
+            assert!(
                 ResolvedCall::from_resolution(
-                    key,
+                    alias,
                     &types,
                     graph.type_info(),
-                    context,
+                    Context::Full,
                     &ast::Span::Panic
                 )
-                .unwrap(),
+                .is_err()
             );
         }
     }
@@ -3121,11 +3218,18 @@ fn vec_instance_macro_rejects_conversion_and_arity_mismatches_before_registratio
         .parse_and_run_program(None, "(sort V (Vec i64))")
         .unwrap();
     let before = graph.type_info().builtin_catalog().unwrap().definitions;
-    for wrong in 0..3 {
+    for wrong in 0..6 {
         let native = graph.get_sort_by_name("V").unwrap().clone();
         let instance = graph
             .type_info()
-            .instantiate_builtin("egglog.core.vec.get", &native)
+            .instantiate_builtin(
+                if wrong < 3 {
+                    "egglog.core.vec.get"
+                } else {
+                    "egglog.core.vec.range"
+                },
+                &native,
+            )
             .unwrap();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if wrong == 0 {
@@ -3134,8 +3238,19 @@ fn vec_instance_macro_rejects_conversion_and_arity_mismatches_before_registratio
                 }, |_: &mut TermDag, _: &[TermId]| { CALLS.fetch_add(1, Ordering::SeqCst); None });
             } else if wrong == 1 {
                 add_primitive!(&mut graph, "bad" [instance = instance] = |xs: @VecContainer, index: i64| -> bool { { let _ = (xs, index); false } });
-            } else {
+            } else if wrong == 2 {
                 add_primitive!(&mut graph, "bad" [instance = instance] = [mut xs: #] -> # { xs.next().unwrap() });
+            } else if wrong == 3 {
+                add_primitive_with_validator!(&mut graph, "bad" [instance = instance] = |end: String| -> @VecContainer {
+                    { CALLS.fetch_add(1, Ordering::SeqCst); let _ = end; VecContainer { do_rebuild: false, data: vec![] } }
+                }, |_: &mut TermDag, _: &[TermId]| { CALLS.fetch_add(1, Ordering::SeqCst); None });
+            } else if wrong == 4 {
+                add_primitive!(
+                    &mut graph,
+                    "bad"[instance = instance] = |end: i64| -> i64 { end }
+                );
+            } else {
+                add_primitive!(&mut graph, "bad" [instance = instance] = [end: i64] -> @VecContainer { { let _ = end; VecContainer { do_rebuild: false, data: vec![] } } });
             }
         }));
         assert!(result.is_err());
