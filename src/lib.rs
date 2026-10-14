@@ -184,6 +184,8 @@ pub trait Primitive: Send + Sync + 'static {
     }
 
     /// Lowers a resolved source-only facade using already-lowered argument refs.
+    /// `native_sorts` retains the exact resolved inputs/output before structural
+    /// protobuf sort projection can erase nominal overload distinctions.
     /// Implementations may import definitions and append helper nodes, but must
     /// not execute native bodies, validators, queries, or sort providers. `None`
     /// must leave the destination unchanged. On error the caller discards the
@@ -191,11 +193,12 @@ pub trait Primitive: Send + Sync + 'static {
     fn lower_builtin_call(
         &self,
         _types: &TypeInfo,
+        _native_sorts: (&[ArcSort], &ArcSort),
         _args: &[u32],
         _output: u32,
         _span: Option<proto::Span>,
         _destination: &mut proto::Program,
-    ) -> Result<Option<proto::Call>, String> {
+    ) -> Result<Option<proto::node::Kind>, String> {
         Ok(None)
     }
 }

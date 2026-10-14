@@ -1,9 +1,273 @@
+use egglog::extract::DEFAULT_COST_MODEL;
 use egglog::sort::{PairContainer, Presort, VecContainer, VecSort};
 use egglog::*;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+
+#[test]
+fn function_value_observer_keeps_typed_occurrences() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(
+            None,
+            r#"
+        (sort X)
+        (sort SI (Set i64))
+        (sort SX (Set X))
+        (function si () SI :merge new)
+        (function sx () SX :merge new)
+        (set (si) (set-empty))
+        (set (sx) (set-empty))
+        (sort F (UnstableFn () bool))
+        (datatype W (Wrap F) (Other F))
+        (let $fi (unstable-fn "egglog.core.bool_ne" (si) (si)))
+        (let $fx (unstable-fn "egglog.core.bool_ne" (sx) (sx)))
+        (check (!= $fi $fx))
+        (let $wi (Wrap $fi))
+        (let $wx (Wrap $fx))
+        (let $other (Other $fi))
+        (union $wi $wx)
+    "#,
+        )
+        .unwrap();
+    let mut roots = vec![];
+    for name in ["$fi", "$fx", "$wi", "$other"] {
+        roots.push(
+            graph
+                .eval_expr(&ast::Expr::Var(ast::Span::Panic, name.into()))
+                .unwrap(),
+        );
+    }
+    let mut nodes: Vec<(TermId, String, Vec<usize>)> = vec![];
+    let best_roots = vec![roots[0].clone(), roots[1].clone(), roots[0].clone()];
+    let legacy = graph.extract_best(best_roots.clone()).unwrap();
+    let (best, ids) = graph
+        .extract_best_with_cost_model_and_observer(
+            best_roots,
+            DEFAULT_COST_MODEL,
+            |_, term, sort, _, children| {
+                let id = nodes.len();
+                nodes.push((term, sort.name().into(), children.to_vec()));
+                Ok(id)
+            },
+        )
+        .unwrap();
+    assert_eq!(best.termdag, legacy.termdag);
+    assert_eq!(
+        best.terms
+            .iter()
+            .map(|t| t.as_ref().map(|t| (t.term, t.cost)))
+            .collect::<Vec<_>>(),
+        legacy
+            .terms
+            .iter()
+            .map(|t| t.as_ref().map(|t| (t.term, t.cost)))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        best.terms[0].as_ref().unwrap().term,
+        best.terms[1].as_ref().unwrap().term
+    );
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(ids[0], ids[2], "duplicate roots retain consumer sharing");
+    for (id, expected) in ids.iter().take(2).zip(["SI", "SX"]) {
+        let children = &nodes[id.unwrap()].2;
+        assert_eq!(
+            children.len(),
+            2,
+            "target-name literal is not a semantic child"
+        );
+        assert_eq!(nodes[children[0]].1, expected);
+        assert_eq!(children[0], children[1]);
+    }
+    let legacy = graph
+        .extract_variants(vec![roots[2].clone(), roots[3].clone()], 2)
+        .unwrap();
+    nodes.clear();
+    let (variants, ids) = graph
+        .extract_variants_with_cost_model_and_observer(
+            vec![roots[2].clone(), roots[3].clone()],
+            2,
+            DEFAULT_COST_MODEL,
+            |_, term, sort, _, children| {
+                let id = nodes.len();
+                nodes.push((term, sort.name().into(), children.to_vec()));
+                Ok(id)
+            },
+        )
+        .unwrap();
+    assert_eq!(variants.termdag, legacy.termdag);
+    let terms: Vec<_> = variants.variants[0]
+        .iter()
+        .map(|t| (t.term, t.cost))
+        .collect();
+    assert_eq!(
+        terms,
+        legacy.variants[0]
+            .iter()
+            .map(|t| (t.term, t.cost))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(terms.len(), 2);
+    assert_eq!(terms[0], terms[1]);
+    assert_eq!(terms[0].1, 1);
+    assert_ne!(
+        ids[0][0], ids[0][1],
+        "selected variants must not be deduplicated by Eq root or TermId"
+    );
+    let mut prefixes: Vec<_> = ids[0]
+        .iter()
+        .map(|id| {
+            let function = nodes[*id].2[0];
+            nodes[nodes[function].2[0]].1.as_str()
+        })
+        .collect();
+    prefixes.sort();
+    assert_eq!(prefixes, ["SI", "SX"]);
+    let shared = nodes[ids[1][0]].2[0];
+    assert!(
+        ids[0].iter().any(|id| nodes[*id].2[0] == shared),
+        "distinct roots retain their common selected function child"
+    );
+    let error = graph
+        .extract_best_with_cost_model_and_observer(
+            vec![roots[0].clone()],
+            DEFAULT_COST_MODEL,
+            |_, _, _, _, _: &[()]| Err::<(), _>(Error::ExtractError("observer failure".into())),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("observer failure"));
+    let error = graph
+        .extract_variants_with_cost_model_and_observer(
+            vec![roots[2].clone()],
+            2,
+            DEFAULT_COST_MODEL,
+            |_, _, _, _, _: &[()]| Err::<(), _>(Error::ExtractError("observer failure".into())),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("observer failure"));
+}
+
+#[test]
+fn function_value_observer_uses_semantic_view_children() {
+    let mut graph = EGraph::new_with_proofs();
+    graph
+        .parse_and_run_program(None, "(datatype M (Num i64)) (let $m (Num 5))")
+        .unwrap();
+    let mut values = vec![];
+    graph
+        .constructor_enodes("Num", |row| values.push(row.eclass))
+        .unwrap();
+    assert_eq!(values.len(), 1);
+    let root = (graph.get_sort_by_name("M").unwrap().clone(), values[0]);
+    let mut nodes: Vec<(String, Vec<usize>)> = vec![];
+    let (_, roots) = graph
+        .extract_best_with_cost_model_and_observer(
+            vec![root],
+            DEFAULT_COST_MODEL,
+            |_, _, sort, _, children| {
+                let id = nodes.len();
+                nodes.push((sort.name().into(), children.to_vec()));
+                Ok(id)
+            },
+        )
+        .unwrap();
+    let root = &nodes[roots[0].unwrap()];
+    assert_eq!(root.0, "M");
+    assert_eq!(root.1.len(), 1);
+    assert_eq!(nodes[root.1[0]].0, "i64");
+}
+
+#[test]
+fn function_value_structural_provenance_and_application_catalog() {
+    let mut graph = EGraph::default();
+    let catalog = graph.type_info().builtin_catalog().unwrap().definitions;
+    let declaration = catalog
+        .declarations
+        .iter()
+        .find(|d| {
+            matches!(&d.kind,
+        Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.fn.apply")
+        })
+        .expect("uninstantiated function application descriptor");
+    let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+        unreachable!()
+    };
+    assert!(matches!(
+        primitive.typing,
+        Some(proto::host_primitive::Typing::Application(_))
+    ));
+    graph
+        .type_info()
+        .check_builtin_signature(&catalog, primitive)
+        .unwrap();
+    graph
+        .parse_and_run_program(
+            None,
+            "(sort F (UnstableFn (i64) i64)) (sort G (UnstableFn (i64) i64))",
+        )
+        .unwrap();
+    let mut sorts = vec![];
+    let f = graph.get_sort_by_name("F").unwrap().clone();
+    let g = graph.get_sort_by_name("G").unwrap().clone();
+    let index = graph.export_sort(&f, &mut sorts).unwrap();
+    assert_eq!(graph.export_sort(&g, &mut sorts).unwrap(), index);
+    let Some(proto::sort::Kind::Func(function)) = &sorts[index as usize].kind else {
+        panic!("expected structural Func")
+    };
+    assert_eq!(function.params, [function.result]);
+    let mut imported = vec![];
+    assert_eq!(
+        builtin::import_sort(&sorts, index, &mut imported).unwrap(),
+        index
+    );
+    assert_eq!(imported, sorts);
+    for sort in [f, g] {
+        let i64_sort = graph.get_sort_by_name("i64").unwrap().clone();
+        let native = [sort.clone(), i64_sort.clone(), i64_sort.clone()];
+        let instance = graph
+            .type_info()
+            .instantiate_builtin("egglog.core.fn.apply", &sort)
+            .unwrap();
+        instance.check_abi(&[None, None], None, false).unwrap();
+        assert!(instance.check_abi(&[None], None, false).is_err());
+        assert!(instance.check_abi(&[None, None], None, true).is_err());
+        assert!(
+            instance
+                .check_abi(
+                    &[Some((std::any::TypeId::of::<i64>(), false)), None],
+                    None,
+                    false
+                )
+                .is_err()
+        );
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let source = ResolvedCall::from_resolution(
+                "unstable-app",
+                &native,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            let keyed = ResolvedCall::from_resolution(
+                "egglog.core.fn.apply",
+                &native,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            assert_eq!(source, keyed);
+            let ResolvedCall::Primitive(primitive) = keyed else {
+                unreachable!()
+            };
+            assert!(primitive.validator().is_none());
+        }
+    }
+}
 
 #[test]
 fn remaining_scalar_catalog_preserves_closed_providers() {
@@ -2680,6 +2944,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.f64.sub",
             "egglog.core.f64.to_i64",
             "egglog.core.f64.to_string",
+            "egglog.core.fn.apply",
             "egglog.core.i64.abs",
             "egglog.core.i64.add",
             "egglog.core.i64.bitand",
@@ -3374,9 +3639,17 @@ fn empty_definition_keys_are_rejected_by_import_and_registration() {
     );
     let primitive = Invalid(definition);
     let mut destination = proto::Program::default();
+    let sort = graph.get_sort_by_name("i64").unwrap().clone();
     assert_eq!(
         primitive
-            .lower_builtin_call(graph.type_info(), &[], 0, None, &mut destination)
+            .lower_builtin_call(
+                graph.type_info(),
+                (&[], &sort),
+                &[],
+                0,
+                None,
+                &mut destination
+            )
             .unwrap(),
         None
     );

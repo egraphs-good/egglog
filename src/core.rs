@@ -75,6 +75,22 @@ impl SpecializedPrimitive {
         span: Option<proto::Span>,
         destination: &mut proto::Program,
     ) -> Result<proto::Call, String> {
+        match self.export_builtin_node(graph, args, span, destination)? {
+            proto::node::Kind::Call(call) => Ok(call),
+            _ => Err("resolved primitive produces a structured value, not a table call".into()),
+        }
+    }
+
+    /// Projects an exact specialization before nominal input/output sorts are
+    /// erased. Structured values (notably partial calls) retain the same native
+    /// target selection as compilation; no primitive body is evaluated.
+    pub fn export_builtin_node(
+        &self,
+        graph: &EGraph,
+        args: &[u32],
+        span: Option<proto::Span>,
+        destination: &mut proto::Program,
+    ) -> Result<proto::node::Kind, String> {
         if args.len() != self.input.len() {
             return Err("resolved builtin call arity mismatch".into());
         }
@@ -92,6 +108,7 @@ impl SpecializedPrimitive {
         let output = graph.export_sort(&self.output, &mut destination.sorts)?;
         if let Some(call) = self.prim_with_id.primitive.lower_builtin_call(
             &graph.type_info,
+            (&self.input, &self.output),
             args,
             output,
             span,
@@ -105,10 +122,10 @@ impl SpecializedPrimitive {
         graph
             .type_info
             .export_builtin_definition(&func, destination)?;
-        Ok(proto::Call {
+        Ok(proto::node::Kind::Call(proto::Call {
             func,
             args: args.to_vec(),
-        })
+        }))
     }
 
     /// Get the name of this primitive

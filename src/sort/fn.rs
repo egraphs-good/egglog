@@ -91,9 +91,43 @@ impl FunctionSort {
     pub fn output(&self) -> ArcSort {
         self.output.clone()
     }
+
+    /// Compiler-private selection of this exact nominal constructor overload.
+    /// Length-prefixing keeps arbitrary native sort names unambiguous. Every
+    /// native sort registration installs the alias, including fresh text engines.
+    pub fn constructor_alias(name: &str) -> String {
+        format!("__egglog_fn_ctor_{}_{}", name.len(), name)
+    }
 }
 
 impl Presort for FunctionSort {
+    fn builtin_definitions() -> Vec<proto::Program> {
+        vec![proto::Program {
+            ir_version: 1,
+            declarations: vec![proto::Declaration {
+                kind: Some(proto::declaration::Kind::HostPrimitive(
+                    proto::HostPrimitive {
+                        name: "egglog.core.fn.apply".into(),
+                        typing: Some(proto::host_primitive::Typing::Application(
+                            proto::FunctionApplication {},
+                        )),
+                    },
+                )),
+                bindings: Some(proto::CallableBindings {
+                    egglog: Some(proto::EgglogBindings {
+                        views: vec![proto::EgglogCallable {
+                            symbol: "unstable-app".into(),
+                            datatype_member: false,
+                        }],
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }]
+    }
+
     fn presort_name() -> &'static str {
         "UnstableFn"
     }
@@ -224,10 +258,26 @@ impl Sort for FunctionSort {
             },
             None,
         );
+        let ctor = eg.type_info.primitives["unstable-fn"]
+            .last()
+            .unwrap()
+            .clone();
+        let alias = Self::constructor_alias(self.name());
+        if eg.type_info.is_primitive(&alias) || eg.type_info.get_func_type(&alias).is_some() {
+            eg.type_info
+                .builtin_errors
+                .push(format!("function constructor alias collision: {alias}"));
+        } else {
+            eg.type_info.builtin_instances.insert(alias, vec![ctor]);
+        }
+        let instance = eg
+            .type_info
+            .instantiate_builtin("egglog.core.fn.apply", &(self.clone() as ArcSort))
+            .expect("registered application descriptor");
         eg.add_pure_primitive(
             Apply {
                 name: "unstable-app".into(),
-                function: self.clone(),
+                instance,
             },
             None,
         );
@@ -454,6 +504,53 @@ impl Primitive for Ctor {
             span: span.clone(),
         })
     }
+
+    fn lower_builtin_call(
+        &self,
+        types: &TypeInfo,
+        (inputs, native_output): (&[ArcSort], &ArcSort),
+        args: &[u32],
+        _output: u32,
+        _span: Option<proto::Span>,
+        destination: &mut proto::Program,
+    ) -> Result<Option<proto::node::Kind>, String> {
+        if native_output.name() != self.function.name()
+            || args.is_empty()
+            || inputs.len() != args.len()
+        {
+            return Err("function constructor specialization mismatch".into());
+        }
+        let Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+            value: Some(proto::primitive_value::Value::String(name)),
+        })) = destination
+            .nodes
+            .get(args[0] as usize)
+            .and_then(|n| n.kind.as_ref())
+        else {
+            return Err("function constructor target must be a literal string".into());
+        };
+        let name = name.clone();
+        let target_inputs = inputs[1..]
+            .iter()
+            .chain(self.function.inputs())
+            .cloned()
+            .collect::<Vec<_>>();
+        let func = types.export_function_target(
+            &name,
+            &target_inputs,
+            &self.function.output(),
+            None,
+            destination,
+        )?;
+        Ok(Some(proto::node::Kind::PrimitiveValue(
+            proto::PrimitiveValue {
+                value: Some(proto::primitive_value::Value::PartialCall(proto::Call {
+                    func,
+                    args: args[1..].to_vec(),
+                })),
+            },
+        )))
+    }
 }
 
 impl PurePrim for Ctor {
@@ -565,7 +662,7 @@ pub enum ResolvedFunctionId {
 #[derive(Clone)]
 struct Apply {
     name: String,
-    function: Arc<FunctionSort>,
+    instance: builtin::BuiltinInstance,
 }
 
 impl Primitive for Apply {
@@ -574,10 +671,11 @@ impl Primitive for Apply {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
-        sorts.extend(self.function.inputs.clone());
-        sorts.push(self.function.output.clone());
-        SimpleTypeConstraint::new(&self.name, sorts, span.clone()).into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 

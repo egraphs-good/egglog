@@ -536,11 +536,12 @@ impl Primitive for MapOf {
     fn lower_builtin_call(
         &self,
         types: &TypeInfo,
+        _native_sorts: (&[ArcSort], &ArcSort),
         args: &[u32],
         output: u32,
         span: Option<proto::Span>,
         destination: &mut proto::Program,
-    ) -> Result<Option<proto::Call>, String> {
+    ) -> Result<Option<proto::node::Kind>, String> {
         use proto as pb;
         let definition = &self.instance.definition;
         // Import the exact registration first, so a stale descriptor cannot be
@@ -594,7 +595,11 @@ impl Primitive for MapOf {
                     _ => None,
                 })
                 .ok_or("missing helper definition")?;
-            let signature = builtin::normalized_signature(helper, primitive, &mut patterns)?;
+            let pb::host_primitive::Typing::Signature(signature) =
+                builtin::normalized_signature(helper, primitive, &mut patterns)?
+            else {
+                return Err("Map helper requires a generic signature".into());
+            };
             if signature.type_params.len() != parameters
                 || signature.inputs.iter().map(|a| a.sort).collect::<Vec<_>>() != fixed
                 || signature.varargs.iter().map(|a| a.sort).collect::<Vec<_>>() != tail
@@ -679,10 +684,10 @@ impl Primitive for MapOf {
             })),
             span,
         });
-        Ok(Some(pb::Call {
+        Ok(Some(pb::node::Kind::Call(pb::Call {
             func: key,
             args: vec![entries],
-        }))
+        })))
     }
 }
 

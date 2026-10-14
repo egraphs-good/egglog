@@ -108,13 +108,15 @@ fn declaration_refs(
             }
         }
         pb::declaration::Kind::HostPrimitive(p) => {
-            let Some(pb::host_primitive::Typing::Signature(s)) = &mut p.typing else {
-                return Err("function application bindings are not supported yet".into());
-            };
-            for a in s.inputs.iter_mut().chain(s.varargs.iter_mut()) {
-                sort(&mut a.sort)?;
+            match p.typing.as_mut().ok_or("missing host typing")? {
+                pb::host_primitive::Typing::Signature(s) => {
+                    for a in s.inputs.iter_mut().chain(s.varargs.iter_mut()) {
+                        sort(&mut a.sort)?;
+                    }
+                    sort(s.output.as_mut().ok_or("missing signature result")?)?;
+                }
+                pb::host_primitive::Typing::Application(_) => (),
             }
-            sort(s.output.as_mut().ok_or("missing signature result")?)?;
         }
         pb::declaration::Kind::EqSort(_) | pb::declaration::Kind::HostSortFamily(_) => (),
         _ => return Err("unsupported declaration kind".into()),
@@ -883,14 +885,16 @@ fn compatible_semantics(
                 }
             }
             pb::declaration::Kind::HostPrimitive(c) => {
-                let Some(pb::host_primitive::Typing::Signature(s)) = &mut c.typing else {
-                    return Err("unsupported host signature".into());
-                };
-                for a in s.inputs.iter_mut().chain(s.varargs.iter_mut()) {
-                    a.name.clear();
-                }
-                for label in &mut s.type_params {
-                    label.clear();
+                match c.typing.as_mut().ok_or("missing host typing")? {
+                    pb::host_primitive::Typing::Signature(s) => {
+                        for a in s.inputs.iter_mut().chain(s.varargs.iter_mut()) {
+                            a.name.clear();
+                        }
+                        for label in &mut s.type_params {
+                            label.clear();
+                        }
+                    }
+                    pb::host_primitive::Typing::Application(_) => (),
                 }
             }
             _ => return Err("unsupported declaration comparison".into()),
@@ -1126,6 +1130,9 @@ fn retain_imported_closures(p: &mut pb::Program, previous: &pb::Program) -> Resu
         }
         if let Some(pb::sort::Kind::Family(f)) = &s.kind {
             pending.extend(&f.args);
+        } else if let Some(pb::sort::Kind::Func(f)) = &s.kind {
+            pending.extend(&f.params);
+            pending.push(f.result);
         }
     }
     let mut node_map = vec![None; p.nodes.len()];
@@ -1175,6 +1182,10 @@ fn retain_imported_closures(p: &mut pb::Program, previous: &pb::Program) -> Resu
         }
         if let Some(pb::sort::Kind::Family(f)) = &mut s.kind {
             for i in &mut f.args {
+                *i = sort_map[*i as usize].unwrap();
+            }
+        } else if let Some(pb::sort::Kind::Func(f)) = &mut s.kind {
+            for i in f.params.iter_mut().chain([&mut f.result]) {
                 *i = sort_map[*i as usize].unwrap();
             }
         }
@@ -1245,7 +1256,10 @@ fn pattern_scope(p: &pb::Program, index: u32, parameters: usize) -> Result<(), S
                 pending.extend(&f.args);
             }
             pb::sort::Kind::Eq(_) | pb::sort::Kind::Var(_) => (),
-            _ => return Err("function sort bindings are not supported yet".into()),
+            pb::sort::Kind::Func(f) => {
+                pending.extend(&f.params);
+                pending.push(f.result);
+            }
         }
     }
     Ok(())
@@ -1446,6 +1460,22 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
 /// generated records and never executes a default, native body, or validator.
 fn validate_bindings(p: &pb::Program) -> Result<(), String> {
     for d in &p.declarations {
+        if matches!(&d.kind, Some(pb::declaration::Kind::HostPrimitive(h)) if matches!(h.typing, Some(pb::host_primitive::Typing::Application(_))))
+        {
+            if let Some(b) = &d.bindings {
+                if b.python.as_ref().is_some_and(|b| !b.views.is_empty())
+                    || b.rust.as_ref().is_some_and(|b| !b.views.is_empty())
+                {
+                    return Err("function application language views are not supported yet".into());
+                }
+                for view in b.egglog.iter().flat_map(|b| &b.views) {
+                    if view.symbol.is_empty() || view.datatype_member {
+                        return Err("invalid Egglog view".into());
+                    }
+                }
+            }
+            continue;
+        }
         let (inputs, output, tail, parameters) =
             match d.kind.as_ref().ok_or("missing declaration kind")? {
                 pb::declaration::Kind::EqSort(s) => {
@@ -1706,6 +1736,18 @@ fn match_pattern(
             if a.name == b.name && a.args.len() == b.args.len() =>
         {
             for (a, b) in a.args.iter().zip(&b.args) {
+                match_pattern(p, *a, *b, bindings)?;
+            }
+        }
+        (Some(pb::sort::Kind::Func(a)), Some(pb::sort::Kind::Func(b)))
+            if a.params.len() == b.params.len() =>
+        {
+            for (a, b) in a
+                .params
+                .iter()
+                .chain([&a.result])
+                .zip(b.params.iter().chain([&b.result]))
+            {
                 match_pattern(p, *a, *b, bindings)?;
             }
         }
