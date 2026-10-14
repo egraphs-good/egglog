@@ -181,6 +181,251 @@ fn function_value_observer_uses_semantic_view_children() {
 }
 
 #[test]
+fn function_application_python_view_is_provider_owned() {
+    let mut graph = EGraph::default();
+    let catalog = graph.type_info().builtin_catalog().unwrap().definitions;
+    let declaration = catalog
+        .declarations
+        .iter()
+        .find(|d| {
+            matches!(&d.kind,
+                Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.fn.apply"
+            )
+        })
+        .unwrap();
+    let bindings = declaration.bindings.as_ref().unwrap();
+    assert_eq!(
+        bindings.egglog.as_ref().unwrap().views[0].symbol,
+        "unstable-app"
+    );
+    assert!(bindings.rust.is_none());
+    assert_eq!(
+        bindings
+            .python
+            .as_ref()
+            .expect("provider function-owner view")
+            .views,
+        [proto::PythonCallable {
+            kind: proto::PythonCallKind::Method.into(),
+            path: vec!["__call__".into()],
+            owner: Some(proto::BindingOwner {
+                kind: Some(proto::binding_owner::Kind::Function(
+                    proto::FunctionTypeOwner {}
+                )),
+            }),
+            receiver: Some(0),
+            params: vec![proto::PythonParameter {
+                core_input: Some(1),
+                name: "args".into(),
+                default_expr: None,
+            }],
+            ..Default::default()
+        }]
+    );
+}
+
+#[test]
+fn function_application_python_metadata_reconciles_and_rejects_malformed_views() {
+    let mut definition = <sort::FunctionSort as Presort>::builtin_definitions().remove(0);
+    let view = proto::PythonCallable {
+        kind: proto::PythonCallKind::Method.into(),
+        path: vec!["__call__".into()],
+        owner: Some(proto::BindingOwner {
+            kind: Some(proto::binding_owner::Kind::Function(
+                proto::FunctionTypeOwner {},
+            )),
+        }),
+        receiver: Some(0),
+        params: vec![proto::PythonParameter {
+            core_input: Some(1),
+            name: "args".into(),
+            default_expr: None,
+        }],
+        ..Default::default()
+    };
+    definition.declarations[0].bindings.as_mut().unwrap().python =
+        Some(proto::PythonBindings { views: vec![view] });
+    let mut absent = definition.clone();
+    absent.declarations[0].bindings.as_mut().unwrap().python = None;
+    for supplies in [[&absent, &definition], [&definition, &absent]] {
+        let mut destination = proto::Program::default();
+        for supply in supplies {
+            builtin::definitions::reconcile_declarations(supply, &mut destination).unwrap();
+        }
+        builtin::definitions::reconcile_declarations(&definition, &mut destination).unwrap();
+        assert_eq!(
+            destination, definition,
+            "absence cannot erase the first supplied block"
+        );
+        let mut batch = definition.clone();
+        batch.declarations = supplies.iter().map(|p| p.declarations[0].clone()).collect();
+        let mut destination = proto::Program::default();
+        builtin::definitions::reconcile_declarations(&batch, &mut destination).unwrap();
+        assert_eq!(
+            destination, definition,
+            "same-fragment reconciliation agrees"
+        );
+    }
+    let mut empty = absent.clone();
+    empty.declarations[0].bindings.as_mut().unwrap().python =
+        Some(proto::PythonBindings::default());
+    for supplies in [[&empty, &definition], [&definition, &empty]] {
+        let mut destination = proto::Program::default();
+        builtin::definitions::reconcile_declarations(supplies[0], &mut destination).unwrap();
+        let before = destination.clone();
+        assert!(
+            builtin::definitions::reconcile_declarations(supplies[1], &mut destination).is_err()
+        );
+        assert_eq!(
+            destination, before,
+            "a supplied empty block is still immutable"
+        );
+        let mut batch = definition.clone();
+        batch.declarations = supplies.iter().map(|p| p.declarations[0].clone()).collect();
+        let mut destination = proto::Program::default();
+        assert!(builtin::definitions::reconcile_declarations(&batch, &mut destination).is_err());
+        assert_eq!(destination, proto::Program::default());
+    }
+    let mut no_bindings = absent.clone();
+    no_bindings.declarations[0].bindings = None;
+    let mut destination = no_bindings;
+    builtin::definitions::reconcile_declarations(&definition, &mut destination).unwrap();
+    assert_eq!(destination, definition);
+    let mut empty_rust = definition.clone();
+    empty_rust.declarations[0].bindings.as_mut().unwrap().rust =
+        Some(proto::RustBindings::default());
+    builtin::definitions::reconcile_declarations(&empty_rust, &mut destination).unwrap();
+    assert_eq!(destination, empty_rust);
+    for case in [
+        "owner_missing",
+        "owner_unset",
+        "owner_sort",
+        "kind",
+        "unknown_kind",
+        "path_empty",
+        "path_component_empty",
+        "path_qualified",
+        "path_other",
+        "receiver_missing",
+        "receiver_tail",
+        "params_missing",
+        "params_extra",
+        "slot_missing",
+        "slot_receiver",
+        "slot_other",
+        "param_empty",
+        "param_other",
+        "default",
+        "mutates_zero",
+        "mutates_tail",
+        "tail_zero",
+        "tail_one",
+        "views_extra",
+        "views_duplicate",
+        "non_application",
+        "rust",
+        "egglog_empty",
+        "egglog_member",
+    ] {
+        let mut invalid = definition.clone();
+        // A valid referenced scalar/default makes the negative discriminate
+        // presentation validation from an out-of-bounds arena reference.
+        invalid.sorts.push(proto::Sort {
+            kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                name: "i64".into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        });
+        invalid.nodes.push(proto::Node {
+            sort_id: 0,
+            kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                value: Some(proto::primitive_value::Value::I64(1)),
+            })),
+            ..Default::default()
+        });
+        let bindings = invalid.declarations[0].bindings.as_mut().unwrap();
+        let view = &mut bindings.python.as_mut().unwrap().views[0];
+        match case {
+            "owner_missing" => view.owner = None,
+            "owner_unset" => view.owner = Some(proto::BindingOwner::default()),
+            "owner_sort" => {
+                view.owner.as_mut().unwrap().kind = Some(proto::binding_owner::Kind::Sort(0))
+            }
+            "kind" => view.kind = proto::PythonCallKind::Function.into(),
+            "unknown_kind" => view.kind = 99,
+            "path_empty" => view.path.clear(),
+            "path_component_empty" => view.path[0].clear(),
+            "path_qualified" => view.path.insert(0, "module".into()),
+            "path_other" => view.path[0] = "apply".into(),
+            "receiver_missing" => view.receiver = None,
+            "receiver_tail" => view.receiver = Some(1),
+            "params_missing" => view.params.clear(),
+            "params_extra" => view.params.push(view.params[0].clone()),
+            "slot_missing" => view.params[0].core_input = None,
+            "slot_receiver" => view.params[0].core_input = Some(0),
+            "slot_other" => view.params[0].core_input = Some(2),
+            "param_empty" => view.params[0].name.clear(),
+            "param_other" => view.params[0].name = "values".into(),
+            "default" => view.params[0].default_expr = Some(0),
+            "mutates_zero" => view.mutates = Some(0),
+            "mutates_tail" => view.mutates = Some(1),
+            "tail_zero" => view.tail_repetitions = Some(0),
+            "tail_one" => view.tail_repetitions = Some(1),
+            "views_extra" => {
+                let mut other = view.clone();
+                other.path[0] = "apply".into();
+                bindings.python.as_mut().unwrap().views.push(other);
+            }
+            "views_duplicate" => {
+                let duplicate = view.clone();
+                bindings.python.as_mut().unwrap().views.push(duplicate);
+            }
+            "non_application" => {
+                let Some(proto::declaration::Kind::HostPrimitive(primitive)) =
+                    &mut invalid.declarations[0].kind
+                else {
+                    unreachable!()
+                };
+                primitive.typing = Some(proto::host_primitive::Typing::Signature(
+                    proto::GenericSignature {
+                        inputs: vec![proto::Arg {
+                            name: "receiver".into(),
+                            sort: 0,
+                        }],
+                        varargs: vec![proto::Arg {
+                            name: "args".into(),
+                            sort: 0,
+                        }],
+                        output: Some(0),
+                        ..Default::default()
+                    },
+                ));
+            }
+            "rust" => {
+                bindings.rust = Some(proto::RustBindings {
+                    views: vec![proto::RustCallable::default()],
+                })
+            }
+            "egglog_empty" => bindings.egglog.as_mut().unwrap().views[0].symbol.clear(),
+            "egglog_member" => bindings.egglog.as_mut().unwrap().views[0].datatype_member = true,
+            _ => unreachable!(),
+        }
+        let mut destination = proto::Program::default();
+        let error = builtin::definitions::reconcile_declarations(&invalid, &mut destination)
+            .expect_err(case);
+        if case == "rust" {
+            assert!(error.contains("Rust views are not supported"));
+        }
+        assert_eq!(
+            destination,
+            proto::Program::default(),
+            "{case} must be transactional"
+        );
+    }
+}
+
+#[test]
 fn function_value_structural_provenance_and_application_catalog() {
     let mut graph = EGraph::default();
     let catalog = graph.type_info().builtin_catalog().unwrap().definitions;

@@ -1463,10 +1463,29 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
         if matches!(&d.kind, Some(pb::declaration::Kind::HostPrimitive(h)) if matches!(h.typing, Some(pb::host_primitive::Typing::Application(_))))
         {
             if let Some(b) = &d.bindings {
-                if b.python.as_ref().is_some_and(|b| !b.views.is_empty())
-                    || b.rust.as_ref().is_some_and(|b| !b.views.is_empty())
-                {
-                    return Err("function application language views are not supported yet".into());
+                if b.rust.as_ref().is_some_and(|b| !b.views.is_empty()) {
+                    return Err("function application Rust views are not supported yet".into());
+                }
+                if let Some(python) = &b.python {
+                    if python.views.len() > 1 {
+                        return Err("function application accepts at most one Python view".into());
+                    }
+                    for v in &python.views {
+                        if v.kind != pb::PythonCallKind::Method as i32
+                            || v.path != ["__call__"]
+                            || !matches!(
+                                v.owner.as_ref().and_then(|o| o.kind.as_ref()),
+                                Some(pb::binding_owner::Kind::Function(_))
+                            )
+                            || v.receiver != Some(0)
+                            || !matches!(v.params.as_slice(), [p] if p.core_input == Some(1)
+                                && p.name == "args" && p.default_expr.is_none())
+                            || v.mutates.is_some()
+                            || v.tail_repetitions.is_some()
+                        {
+                            return Err("invalid function application Python view".into());
+                        }
+                    }
                 }
                 for view in b.egglog.iter().flat_map(|b| &b.views) {
                     if view.symbol.is_empty() || view.datatype_member {

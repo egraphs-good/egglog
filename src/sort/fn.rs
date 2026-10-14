@@ -114,6 +114,24 @@ impl Presort for FunctionSort {
                     },
                 )),
                 bindings: Some(proto::CallableBindings {
+                    python: Some(proto::PythonBindings {
+                        views: vec![proto::PythonCallable {
+                            kind: proto::PythonCallKind::Method.into(),
+                            path: vec!["__call__".into()],
+                            owner: Some(proto::BindingOwner {
+                                kind: Some(proto::binding_owner::Kind::Function(
+                                    proto::FunctionTypeOwner {},
+                                )),
+                            }),
+                            receiver: Some(0),
+                            params: vec![proto::PythonParameter {
+                                core_input: Some(1),
+                                name: "args".into(),
+                                default_expr: None,
+                            }],
+                            ..Default::default()
+                        }],
+                    }),
                     egglog: Some(proto::EgglogBindings {
                         views: vec![proto::EgglogCallable {
                             symbol: "unstable-app".into(),
