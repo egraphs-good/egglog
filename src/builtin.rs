@@ -945,15 +945,20 @@ impl TypeInfo {
                     return Err("function target runtime identity mismatch".into());
                 }
             }
-            let definition = primitive
-                .primitive
-                .builtin_definition()
-                .ok_or_else(|| format!("function target {name} has no catalog definition yet"))?;
-            let key = import_definition(definition, destination)?;
+            let key =
+                if let Some(key) = primitive.primitive.export_program_definition(destination)? {
+                    key
+                } else {
+                    let definition = primitive.primitive.builtin_definition().ok_or_else(|| {
+                        format!("function target {name} has no catalog definition yet")
+                    })?;
+                    let key = import_definition(definition, destination)?;
+                    self.export_builtin_definition(&key, destination)?;
+                    key
+                };
             if target.as_ref().is_some_and(|old| old != &key) {
                 return Err("function target contexts have different canonical identities".into());
             }
-            self.export_builtin_definition(&key, destination)?;
             target = Some(key);
         }
         target.ok_or_else(|| format!("unresolved function target {name}"))

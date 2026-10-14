@@ -17,6 +17,7 @@ fn declaration_identity(d: &pb::Declaration) -> Result<(Namespace, &str), String
         pb::declaration::Kind::HostSortFamily(s) => (Namespace::HostSortFamily, s.name.as_str()),
         pb::declaration::Kind::Constructor(c) => (Namespace::Callable, c.name.as_str()),
         pb::declaration::Kind::Function(f) => (Namespace::Callable, f.name.as_str()),
+        pb::declaration::Kind::Primitive(p) => (Namespace::Callable, p.name.as_str()),
         pb::declaration::Kind::HostPrimitive(p) => (Namespace::Callable, p.name.as_str()),
         _ => return Err("declaration reconciliation does not support this kind yet".into()),
     };
@@ -106,6 +107,13 @@ fn declaration_refs(
             if let Some(i) = &mut c.merge {
                 node(i)?;
             }
+        }
+        pb::declaration::Kind::Primitive(p) => {
+            for a in &mut p.inputs {
+                sort(&mut a.sort)?;
+            }
+            sort(&mut p.output)?;
+            node(p.body.as_mut().ok_or("missing primitive body")?)?;
         }
         pb::declaration::Kind::HostPrimitive(p) => {
             match p.typing.as_mut().ok_or("missing host typing")? {
@@ -884,6 +892,11 @@ fn compatible_semantics(
                     a.name.clear();
                 }
             }
+            pb::declaration::Kind::Primitive(c) => {
+                for a in &mut c.inputs {
+                    a.name.clear();
+                }
+            }
             pb::declaration::Kind::HostPrimitive(c) => {
                 match c.typing.as_mut().ok_or("missing host typing")? {
                     pb::host_primitive::Typing::Signature(s) => {
@@ -1302,6 +1315,7 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                 let (inputs, output, tail, parameters) = match declaration.kind.as_ref().unwrap() {
                     pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, &[][..], 0),
                     pb::declaration::Kind::Function(f) => (&f.inputs, f.output, &[][..], 0),
+                    pb::declaration::Kind::Primitive(p) => (&p.inputs, p.output, &[][..], 0),
                     pb::declaration::Kind::HostPrimitive(h) => {
                         let Some(pb::host_primitive::Typing::Signature(s)) = &h.typing else {
                             return Err("unsupported default callee signature".into());
@@ -1513,6 +1527,51 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 }
                 pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, &[][..], 0),
                 pb::declaration::Kind::Function(f) => (&f.inputs, f.output, &[][..], 0),
+                pb::declaration::Kind::Primitive(primitive) => {
+                    let root = primitive.body.ok_or("missing primitive body")?;
+                    if p.nodes
+                        .get(root as usize)
+                        .ok_or("primitive body out of bounds")?
+                        .sort_id
+                        != primitive.output
+                    {
+                        return Err("primitive body result sort mismatch".into());
+                    }
+                    // Scope belongs to this declaration, even when another
+                    // declaration shares the same imported body nodes.
+                    let mut pending = vec![root];
+                    let mut seen = HashSet::default();
+                    while let Some(i) = pending.pop() {
+                        if !seen.insert(i) {
+                            continue;
+                        }
+                        let node = p
+                            .nodes
+                            .get(i as usize)
+                            .ok_or("primitive body node out of bounds")?;
+                        pattern_scope(p, node.sort_id, 0)?;
+                        let mut kind = node.kind.clone().ok_or("missing primitive body node")?;
+                        if let pb::node::Kind::Var(name) = &kind {
+                            let index = name
+                                .strip_prefix('_')
+                                .and_then(|s| s.parse::<usize>().ok())
+                                .filter(|index| name == &format!("_{index}"));
+                            if index
+                                .and_then(|index| primitive.inputs.get(index))
+                                .is_none_or(|arg| arg.sort != node.sort_id)
+                            {
+                                return Err(format!(
+                                    "unbound or inconsistently typed primitive variable {name}"
+                                ));
+                            }
+                        }
+                        node_edges(&mut kind, |child| {
+                            pending.push(*child);
+                            Ok(())
+                        })?;
+                    }
+                    (&primitive.inputs, primitive.output, &[][..], 0)
+                }
                 pb::declaration::Kind::HostPrimitive(h) => {
                     let Some(pb::host_primitive::Typing::Signature(s)) = &h.typing else {
                         return Err("unsupported binding signature".into());

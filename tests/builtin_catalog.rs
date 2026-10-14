@@ -3803,6 +3803,145 @@ fn generic_signature_import_remaps_children_and_ignores_binder_labels() {
 }
 
 #[test]
+fn program_primitive_reconciliation_checks_body_scope_and_identity() {
+    let source = proto::Program {
+        ir_version: 1,
+        sorts: vec![proto::Sort {
+            kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                name: "i64".into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        }],
+        nodes: vec![proto::Node {
+            sort_id: 0,
+            kind: Some(proto::node::Kind::Var("_0".into())),
+            ..Default::default()
+        }],
+        declarations: vec![proto::Declaration {
+            kind: Some(proto::declaration::Kind::Primitive(proto::Primitive {
+                name: "identity".into(),
+                inputs: vec![proto::Arg {
+                    name: "value".into(),
+                    sort: 0,
+                }],
+                output: 0,
+                body: Some(0),
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut destination = proto::Program {
+        ir_version: 1,
+        sorts: vec![proto::Sort {
+            kind: Some(proto::sort::Kind::Eq("Prior".into())),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        builtin::definitions::reconcile_declarations(&source, &mut destination).unwrap(),
+        [true]
+    );
+    let before = destination.clone();
+    for mutation in [
+        "label",
+        "missing",
+        "bounds",
+        "free",
+        "out-of-scope",
+        "noncanonical",
+        "sort",
+        "changed-body",
+        "shared-scope",
+        "cycle",
+        "lambda",
+    ] {
+        let mut candidate = source.clone();
+        let Some(proto::declaration::Kind::Primitive(primitive)) =
+            &mut candidate.declarations[0].kind
+        else {
+            unreachable!()
+        };
+        match mutation {
+            "label" => primitive.inputs[0].name = "renamed".into(),
+            "missing" => primitive.body = None,
+            "bounds" => primitive.body = Some(9),
+            "free" => candidate.nodes[0].kind = Some(proto::node::Kind::Var("outer".into())),
+            "out-of-scope" => candidate.nodes[0].kind = Some(proto::node::Kind::Var("_1".into())),
+            "noncanonical" => candidate.nodes[0].kind = Some(proto::node::Kind::Var("_00".into())),
+            "sort" => {
+                candidate.sorts.push(proto::Sort {
+                    kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                        name: "bool".into(),
+                        args: vec![],
+                    })),
+                    ..Default::default()
+                });
+                candidate.nodes[0].sort_id = 1;
+            }
+            "changed-body" => {
+                candidate.nodes[0].kind =
+                    Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                        value: Some(proto::primitive_value::Value::I64(1)),
+                    }))
+            }
+            "shared-scope" => candidate.declarations.push(proto::Declaration {
+                kind: Some(proto::declaration::Kind::Primitive(proto::Primitive {
+                    name: "nullary".into(),
+                    inputs: vec![],
+                    output: 0,
+                    body: Some(0),
+                })),
+                ..Default::default()
+            }),
+            "cycle" => {
+                candidate.nodes[0].kind = Some(proto::node::Kind::Call(proto::Call {
+                    func: "identity".into(),
+                    args: vec![0],
+                }))
+            }
+            "lambda" => {
+                candidate.nodes[0].kind =
+                    Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                        value: Some(proto::primitive_value::Value::Lambda(proto::Lambda {
+                            captures: vec![],
+                            body: 0,
+                        })),
+                    }))
+            }
+            _ => unreachable!(),
+        }
+        let result = builtin::definitions::reconcile_declarations(&candidate, &mut destination);
+        assert_eq!(
+            result.is_ok(),
+            mutation == "label",
+            "{mutation}: {result:?}"
+        );
+        assert_eq!(destination, before, "{mutation}");
+        let mut fresh = proto::Program::default();
+        let fresh_result = builtin::definitions::reconcile_declarations(&candidate, &mut fresh);
+        assert_eq!(
+            fresh_result.is_ok(),
+            matches!(mutation, "label" | "changed-body"),
+            "fresh {mutation}: {fresh_result:?}"
+        );
+    }
+    let mut distinct = source;
+    let Some(proto::declaration::Kind::Primitive(primitive)) = &mut distinct.declarations[0].kind
+    else {
+        unreachable!()
+    };
+    primitive.name = "another_identity".into();
+    assert_eq!(
+        builtin::definitions::reconcile_declarations(&distinct, &mut destination).unwrap(),
+        [true]
+    );
+    assert_eq!(destination.declarations.len(), 2);
+}
+
+#[test]
 fn migrated_vec_operations_preserve_native_proofs() {
     EGraph::new_with_proofs()
         .parse_and_run_program(

@@ -183,6 +183,17 @@ pub trait Primitive: Send + Sync + 'static {
         None
     }
 
+    /// Imports a genuine program-defined computation and its portable code.
+    /// This is separate from the host catalog: it must not execute the body,
+    /// a validator, or any provider. Exact native selection is checked by the
+    /// caller before this projection. `None` leaves the destination unchanged.
+    fn export_program_definition(
+        &self,
+        _destination: &mut proto::Program,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
     /// Lowers a resolved source-only facade using already-lowered argument refs.
     /// `native_sorts` retains the exact resolved inputs/output before structural
     /// protobuf sort projection can erase nominal overload distinctions.
@@ -439,6 +450,15 @@ pub struct EGraph {
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
     fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error>;
+
+    /// Opts a declaration command into compile-only preparation. Implementations
+    /// may typecheck and register code, but must not evaluate bodies, captures,
+    /// queries, actions or validators. Runtime IDs belong to the supplied graph.
+    fn prepare(&self, _egraph: &mut EGraph, _args: &[Expr]) -> Result<(), Error> {
+        Err(Error::BackendError(
+            "compile-only validation does not execute user-defined commands".into(),
+        ))
+    }
 }
 
 /// A function in the e-graph.
@@ -2654,10 +2674,8 @@ impl EGraph {
             }
             // Runtime success/failure is deliberately unknown during validation.
             ResolvedNCommand::Fail(_, command) => self.compile_command(*command, origin)?,
-            ResolvedNCommand::UserDefined(..) => {
-                return Err(Error::BackendError(
-                    "compile-only validation does not execute user-defined commands".into(),
-                ));
+            ResolvedNCommand::UserDefined(_, name, args) => {
+                self.prepare_user_defined_command(&name, &args)?;
             }
             _ => {}
         }
@@ -2836,8 +2854,9 @@ impl EGraph {
     /// groundedness checks), actions and internal queries. Requested Checks are
     /// typechecked, but their query planning remains at the execution boundary,
     /// where native Fail can catch it. Proof/term expansion and internal helper
-    /// validation are unchanged. It executes no actions, runs,
-    /// primitive bodies, proof validators, maintenance or user-defined commands.
+    /// validation are unchanged. It executes no actions, runs, primitive bodies,
+    /// proof validators, maintenance or user-defined runtime commands. Extension
+    /// declarations may opt into [`UserDefinedCommand::prepare`].
     /// No backend IDs or speculative definitions are transferred to this graph.
     /// Runtime errors such as a missing witness are left to actual execution.
     pub fn validate_program(&self, program: Vec<Command>) -> Result<(), Error> {
@@ -2848,6 +2867,16 @@ impl EGraph {
             &mut |_, _| {},
         )?;
         Ok(())
+    }
+
+    /// Prepares an explicitly opted-in extension declaration without invoking
+    /// its runtime command. Unregistered and execution-only commands reject.
+    pub fn prepare_user_defined_command(&mut self, name: &str, args: &[Expr]) -> Result<(), Error> {
+        let command =
+            self.commands.get(name).cloned().ok_or_else(|| {
+                NotFoundError(format!("Unrecognized user-defined command: {name}"))
+            })?;
+        command.prepare(self, args)
     }
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
