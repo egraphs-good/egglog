@@ -13,7 +13,7 @@ use crate::{
     numeric_id::NumericId,
     offsets::RowId,
     table::SortedWritesTable,
-    table_spec::{ColumnId, Table, WrappedTable},
+    table_spec::{ColumnId, Table, WrappedTableRef},
 };
 
 use super::{ColumnIndex, IndexBase, merge_sorted_blocks_dedup, radix_sort_slice_by_value};
@@ -83,7 +83,7 @@ pub fn with_threads<R>(n: usize, f: impl FnOnce() -> R) -> R {
 /// A random table set up to (re)build a `ColumnIndex` over its value columns (`1..=n_val_cols`;
 /// column 0 is a unique key so no rows merge).
 pub struct IndexInput {
-    table: WrappedTable,
+    table: SortedWritesTable,
     cols: Vec<ColumnId>,
 }
 
@@ -93,8 +93,8 @@ impl IndexInput {
         let n_cols = n_val_cols + 1;
         let mut table = SortedWritesTable::new(
             1,
-            n_cols,
-            None,
+            n_cols + 1,
+            ColumnId::from_usize(n_cols),
             vec![],
             Box::new(|_, _old, new, out: &mut Vec<Value>| {
                 out.extend_from_slice(new);
@@ -103,10 +103,10 @@ impl IndexInput {
         );
         {
             let mut buf = table.new_buffer();
-            let mut row = vec![Value::new(0); n_cols];
+            let mut row = vec![Value::new(0); n_cols + 1];
             for i in 0..n_rows {
                 row[0] = Value::from_usize(i);
-                for cell in row.iter_mut().skip(1) {
+                for cell in row.iter_mut().skip(1).take(n_val_cols) {
                     *cell = Value::new(rng.random_range(0..distinct));
                 }
                 buf.stage_insert(&row);
@@ -117,7 +117,7 @@ impl IndexInput {
             table.merge(es);
         });
         IndexInput {
-            table: WrappedTable::new(table),
+            table,
             cols: (1..n_cols).map(ColumnId::from_usize).collect(),
         }
     }
@@ -125,14 +125,18 @@ impl IndexInput {
     /// Build the index with the serial radix-sort + merge path.
     pub fn build_serial(&self) {
         let mut ci = ColumnIndex::new();
-        ci.rebuild_full(&self.cols, self.table.as_ref(), self.table.all().as_ref());
+        WrappedTableRef::with_wrapper(&self.table, |table| {
+            ci.rebuild_full(&self.cols, table, table.all().as_ref());
+        });
         std::hint::black_box(&ci);
     }
 
     /// Build the index with the parallel sharded path. Call inside [`with_threads`].
     pub fn build_parallel(&self) {
         let mut ci = ColumnIndex::new();
-        ci.merge_parallel(&self.cols, self.table.as_ref(), self.table.all().as_ref());
+        WrappedTableRef::with_wrapper(&self.table, |table| {
+            ci.merge_parallel(&self.cols, table, table.all().as_ref());
+        });
         std::hint::black_box(&ci);
     }
 }

@@ -615,7 +615,7 @@ impl EGraph {
             SortedWritesTable::new(
                 n_args,
                 n_cols,
-                Some(ColumnId::from_usize(schema.len())),
+                ColumnId::from_usize(schema.len()),
                 to_rebuild,
                 merge_fn,
             )

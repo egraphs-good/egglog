@@ -266,7 +266,7 @@ pub struct SortedWritesTable {
 
     n_keys: usize,
     n_columns: usize,
-    sort_by: Option<ColumnId>,
+    sort_by: ColumnId,
     offsets: Vec<(Value, RowId)>,
 
     pending_state: Arc<PendingState>,
@@ -403,7 +403,6 @@ impl Table for SortedWritesTable {
             n_keys: self.n_keys,
             n_vals: self.n_columns - self.n_keys,
             uncacheable_columns: Default::default(),
-            allows_delete: true,
         }
     }
 
@@ -537,7 +536,7 @@ impl Table for SortedWritesTable {
     }
 
     fn fast_subset(&self, constraint: &Constraint) -> Option<Subset> {
-        let sort_by = self.sort_by?;
+        let sort_by = self.sort_by;
         match constraint {
             Constraint::Eq { .. } => None,
             Constraint::EqConst { col, val } => {
@@ -647,10 +646,10 @@ impl Table for SortedWritesTable {
     }
 
     fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
-        let removed = self.do_delete();
+        self.do_delete();
         let added = self.do_insert(exec_state);
         self.maybe_rehash();
-        TableChange { removed, added }
+        TableChange { added }
     }
 
     fn get_row(&self, key: &[Value]) -> Option<Row> {
@@ -685,11 +684,7 @@ impl SortedWritesTable {
     }
 
     /// Create a new [`SortedWritesTable`] with the given number of keys,
-    /// columns, and an optional sort column.
-    ///
-    /// `sort_by: None` supports unordered writes and disables sorted-column
-    /// offsets. The egglog frontend uses a timestamp sort column, but direct
-    /// core-relations clients need not have a timestamp or preserve its order.
+    /// columns, and a sort column (normally the timestamp).
     ///
     /// The `merge_fn` is used to evaluate conflicts when more than one row is
     /// inserted with the same primary key. The old and new proposed values are
@@ -702,7 +697,7 @@ impl SortedWritesTable {
     pub fn new(
         n_keys: usize,
         n_columns: usize,
-        sort_by: Option<ColumnId>,
+        sort_by: ColumnId,
         to_rebuild: Vec<ColumnId>,
         merge_fn: Box<MergeFn>,
     ) -> Self {
@@ -816,32 +811,28 @@ impl SortedWritesTable {
         changed
     }
 
-    fn do_delete(&mut self) -> bool {
+    fn do_delete(&mut self) {
         let total = self.pending_state.total_removals.swap(0, Ordering::Relaxed);
 
         if parallelize_table_op(total) {
             self.parallel_delete()
         } else {
             self.serial_delete()
-        }
+        };
     }
 
     fn do_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let total = self.pending_state.total_rows.swap(0, Ordering::Relaxed);
         self.data.data.reserve(total);
         if parallelize_table_op(total) {
-            if let Some(col) = self.sort_by {
-                self.parallel_insert(
-                    exec_state,
-                    SortChecker {
-                        col,
-                        current: None,
-                        baseline: self.offsets.last().map(|(v, _)| *v),
-                    },
-                )
-            } else {
-                self.parallel_insert(exec_state, ())
-            }
+            self.parallel_insert(
+                exec_state,
+                SortChecker {
+                    col: self.sort_by,
+                    current: None,
+                    baseline: self.offsets.last().map(|(v, _)| *v),
+                },
+            )
         } else {
             self.serial_insert(exec_state)
         }
@@ -883,9 +874,7 @@ impl SortedWritesTable {
                             if (self.merge)(exec_state, cur, query, &mut scratch) {
                                 debug_assert_eq!(&scratch[0..n_keys], key);
                                 let new = self.data.add_row(&scratch);
-                                if let Some(sort_by) = self.sort_by {
-                                    update_sort_offsets(sort_by, query, new, &mut self.offsets);
-                                }
+                                update_sort_offsets(self.sort_by, &scratch, new, &mut self.offsets);
                                 self.data.set_stale(old_row);
                                 entry.get_mut().row = new;
                                 changed = true;
@@ -894,9 +883,7 @@ impl SortedWritesTable {
                         }
                         Entry::Vacant(entry) => {
                             let new = self.data.add_row(query);
-                            if let Some(sort_by) = self.sort_by {
-                                update_sort_offsets(sort_by, query, new, &mut self.offsets);
-                            }
+                            update_sort_offsets(self.sort_by, query, new, &mut self.offsets);
                             entry.insert(TableEntry { hash, row: new });
                             changed = true;
                         }
@@ -907,11 +894,7 @@ impl SortedWritesTable {
         changed
     }
 
-    fn parallel_insert<C: OrderingChecker>(
-        &mut self,
-        exec_state: &ExecutionState,
-        checker: C,
-    ) -> bool {
+    fn parallel_insert(&mut self, exec_state: &ExecutionState, checker: SortChecker) -> bool {
         // Parallel insert uses one giant parallel foreach. We have updates
         // pre-sharded, and one logical thread can process updates for each
         // shard independently. Updates happen in three phases, which comments
@@ -924,7 +907,7 @@ impl SortedWritesTable {
         let merge = self.merge.clone();
         let pending_adds = parallel::map_mut(self.hash.mut_shards(), |shard_id, shard| {
             let shard_id = ShardId::from_usize(shard_id);
-            let mut checker = checker.clone();
+            let mut checker = checker;
             let mut exec_state = exec_state.clone();
             let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
             let queue = &pending_rows[shard_id];
@@ -1061,7 +1044,7 @@ impl SortedWritesTable {
 
         // Confirm none of the writes violated sort order and update the
         // `offsets` vector.
-        let checker = C::check_global(pending_adds.iter().map(|(checker, _, _)| checker));
+        let checker = SortChecker::check_global(pending_adds.iter().map(|(checker, _, _)| checker));
         checker.update_offsets(next_offset, &mut self.offsets);
 
         // Update the staleness counters.
@@ -1150,10 +1133,7 @@ impl SortedWritesTable {
         //
         // We iterate over each shard and then write out new contents to a fresh row, in parallel.
         self.generation = self.generation.inc();
-        let Some(sort_by) = self.sort_by else {
-            self.parallel_rehash_unsorted();
-            return;
-        };
+        let sort_by = self.sort_by;
         assert!(!self.offsets.is_empty());
         struct TimestampStats {
             value: Value,
@@ -1286,119 +1266,23 @@ impl SortedWritesTable {
         self.data.stale_rows = 0;
     }
 
-    /// Compact an unsorted table by walking its live hash entries rather than
-    /// scanning the row store, which may be mostly stale.
-    ///
-    /// Timestamp sorting is a frontend convention, not a table invariant:
-    /// [`Self::new`] also supports `sort_by: None`, used by direct table clients
-    /// and the table-mutation benchmarks. That mode needs this compaction path
-    /// without attempting to construct sorted-column offsets.
-    ///
-    /// Every live row has exactly one entry in exactly one hash shard. Shard
-    /// lengths therefore give both the live-row count and a cheap histogram
-    /// for assigning each worker a disjoint output range.
-    fn parallel_rehash_unsorted(&mut self) {
-        debug_assert!(self.sort_by.is_none());
-        debug_assert!(self.offsets.is_empty());
-
-        let shards = self.hash.mut_shards();
-        let mut shard_offsets = Vec::with_capacity(shards.len() + 1);
-        shard_offsets.push(0usize);
-        for shard in shards.iter() {
-            let next = shard_offsets
-                .last()
-                .copied()
-                .unwrap()
-                .checked_add(shard.len())
-                .expect("live row count should fit in usize");
-            shard_offsets.push(next);
-        }
-        let live_rows = *shard_offsets.last().unwrap();
-        debug_assert_eq!(
-            live_rows,
-            self.data.data.len() - self.data.stale_rows,
-            "each live row should have exactly one hash entry"
-        );
-
-        self.data.scratch.clear();
-        self.data.scratch.reserve(live_rows);
-        let scratch_ptr = self.data.scratch.raw_rows() as usize;
-        let data = &self.data.data;
-        let n_columns = self.n_columns;
-
-        // Workers mutate disjoint hash shards and copy into the corresponding
-        // disjoint half-open ranges in `scratch`. The raw pointer is passed as
-        // an integer because raw pointers are not Sync.
-        parallel::for_each_mut(shards, |shard_index, shard| {
-            let scratch_ptr = scratch_ptr as *mut Value;
-            let mut next = shard_offsets[shard_index];
-            let end = shard_offsets[shard_index + 1];
-            for TableEntry { row: row_id, .. } in shard.iter_mut() {
-                let row = data.get_row(*row_id);
-                debug_assert!(
-                    !row[0].is_stale(),
-                    "a hash entry should never point to a stale row"
-                );
-                let new_row = RowId::from_usize(next);
-
-                // SAFETY:
-                // * `scratch` was reserved once before any worker started and
-                //   is not resized until all workers have joined.
-                // * The prefix offsets give each shard a disjoint destination
-                //   range large enough for all of its entries.
-                // * `data` and `scratch` are distinct row buffers, so source
-                //   and destination cannot overlap.
-                // * No references into the uninitialized part of `scratch`
-                //   are created before `set_len` below.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        row.as_ptr(),
-                        scratch_ptr.add(next * n_columns),
-                        n_columns,
-                    );
-                }
-                *row_id = new_row;
-                next += 1;
-            }
-            debug_assert_eq!(next, end);
-        });
-
-        // SAFETY: every row up to `live_rows` was initialized exactly once by
-        // the shard workers above, and the parallel scope has joined.
-        unsafe { self.data.scratch.set_len(live_rows) };
-        mem::swap(&mut self.data.data, &mut self.data.scratch);
-        self.data.stale_rows = 0;
-    }
-
     fn rehash_impl(
-        sort_by: Option<ColumnId>,
+        sort_by: ColumnId,
         n_keys: usize,
         rows: &mut Rows,
         offsets: &mut Vec<(Value, RowId)>,
         hash: &mut ShardedHashTable<TableEntry>,
     ) {
-        if let Some(sort_by) = sort_by {
-            offsets.clear();
-            rows.remove_stale(|row, old, new| {
-                let stale_entry = get_entry_mut(row, n_keys, hash, |x| x == old)
-                    .expect("non-stale entry not mapped in hash");
-                *stale_entry = new;
-                let sort_col = row[sort_by.index()];
-                if let Some((max, _)) = offsets.last() {
-                    if sort_col > *max {
-                        offsets.push((sort_col, new));
-                    }
-                } else {
-                    offsets.push((sort_col, new));
-                }
-            })
-        } else {
-            rows.remove_stale(|row, old, new| {
-                let stale_entry = get_entry_mut(row, n_keys, hash, |x| x == old)
-                    .expect("non-stale entry not mapped in hash");
-                *stale_entry = new;
-            })
-        }
+        offsets.clear();
+        rows.remove_stale(|row, old, new| {
+            let stale_entry = get_entry_mut(row, n_keys, hash, |x| x == old)
+                .expect("non-stale entry not mapped in hash");
+            *stale_entry = new;
+            let sort_col = row[sort_by.index()];
+            if offsets.last().is_none_or(|(max, _)| sort_col > *max) {
+                offsets.push((sort_col, new));
+            }
+        })
     }
 
     fn rehash(&mut self) {
@@ -1588,33 +1472,6 @@ impl PendingState {
     }
 }
 
-/// A trait that encapsulates the logic of potentially checking that written
-/// columns appear in sorted order.
-///
-/// For rows that are sorted by a column, an OrderingChecker asserts that all
-/// new rows have the same value in that column, and that the column is greater
-/// than or equal to the column value coming in. For rows not sorted, these
-/// checks become no-ops.
-trait OrderingChecker: Clone + Send + Sync {
-    /// Check any invariants locally, updating the state of the checker when
-    /// doing so.
-    fn check_local(&mut self, row: &[Value]);
-    /// Combine the states of multiple checkers, returning a new checker with
-    /// all information assimilated. This is the checker that is suitable for
-    /// calling `update_offsets` with.
-    fn check_global<'a>(checkers: impl Iterator<Item = &'a Self>) -> Self
-    where
-        Self: 'a;
-    /// Update the sorted offset vector with the current state of the checker.
-    fn update_offsets(&self, start: RowId, offsets: &mut Vec<(Value, RowId)>);
-}
-
-impl OrderingChecker for () {
-    fn check_local(&mut self, _: &[Value]) {}
-    fn check_global<'a>(_: impl Iterator<Item = &'a ()>) {}
-    fn update_offsets(&self, _: RowId, _: &mut Vec<(Value, RowId)>) {}
-}
-
 #[derive(Copy, Clone)]
 struct SortChecker {
     col: ColumnId,
@@ -1622,7 +1479,7 @@ struct SortChecker {
     current: Option<Value>,
 }
 
-impl OrderingChecker for SortChecker {
+impl SortChecker {
     fn check_local(&mut self, row: &[Value]) {
         let val = row[self.col.index()];
         if let Some(cur) = self.current {
@@ -1639,13 +1496,9 @@ impl OrderingChecker for SortChecker {
     }
 
     fn check_global<'a>(mut checkers: impl Iterator<Item = &'a Self>) -> Self {
-        let Some(start) = checkers.next() else {
-            return SortChecker {
-                col: ColumnId::new(!0),
-                baseline: None,
-                current: None,
-            };
-        };
+        let start = checkers
+            .next()
+            .expect("a table must have at least one shard");
         let mut expected = start.current;
         for checker in checkers {
             assert_eq!(checker.baseline, start.baseline);
