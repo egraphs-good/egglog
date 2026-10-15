@@ -802,7 +802,17 @@ impl Query {
         //
         let mut constraints: Vec<(core_relations::AtomId, Constraint)> =
             Vec::with_capacity(self.atoms.len());
-        'outer: for focus_atom in 0..self.atoms.len() {
+        // Experimental alternative: let every non-delta atom read all rows.
+        // This permits overlap between variants, but gives their unaffected
+        // decomposed bags identical inputs and more opportunities for reuse.
+        let all_non_delta = std::env::var_os("EGGLOG_SEMINAIVE_ALL")
+            .is_some_and(|value| value == "1");
+        for focus_atom in 0..self.atoms.len() {
+            // At timestamp zero, every delta is already the entire table.
+            // One variant covers the full join under either strategy.
+            if focus_atom > 0 && mid_ts == Timestamp::new(0) {
+                break;
+            }
             constraints.clear();
             // start with the focus atom since `add_rule_from_cached_plan` will apply the
             // constraints in order, and the focus atom may have an empty delta, which
@@ -818,10 +828,11 @@ impl Query {
                     },
                 ))
             }
-            for (i, (_, _, schema_info)) in self.atoms[0..focus_atom].iter().enumerate() {
-                if mid_ts == Timestamp::new(0) {
-                    continue 'outer;
-                }
+            for (i, (_, _, schema_info)) in self.atoms[0..focus_atom]
+                .iter()
+                .enumerate()
+                .take(if all_non_delta { 0 } else { focus_atom })
+            {
                 let ts_col = ColumnId::from_usize(schema_info.ts_col());
                 constraints.push((
                     cached_plan.atom_mapping[i],

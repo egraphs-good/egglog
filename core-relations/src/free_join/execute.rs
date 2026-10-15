@@ -41,6 +41,7 @@ use crate::{
 
 use super::{
     ActionId, AtomId, ColumnIds, Database, TableId, Variable,
+    bag_cache::BagCache,
     frame_update::{FrameUpdates, UpdateInstr},
     join_tail::{
         BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
@@ -197,6 +198,9 @@ impl Database {
         };
 
         let search_and_apply_timer = Instant::now();
+        // Only completed, immutable bag outputs are reused. The cache follows
+        // the same frozen-table lifetime as the shared tries.
+        let bag_cache = BagCache::new(rule_set.plans.values().map(|(plan, _, _)| plan));
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
         let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
         let exec_state = ExecutionState::new(self.read_only_view_with(context), Default::default());
@@ -218,6 +222,7 @@ impl Database {
                     let exec_state = exec_state.seed();
                     let match_counter = match_counter.clone();
                     let trie_cache = trie_cache.clone();
+                    let bag_cache = &bag_cache;
                     let arena = &arena;
                     scope.spawn(move |_| {
                         let search_and_apply_timer = Instant::now();
@@ -304,6 +309,16 @@ impl Database {
                                             .enumerate()
                                         {
                                             let mat_id = MatId::from_usize(mat_id);
+                                            if let Some(result) =
+                                                bag_cache.get(plan.actions, mat_id)
+                                            {
+                                                if result.is_empty() {
+                                                    break 'eval;
+                                                }
+                                                binding_info.materializations.insert(mat_id, result);
+                                                continue;
+                                            }
+                                            let bag_timer = bag_cache.start_timer();
                                             // Keep task-local join state alive until the stage has
                                             // quiesced. Besides making destruction deterministic,
                                             // this prevents many workers from concurrently decrementing
@@ -327,9 +342,6 @@ impl Database {
                                                     &mut materializer,
                                                 );
                                             });
-                                            if materializations[mat_id].is_empty() {
-                                                break 'eval;
-                                            }
                                             assert_eq!(Arc::strong_count(&materializations), 1);
                                             let mut materializations_dearc =
                                                 Arc::unwrap_or_clone(materializations);
@@ -339,10 +351,27 @@ impl Database {
                                             )
                                             .into_iter()
                                             .collect::<IndexMap<_, _>>();
+                                            let mut materialization = Arc::new(materialization);
+                                            bag_cache.finish(
+                                                plan.actions,
+                                                mat_id,
+                                                &materialization,
+                                                bag_timer,
+                                            );
+                                            if !join_state.exec_state.should_stop() {
+                                                materialization = bag_cache.publish(
+                                                    plan.actions,
+                                                    mat_id,
+                                                    materialization,
+                                                );
+                                            }
+                                            materializations = Arc::new(materializations_dearc);
+                                            if materialization.is_empty() {
+                                                break 'eval;
+                                            }
                                             binding_info
                                                 .materializations
-                                                .insert(mat_id, Arc::new(materialization));
-                                            materializations = Arc::new(materializations_dearc);
+                                                .insert(mat_id, materialization);
                                         }
                                         join_state.run_join_stages(
                                             &plan.result_block,
@@ -462,6 +491,14 @@ impl Database {
                                     plan.stages.blocks.iter().zip(prepared_blocks).enumerate()
                                 {
                                     let mat_id = MatId::from_usize(mat_id);
+                                    if let Some(result) = bag_cache.get(plan.actions, mat_id) {
+                                        if result.is_empty() {
+                                            break 'eval;
+                                        }
+                                        binding_info.materializations.insert(mat_id, result);
+                                        continue;
+                                    }
+                                    let bag_timer = bag_cache.start_timer();
                                     join_state.run_join_stages(
                                         &stage_block.0,
                                         prepared_block,
@@ -470,15 +507,28 @@ impl Database {
                                         &mut binding_info,
                                         &mut materializer,
                                     );
-                                    if materializer.materializations[mat_id].is_empty() {
+                                    let mut materialization = Arc::new(
+                                        materializer.materializations.take(mat_id).unwrap(),
+                                    );
+                                    bag_cache.finish(
+                                        plan.actions,
+                                        mat_id,
+                                        &materialization,
+                                        bag_timer,
+                                    );
+                                    if !join_state.exec_state.should_stop() {
+                                        materialization = bag_cache.publish(
+                                            plan.actions,
+                                            mat_id,
+                                            materialization,
+                                        );
+                                    }
+                                    if materialization.is_empty() {
                                         break 'eval;
                                     }
-                                    binding_info.materializations.insert(
-                                        mat_id,
-                                        Arc::new(
-                                            materializer.materializations.take(mat_id).unwrap(),
-                                        ),
-                                    );
+                                    binding_info
+                                        .materializations
+                                        .insert(mat_id, materialization);
                                 }
                                 join_state.run_join_stages(
                                     &plan.result_block,
@@ -525,6 +575,8 @@ impl Database {
         // allocation peaks do not overlap and no arena address outlives its
         // catalog index.
         drop(trie_cache);
+        bag_cache.report(search_and_apply_timer.elapsed());
+        drop(bag_cache);
         drop(arena);
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
