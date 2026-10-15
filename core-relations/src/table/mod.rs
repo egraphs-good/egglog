@@ -26,7 +26,7 @@ use crate::{
     action::ExecutionState,
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
     hash_index::{ColumnIndex, Index},
-    offsets::{OffsetRange, Offsets, RowId, SortedOffsetVector, Subset, SubsetRef},
+    offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
     parallel,
     parallel_heuristics::parallelize_table_op,
     pool::with_pool_set,
@@ -613,23 +613,21 @@ impl Table for SortedWritesTable {
     }
 
     fn refine_ref(&self, subset: SubsetRef, cs: &[Constraint], _check_live: bool) -> Subset {
-        // Single fused pass: `eval` reads each row once, checking liveness
-        // (`get_row` skips stale rows) and all constraints together. A dense
-        // input whose rows all survive stays dense.
-        let n = subset.size();
-        let mut vec: Pooled<SortedOffsetVector> = with_pool_set(|ps| ps.get());
+        // Single fused pass: `eval` checks liveness and all constraints. Keep
+        // contiguous survivors dense and allocate only at the first gap (or
+        // duplicate), rather than materializing rows that can stay a range.
+        let mut result = Subset::empty();
         subset.offsets(|row| {
             if self.eval(cs, row) {
-                // SAFETY: `offsets` visits rows in ascending order.
-                unsafe { vec.push_unchecked(row) }
+                if let Subset::Sparse(rows) = &mut result {
+                    // SAFETY: `offsets` visits rows in nondecreasing order.
+                    unsafe { rows.push_unchecked(row) }
+                } else {
+                    result.add_row_sorted(row);
+                }
             }
         });
-        if let SubsetRef::Dense(range) = subset
-            && vec.slice().inner().len() == n
-        {
-            return Subset::Dense(range);
-        }
-        Subset::Sparse(vec)
+        result
     }
 
     fn contains_match(&self, subset: SubsetRef, cs: &[Constraint]) -> bool {

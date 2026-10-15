@@ -2,7 +2,7 @@ use crate::numeric_id::NumericId;
 
 use crate::{OffsetRange, Subset, common::HashSet, pool::with_pool_set};
 
-use super::{Offsets, RowId};
+use super::{Offsets, RowId, SortedOffsetVector, SubsetRef};
 
 fn o(u: usize) -> RowId {
     RowId::from_usize(u)
@@ -188,4 +188,132 @@ fn intersect_sparse_sparse_skewed() {
     let mut got = Vec::new();
     cur.offsets(|row| got.push(row.index()));
     assert_eq!(got, other_rows);
+}
+
+fn sparse_rows(rows: &[usize]) -> Subset {
+    let mut offsets = with_pool_set(|ps| ps.get::<SortedOffsetVector>());
+    for row in rows {
+        offsets.push(o(*row));
+    }
+    Subset::Sparse(offsets)
+}
+
+fn row_ids(subset: &Subset) -> Vec<usize> {
+    let mut rows = Vec::new();
+    subset.offsets(|row| rows.push(row.index()));
+    rows
+}
+
+#[test]
+fn empty_sparse_results_stay_dense() {
+    let pool = with_pool_set(|ps| ps.get_pool());
+    let empty = sparse_rows(&[]);
+    assert!(empty.as_ref().to_owned(&pool).is_dense());
+
+    let mut retained = sparse_rows(&[1, 3]);
+    retained.retain(|_| false);
+    assert!(retained.is_dense());
+    assert_eq!(retained.size(), 0);
+
+    for left in [vec![], vec![1, 3], vec![7, 9]] {
+        for right in [vec![], vec![4, 6]] {
+            let mut left = sparse_rows(&left);
+            left.intersect(sparse_rows(&right).as_ref(), &pool);
+            assert!(left.is_dense());
+            assert_eq!(left.size(), 0);
+        }
+    }
+}
+
+#[test]
+fn singleton_sparse_results_preserve_chained_duplicate_intersections() {
+    // Sparse/sparse intersections consume matching occurrences, while a dense
+    // range keeps every occurrence it covers. Canonicalizing singleton sparse
+    // results to dense would change the next intersection with duplicates.
+    let pool = with_pool_set(|ps| ps.get_pool());
+    let mut retained = sparse_rows(&[3, 5]);
+    retained.retain(|row| row == o(3));
+    let mut intersected = sparse_rows(&[1, 3]);
+    intersected.intersect(SubsetRef::Dense(OffsetRange::new(o(3), o(4))), &pool);
+    let owned = sparse_rows(&[3]).as_ref().to_owned(&pool);
+    for singleton in [retained, intersected, owned] {
+        assert!(!singleton.is_dense());
+        let mut duplicates = sparse_rows(&[3, 3]);
+        duplicates.intersect(singleton.as_ref(), &pool);
+        assert_eq!(row_ids(&duplicates), vec![3]);
+    }
+}
+
+#[test]
+fn intersect_small_multisets_and_dense_ranges() {
+    let pool = with_pool_set(|ps| ps.get_pool());
+    // Enumerate every sorted multiset containing up to two of each row 1..=4.
+    let multisets: Vec<Vec<usize>> = (0..3usize.pow(4))
+        .map(|mut code| {
+            let mut rows = Vec::new();
+            for row in 1..=4 {
+                rows.extend(std::iter::repeat_n(row, code % 3));
+                code /= 3;
+            }
+            rows
+        })
+        .collect();
+
+    for left in &multisets {
+        for right in &multisets {
+            let mut actual = sparse_rows(left);
+            actual.intersect(sparse_rows(right).as_ref(), &pool);
+            let expected: Vec<usize> = (1..=4)
+                .flat_map(|row| {
+                    let left_count = left.iter().filter(|r| **r == row).count();
+                    let right_count = right.iter().filter(|r| **r == row).count();
+                    std::iter::repeat_n(row, left_count.min(right_count))
+                })
+                .collect();
+            assert_eq!(row_ids(&actual), expected, "{left:?} intersect {right:?}");
+        }
+        for low in 0..=6 {
+            for high in low..=6 {
+                let range = OffsetRange::new(o(low), o(high));
+                let expected: Vec<usize> = left
+                    .iter()
+                    .copied()
+                    .filter(|row| (low..high).contains(row))
+                    .collect();
+                let mut sparse = sparse_rows(left);
+                sparse.intersect(SubsetRef::Dense(range), &pool);
+                let mut dense = Subset::Dense(range);
+                dense.intersect(sparse_rows(left).as_ref(), &pool);
+                assert_eq!(row_ids(&sparse), expected, "{left:?} intersect {range:?}");
+                assert_eq!(row_ids(&dense), expected, "{range:?} intersect {left:?}");
+                if expected.is_empty() {
+                    assert!(sparse.is_dense());
+                    assert!(dense.is_dense());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn intersect_skewed_sparse_duplicates_and_maximum_row_id() {
+    let pool = with_pool_set(|ps| ps.get_pool());
+    let large: Vec<usize> = (0..128)
+        .flat_map(|row| std::iter::repeat_n(row * 2, 2))
+        .collect();
+    let small = vec![4, 4, 4, 64, 254, 255];
+    for (left, right) in [(&large, &small), (&small, &large)] {
+        let mut actual = sparse_rows(left);
+        actual.intersect(sparse_rows(right).as_ref(), &pool);
+        assert_eq!(row_ids(&actual), vec![4, 4, 64, 254]);
+    }
+
+    // Endpoint checks must not compute an overflowing exclusive upper bound.
+    let max = u32::MAX as usize;
+    let mut dense = Subset::Dense(OffsetRange::new(o(0), o(max)));
+    dense.intersect(sparse_rows(&[max]).as_ref(), &pool);
+    assert_eq!(dense.size(), 0);
+    let mut sparse = sparse_rows(&[max]);
+    sparse.intersect(sparse_rows(&[max]).as_ref(), &pool);
+    assert_eq!(row_ids(&sparse), vec![max]);
 }

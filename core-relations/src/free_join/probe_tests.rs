@@ -294,10 +294,7 @@ mod catalog_filter {
         let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(1)]) else {
             panic!("expected filtered rows")
         };
-        let AtomRowsKind::Owned(root) = rows.kind() else {
-            panic!("a large filtered group must become a residual root")
-        };
-        assert!(!root.is_plan_root());
+        assert!(matches!(rows.kind(), AtomRowsKind::Dense(_)));
         let mut expected = live_rows_matching(
             &db,
             table,
@@ -333,7 +330,7 @@ mod catalog_filter {
         prober.for_each(|_, _| seen += 1);
         assert_eq!(seen, 0);
 
-        // A small survivor set travels inline instead of allocating.
+        // A small contiguous survivor set also stays dense.
         let narrow = [Constraint::GtConst {
             col: ColumnId::new(1),
             val: v(ROWS_PER_GROUP - 3),
@@ -350,7 +347,7 @@ mod catalog_filter {
         let Some(ProbeMatch::Rows(rows)) = prober.get_subset(&[v(2)]) else {
             panic!("expected filtered rows")
         };
-        assert!(matches!(rows.kind(), AtomRowsKind::Inline(_)));
+        assert!(matches!(rows.kind(), AtomRowsKind::Dense(_)));
         assert_eq!(rows_of(&rows).len(), 2);
 
         // Existence-only probes apply the same constraint check.

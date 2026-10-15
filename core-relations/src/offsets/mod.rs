@@ -297,6 +297,7 @@ impl SubsetRef<'_> {
     pub(crate) fn to_owned(self, pool: &Pool<SortedOffsetVector>) -> Subset {
         match self {
             SubsetRef::Dense(r) => Subset::Dense(r),
+            SubsetRef::Sparse(s) if s.inner().is_empty() => Subset::empty(),
             SubsetRef::Sparse(s) => {
                 let mut vec = pool.get();
                 vec.extend_nonoverlapping(s);
@@ -409,11 +410,19 @@ impl Subset {
             }
             Subset::Sparse(offs) => offs.retain(filter),
         }
+        self.normalize_empty();
     }
+
+    fn normalize_empty(&mut self) {
+        if matches!(self, Subset::Sparse(rows) if rows.0.is_empty()) {
+            *self = Subset::empty();
+        }
+    }
+
     /// Remove any elements of the current subset not present in `other`.
     #[inline]
     pub(crate) fn intersect(&mut self, other: SubsetRef, pool: &Pool<SortedOffsetVector>) {
-        match (self, other) {
+        match (&mut *self, other) {
             (Subset::Dense(cur), SubsetRef::Dense(other)) => {
                 let resl = cmp::max(cur.start, other.start);
                 let resr = cmp::min(cur.end, other.end);
@@ -425,31 +434,47 @@ impl Subset {
             }
             (x @ Subset::Dense(_), SubsetRef::Sparse(sparse)) => {
                 let (low, hi) = x.bounds().unwrap();
-                if sparse.bounds().is_some() {
-                    let l = sparse.binary_search_by_id(low);
-                    let r = sparse.binary_search_by_id(hi);
-                    // Check emptiness before allocating from the pool.
-                    if l >= r {
-                        *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
-                    } else {
-                        let subslice = sparse.subslice(l, r);
-                        let mut res = pool.get();
-                        res.extend_nonoverlapping(subslice);
-                        *x = Subset::Sparse(res);
-                    }
+                let rows = sparse.inner();
+                if low == hi || rows.is_empty() || rows[rows.len() - 1] < low || rows[0] >= hi {
+                    *x = Subset::empty();
                 } else {
-                    // empty range
-                    *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
+                    // Bounds already covered by the dense range need no search.
+                    let l = if low <= rows[0] {
+                        0
+                    } else {
+                        sparse.binary_search_by_id(low)
+                    };
+                    let r = if rows[rows.len() - 1] < hi {
+                        rows.len()
+                    } else {
+                        sparse.binary_search_from(l, hi)
+                    };
+                    *x = SubsetRef::Sparse(sparse.subslice(l, r)).to_owned(pool);
                 }
             }
             (Subset::Sparse(sparse), SubsetRef::Dense(dense)) => {
-                // Binary search for both bounds; avoid copy_within if no prefix to remove.
-                let l = sparse.slice().binary_search_by_id(dense.start);
-                let r = sparse.slice().binary_search_from(l, dense.end);
-                if l == 0 {
-                    sparse.0.truncate(r);
+                let rows = &sparse.0;
+                if dense.start == dense.end
+                    || rows.is_empty()
+                    || rows[rows.len() - 1] < dense.start
+                    || rows[0] >= dense.end
+                {
+                    sparse.0.clear();
                 } else {
-                    sparse.0.copy_within(l..r, 0);
+                    let l = if dense.start <= rows[0] {
+                        0
+                    } else {
+                        sparse.slice().binary_search_by_id(dense.start)
+                    };
+                    let r = if rows[rows.len() - 1] < dense.end {
+                        rows.len()
+                    } else {
+                        sparse.slice().binary_search_from(l, dense.end)
+                    };
+                    // A covering range leaves the allocation and every row untouched.
+                    if l > 0 {
+                        sparse.0.copy_within(l..r, 0);
+                    }
                     sparse.0.truncate(r - l);
                 }
             }
@@ -457,7 +482,13 @@ impl Subset {
                 let cur_len = cur.0.len();
                 let other_inner = other.inner();
                 let other_len = other_inner.len();
-                if (cur_len <= 16 && other_len <= 16)
+                if cur_len == 0
+                    || other_len == 0
+                    || cur.0[cur_len - 1] < other_inner[0]
+                    || other_inner[other_len - 1] < cur.0[0]
+                {
+                    cur.0.clear();
+                } else if (cur_len <= 16 && other_len <= 16)
                     || (cur_len / 4 <= other_len && other_len <= cur_len * 4)
                 {
                     // Similar sizes: two-pointer intersection in O(cur_len + other_len).
@@ -529,6 +560,7 @@ impl Subset {
                 }
             }
         }
+        self.normalize_empty();
     }
 
     /// Append the given row id to the Subset.

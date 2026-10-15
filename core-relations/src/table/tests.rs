@@ -5,7 +5,7 @@ use rand::{Rng, rng};
 
 use crate::{
     common::{HashMap, ShardId, Value},
-    offsets::{RowId, SubsetRef},
+    offsets::{Offsets, RowId, SortedOffsetVector, Subset, SubsetRef},
     row_buffer::TaggedRowBuffer,
     table::{
         CompactHash, FullHash, HashedRowBuffer, KnownRemoval, ProbeHash, ShardHash,
@@ -668,4 +668,90 @@ fn shard_math() {
 
     // Picking low numbers should all get shard 0.
     assert!((0..100_000).all(|x| table.shard_data().shard_id(x as u64) == ShardId::new(0)));
+}
+
+#[test]
+fn refine_ref_keeps_contiguous_survivors_dense() {
+    let table = fill_table((0..8).map(|row| vec![v(row)]), 1, None, |_, _| None);
+    let all = table.all();
+    let mut sparse = SortedOffsetVector::default();
+    for row in 0..8 {
+        sparse.push(RowId::new(row));
+    }
+    // Includes empty, singleton, prefix, suffix, interior, and unchanged ranges,
+    // starting from either representation of the same input rows.
+    for low in 0..=8 {
+        for high in low..=8 {
+            let constraints = [
+                Constraint::GeConst {
+                    col: ColumnId::new(0),
+                    val: v(low),
+                },
+                Constraint::LtConst {
+                    col: ColumnId::new(0),
+                    val: v(high),
+                },
+            ];
+            for input in [all.as_ref(), SubsetRef::Sparse(sparse.slice())] {
+                let result = table.refine_ref(input, &constraints, true);
+                assert!(result.is_dense(), "range {low}..{high}: {result:?}");
+                let mut rows = Vec::new();
+                result.offsets(|row| rows.push(row.index()));
+                assert_eq!(rows, (low..high).collect::<Vec<_>>());
+            }
+        }
+    }
+}
+
+#[test]
+fn refine_ref_preserves_gaps_duplicates_and_skips_stale_rows() {
+    empty_execution_state!(e);
+    let mut table = fill_table((0..8).map(|row| vec![v(row)]), 1, None, |_, _| None);
+    for row in [1, 6] {
+        table.new_buffer().stage_remove(&[v(row)]);
+    }
+    table.merge(&mut e);
+    assert_eq!(table.all().size(), 8, "stale rows should remain in place");
+
+    for check_live in [false, true] {
+        let result = table.refine_ref(table.all().as_ref(), &[], check_live);
+        assert!(matches!(result, Subset::Sparse(_)));
+        let mut rows = Vec::new();
+        result.offsets(|row| rows.push(row.index()));
+        assert_eq!(rows, vec![0, 2, 3, 4, 5, 7]);
+
+        let constraints = [
+            Constraint::GeConst {
+                col: ColumnId::new(0),
+                val: v(2),
+            },
+            Constraint::LtConst {
+                col: ColumnId::new(0),
+                val: v(6),
+            },
+        ];
+        let result = table.refine_ref(table.all().as_ref(), &constraints, check_live);
+        assert!(result.is_dense());
+        let mut rows = Vec::new();
+        result.offsets(|row| rows.push(row.index()));
+        assert_eq!(rows, vec![2, 3, 4, 5]);
+    }
+
+    // [0, 0, 2] has the same length and endpoints as 0..3, but contains a
+    // duplicate and omits row 1. A length/endpoints heuristic would corrupt it.
+    for input in [vec![0, 0, 2], vec![0, 1, 2, 2, 3, 5, 6]] {
+        let mut sparse = SortedOffsetVector::default();
+        for row in &input {
+            sparse.push(RowId::new(*row));
+        }
+        let result = table.refine_ref(SubsetRef::Sparse(sparse.slice()), &[], true);
+        assert!(matches!(result, Subset::Sparse(_)));
+        let mut rows = Vec::new();
+        result.offsets(|row| rows.push(row.rep()));
+        let expected: Vec<_> = input
+            .into_iter()
+            .filter(|row| ![1, 6].contains(row))
+            .collect();
+        assert_eq!(rows, expected);
+    }
 }
