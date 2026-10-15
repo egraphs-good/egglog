@@ -424,7 +424,8 @@ fn prepared_plan_indexes_refresh_across_runs_and_clear() {
         .map(|stage| match stage {
             JoinStage::Intersect { .. } => 0,
             JoinStage::FusedIntersect { to_intersect, .. }
-            | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+            | JoinStage::FusedIntersectMat { to_intersect, .. }
+            | JoinStage::Primitive { to_intersect, .. } => to_intersect
                 .iter()
                 .filter(|(scan, _)| {
                     plan.atoms[scan.to_index.atom].table == target && scan.to_index.vars.len() != 1
@@ -442,7 +443,8 @@ fn prepared_plan_indexes_refresh_across_runs_and_clear() {
                 .filter(|scan| plan.atoms[scan.atom].table == allowed)
                 .count(),
             JoinStage::FusedIntersect { to_intersect, .. }
-            | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+            | JoinStage::FusedIntersectMat { to_intersect, .. }
+            | JoinStage::Primitive { to_intersect, .. } => to_intersect
                 .iter()
                 .filter(|(scan, _)| {
                     plan.atoms[scan.to_index.atom].table == allowed && scan.to_index.vars.len() == 1
@@ -760,7 +762,9 @@ fn packed_three_column_exact_probe_matches_oracle_inner() {
         JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.iter().find(|(scan, _)| {
             plan.atoms[scan.to_index.atom].table == facts && scan.to_index.vars.len() == 3
         }),
-        JoinStage::Intersect { .. } | JoinStage::FusedIntersectMat { .. } => None,
+        JoinStage::Intersect { .. }
+        | JoinStage::FusedIntersectMat { .. }
+        | JoinStage::Primitive { .. } => None,
     });
     let Some((scan, key_columns)) = exact_probe else {
         panic!("the smaller driver must produce a three-column exact facts probe")
@@ -958,7 +962,8 @@ fn inline_multi_column_exact_probe_matches_oracle_inner() {
                     .map(|(scan, _)| (position, scan.to_index.atom)),
                 JoinStage::Intersect { .. }
                 | JoinStage::FusedIntersect { .. }
-                | JoinStage::FusedIntersectMat { .. } => None,
+                | JoinStage::FusedIntersectMat { .. }
+                | JoinStage::Primitive { .. } => None,
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -984,7 +989,8 @@ fn inline_multi_column_exact_probe_matches_oracle_inner() {
                             .iter()
                             .any(|(scan, _)| scan.to_index.atom == exact_atom)
                 }
-                JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                JoinStage::FusedIntersectMat { to_intersect, .. }
+                | JoinStage::Primitive { to_intersect, .. } => to_intersect
                     .iter()
                     .any(|(scan, _)| scan.to_index.atom == exact_atom),
             });
@@ -1447,7 +1453,9 @@ fn small_live_residuals_stay_inline_and_filter_stale_rows_inner() {
         .iter()
         .filter_map(|stage| match stage {
             JoinStage::Intersect { scans, .. } => Some(scans),
-            JoinStage::FusedIntersect { .. } | JoinStage::FusedIntersectMat { .. } => None,
+            JoinStage::FusedIntersect { .. }
+            | JoinStage::FusedIntersectMat { .. }
+            | JoinStage::Primitive { .. } => None,
         })
         .flatten()
         .filter(|scan| plan.atoms[scan.atom].table == facts)

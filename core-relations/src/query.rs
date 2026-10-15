@@ -121,6 +121,7 @@ impl<'outer> RuleSetBuilder<'outer> {
             query: Query {
                 var_info: Default::default(),
                 atoms: Default::default(),
+                primitives: Vec::new(),
                 // start with an invalid ActionId
                 action: ActionId::new(u32::MAX),
                 plan_strategy: Default::default(),
@@ -332,6 +333,53 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         if let QueryEntry::Var(v) = entry {
             self.query.var_info[*v].defined_in_rhs = true;
         }
+    }
+
+    /// Add a forward-only primitive relation to the query.
+    ///
+    /// Once all `args` are bound, the function returns either one output or no
+    /// matching row. A fresh output variable is bound to the result; a constant
+    /// or previously bound variable is compared with it.
+    ///
+    /// The function must be safe to evaluate during query execution: it may
+    /// read the current database snapshot and intern values, but must not make
+    /// observable mutations or depend on the number or order of its calls.
+    /// Ordinary action-side external functions do not have this contract and
+    /// are never moved into queries automatically.
+    pub fn add_primitive(
+        &mut self,
+        function: ExternalFunctionId,
+        args: &[QueryEntry],
+        output: QueryEntry,
+    ) {
+        let variables = |entry: &QueryEntry| match entry {
+            QueryEntry::Var(var) => Some(*var),
+            QueryEntry::Const(_) => None,
+        };
+        for var in args
+            .iter()
+            .chain(std::iter::once(&output))
+            .filter_map(variables)
+        {
+            assert!(
+                self.query.var_info.contains_key(var),
+                "all primitive variables must belong to the current query"
+            );
+        }
+        if let Some(output) = variables(&output) {
+            // Unlike the historical stored-table dependency registration,
+            // preserve an empty antecedent: a nullary/constant-input lookup
+            // determines its output without an existing variable binding.
+            self.query
+                .fun_deps
+                .dependencies
+                .push((args.iter().filter_map(variables).collect(), vec![output]));
+        }
+        self.query.primitives.push(QueryPrimitive {
+            function,
+            args: args.to_vec(),
+            output,
+        });
     }
 
     /// Add the given atom to the query, with the given variables and constraints.
@@ -1031,9 +1079,19 @@ impl std::fmt::Debug for FunDeps {
     }
 }
 
+/// A relation with the access requirement that all inputs must be bound.
+/// Functional dependency closure alone does not make an input available.
+#[derive(Clone, Debug)]
+pub(crate) struct QueryPrimitive {
+    pub(crate) function: ExternalFunctionId,
+    pub(crate) args: Vec<QueryEntry>,
+    pub(crate) output: QueryEntry,
+}
+
 pub(crate) struct Query {
     pub(crate) var_info: DenseIdMap<Variable, VarInfo>,
     pub(crate) atoms: DenseIdMap<AtomId, Atom>,
+    pub(crate) primitives: Vec<QueryPrimitive>,
     pub(crate) action: ActionId,
     pub(crate) plan_strategy: PlanStrategy,
     pub(crate) fun_deps: FunDeps,
@@ -1042,4 +1100,25 @@ pub(crate) struct Query {
     /// [`crate::free_join::plan::tree_decompose_and_plan`]. Set via
     /// [`QueryBuilder::set_no_decomp`].
     pub(crate) no_decomp: bool,
+}
+
+#[cfg(test)]
+mod primitive_tests {
+    use super::*;
+
+    #[test]
+    fn primitive_dependencies_include_constant_inputs_and_chains() {
+        let mut db = Database::new();
+        let mut rules = db.new_rule_set();
+        let mut query = rules.new_rule();
+        let x = query.new_var();
+        let y = query.new_var();
+        let function = ExternalFunctionId::new(0);
+        query.add_primitive(function, &[x.into(), x.into()], y.into());
+        assert!(!query.query.fun_deps.closure([]).contains_key(y));
+        query.add_primitive(function, &[], x.into());
+        let closure = query.query.fun_deps.closure([]);
+        assert!(closure.contains_key(x));
+        assert!(closure.contains_key(y));
+    }
 }

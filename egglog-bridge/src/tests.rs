@@ -23,6 +23,8 @@ use crate::{
     define_rule,
 };
 
+mod primitive_query;
+
 /// Run a simple associativity/commutativity test.
 ///
 /// The `can_subsume` argument is only used to enable subsumption on the underlying tables created
