@@ -315,7 +315,9 @@ impl Database {
                                                 if result.is_empty() {
                                                     break 'eval;
                                                 }
-                                                binding_info.materializations.insert(mat_id, result);
+                                                binding_info
+                                                    .materializations
+                                                    .insert(mat_id, result);
                                                 continue;
                                             }
                                             let bag_timer = bag_cache.start_timer();

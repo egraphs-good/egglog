@@ -656,4 +656,28 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn concurrent_misses_publish_one_complete_shared_result() {
+        let base = fixture();
+        let second = variant(&base, 1, &[]);
+        let cache = BagCache::with_options([&base, &second].into_iter(), true, false);
+        let barrier = std::sync::Barrier::new(2);
+        let (first, second) = std::thread::scope(|scope| {
+            let build = |action| {
+                let mat = MatId::new(0);
+                assert!(cache.get(action, mat).is_none());
+                // Both variants can finish their own work without waiting
+                // for another builder to publish its result.
+                let result = output();
+                barrier.wait();
+                cache.publish(action, mat, result)
+            };
+            let first = scope.spawn(move || build(ActionId::new(0)));
+            let second = scope.spawn(move || build(ActionId::new(1)));
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(result_size(&first), (1, 2, 3 * size_of::<Value>() as u64));
+    }
 }

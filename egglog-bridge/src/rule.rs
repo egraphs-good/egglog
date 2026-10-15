@@ -805,8 +805,8 @@ impl Query {
         // Experimental alternative: let every non-delta atom read all rows.
         // This permits overlap between variants, but gives their unaffected
         // decomposed bags identical inputs and more opportunities for reuse.
-        let all_non_delta = std::env::var_os("EGGLOG_SEMINAIVE_ALL")
-            .is_some_and(|value| value == "1");
+        let all_non_delta =
+            std::env::var_os("EGGLOG_SEMINAIVE_ALL").is_some_and(|value| value == "1");
         for focus_atom in 0..self.atoms.len() {
             // At timestamp zero, every delta is already the entire table.
             // One variant covers the full join under either strategy.
