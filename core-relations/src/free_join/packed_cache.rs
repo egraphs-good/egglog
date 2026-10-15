@@ -7,6 +7,7 @@
 //! table-wide [`FamilyId`]s, so two plans that reach the same rows and index
 //! the same next column with the same constraints build that index once.
 
+use std::ops::Range;
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicUsize, Ordering},
@@ -18,7 +19,7 @@ use smallvec::SmallVec;
 use crate::{
     common::{DashMap, HashMap, HashSet},
     numeric_id::{NumericId, define_id},
-    offsets::Subset,
+    offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
     table_spec::{ColumnId, Constraint},
 };
 
@@ -104,7 +105,7 @@ type CatalogContinuationMap = DashMap<ColumnIds, Arc<RootContinuationCache>>;
 /// run, so each key continues to denote the same subset after publication.
 #[derive(Default)]
 pub(super) struct TrieCache {
-    pub(super) roots: DashMap<RootKey, Arc<OwnedAtomRows>>,
+    roots: DashMap<RootKey, Option<Arc<OwnedAtomRows>>>,
     /// Interns canonical header-constraint sets to keep [`RootKey`] cheap.
     /// The table stays outside the id and remains the first part of `RootKey`.
     header_ids: DashMap<SmallVec<[Constraint; 2]>, HeaderConstraintId>,
@@ -114,6 +115,27 @@ pub(super) struct TrieCache {
 }
 
 impl TrieCache {
+    /// Build each shared root once, including an empty intersection.
+    pub(super) fn root(
+        &self,
+        table: TableId,
+        header: HeaderConstraintId,
+        build: impl FnOnce() -> Option<RootSubset>,
+    ) -> Option<Arc<OwnedAtomRows>> {
+        let key = (table, header);
+        if let Some(root) = self.roots.get(&key) {
+            return root.clone();
+        }
+        match self.roots.entry(key) {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                let root = build().map(|subset| Arc::new(OwnedAtomRows::new_shared(subset)));
+                entry.insert(root.clone());
+                root
+            }
+        }
+    }
+
     /// Return the interned id for a canonical set of fast header constraints.
     ///
     /// Id 0 is reserved for the common unconstrained case, so those atoms skip
@@ -200,6 +222,76 @@ struct SharedRootIndexes {
     catalog_continuations: OnceLock<CatalogContinuationMap>,
 }
 
+/// Root rows either own their offsets or retain a slice of a processed header.
+#[derive(Debug)]
+pub(super) enum RootSubset {
+    Owned(Subset),
+    HeaderSlice {
+        backing: Arc<Subset>,
+        range: Range<usize>,
+    },
+}
+
+impl From<Subset> for RootSubset {
+    fn from(subset: Subset) -> Self {
+        Self::Owned(subset)
+    }
+}
+
+impl RootSubset {
+    pub(super) fn clipped_header(backing: &Arc<Subset>, bounds: OffsetRange) -> Option<Self> {
+        let SubsetRef::Sparse(rows) = backing.as_ref().as_ref() else {
+            unreachable!("only sparse headers need shared backing storage")
+        };
+        let slice = rows.inner();
+        let first = *slice.first()?;
+        let last = *slice.last()?;
+        if bounds.is_empty() || last < bounds.start || first >= bounds.end {
+            return None;
+        }
+        let start = if first >= bounds.start {
+            0
+        } else {
+            rows.binary_search_by_id(bounds.start)
+        };
+        let end = if last < bounds.end {
+            slice.len()
+        } else {
+            rows.binary_search_from(start, bounds.end)
+        };
+        match end - start {
+            0 => None,
+            1 => Some(
+                Subset::Dense(OffsetRange::new(
+                    slice[start],
+                    RowId::from_usize(slice[start].index() + 1),
+                ))
+                .into(),
+            ),
+            _ => Some(Self::HeaderSlice {
+                backing: backing.clone(),
+                range: start..end,
+            }),
+        }
+    }
+
+    pub(super) fn as_ref(&self) -> SubsetRef<'_> {
+        match self {
+            Self::Owned(subset) => subset.as_ref(),
+            Self::HeaderSlice { backing, range } => {
+                let SubsetRef::Sparse(rows) = backing.as_ref().as_ref() else {
+                    unreachable!("only sparse headers need shared backing storage")
+                };
+                SubsetRef::Sparse(rows.subslice(range.start, range.end))
+            }
+        }
+    }
+
+    pub(super) fn size(&self) -> usize {
+        self.as_ref().size()
+    }
+}
+
 /// Owning row subset for an atom. Lower trie levels are execution-scoped
 /// packed nodes; below a shared root they are shared across plans.
 ///
@@ -207,7 +299,7 @@ struct SharedRootIndexes {
 /// execution. An owned residual holds the rows left by one constrained probe
 /// and belongs to a single frame.
 pub(crate) struct OwnedAtomRows {
-    pub(super) subset: Subset,
+    pub(super) subset: RootSubset,
     /// Present only for roots shared across plans.
     shared: Option<SharedRootIndexes>,
     plan_root: bool,
@@ -222,17 +314,17 @@ impl std::fmt::Debug for OwnedAtomRows {
 }
 
 impl OwnedAtomRows {
-    pub(super) fn new(subset: Subset) -> Self {
+    pub(super) fn new(subset: impl Into<RootSubset>) -> Self {
         Self {
-            subset,
+            subset: subset.into(),
             shared: None,
             plan_root: true,
         }
     }
 
-    pub(super) fn new_shared(subset: Subset) -> Self {
+    pub(super) fn new_shared(subset: impl Into<RootSubset>) -> Self {
         Self {
-            subset,
+            subset: subset.into(),
             shared: Some(SharedRootIndexes::default()),
             plan_root: true,
         }
@@ -246,7 +338,7 @@ impl OwnedAtomRows {
     /// A frame-local residual that no plan-level slot may cache.
     pub(super) fn new_residual(subset: Subset) -> Self {
         Self {
-            subset,
+            subset: subset.into(),
             shared: None,
             plan_root: false,
         }

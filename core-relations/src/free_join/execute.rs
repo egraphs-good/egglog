@@ -47,9 +47,11 @@ use super::{
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
         materialization_is_live_in_tail, sort_plan_by_size,
     },
-    packed_cache::{OwnedAtomRows, TrieCache},
+    packed_cache::{OwnedAtomRows, RootSubset, TrieCache},
     packed_trie::{ChildShape, TrieNode},
-    plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
+    plan::{
+        JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan, SharedHeaderSubset,
+    },
     prepared_index::{
         PreparedIndexRef, PreparedJoinIndexes, PreparedPlanIndexes, StageMask,
         columns_are_cacheable,
@@ -159,6 +161,50 @@ fn cover_scan_bounds(partition: Option<TopLevelPartition>, cover_rows: usize) ->
             unreachable!("an index partition can only drive a scalar intersection")
         }
     }
+}
+
+fn intersect_root_headers(
+    mut subset: Subset,
+    headers: &[&JoinHeader],
+    pool: &Pool<SortedOffsetVector>,
+) -> Option<RootSubset> {
+    // Timestamp constraints only clip a header's sorted offsets. Keep that
+    // slice alive through the header instead of copying it into a new vector.
+    if let Subset::Dense(mut bounds) = subset {
+        let mut sparse = None;
+        let mut multiple_sparse = false;
+        for header in headers {
+            if header.subset.is_empty() {
+                return None;
+            }
+            match &header.subset {
+                SharedHeaderSubset::Dense(range) => {
+                    bounds.start = bounds.start.max(range.start);
+                    bounds.end = bounds.end.min(range.end).max(bounds.start);
+                }
+                SharedHeaderSubset::Sparse(rows) => {
+                    if sparse.replace(rows).is_some() {
+                        multiple_sparse = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !multiple_sparse {
+            if let Some(rows) = sparse {
+                return RootSubset::clipped_header(rows, bounds);
+            }
+            return (!bounds.is_empty()).then(|| Subset::Dense(bounds).into());
+        }
+    }
+
+    for header in headers {
+        subset.intersect(header.subset.as_ref(), pool);
+        if subset.is_empty() {
+            return None;
+        }
+    }
+    (!subset.is_empty()).then(|| subset.into())
 }
 
 impl Database {
@@ -643,36 +689,15 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
 
         let header = trie_cache.header_id(&sig.1);
-        let key = (table_id, header);
-        if let Some(node) = trie_cache.roots.get(&key) {
-            return (!node.subset.is_empty()).then(|| node.clone());
-        }
-        let subset = self.build_root_subset(table_id, headers)?;
-        let node = match trie_cache.roots.entry(key) {
-            Entry::Occupied(o) => o.get().clone(),
-            Entry::Vacant(v) => {
-                let node = Arc::new(OwnedAtomRows::new_shared(subset));
-                v.insert(node.clone());
-                node
-            }
-        };
-        (!node.subset.is_empty()).then_some(node)
+        trie_cache.root(table_id, header, || {
+            self.build_root_subset(table_id, headers)
+        })
     }
 
     /// The root subset for `table_id`: the whole table intersected with every
     /// header subset. Returns `None` if the result is empty.
-    fn build_root_subset(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<Subset> {
-        let mut subset = self.db.get_table(table_id).all();
-        for h in headers {
-            if h.subset.is_empty() {
-                return None;
-            }
-            subset.intersect(h.subset.as_ref(), &self.pool);
-            if subset.is_empty() {
-                return None;
-            }
-        }
-        Some(subset)
+    fn build_root_subset(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<RootSubset> {
+        intersect_root_headers(self.db.get_table(table_id).all(), headers, &self.pool)
     }
 
     /// Build a packed index for one column of `subset` after applying the slow
@@ -926,14 +951,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         // whole-table metadata work for them (including tiny cached groups).
         let catalog_intersection = match source.kind() {
             AtomRowsKind::Owned(root) if constraints.is_empty() || !root.is_shared() => {
-                if let Subset::Dense(range) = &root.subset
+                if let SubsetRef::Dense(range) = root.subset.as_ref()
                     && columns_are_cacheable(info, &cols)
                 {
                     let whole_table = info.table.all();
                     (whole_table.size() / 2 < source.size()).then(|| {
                         let needs_intersect = !(whole_table.is_dense()
-                            && root.subset.bounds() == whole_table.bounds());
-                        needs_intersect.then_some(*range)
+                            && root.subset.as_ref().bounds() == whole_table.bounds());
+                        needs_intersect.then_some(range)
                     })
                 } else {
                     None

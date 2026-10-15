@@ -31,6 +31,98 @@ use crate::free_join::{
 };
 
 #[test]
+fn roots_clip_shared_headers_without_copying_offsets() {
+    use super::intersect_root_headers;
+    use crate::free_join::plan::JoinHeader;
+    use crate::{OffsetRange, RowId, SubsetRef, offsets::Offsets, pool::with_pool_set};
+
+    let pool = with_pool_set(|ps| ps.get_pool::<crate::offsets::SortedOffsetVector>());
+    let mut rows = pool.get();
+    for row in [1, 3, 3, 5, 8] {
+        rows.push(RowId::new(row));
+    }
+    let header = JoinHeader {
+        atom: AtomId::new(0),
+        constraints: with_pool_set(|ps| ps.get()),
+        subset: Subset::Sparse(rows).into(),
+    };
+    let original = header.subset.as_ref()._slice().as_ptr();
+    for start in 0..=10 {
+        for end in start..=10 {
+            let timestamp = JoinHeader {
+                atom: AtomId::new(0),
+                constraints: with_pool_set(|ps| ps.get()),
+                subset: Subset::Dense(OffsetRange::new(RowId::new(start), RowId::new(end))).into(),
+            };
+            for headers in [[&header, &timestamp], [&timestamp, &header]] {
+                let root = intersect_root_headers(
+                    Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(10))),
+                    &headers,
+                    &pool,
+                );
+                let expected = [1, 3, 3, 5, 8]
+                    .into_iter()
+                    .filter(|row| start <= *row && *row < end)
+                    .map(RowId::new)
+                    .collect::<Vec<_>>();
+                let mut actual = Vec::new();
+                if let Some(root) = root {
+                    root.as_ref().offsets(|row| actual.push(row));
+                    if expected.len() > 1 {
+                        let SubsetRef::Sparse(slice) = root.as_ref() else {
+                            panic!("multiple offsets should retain the header slice")
+                        };
+                        let offset = [1, 3, 3, 5, 8].partition_point(|row| *row < start);
+                        assert_eq!(slice.inner().as_ptr(), original.wrapping_add(offset));
+                    } else {
+                        assert!(matches!(root.as_ref(), SubsetRef::Dense(_)));
+                    }
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    let root = intersect_root_headers(
+        Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(10))),
+        &[&header],
+        &pool,
+    )
+    .unwrap();
+    drop(header);
+    assert_eq!(root.as_ref()._slice(), &[1, 3, 3, 5, 8].map(RowId::new));
+}
+
+#[test]
+fn roots_intersect_multiple_sparse_headers_and_sparse_tables() {
+    use super::intersect_root_headers;
+    use crate::free_join::plan::JoinHeader;
+    use crate::{OffsetRange, RowId, offsets::Offsets, pool::with_pool_set};
+
+    let pool = with_pool_set(|ps| ps.get_pool::<crate::offsets::SortedOffsetVector>());
+    let sparse = |ids: &[u32]| {
+        let mut rows = pool.get();
+        for id in ids {
+            rows.push(RowId::new(*id));
+        }
+        Subset::Sparse(rows)
+    };
+    let headers = [&[1, 3, 5, 8][..], &[2, 3, 5, 9][..]].map(|ids| JoinHeader {
+        atom: AtomId::new(0),
+        constraints: with_pool_set(|ps| ps.get()),
+        subset: sparse(ids).into(),
+    });
+    for table in [
+        Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(10))),
+        sparse(&[0, 3, 5, 7]),
+    ] {
+        let root = intersect_root_headers(table, &[&headers[0], &headers[1]], &pool).unwrap();
+        let mut actual = Vec::new();
+        root.as_ref().offsets(|row| actual.push(row));
+        assert_eq!(actual, [RowId::new(3), RowId::new(5)]);
+    }
+}
+
+#[test]
 fn catalog_candidates_require_live_rows_before_terminal_match() {
     terminal_catalog_filter_cases(true);
 }
