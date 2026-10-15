@@ -948,7 +948,32 @@ fn inequality_catalog_uses_one_generic_registration() {
     );
     let bindings = declaration.bindings.as_ref().unwrap();
     assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, "!=");
-    assert!(bindings.python.is_none() && bindings.rust.is_none());
+    assert!(bindings.python.is_none());
+    assert_eq!(
+        bindings
+            .rust
+            .as_ref()
+            .expect("inequality needs a Rust view")
+            .views,
+        vec![proto::RustCallable {
+            path: ["egglog_experimental", "typed", "builtins", "ne"]
+                .map(str::to_owned)
+                .into(),
+            params: signature
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(index, input)| {
+                    proto::RustParameter {
+                        name: input.name.clone(),
+                        core_input: Some(index as u32),
+                        borrowed: false,
+                    }
+                })
+                .collect(),
+            ..Default::default()
+        }]
+    );
     assert!(
         !catalog
             .undescribed_primitives

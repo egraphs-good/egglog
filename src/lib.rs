@@ -572,7 +572,24 @@ impl Default for EGraph {
         };
         add_primitive_with_validator!(
             &mut eg,
-            "!=" [id = "egglog.core.ne"] = |a: #, b: #| -?> () {
+            "!=" [id = "egglog.core.ne", bindings = |signature: &proto::GenericSignature| proto::CallableBindings {
+                rust: Some(proto::RustBindings {
+                    views: vec![proto::RustCallable {
+                        path: ["egglog_experimental", "typed", "builtins", "ne"]
+                            .map(str::to_owned)
+                            .into(),
+                        params: signature.inputs.iter().enumerate().map(|(index, input)| {
+                            proto::RustParameter {
+                                name: input.name.clone(),
+                                core_input: Some(index as u32),
+                                borrowed: false,
+                            }
+                        }).collect(),
+                        ..Default::default()
+                    }],
+                }),
+                ..Default::default()
+            }] = |a: #, b: #| -?> () {
                 (a != b).then_some(())
             },
             neq_validator
