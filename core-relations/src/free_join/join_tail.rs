@@ -396,10 +396,10 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
     )
 }
 
-/// Reorder a suffix of the cached logical plan using the DVO policy.
+/// Reorder a suffix of the current execution schedule using the DVO policy.
 ///
 /// Within each phase, the greedy key is decreasing refinement count in the
-/// logical plan prefix, increasing live residual size, then decreasing number
+/// scheduled prefix, increasing live residual size, then decreasing number
 /// of intersected relations. Materialization stages that do not commute remain
 /// fixed barriers. Reordering can also change factorized leaf-scan eligibility,
 /// so [`recompute_leaf_scans`] runs after every change.
@@ -555,10 +555,12 @@ pub(super) fn sort_plan_by_size_inner(
             }
         };
 
-    // Count how many times each atom has been refined in the logical plan
-    // prefix, as the DVO heuristic does.
-    for stage in &instrs[..range.start] {
-        update_refinements(stage, &mut times_refined);
+    // Count refinements in execution order: earlier DVO calls may have moved
+    // stages away from their logical positions. At runtime this includes the
+    // stages already executed; later phases also include stages just scheduled
+    // before their barrier.
+    for position in 0..range.start {
+        update_refinements(&instrs[order.get(position)], &mut times_refined);
     }
 
     // We prioritize stages by

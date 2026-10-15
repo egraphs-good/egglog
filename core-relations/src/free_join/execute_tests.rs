@@ -320,31 +320,38 @@ fn intersect_stage(atom: usize, column: usize) -> JoinStage {
 }
 
 #[test]
-fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
+fn mixed_recursive_dvo_counts_refinements_from_the_executed_prefix() {
     let stages = vec![
         intersect_stage(0, 0),
         intersect_stage(1, 0),
         intersect_stage(1, 1),
         mat_stage(0),
     ];
-    let mut binding_info = BindingInfo::default();
-    for atom in 0..2 {
-        binding_info.insert_subset(
-            AtomId::from_usize(atom),
-            Subset::Dense(crate::OffsetRange::new(
-                crate::RowId::from_usize(0),
-                crate::RowId::from_usize(100),
-            )),
+    for residual_sizes in [[100, 100], [7_582, 70]] {
+        let mut binding_info = BindingInfo::default();
+        for (atom, rows) in residual_sizes.into_iter().enumerate() {
+            binding_info.insert_subset(
+                AtomId::from_usize(atom),
+                Subset::Dense(crate::OffsetRange::new(
+                    crate::RowId::from_usize(0),
+                    crate::RowId::from_usize(rows),
+                )),
+            );
+        }
+
+        // Stage 1 ran first in this branch, refining atom 1. Stage 2 can use
+        // its refined residual. Counting the unexecuted logical stage 0
+        // instead would incorrectly prioritize atom 0, even when its residual
+        // is much larger. Equal sizes check that actual refinements break ties.
+        let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
+        sort_plan_by_size_inner(&mut order, 1..3, &stages, &mut binding_info);
+
+        assert_eq!(
+            order,
+            InstrOrder::from_iter([1, 2, 0, 3].into_iter()),
+            "residual sizes: {residual_sizes:?}"
         );
     }
-
-    // Stage 1 happened to run first in this branch. The stable plan prefix
-    // still anchors the recursive ordering to stage 0 / atom 0. Using the
-    // physical prefix here would instead promote stage 2 / atom 1.
-    let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
-    sort_plan_by_size_inner(&mut order, 1..3, &stages, &mut binding_info);
-
-    assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3].into_iter()));
 }
 
 fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
