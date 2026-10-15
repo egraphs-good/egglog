@@ -235,10 +235,7 @@ fn cached_seminaive_variants_share_base_headers_and_produce_correct_rows() {
         let id = rule.build_with_description("header-cache-seminaive");
         let rules = builder.build();
         let cached = rules.build_cached_plan(id);
-        assert!(Arc::ptr_eq(
-            sparse(&rules.plans[id].0.header()[0]),
-            sparse(&cached.plan.header()[0])
-        ));
+        assert!(cached.plan.header().iter().all(|h| h.subset.is_empty()));
         (cached, first, second)
     };
     let mut builder = db.new_rule_set();
@@ -322,7 +319,7 @@ fn cached_decomposed_plans_share_headers_without_changing_results() {
             db.merge_all();
         }
     }
-    let (cached, first_atom) = {
+    let (cached, first_atom, initial_rows) = {
         let mut builder = db.new_rule_set();
         let mut query = builder.new_rule();
         query.set_plan_strategy(PlanStrategy::Gj);
@@ -352,14 +349,33 @@ fn cached_decomposed_plans_share_headers_without_changing_results() {
         let rules = builder.build();
         let cached = rules.build_cached_plan(id);
         assert!(matches!(cached.plan, Plan::DecomposedPlan(_)));
-        (cached, first.unwrap())
+        let initial_rows = Arc::downgrade(sparse(&rules.plans[id].0.header()[0]));
+        // Creating the cache must not clear the live ruleset's headers.
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        assert_eq!(report.num_matches("header-cache-decomposed"), 2);
+        (cached, first.unwrap(), initial_rows)
     };
+    assert!(initial_rows.upgrade().is_none());
+    db.clear_table(output);
+    // A cached decomposed plan must refresh every atom after new rows arrive.
+    for (table, (left, right)) in
+        tables
+            .iter()
+            .zip([(0, 10), (10, 20), (20, 0), (0, 30), (30, 40), (40, 0)])
+    {
+        db.new_buffer(*table)
+            .stage_insert(&[v(left + 5), v(right + 5), v(1)]);
+    }
+    db.merge_all();
     let mut builder = db.new_rule_set();
     let first = builder
         .add_rule_from_cached_plan(&cached, &[(first_atom, eq(0, 1))])
         .unwrap();
     let second = builder
         .add_rule_from_cached_plan(&cached, &[(first_atom, eq(0, 3))])
+        .unwrap();
+    builder
+        .add_rule_from_cached_plan(&cached, &[(first_atom, eq(0, 5))])
         .unwrap();
     let rules = builder.build();
     for (left, right) in rules.plans[first].0.header()[1..]
@@ -371,7 +387,7 @@ fn cached_decomposed_plans_share_headers_without_changing_results() {
     db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
     assert_eq!(
         table_rows(&db, output),
-        [1, 3]
+        [1, 3, 5]
             .into_iter()
             .map(|x| vec![v(x), v(10 + x), v(20 + x), v(30 + x), v(40 + x)])
             .collect::<Vec<_>>()
@@ -379,9 +395,10 @@ fn cached_decomposed_plans_share_headers_without_changing_results() {
 }
 
 #[test]
-fn initial_atom_clones_headers_and_cached_plan_share_processed_rows() {
+fn cached_plan_releases_initial_rows_and_refreshes_without_changing_original_ruleset() {
     let mut db = Database::default();
     let table = add_table(&mut db, 2);
+    let output = output_table(&mut db, 1);
     let mut builder = db.new_rule_set();
     let mut query = builder.new_rule();
     query.set_no_decomp(true);
@@ -400,7 +417,9 @@ fn initial_atom_clones_headers_and_cached_plan_share_processed_rows() {
     };
     assert!(Arc::ptr_eq(&processed, cloned));
 
-    let rule = query.build().build();
+    let mut rule = query.build();
+    rule.insert(output, &[x.into()]).unwrap();
+    let rule = rule.build_with_description("cached-snapshot");
     let rules = builder.build();
     let plan = &rules.plans[rule].0;
     let header = plan
@@ -415,11 +434,41 @@ fn initial_atom_clones_headers_and_cached_plan_share_processed_rows() {
     };
     assert!(Arc::ptr_eq(&processed, planned));
     let cached = rules.build_cached_plan(rule);
-    let cached_header = cached
-        .plan
-        .header()
-        .iter()
-        .find(|header| header.atom == atom)
-        .unwrap();
-    assert!(Arc::ptr_eq(&processed, sparse(cached_header)));
+    assert!(cached.plan.header().iter().all(|h| h.subset.is_empty()));
+    let cached_atoms = cached.plan.atoms();
+    assert!(cached_atoms[atom].constraints.subset.is_empty());
+    assert_eq!(
+        *cached_atoms[atom].constraints.fast,
+        *atoms[atom].constraints.fast
+    );
+    assert_eq!(
+        *cached_atoms[atom].constraints.slow,
+        *atoms[atom].constraints.slow
+    );
+    let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(report.num_matches("cached-snapshot"), 6);
+    assert_eq!(table_rows(&db, output).len(), 6);
+
+    let initial_rows = Arc::downgrade(&processed);
+    drop(processed);
+    drop(cloned_atom);
+    drop(atoms);
+    drop(rules);
+    assert!(initial_rows.upgrade().is_none());
+
+    db.clear_table(table);
+    db.clear_table(output);
+    {
+        let mut buffer = db.new_buffer(table);
+        buffer.stage_insert(&[v(20), v(1), v(20)]);
+        buffer.stage_insert(&[v(21), v(0), v(21)]);
+        buffer.stage_insert(&[v(22), v(1), v(22)]);
+    }
+    db.merge_all();
+    let mut builder = db.new_rule_set();
+    builder.add_rule_from_cached_plan(&cached, &[]).unwrap();
+    let fresh_rules = builder.build();
+    let report = db.run_rule_set(&fresh_rules, ReportLevel::TimeOnly, None);
+    assert_eq!(report.num_matches("cached-snapshot"), 2);
+    assert_eq!(table_rows(&db, output), vec![vec![v(20)], vec![v(22)]]);
 }

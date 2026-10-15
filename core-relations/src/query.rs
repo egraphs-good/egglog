@@ -73,8 +73,30 @@ impl RuleSet {
             .get(plan.actions())
             .expect("action must exist")
             .clone();
+        let mut plan = plan.clone();
+        let (atoms, headers) = match &mut plan {
+            Plan::SinglePlan(plan) => (&mut plan.atoms, &mut plan.header),
+            Plan::DecomposedPlan(plan) => (&mut plan.atoms, &mut plan.header),
+        };
+        // Cached plans reuse the instructions and constraints, but refresh
+        // headers against the database when added to a ruleset. Retaining the
+        // initial rows here would keep an obsolete snapshot alive indefinitely.
+        for header in headers {
+            header.subset = crate::Subset::empty().into();
+        }
+        // Dense ranges own no row storage. Avoid copying atom metadata unless
+        // there is a sparse snapshot to release, and leave the original ruleset
+        // intact so it can still be executed.
+        if atoms
+            .iter()
+            .any(|(_, atom)| matches!(atom.constraints.subset, SharedHeaderSubset::Sparse(_)))
+        {
+            for (_, atom) in Arc::make_mut(atoms).iter_mut() {
+                atom.constraints.subset = crate::Subset::empty().into();
+            }
+        }
         CachedPlan {
-            plan: plan.clone(),
+            plan,
             desc: desc.clone(),
             symbol_map: symbol_map.clone(),
             actions,
