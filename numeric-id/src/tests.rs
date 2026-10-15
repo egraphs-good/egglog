@@ -72,3 +72,45 @@ fn basic_id_vec() {
         res
     });
 }
+
+#[test]
+fn dense_id_map_clone_from_reuses_capacity_and_preserves_holes() {
+    let mut source = DenseIdMap::<Id, String>::default();
+    source.insert(Id::new(2), "two".into());
+    source.insert(Id::new(7), "seven".into());
+    let mut destination = DenseIdMap::<Id, String>::with_capacity(64);
+    destination.insert(Id::new(20), "old".into());
+    let pointer = destination.data.as_ptr();
+    let capacity = destination.capacity();
+    destination.clear();
+    destination.clone_from(&source);
+    assert_eq!(destination, source);
+    assert_eq!(destination.data.as_ptr(), pointer);
+    assert_eq!(destination.capacity(), capacity);
+
+    destination.clone_from(&DenseIdMap::default());
+    assert_eq!(destination.n_ids(), 0);
+    assert_eq!(destination.data.as_ptr(), pointer);
+    assert_eq!(destination.capacity(), capacity);
+}
+
+#[test]
+fn id_vec_clone_from_reuses_capacity() {
+    let mut source = IdVec::<Id, String>::default();
+    source.push("first".into());
+    source.push("second".into());
+    let mut destination = IdVec::<Id, String>::default();
+    destination.resize_with(64, || "old".into());
+    let pointer = destination.data.as_ptr();
+    let capacity = destination.capacity();
+    destination.clear();
+    destination.clone_from(&source);
+    assert_eq!(destination.data, source.data);
+    assert_eq!(destination.data.as_ptr(), pointer);
+    assert_eq!(destination.capacity(), capacity);
+
+    destination.clone_from(&IdVec::default());
+    assert_eq!(destination.len(), 0);
+    assert_eq!(destination.data.as_ptr(), pointer);
+    assert_eq!(destination.capacity(), capacity);
+}

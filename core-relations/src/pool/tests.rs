@@ -1,6 +1,104 @@
 use std::{cell::RefCell, mem, rc::Rc};
 
-use super::{Clear, InPoolSet, Pool, PoolSet};
+use super::{Clear, InPoolSet, Pool, PoolSet, PoolState, Pooled, ReusableBitSet, with_pool_set};
+
+#[test]
+fn bitset_pool_retains_allocation_and_restores_logical_length() {
+    let pool = with_pool_set(|ps| ps.get_pool::<ReusableBitSet>());
+    pool.clear();
+    let mut source = Pooled::new(ReusableBitSet::default());
+    source.grow(17);
+    source.set_range(3..9, true);
+
+    let mut spare = pool.get();
+    spare.grow(4097);
+    spare.set(4096, true);
+    let pointer = spare.as_slice().as_ptr();
+    let bytes = spare.bytes();
+    assert_eq!(bytes, 1024);
+    drop(spare);
+    assert_eq!(pool.data.borrow().data.len(), 1);
+    assert_eq!(pool.data.borrow().bytes, bytes);
+
+    let cloned = Pooled::cloned(&source);
+    assert_eq!(cloned.len(), 17);
+    assert_eq!(
+        cloned.ones().collect::<Vec<_>>(),
+        (3..9).collect::<Vec<_>>()
+    );
+    assert_eq!(cloned.as_slice().as_ptr(), pointer);
+    assert_eq!(cloned.bytes(), bytes);
+    assert_eq!(pool.data.borrow().bytes, 0);
+    drop(cloned);
+    assert_eq!(pool.data.borrow().bytes, bytes);
+
+    let mut reused = pool.get();
+    assert_eq!(reused.len(), 0);
+    assert!(reused.is_clear());
+    reused.grow(5);
+    assert_eq!(reused.len(), 5);
+    assert!(reused.is_clear());
+    assert_eq!(reused.as_slice().as_ptr(), pointer);
+    reused.grow(4097);
+    assert!(
+        reused.is_clear(),
+        "bits from the previous owner survived reuse"
+    );
+}
+
+#[test]
+fn bitset_pool_budget_counts_retained_capacity_after_shrinking() {
+    let mut bitset = ReusableBitSet::default();
+    bitset.grow(257);
+    let bytes = bitset.bytes();
+    assert_eq!(bytes, 64);
+    bitset.clone_from(&ReusableBitSet::default());
+    assert_eq!(bitset.len(), 0);
+    assert_eq!(bitset.bytes(), bytes);
+
+    let mut too_small = PoolState::new(bytes - 1);
+    too_small.push(bitset.clone());
+    // A fresh clone of an empty value owns no allocation.
+    assert!(too_small.data.is_empty());
+    too_small.push(bitset);
+    assert!(too_small.data.is_empty());
+    assert_eq!(too_small.bytes, 0);
+
+    let mut bounded = PoolState::new(bytes);
+    for _ in 0..2 {
+        let mut bitset = ReusableBitSet::default();
+        bitset.grow(257);
+        bounded.push(bitset);
+    }
+    assert_eq!(bounded.data.len(), 1);
+    assert_eq!(bounded.bytes, bytes);
+    let recycled = bounded.pop();
+    assert_eq!(recycled.len(), 0);
+    assert_eq!(recycled.bytes(), bytes);
+    assert_eq!(bounded.bytes, 0);
+}
+
+#[test]
+fn bitset_growth_and_set_operations_preserve_logical_contents() {
+    let mut left = ReusableBitSet::default();
+    left.grow(5);
+    left.set(2, true);
+    let mut right = ReusableBitSet::default();
+    right.grow(513);
+    right.set(512, true);
+    left.union_with(&right);
+    assert_eq!(left.len(), 513);
+    assert_eq!(left.ones().collect::<Vec<_>>(), vec![2, 512]);
+    assert_eq!(left.bytes(), 128);
+    left.symmetric_difference_with(&right);
+    assert_eq!(left.ones().collect::<Vec<_>>(), vec![2]);
+    left.clear();
+    assert_eq!(left.len(), 513);
+    assert!(left.is_clear());
+    Clear::clear(&mut left);
+    assert_eq!(left.len(), 0);
+    assert_eq!(left.bytes(), 128);
+}
 
 #[test]
 fn pooled_does_not_drop() {

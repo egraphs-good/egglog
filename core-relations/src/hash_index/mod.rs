@@ -211,7 +211,17 @@ impl Clone for SubsetTable {
     fn clone(&self) -> Self {
         SubsetTable {
             keys: self.keys.clone(),
-            hash: Pooled::cloned(&self.hash),
+            hash: Pooled::cloned_with(&self.hash, |target, source| {
+                if target.capacity() < source.len() {
+                    *target = source.clone();
+                    return;
+                }
+                // HashTable's default clone_from replaces its bucket allocation.
+                target.reserve(source.len(), |entry| entry.hash);
+                for entry in source.iter() {
+                    target.insert_unique(entry.hash, entry.clone(), |entry| entry.hash);
+                }
+            }),
         }
     }
 }
@@ -413,7 +423,15 @@ fn subset_partition<'a>(subset: SubsetRef<'a>, start: usize, end: usize) -> Subs
 impl Clone for ColumnIndexShard {
     fn clone(&self) -> Self {
         ColumnIndexShard {
-            table: Pooled::cloned(&self.table),
+            table: Pooled::cloned_with(&self.table, |target, source| {
+                if target.capacity() < source.len() {
+                    target.clone_from(source);
+                    return;
+                }
+                // IndexMap::clone_from replaces its internal hash table.
+                target.reserve(source.len());
+                target.extend(source.iter().map(|(key, value)| (*key, value.clone())));
+            }),
             subsets: self.subsets.clone(),
         }
     }

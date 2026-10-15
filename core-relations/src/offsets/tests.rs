@@ -29,6 +29,30 @@ fn subset_push() {
     assert_eq!(collect(&s, &elts), vec![1, 2, 3, 7]);
 }
 
+#[test]
+fn subset_clone_reuses_pooled_vector_allocation() {
+    use super::SortedOffsetVector;
+    use crate::pool::Pooled;
+
+    let pool = with_pool_set(|ps| ps.get_pool::<SortedOffsetVector>());
+    pool.clear();
+    let source = Subset::Sparse(Pooled::new(SortedOffsetVector(vec![o(1), o(3), o(7)])));
+
+    let mut spare = pool.get();
+    spare.fill_from_dense(&OffsetRange::new(o(0), o(64)));
+    let pointer = spare.0.as_ptr();
+    let capacity = spare.0.capacity();
+    drop(spare);
+
+    let cloned = source.clone();
+    let Subset::Sparse(rows) = &cloned else {
+        panic!("cloning a sparse subset changed its representation");
+    };
+    assert_eq!(rows.slice().inner(), &[o(1), o(3), o(7)]);
+    assert_eq!(rows.0.capacity(), capacity);
+    assert_eq!(rows.0.as_ptr(), pointer);
+}
+
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic]

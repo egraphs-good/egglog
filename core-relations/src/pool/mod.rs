@@ -14,8 +14,10 @@ use crate::{
     AtomId,
     numeric_id::{DenseIdMap, IdVec},
 };
-use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
+
+mod bitset;
+pub(crate) use bitset::ReusableBitSet;
 
 use crate::{
     RowId,
@@ -136,18 +138,6 @@ impl<T> Clear for IndexSet<T> {
     }
     fn bytes(&self) -> usize {
         self.capacity() * (mem::size_of::<u64>() + mem::size_of::<T>())
-    }
-}
-
-impl Clear for FixedBitSet {
-    fn clear(&mut self) {
-        self.clone_from(&Default::default());
-    }
-    fn reuse(&self) -> bool {
-        !self.is_empty()
-    }
-    fn bytes(&self) -> usize {
-        self.len() / 8
     }
 }
 
@@ -322,9 +312,16 @@ impl<T: Clear + InPoolSet<PoolSet> + 'static> Pooled<T> {
 
 impl<T: Clear + Clone + InPoolSet<PoolSet>> Pooled<T> {
     pub(crate) fn cloned(this: &Pooled<T>) -> Pooled<T> {
-        let mut res = with_pool_set(|ps| ps.get::<T>());
-        res.clone_from(this);
-        res
+        Self::cloned_with(this, T::clone_from)
+    }
+}
+
+impl<T: Clear + InPoolSet<PoolSet>> Pooled<T> {
+    /// Copy into an empty pooled value using a storage-preserving operation.
+    pub(crate) fn cloned_with(this: &Pooled<T>, clone: impl FnOnce(&mut T, &T)) -> Pooled<T> {
+        let mut result = with_pool_set(|ps| ps.get::<T>());
+        clone(&mut result, this);
+        result
     }
 }
 
@@ -430,7 +427,7 @@ pool_set! {
         offset_vec: SortedOffsetVector [ 1 << 20 ],
         column_index: IndexMap<Value, BufferedSubset> [ 1 << 20 ],
         constraints: Vec<Constraint> [ 1 << 20 ],
-        bitsets: FixedBitSet [ 1 << 20 ],
+        bitsets: ReusableBitSet [ 1 << 20 ],
         instrs: Vec<Instr> [ 1 << 20 ],
         tuple_indexes: HashTable<TableEntry<BufferedSubset>> [ 1 << 20 ],
         staged_outputs: HashTable<SwTableEntry> [ 1 << 25 ],

@@ -27,6 +27,114 @@ fn subset_rows(subset: SubsetRef<'_>) -> Vec<usize> {
 }
 
 #[test]
+fn tuple_index_clone_reuses_pooled_hash_buckets() {
+    use super::{BufferedSubset, SubsetTable, TableEntry};
+    use crate::pool::with_pool_set;
+    use hashbrown::HashTable;
+
+    let mut source = SubsetTable::new(1);
+    let hash = 7;
+    let key = source.keys.add_row(&[v(42)]);
+    source.hash.insert_unique(
+        hash,
+        TableEntry {
+            hash,
+            key,
+            vals: BufferedSubset::singleton(RowId::new(9)),
+        },
+        |entry| entry.hash,
+    );
+    let other_key = source.keys.add_row(&[v(43)]);
+    source.hash.insert_unique(
+        hash,
+        TableEntry {
+            hash,
+            key: other_key,
+            vals: BufferedSubset::singleton(RowId::new(21)),
+        },
+        |entry| entry.hash,
+    );
+
+    let pool = with_pool_set(|ps| ps.get_pool::<HashTable<TableEntry<BufferedSubset>>>());
+    pool.clear();
+    let mut spare = pool.get();
+    spare.reserve(1024, |entry| entry.hash);
+    spare.insert_unique(
+        hash,
+        source.hash.find(hash, |_| true).unwrap().clone(),
+        |entry| entry.hash,
+    );
+    let pointer = spare.find(hash, |_| true).unwrap() as *const _;
+    let capacity = spare.capacity();
+    drop(spare);
+
+    let cloned = source.clone();
+    drop(source);
+    assert_eq!(cloned.hash.capacity(), capacity);
+    assert_eq!(cloned.hash.len(), 2);
+    assert_eq!(
+        cloned.hash.find(hash, |_| true).unwrap() as *const _,
+        pointer
+    );
+    for (value, row) in [(v(42), 9), (v(43), 21)] {
+        let entry = cloned
+            .hash
+            .find(hash, |entry| {
+                // SAFETY: every entry's key was added to the cloned RowBuffer.
+                unsafe { cloned.keys.get_row_unchecked(entry.key) == [value] }
+            })
+            .unwrap();
+        assert_eq!(entry.hash, hash);
+        assert!(matches!(&entry.vals, BufferedSubset::Dense(range)
+            if range.start == RowId::new(row) && range.end == RowId::new(row + 1)));
+    }
+}
+
+#[test]
+fn column_index_clone_reuses_both_allocations_and_preserves_order() {
+    use super::{BufferedSubset, ColumnIndexShard};
+    use crate::{common::IndexMap, pool::with_pool_set};
+
+    let mut source = ColumnIndexShard {
+        table: with_pool_set(|ps| ps.get()),
+        subsets: Default::default(),
+    };
+    source.merge_sorted_pairs(&[
+        (v(9), RowId::new(1)),
+        (v(9), RowId::new(4)),
+        (v(3), RowId::new(8)),
+    ]);
+    let pool = with_pool_set(|ps| ps.get_pool::<IndexMap<Value, BufferedSubset>>());
+    pool.clear();
+    let mut spare = pool.get();
+    spare.reserve(1024);
+    spare.insert(v(0), BufferedSubset::empty());
+    let pointer = spare.get_index(0).unwrap().0 as *const Value;
+    let capacity = spare.capacity();
+    drop(spare);
+
+    let cloned = source.clone();
+    drop(source);
+    assert_eq!(cloned.table.capacity(), capacity);
+    assert_eq!(
+        cloned.table.get_index(0).unwrap().0 as *const Value,
+        pointer
+    );
+    assert_eq!(
+        cloned.table.keys().copied().collect::<Vec<_>>(),
+        vec![v(9), v(3)]
+    );
+    assert_eq!(
+        subset_rows(cloned.table[&v(9)].as_ref(&cloned.subsets)),
+        vec![1, 4]
+    );
+    assert_eq!(
+        subset_rows(cloned.table[&v(3)].as_ref(&cloned.subsets)),
+        vec![8]
+    );
+}
+
+#[test]
 fn coarse_index_scan_partitions_are_bounded() {
     assert_eq!(coarse_index_scan_partition_size(0, 0), 256);
     assert_eq!(coarse_index_scan_partition_size(1_000, 4), 256);

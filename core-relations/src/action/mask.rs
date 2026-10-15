@@ -2,18 +2,17 @@
 
 use std::ops::Range;
 
-use fixedbitset::FixedBitSet;
 use smallvec::SmallVec;
 
 use crate::{
     PoolSet,
-    pool::{InPoolSet, Pool, Pooled},
+    pool::{InPoolSet, Pool, Pooled, ReusableBitSet},
 };
 
 /// A subset of offsets that are still active.
 #[derive(Debug)]
 pub(crate) struct Mask {
-    data: Pooled<FixedBitSet>,
+    data: Pooled<ReusableBitSet>,
 }
 
 impl Clone for Mask {
@@ -40,7 +39,7 @@ impl Clone for Mask {
 
 impl Mask {
     pub(super) fn new(range: Range<usize>, ps: &PoolSet) -> Mask {
-        let mut data = ps.get::<FixedBitSet>();
+        let mut data = ps.get::<ReusableBitSet>();
         data.grow(range.end);
         data.set_range(range, true);
         Mask { data }
@@ -258,7 +257,7 @@ pub(crate) struct MaskIterDynamicSource<'slice, 'mask, T> {
     counter: usize,
     data: SmallVec<[ValueSource<'slice, T>; 4]>,
     pool: Pool<Vec<T>>,
-    mask: &'mask mut FixedBitSet,
+    mask: &'mask mut ReusableBitSet,
 }
 
 // NB: We could get this to work by passing references as well. This way is just
@@ -305,7 +304,7 @@ where
 
 pub(crate) struct MaskIterUnit<'mask> {
     counter: usize,
-    mask: &'mask mut FixedBitSet,
+    mask: &'mask mut ReusableBitSet,
 }
 
 impl<'mask> MaskIter for MaskIterUnit<'mask> {
@@ -335,7 +334,7 @@ impl<'mask> MaskIter for MaskIterUnit<'mask> {
 pub(crate) struct MaskIterBase<'slice, 'mask, T> {
     counter: usize,
     slice: &'slice [T],
-    mask: &'mask mut FixedBitSet,
+    mask: &'mask mut ReusableBitSet,
 }
 
 impl<'slice, T> MaskIter for MaskIterBase<'slice, '_, T> {

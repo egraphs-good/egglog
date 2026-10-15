@@ -61,10 +61,23 @@ impl NumericId for usize {
 ///
 /// This mapping is _dense_: it stores a flat array indexed by `K::index()`,
 /// with no hashing. For sparse mappings, use a HashMap.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct DenseIdMap<K, V> {
     data: Vec<Option<V>>,
     _marker: PhantomData<K>,
+}
+
+impl<K, V: Clone> Clone for DenseIdMap<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            _marker: PhantomData,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.data.clone_from(&source.data);
+    }
 }
 
 impl<K: NumericId + Debug, V: Debug> Debug for DenseIdMap<K, V> {
@@ -300,6 +313,10 @@ impl<K, V: Clone> Clone for IdVec<K, V> {
             data: self.data.clone(),
             _marker: std::marker::PhantomData,
         }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.data.clone_from(&source.data);
     }
 }
 
