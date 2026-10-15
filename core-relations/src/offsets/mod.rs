@@ -297,8 +297,10 @@ impl SubsetRef<'_> {
     pub(crate) fn to_owned(self, pool: &Pool<SortedOffsetVector>) -> Subset {
         match self {
             SubsetRef::Dense(r) => Subset::Dense(r),
-            SubsetRef::Sparse(s) if s.inner().is_empty() => Subset::empty(),
             SubsetRef::Sparse(s) => {
+                if let Some(range) = small_dense_range(s.inner()) {
+                    return Subset::Dense(range);
+                }
                 let mut vec = pool.get();
                 vec.extend_nonoverlapping(s);
                 Subset::Sparse(vec)
@@ -341,6 +343,18 @@ impl SubsetRef<'_> {
                 next
             }
         }
+    }
+}
+
+fn small_dense_range(rows: &[RowId]) -> Option<OffsetRange> {
+    match rows {
+        [] => Some(OffsetRange::new(RowId::new(0), RowId::new(0))),
+        // The MAX sentinel has no representable exclusive endpoint.
+        [row] => row
+            .rep()
+            .checked_add(1)
+            .map(|end| OffsetRange::new(*row, RowId::new(end))),
+        _ => None,
     }
 }
 
@@ -410,12 +424,14 @@ impl Subset {
             }
             Subset::Sparse(offs) => offs.retain(filter),
         }
-        self.normalize_empty();
+        self.normalize_small();
     }
 
-    fn normalize_empty(&mut self) {
-        if matches!(self, Subset::Sparse(rows) if rows.0.is_empty()) {
-            *self = Subset::empty();
+    fn normalize_small(&mut self) {
+        if let Subset::Sparse(rows) = self
+            && let Some(range) = small_dense_range(&rows.0)
+        {
+            *self = Subset::Dense(range);
         }
     }
 
@@ -560,7 +576,7 @@ impl Subset {
                 }
             }
         }
-        self.normalize_empty();
+        self.normalize_small();
     }
 
     /// Append the given row id to the Subset.

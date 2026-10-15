@@ -226,21 +226,34 @@ fn empty_sparse_results_stay_dense() {
 }
 
 #[test]
-fn singleton_sparse_results_preserve_chained_duplicate_intersections() {
-    // Sparse/sparse intersections consume matching occurrences, while a dense
-    // range keeps every occurrence it covers. Canonicalizing singleton sparse
-    // results to dense would change the next intersection with duplicates.
+fn singleton_sparse_results_stay_dense_under_set_intersections() {
     let pool = with_pool_set(|ps| ps.get_pool());
     let mut retained = sparse_rows(&[3, 5]);
     retained.retain(|row| row == o(3));
     let mut intersected = sparse_rows(&[1, 3]);
     intersected.intersect(SubsetRef::Dense(OffsetRange::new(o(3), o(4))), &pool);
+    let mut intersected_sparse = sparse_rows(&[1, 3]);
+    intersected_sparse.intersect(sparse_rows(&[3, 5]).as_ref(), &pool);
+    let mut intersected_dense = Subset::Dense(OffsetRange::new(o(3), o(4)));
+    intersected_dense.intersect(sparse_rows(&[1, 3, 5]).as_ref(), &pool);
     let owned = sparse_rows(&[3]).as_ref().to_owned(&pool);
-    for singleton in [retained, intersected, owned] {
-        assert!(!singleton.is_dense());
-        let mut duplicates = sparse_rows(&[3, 3]);
-        duplicates.intersect(singleton.as_ref(), &pool);
-        assert_eq!(row_ids(&duplicates), vec![3]);
+    for singleton in [
+        retained,
+        intersected,
+        intersected_sparse,
+        intersected_dense,
+        owned,
+    ] {
+        assert!(singleton.is_dense());
+        assert_eq!(row_ids(&singleton), vec![3]);
+        let mut containing = sparse_rows(&[1, 3, 5]);
+        containing.intersect(singleton.as_ref(), &pool);
+        assert!(containing.is_dense());
+        assert_eq!(row_ids(&containing), vec![3]);
+        let mut disjoint = sparse_rows(&[2, 4]);
+        disjoint.intersect(singleton.as_ref(), &pool);
+        assert!(disjoint.is_dense());
+        assert_eq!(disjoint.size(), 0);
     }
 }
 
@@ -286,7 +299,7 @@ fn intersect_small_multisets_and_dense_ranges() {
                 dense.intersect(sparse_rows(left).as_ref(), &pool);
                 assert_eq!(row_ids(&sparse), expected, "{left:?} intersect {range:?}");
                 assert_eq!(row_ids(&dense), expected, "{range:?} intersect {left:?}");
-                if expected.is_empty() {
+                if expected.len() <= 1 {
                     assert!(sparse.is_dense());
                     assert!(dense.is_dense());
                 }
@@ -316,4 +329,8 @@ fn intersect_skewed_sparse_duplicates_and_maximum_row_id() {
     let mut sparse = sparse_rows(&[max]);
     sparse.intersect(sparse_rows(&[max]).as_ref(), &pool);
     assert_eq!(row_ids(&sparse), vec![max]);
+    assert!(!sparse.is_dense(), "MAX has no dense exclusive endpoint");
+    let owned = sparse.as_ref().to_owned(&pool);
+    assert_eq!(row_ids(&owned), vec![max]);
+    assert!(!owned.is_dense());
 }
