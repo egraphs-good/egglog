@@ -9,7 +9,7 @@ use egglog_reports::ReportLevel;
 use crate::numeric_id::NumericId;
 
 use crate::{
-    PlanStrategy, Subset,
+    PlanStrategy,
     action::WriteVal,
     common::Value,
     free_join::{
@@ -2056,7 +2056,7 @@ fn fused_cover_partition_fixture(
                 .find(|header| header.atom == facts_atom)
                 .unwrap();
             assert_eq!(cover_header.subset.size(), expected);
-            let Subset::Dense(range) = &cover_header.subset else {
+            let crate::SubsetRef::Dense(range) = cover_header.subset.as_ref() else {
                 panic!("sorted timestamp filter must produce a dense suffix")
             };
             assert!(
