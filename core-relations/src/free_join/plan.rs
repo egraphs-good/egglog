@@ -92,6 +92,9 @@ define_id!(pub(crate) MatId, u32, "An identifier for materialization within a de
 pub(crate) enum MatScanMode {
     Full,
     KeyOnly,
+    /// Like `KeyOnly`, but earlier stages may bind some of `bind`, which lists every key
+    /// column in order: it yields the keys matching those, and tests membership once all are.
+    Semijoin,
     Value(SmallVec<[Variable; 16]>),
     Lookup(SmallVec<[Variable; 16]>),
 }
@@ -319,6 +322,8 @@ pub(crate) struct JoinStageData {
     /// Analyze only blocks that execute, then reuse their immutable layout.
     /// Catalog handles and arena addresses belong to each execution instead.
     pub(super) prepared_layout: OnceLock<Option<Box<super::prepared_index::PreparedJoinLayout>>>,
+    /// The DVO fence of `instrs`, from [`super::join_tail::semijoin_fence`].
+    pub(super) fence: usize,
 }
 
 impl std::ops::Deref for JoinStages {
@@ -338,6 +343,7 @@ impl JoinStages {
 
     pub(crate) fn new(instrs: Vec<JoinStage>) -> Self {
         Self(Arc::new(JoinStageData {
+            fence: super::join_tail::semijoin_fence(&instrs),
             instrs,
             families: Box::new([]),
             prepared_layout: OnceLock::new(),
@@ -1003,9 +1009,8 @@ fn plan_single_bag(
     let mut stripped_bag = bag.clone();
 
     // Add prologue and epilogue instructions to look up previous materialized bags
-    // These are constraints from children blocks. If there's only one such block, it can be the header.
-    // Otherwise, they have to be epilogue instructions doing filtering at the end, which is less efficient.
-    let mut prologue = None;
+    // Later messages become reorderable semijoins, lookups, or both.
+    let mut prologue = Vec::new();
     let mut epilogue = Vec::new();
     for (i, prev_block) in blocks.iter().enumerate().rev() {
         if prev_block.1.msg_vars.is_empty() {
@@ -1019,7 +1024,8 @@ fn plan_single_bag(
                 .all(|var| bag.vars.contains_key(*var))
         {
             has_block_contributed[i] = true;
-            if prologue.is_none() {
+            let (first, msg) = (prologue.is_empty(), &prev_block.1.msg_vars);
+            if msg.iter().any(|var| stripped_bag.vars.contains_key(*var)) {
                 let bind = prev_block
                     .1
                     .msg_vars
@@ -1029,7 +1035,9 @@ fn plan_single_bag(
                     .collect();
                 let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
                 for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
-                    let vinfo = &bag.vars[*var];
+                    let Some(vinfo) = stripped_bag.vars.get(*var) else {
+                        continue;
+                    };
                     for occ in vinfo.occurrences.iter() {
                         let isect = match to_intersect
                             .iter_mut()
@@ -1057,17 +1065,22 @@ fn plan_single_bag(
                     }
                 }
 
-                prologue = Some(JoinStage::FusedIntersectMat {
+                prologue.push(JoinStage::FusedIntersectMat {
                     cover: MatId::from_usize(i),
-                    mode: MatScanMode::KeyOnly,
+                    mode: if first {
+                        MatScanMode::KeyOnly
+                    } else {
+                        MatScanMode::Semijoin
+                    },
                     bind,
                     to_intersect,
                 });
-
+            }
+            if first {
                 stripped_bag
                     .vars
                     .retain(|var, _vinfo| !prev_block.1.msg_vars.contains(&var));
-            } else {
+            } else if !msg.iter().all(|var| stripped_bag.vars.contains_key(*var)) {
                 epilogue.push(JoinStage::FusedIntersectMat {
                     cover: MatId::from_usize(i),
                     mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),

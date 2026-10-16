@@ -1,0 +1,14 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((ab 1)
+ (ax 2)
+ (ay 2)
+ (bc 1)
+ (ca 1)
+ (found 2)
+ (rt 2)
+ (st 2)
+ (xr 2)
+ (ys 2))
