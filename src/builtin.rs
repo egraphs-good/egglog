@@ -425,6 +425,17 @@ pub(crate) fn normalized_signature(
         None => return Err("missing builtin typing form".into()),
     };
     let mut signature = signature.clone();
+    if signature
+        .equality_type_params
+        .windows(2)
+        .any(|w| w[0] >= w[1])
+        || signature
+            .equality_type_params
+            .iter()
+            .any(|i| *i as usize >= signature.type_params.len())
+    {
+        return Err("invalid equality type parameter indices".into());
+    }
     for label in &mut signature.type_params {
         label.clear();
     }
@@ -1224,6 +1235,18 @@ impl TypeInfo {
         if self.builtin_owners.get(key) != Some(family) {
             return Err("builtin definition belongs to another family".into());
         }
+        for declaration in &definition.declarations {
+            if let Some(pb::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind
+                && let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing
+                && signature.equality_type_params.iter().any(|i| {
+                    parameters
+                        .get(*i as usize)
+                        .is_none_or(|sort| !sort.is_eq_sort())
+                })
+            {
+                return Err("builtin type parameter requires an equality sort".into());
+            }
+        }
         let mut resolved = vec![None; definition.sorts.len()];
         fn resolve(
             index: usize,
@@ -1490,6 +1513,14 @@ impl TypeInfo {
                 }
                 if substitution.iter().any(Option::is_none) {
                     return Err("undetermined builtin type parameter".into());
+                }
+                if signature.equality_type_params.iter().any(|i| {
+                    !matches!(
+                        arena[substitution[*i as usize].unwrap() as usize].kind,
+                        Some(pb::sort::Kind::Eq(_))
+                    )
+                }) {
+                    return Err("builtin type parameter requires an equality sort".into());
                 }
             }
             pb::host_primitive::Typing::Application(_) => {

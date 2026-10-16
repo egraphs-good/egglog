@@ -192,6 +192,7 @@ impl Presort for SetSort {
                             typing: Some(pb::host_primitive::Typing::Signature(
                                 pb::GenericSignature {
                                     type_params: vec!["T".into()],
+                                    equality_type_params: vec![],
                                     inputs: inputs
                                         .iter()
                                         .map(|(name, sort)| pb::Arg {

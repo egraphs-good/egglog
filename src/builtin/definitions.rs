@@ -1356,6 +1356,17 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                 if substitution.len() != parameters {
                     return Err("default call does not determine every type parameter".into());
                 }
+                if let Some(pb::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind
+                    && let Some(pb::host_primitive::Typing::Signature(signature)) =
+                        &primitive.typing
+                    && signature.equality_type_params.iter().any(|i| {
+                        substitution.get(i).is_none_or(|sort| {
+                            !matches!(p.sorts[*sort as usize].kind, Some(pb::sort::Kind::Eq(_)))
+                        })
+                    })
+                {
+                    return Err("default type parameter requires an equality sort".into());
+                }
             }
             pb::node::Kind::Union(u) => {
                 for member in &u.members {
@@ -1576,6 +1587,13 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                     let Some(pb::host_primitive::Typing::Signature(s)) = &h.typing else {
                         return Err("unsupported binding signature".into());
                     };
+                    if s.equality_type_params.windows(2).any(|w| w[0] >= w[1])
+                        || s.equality_type_params
+                            .iter()
+                            .any(|i| *i as usize >= s.type_params.len())
+                    {
+                        return Err("invalid equality type parameter indices".into());
+                    }
                     (
                         &s.inputs,
                         s.output.ok_or("missing signature result")?,
@@ -1629,7 +1647,10 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 .map(|p| p.core_input)
                 .chain(v.receiver.map(Some))
                 .collect::<Vec<_>>();
-            let effective = view_inputs(inputs, tail, v.tail_repetitions, &slots)?;
+            let effective = view_inputs(inputs, tail, v.tail_repetitions, v.receiver, &slots)?;
+            if v.tail_repetitions.is_none() && effective.len() > inputs.len() && kind != K::Method {
+                return Err("only a method can consume a tail receiver".into());
+            }
             if kind == K::Initializer && owner != Some(output) {
                 return Err("initializer result differs from owner".into());
             }
@@ -1644,7 +1665,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                     return Err("empty Python parameter".into());
                 }
                 if v.tail_repetitions.is_none()
-                    && slot == inputs.len()
+                    && slot == effective.len()
                     && (position + 1 != v.params.len() || param.default_expr.is_some())
                 {
                     return Err("invalid Python tail parameter".into());
@@ -1687,7 +1708,13 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                 .map(|p| p.core_input)
                 .chain(v.receiver.map(|r| r.core_input))
                 .collect::<Vec<_>>();
-            let effective = view_inputs(inputs, tail, v.tail_repetitions, &slots)?;
+            let effective = view_inputs(
+                inputs,
+                tail,
+                v.tail_repetitions,
+                v.receiver.and_then(|r| r.core_input),
+                &slots,
+            )?;
             if let Some(r) = v.receiver
                 && (r.core_input.is_none()
                     || effective.get(r.core_input.unwrap() as usize).copied() != owner)
@@ -1697,7 +1724,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
             for (position, param) in v.params.iter().enumerate() {
                 if param.name.is_empty()
                     || (v.tail_repetitions.is_none()
-                        && param.core_input == Some(inputs.len() as u32)
+                        && param.core_input == Some(effective.len() as u32)
                         && position + 1 != v.params.len())
                 {
                     return Err("invalid Rust parameter".into());
@@ -1750,9 +1777,14 @@ fn view_inputs(
     inputs: &[pb::Arg],
     tail: &[pb::Arg],
     repetitions: Option<u32>,
+    receiver: Option<u32>,
     slots: &[Option<u32>],
 ) -> Result<Vec<u32>, String> {
     let fixed = u32::try_from(inputs.len()).map_err(|_| "too many fixed inputs")?;
+    let consumes_tail = repetitions.is_none() && receiver == Some(fixed);
+    if consumes_tail && tail.len() != 1 {
+        return Err("tail receiver requires a homogeneous variadic signature".into());
+    }
     let count = match repetitions {
         Some(repetitions) => {
             if tail.is_empty() {
@@ -1768,7 +1800,7 @@ fn view_inputs(
                 .ok_or("view input count overflow")?
         }
         None => fixed
-            .checked_add(u32::from(!tail.is_empty()))
+            .checked_add(u32::from(!tail.is_empty()) + u32::from(consumes_tail))
             .ok_or("view input count overflow")?,
     };
     if slots.len() != count as usize {
@@ -1778,11 +1810,11 @@ fn view_inputs(
     if set.len() != slots.len() || slots.iter().any(|s| s.is_none_or(|s| s >= count)) {
         return Err("presentation must cover each core input exactly once".into());
     }
-    // An unspecialized tail is one logical parameter, never a receiver sort.
+    // The consuming receiver adds one fixed operand, followed by a logical tail.
     let effective = if repetitions.is_some() {
         count as usize
     } else {
-        inputs.len()
+        inputs.len() + usize::from(consumes_tail)
     };
     Ok(inputs
         .iter()

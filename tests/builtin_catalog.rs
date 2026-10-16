@@ -3240,10 +3240,14 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.i64.shr",
             "egglog.core.i64.sub",
             "egglog.core.i64.to_string",
+            "egglog.core.map.contains",
             "egglog.core.map.empty",
             "egglog.core.map.get",
             "egglog.core.map.insert",
+            "egglog.core.map.length",
+            "egglog.core.map.not_contains",
             "egglog.core.map.of",
+            "egglog.core.map.remove",
             "egglog.core.ne",
             "egglog.core.pair.first",
             "egglog.core.pair.make",
@@ -3263,10 +3267,19 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.string.count_matches",
             "egglog.core.string.replace",
             "egglog.core.value_eq",
+            "egglog.core.vec.append",
+            "egglog.core.vec.contains",
             "egglog.core.vec.empty",
             "egglog.core.vec.get",
+            "egglog.core.vec.length",
+            "egglog.core.vec.not_contains",
             "egglog.core.vec.of",
+            "egglog.core.vec.pop",
+            "egglog.core.vec.push",
             "egglog.core.vec.range",
+            "egglog.core.vec.remove",
+            "egglog.core.vec.set",
+            "egglog.core.vec.union",
             "test.counted"
         ]
     );
@@ -3618,7 +3631,7 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
         before
             .undescribed_family_primitives
             .iter()
-            .any(|name| name == "Vec::vec-append")
+            .any(|name| name == "Vec::unstable-vec-map")
     );
     assert!(
         !before
@@ -3741,6 +3754,407 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
                 )
                 .is_err()
             );
+        }
+    }
+}
+
+#[test]
+fn ordinary_vec_map_definitions_are_complete() {
+    let catalog = EGraph::default().type_info().builtin_catalog().unwrap();
+    for key in [
+        "egglog.core.vec.append",
+        "egglog.core.vec.union",
+        "egglog.core.vec.push",
+        "egglog.core.vec.pop",
+        "egglog.core.vec.length",
+        "egglog.core.vec.contains",
+        "egglog.core.vec.not_contains",
+        "egglog.core.vec.set",
+        "egglog.core.vec.remove",
+        "egglog.core.map.remove",
+        "egglog.core.map.length",
+        "egglog.core.map.contains",
+        "egglog.core.map.not_contains",
+    ] {
+        assert!(catalog.definitions.declarations.iter().any(|declaration| matches!(
+            &declaration.kind,
+            Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key
+        )), "missing definition {key}");
+    }
+}
+
+#[test]
+fn ordinary_vec_map_signatures_aliases_and_contexts_are_exact() {
+    let mut graph = EGraph::default();
+    let before = graph.type_info().builtin_catalog().unwrap().definitions;
+    graph
+        .parse_and_run_program(None, "(sort VI (Vec i64)) (sort MI (Map String i64))")
+        .unwrap();
+    assert_eq!(
+        graph.type_info().builtin_catalog().unwrap().definitions,
+        before
+    );
+    for (family, key, fixed, output, native) in [
+        ("vec", "push", vec![1, 0], 1, vec!["VI", "i64", "VI"]),
+        ("vec", "pop", vec![1], 1, vec!["VI", "VI"]),
+        ("vec", "length", vec![1], 2, vec!["VI", "i64"]),
+        ("vec", "contains", vec![1, 0], 3, vec!["VI", "i64", "Unit"]),
+        (
+            "vec",
+            "not_contains",
+            vec![1, 0],
+            3,
+            vec!["VI", "i64", "Unit"],
+        ),
+        (
+            "vec",
+            "set",
+            vec![1, 2, 0],
+            1,
+            vec!["VI", "i64", "i64", "VI"],
+        ),
+        ("vec", "remove", vec![1, 2], 1, vec!["VI", "i64", "VI"]),
+        ("map", "remove", vec![2, 0], 2, vec!["MI", "String", "MI"]),
+        ("map", "length", vec![2], 5, vec!["MI", "i64"]),
+        (
+            "map",
+            "contains",
+            vec![2, 0],
+            6,
+            vec!["MI", "String", "Unit"],
+        ),
+        (
+            "map",
+            "not_contains",
+            vec![2, 0],
+            6,
+            vec!["MI", "String", "Unit"],
+        ),
+    ] {
+        let canonical = format!("egglog.core.{family}.{key}");
+        let alias = format!("{family}-{}", key.replace('_', "-"));
+        let definitions = if family == "vec" {
+            VecSort::builtin_definitions()
+        } else {
+            egglog::sort::MapSort::builtin_definitions()
+        };
+        let (definition, declaration) = definitions.iter().find_map(|p| p.declarations.iter().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(h)) if h.name == canonical)).map(|d| (p, d))).unwrap();
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
+        assert_eq!(
+            signature.type_params,
+            if family == "vec" {
+                vec!["T"]
+            } else {
+                vec!["K", "V"]
+            }
+        );
+        assert_eq!(
+            signature.inputs.iter().map(|a| a.sort).collect::<Vec<_>>(),
+            fixed,
+            "{canonical}"
+        );
+        assert_eq!(signature.output, Some(output));
+        assert!(signature.varargs.is_empty());
+        assert!(signature.equality_type_params.is_empty());
+        let bindings = declaration.bindings.as_ref().unwrap();
+        assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
+        let python = &bindings.python.as_ref().unwrap().views[0];
+        let rust = &bindings.rust.as_ref().unwrap().views[0];
+        assert_eq!(python.path, [key]);
+        assert_eq!(rust.path, [key]);
+        assert_eq!(python.receiver, Some(0));
+        assert_eq!(rust.receiver.as_ref().unwrap().core_input, Some(0));
+        assert!(rust.receiver.as_ref().unwrap().borrowed);
+        assert_eq!(
+            python
+                .params
+                .iter()
+                .map(|p| p.core_input.unwrap())
+                .collect::<Vec<_>>(),
+            (1..fixed.len() as u32).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rust.params
+                .iter()
+                .map(|p| p.core_input.unwrap())
+                .collect::<Vec<_>>(),
+            (1..fixed.len() as u32).collect::<Vec<_>>()
+        );
+        builtin::definitions::reconcile_declarations(definition, &mut proto::Program::default())
+            .unwrap();
+        let native = native
+            .iter()
+            .map(|name| graph.get_sort_by_name(name).unwrap().clone())
+            .collect::<Vec<_>>();
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            assert_eq!(
+                ResolvedCall::from_resolution(
+                    &canonical,
+                    &native,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic
+                )
+                .unwrap(),
+                ResolvedCall::from_resolution(
+                    &alias,
+                    &native,
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic
+                )
+                .unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn vec_tail_receiver_and_equality_restriction_are_exact() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(
+            None,
+            "(sort A) (sort VI (Vec i64)) (sort VA (Vec A)) (sort VVA (Vec VA))",
+        )
+        .unwrap();
+    for (name, equality) in [("VI", false), ("VA", true), ("VVA", false)] {
+        let vector = graph.get_sort_by_name(name).unwrap().clone();
+        assert_eq!(
+            graph
+                .type_info()
+                .instantiate_builtin("egglog.core.vec.union", &vector)
+                .is_ok(),
+            equality
+        );
+        for arity in [0, 1, 3] {
+            let sorts = vec![vector.clone(); arity + 1];
+            for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+                assert_eq!(
+                    ResolvedCall::from_resolution(
+                        "vec-append",
+                        &sorts,
+                        graph.type_info(),
+                        context,
+                        &ast::Span::Panic
+                    )
+                    .unwrap(),
+                    ResolvedCall::from_resolution(
+                        "egglog.core.vec.append",
+                        &sorts,
+                        graph.type_info(),
+                        context,
+                        &ast::Span::Panic
+                    )
+                    .unwrap(),
+                );
+                for key in ["vec-union", "egglog.core.vec.union"] {
+                    assert_eq!(
+                        ResolvedCall::from_resolution(
+                            key,
+                            &vec![vector.clone(); 3],
+                            graph.type_info(),
+                            context,
+                            &ast::Span::Panic
+                        )
+                        .is_ok(),
+                        equality && matches!(context, Context::Write | Context::Full)
+                    );
+                }
+            }
+        }
+    }
+    for definition in VecSort::builtin_definitions() {
+        let index = definition.declarations.iter().position(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(p)) if p.name == "egglog.core.vec.append" || p.name == "egglog.core.vec.union"));
+        let Some(index) = index else { continue };
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) =
+            &definition.declarations[index].kind
+        else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
+        let union = primitive.name.ends_with("union");
+        assert_eq!(signature.type_params, ["T"]);
+        assert_eq!(signature.output, Some(1));
+        assert_eq!(
+            signature.inputs.iter().map(|a| a.sort).collect::<Vec<_>>(),
+            if union { vec![1, 1] } else { vec![] }
+        );
+        assert_eq!(
+            signature.varargs.iter().map(|a| a.sort).collect::<Vec<_>>(),
+            if union { vec![] } else { vec![1] }
+        );
+        assert_eq!(
+            signature.equality_type_params,
+            if union { vec![0] } else { vec![] }
+        );
+        let mut installed = proto::Program::default();
+        builtin::definitions::reconcile_declarations(&definition, &mut installed).unwrap();
+        for mutation in 0..if union { 4 } else { 6 } {
+            let mut invalid = definition.clone();
+            let declaration = &mut invalid.declarations[index];
+            if union {
+                let Some(proto::declaration::Kind::HostPrimitive(p)) = &mut declaration.kind else {
+                    unreachable!()
+                };
+                let Some(proto::host_primitive::Typing::Signature(s)) = &mut p.typing else {
+                    unreachable!()
+                };
+                match mutation {
+                    0 => s.equality_type_params.clear(), // distinct semantic signature, not a merge
+                    1 => s.equality_type_params = vec![0, 0],
+                    2 => s.equality_type_params = vec![1],
+                    3 => {
+                        s.type_params.push("U".into());
+                        s.equality_type_params = vec![1, 0];
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                let view = &mut declaration
+                    .bindings
+                    .as_mut()
+                    .unwrap()
+                    .python
+                    .as_mut()
+                    .unwrap()
+                    .views[0];
+                match mutation {
+                    0 => view.receiver = Some(1),
+                    1 => view.params[0].core_input = Some(0),
+                    2 => view.params.clear(),
+                    3 => {
+                        view.owner.as_mut().unwrap().kind =
+                            Some(proto::binding_owner::Kind::Sort(2))
+                    }
+                    4 => view.kind = proto::PythonCallKind::Property as i32,
+                    5 => {
+                        let Some(proto::declaration::Kind::HostPrimitive(p)) =
+                            &mut declaration.kind
+                        else {
+                            unreachable!()
+                        };
+                        let Some(proto::host_primitive::Typing::Signature(s)) = &mut p.typing
+                        else {
+                            unreachable!()
+                        };
+                        s.varargs.push(s.varargs[0].clone());
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            assert!(
+                builtin::definitions::reconcile_declarations(&invalid, &mut installed.clone())
+                    .is_err(),
+                "{union} mutation {mutation}"
+            );
+            if !union || mutation != 0 {
+                assert!(
+                    builtin::definitions::reconcile_declarations(
+                        &invalid,
+                        &mut proto::Program::default()
+                    )
+                    .is_err(),
+                    "fresh {union} mutation {mutation}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn closed_defaults_enforce_exact_equality_binders_after_substitution() {
+    let definition = VecSort::builtin_definitions().into_iter().find(|p| p.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(h)) if h.name == "egglog.core.vec.union"))).unwrap();
+    for element in [
+        proto::sort::Kind::Eq("Atom".into()),
+        proto::sort::Kind::Family(proto::HostSort {
+            name: "i64".into(),
+            args: vec![],
+        }),
+        proto::sort::Kind::Family(proto::HostSort {
+            name: "Vec".into(),
+            args: vec![4],
+        }),
+    ] {
+        let valid = matches!(element, proto::sort::Kind::Eq(_));
+        let mut candidate = definition.clone();
+        let concrete = candidate.sorts.len() as u32;
+        candidate.sorts.push(proto::Sort {
+            kind: Some(element),
+            ..Default::default()
+        });
+        candidate.sorts.push(proto::Sort {
+            kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                name: "Vec".into(),
+                args: vec![concrete],
+            })),
+            ..Default::default()
+        });
+        // In the container-negative case, use a distinct closed Eq leaf.
+        if !valid
+            && matches!(&candidate.sorts[concrete as usize].kind, Some(proto::sort::Kind::Family(f)) if f.name == "Vec")
+        {
+            let leaf = candidate.sorts.len() as u32;
+            candidate.sorts.push(proto::Sort {
+                kind: Some(proto::sort::Kind::Eq("Atom".into())),
+                ..Default::default()
+            });
+            let Some(proto::sort::Kind::Family(f)) = &mut candidate.sorts[concrete as usize].kind
+            else {
+                unreachable!()
+            };
+            f.args = vec![leaf];
+        }
+        candidate.declarations.push(proto::Declaration {
+            kind: Some(proto::declaration::Kind::EqSort(proto::EqSort {
+                name: "Atom".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        candidate.nodes = vec![
+            proto::Node {
+                sort_id: concrete + 1,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::Vec(Default::default())),
+                })),
+                ..Default::default()
+            },
+            proto::Node {
+                sort_id: concrete + 1,
+                kind: Some(proto::node::Kind::Call(proto::Call {
+                    func: "egglog.core.vec.union".into(),
+                    args: vec![0, 0],
+                })),
+                ..Default::default()
+            },
+        ];
+        let declaration = candidate.declarations.iter_mut().find(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(h)) if h.name == "egglog.core.vec.union")).unwrap();
+        declaration
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python
+            .as_mut()
+            .unwrap()
+            .views[0]
+            .params[0]
+            .default_expr = Some(1);
+        let result = builtin::definitions::reconcile_declarations(
+            &candidate,
+            &mut proto::Program::default(),
+        );
+        if valid {
+            result.unwrap();
+        } else {
+            assert!(result.unwrap_err().contains("requires an equality sort"));
         }
     }
 }

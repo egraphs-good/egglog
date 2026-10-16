@@ -141,6 +141,7 @@ impl Presort for PairSort {
                                     .collect(),
                                 output: Some(output),
                                 varargs: vec![],
+                                ..Default::default()
                             },
                         )),
                     })),

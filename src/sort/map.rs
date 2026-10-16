@@ -114,6 +114,15 @@ impl Presort for MapSort {
             ("empty", "map-empty", vec![], 2),
             ("of", "map-from-pairs", vec![("entries", 4)], 2),
             ("get", "map-get", vec![("map", 2), ("key", 0)], 1),
+            ("remove", "map-remove", vec![("map", 2), ("key", 0)], 2),
+            ("length", "map-length", vec![("map", 2)], 5),
+            ("contains", "map-contains", vec![("map", 2), ("key", 0)], 6),
+            (
+                "not_contains",
+                "map-not-contains",
+                vec![("map", 2), ("key", 0)],
+                6,
+            ),
             (
                 "insert",
                 "map-insert",
@@ -123,7 +132,7 @@ impl Presort for MapSort {
         ]
         .into_iter()
         .map(|(key, alias, inputs, output)| {
-            let receiver = matches!(key, "get" | "insert");
+            let receiver = !matches!(key, "empty" | "of");
             let parameters = inputs.iter().enumerate().skip(usize::from(receiver));
             pb::Program {
                 ir_version: 1,
@@ -154,6 +163,20 @@ impl Presort for MapSort {
                         kind: Some(pb::sort::Kind::Family(pb::HostSort {
                             name: "Vec".into(),
                             args: vec![3],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "i64".into(),
+                            args: vec![],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "Unit".into(),
+                            args: vec![],
                         })),
                         ..Default::default()
                     },
@@ -199,6 +222,22 @@ impl Presort for MapSort {
                         ..Default::default()
                     },
                     pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "i64".into(),
+                            arity: 0,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "Unit".into(),
+                            arity: 0,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
                         kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
                             name: format!("egglog.core.map.{key}"),
                             typing: Some(pb::host_primitive::Typing::Signature(
@@ -213,6 +252,7 @@ impl Presort for MapSort {
                                         .collect(),
                                     output: Some(output),
                                     varargs: vec![],
+                                    ..Default::default()
                                 },
                             )),
                         })),
@@ -390,6 +430,12 @@ impl ContainerSort for MapSort {
             .type_info
             .instantiate_builtin("egglog.core.map.insert", &arc)
             .unwrap();
+        let [remove, length, contains, not_contains] =
+            ["remove", "length", "contains", "not_contains"].map(|key| {
+                eg.type_info
+                    .instantiate_builtin(&format!("egglog.core.map.{key}"), &arc)
+                    .unwrap()
+            });
 
         // The proof "term form" of a map is the flat `(map-of k0 v0 k1 v1 ...)`
         // in canonical key order (like `set-of`/`vec-of`), matching
@@ -484,11 +530,11 @@ impl ContainerSort for MapSort {
 
         add_primitive_with_validator!(eg, "map-get" [instance = get] = |xs: @MapContainer, x: #| -?> # { xs.data.get(&x).copied() }, map_get_validator);
         add_primitive_with_validator!(eg, "map-insert" [instance = insert] = |mut xs: @MapContainer, x: #, y: #| -> @MapContainer {{ xs.data.insert(x, y); xs }}, map_insert_validator);
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
+        add_primitive!(eg, "map-remove" [instance = remove] = |mut xs: @MapContainer, x: #| -> @MapContainer {{ xs.data.remove(&x);   xs }});
 
-        add_primitive_with_validator!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 }, map_length_validator);
-        add_primitive_with_validator!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) }, map_contains_validator);
-        add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
+        add_primitive_with_validator!(eg, "map-length" [instance = length] = |xs: @MapContainer| -> i64 { xs.data.len() as i64 }, map_length_validator);
+        add_primitive_with_validator!(eg, "map-contains" [instance = contains] = |xs: @MapContainer, x: #| -?> () { ( xs.data.contains_key(&x)).then_some(()) }, map_contains_validator);
+        add_primitive_with_validator!(eg, "map-not-contains" [instance = not_contains] = |xs: @MapContainer, x: #| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
     }
 
     fn reconstruct_termdag(
@@ -601,6 +647,7 @@ impl Primitive for MapOf {
                 return Err("Map helper requires a generic signature".into());
             };
             if signature.type_params.len() != parameters
+                || !signature.equality_type_params.is_empty()
                 || signature.inputs.iter().map(|a| a.sort).collect::<Vec<_>>() != fixed
                 || signature.varargs.iter().map(|a| a.sort).collect::<Vec<_>>() != tail
                 || signature.output != Some(result)

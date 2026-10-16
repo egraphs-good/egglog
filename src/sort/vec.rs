@@ -63,202 +63,240 @@ impl Presort for VecSort {
     fn builtin_definitions() -> Vec<proto::Program> {
         use proto as pb;
         [
-            ("empty", "vec-empty", vec![], vec![]),
+            ("empty", "vec-empty", vec![], vec![], 1),
+            ("of", "vec-of", vec![], vec![("values", 0)], 1),
+            ("get", "vec-get", vec![("vec", 1), ("index", 2)], vec![], 0),
+            ("range", "vec-range", vec![("end", 2)], vec![], 1),
+            ("append", "vec-append", vec![], vec![("others", 1)], 1),
             (
-                "of",
-                "vec-of",
+                "union",
+                "vec-union",
+                vec![("vec", 1), ("other", 1)],
                 vec![],
-                vec![pb::Arg {
-                    name: "values".into(),
-                    sort: 0,
-                }],
+                1,
             ),
             (
-                "get",
-                "vec-get",
-                vec![
-                    pb::Arg {
-                        name: "vec".into(),
-                        sort: 1,
-                    },
-                    pb::Arg {
-                        name: "index".into(),
-                        sort: 2,
-                    },
-                ],
+                "push",
+                "vec-push",
+                vec![("vec", 1), ("value", 0)],
                 vec![],
+                1,
+            ),
+            ("pop", "vec-pop", vec![("vec", 1)], vec![], 1),
+            ("length", "vec-length", vec![("vec", 1)], vec![], 2),
+            (
+                "contains",
+                "vec-contains",
+                vec![("vec", 1), ("value", 0)],
+                vec![],
+                3,
             ),
             (
-                "range",
-                "vec-range",
-                vec![pb::Arg {
-                    name: "end".into(),
-                    sort: 2,
-                }],
+                "not_contains",
+                "vec-not-contains",
+                vec![("vec", 1), ("value", 0)],
                 vec![],
+                3,
+            ),
+            (
+                "set",
+                "vec-set",
+                vec![("vec", 1), ("index", 2), ("value", 0)],
+                vec![],
+                1,
+            ),
+            (
+                "remove",
+                "vec-remove",
+                vec![("vec", 1), ("index", 2)],
+                vec![],
+                1,
             ),
         ]
         .into_iter()
-        .map(|(key, alias, inputs, varargs)| pb::Program {
-            ir_version: 1,
-            sorts: vec![
-                pb::Sort {
-                    kind: Some(if key == "range" {
-                        pb::sort::Kind::Family(pb::HostSort {
+        .map(|(key, alias, inputs, varargs, output)| {
+            let receiver = !matches!(key, "empty" | "of");
+            let parameters = inputs.iter().enumerate().skip(usize::from(receiver)).chain(
+                varargs
+                    .iter()
+                    .map(|arg| (inputs.len() + usize::from(key == "append"), arg)),
+            );
+            pb::Program {
+                ir_version: 1,
+                sorts: vec![
+                    pb::Sort {
+                        kind: Some(if key == "range" {
+                            pb::sort::Kind::Family(pb::HostSort {
+                                name: "i64".into(),
+                                args: vec![],
+                            })
+                        } else {
+                            pb::sort::Kind::Var(0)
+                        }),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "Vec".into(),
+                            args: vec![0],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
                             name: "i64".into(),
                             args: vec![],
-                        })
-                    } else {
-                        pb::sort::Kind::Var(0)
-                    }),
-                    ..Default::default()
-                },
-                pb::Sort {
-                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                        name: "Vec".into(),
-                        args: vec![0],
-                    })),
-                    ..Default::default()
-                },
-                pb::Sort {
-                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                        name: "i64".into(),
-                        args: vec![],
-                    })),
-                    ..Default::default()
-                },
-            ],
-            declarations: vec![
-                pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                        name: "Vec".into(),
-                        arity: 1,
-                        bindings: Some(pb::SortBindings {
-                            python: Some(pb::TypeBinding {
-                                path: vec!["egglog".into(), "builtins".into(), "Vec".into()],
-                                type_params: vec!["T".into()],
-                            }),
-                            rust: Some(pb::TypeBinding {
-                                path: vec![
-                                    "egglog_experimental".into(),
-                                    "typed".into(),
-                                    "builtins".into(),
-                                    "Vec".into(),
-                                ],
-                                type_params: vec!["T".into()],
-                            }),
-                            ..Default::default()
-                        }),
-                    })),
-                    ..Default::default()
-                },
-                pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                        name: "i64".into(),
-                        arity: 0,
+                        })),
                         ..Default::default()
-                    })),
-                    ..Default::default()
-                },
-                pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
-                        name: format!("egglog.core.vec.{key}"),
-                        typing: Some(pb::host_primitive::Typing::Signature(
-                            pb::GenericSignature {
-                                type_params: if key == "range" {
-                                    vec![]
-                                } else {
-                                    vec!["T".into()]
-                                },
-                                inputs,
-                                output: Some(if key == "get" { 0 } else { 1 }),
-                                varargs,
-                            },
-                        )),
-                    })),
-                    bindings: Some(pb::CallableBindings {
-                        python: Some(pb::PythonBindings {
-                            views: vec![pb::PythonCallable {
-                                kind: match key {
-                                    "of" => pb::PythonCallKind::Initializer,
-                                    "empty" => pb::PythonCallKind::ClassMethod,
-                                    _ => pb::PythonCallKind::Method,
-                                }
-                                .into(),
-                                path: match key {
-                                    "of" => vec![],
-                                    "empty" => vec!["empty".into()],
-                                    "range" => vec!["range".into()],
-                                    _ => vec!["__getitem__".into()],
-                                },
-                                owner: Some(pb::BindingOwner {
-                                    kind: Some(pb::binding_owner::Kind::Sort(if key == "range" {
-                                        2
-                                    } else {
-                                        1
-                                    })),
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "Unit".into(),
+                            args: vec![],
+                        })),
+                        ..Default::default()
+                    },
+                ],
+                declarations: vec![
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "Vec".into(),
+                            arity: 1,
+                            bindings: Some(pb::SortBindings {
+                                python: Some(pb::TypeBinding {
+                                    path: vec!["egglog".into(), "builtins".into(), "Vec".into()],
+                                    type_params: vec!["T".into()],
                                 }),
-                                receiver: matches!(key, "get" | "range").then_some(0),
-                                params: match key {
-                                    "of" => vec![pb::PythonParameter {
-                                        core_input: Some(0),
-                                        name: "args".into(),
-                                        default_expr: None,
-                                    }],
-                                    "get" => vec![pb::PythonParameter {
-                                        core_input: Some(1),
-                                        name: "index".into(),
-                                        default_expr: None,
-                                    }],
-                                    _ => vec![],
-                                },
-                                mutates: None,
-                                tail_repetitions: None,
-                            }],
-                        }),
-                        rust: Some(pb::RustBindings {
-                            views: vec![pb::RustCallable {
-                                path: vec![key.into()],
-                                owner: Some(pb::BindingOwner {
-                                    kind: Some(pb::binding_owner::Kind::Sort(if key == "range" {
-                                        2
-                                    } else {
-                                        1
-                                    })),
+                                rust: Some(pb::TypeBinding {
+                                    path: vec![
+                                        "egglog_experimental".into(),
+                                        "typed".into(),
+                                        "builtins".into(),
+                                        "Vec".into(),
+                                    ],
+                                    type_params: vec!["T".into()],
                                 }),
-                                receiver: matches!(key, "get" | "range").then_some(
-                                    pb::RustReceiver {
-                                        core_input: Some(0),
-                                        borrowed: key == "get",
-                                    },
-                                ),
-                                params: match key {
-                                    "of" => vec![pb::RustParameter {
-                                        core_input: Some(0),
-                                        name: "values".into(),
-                                        borrowed: false,
-                                    }],
-                                    "get" => vec![pb::RustParameter {
-                                        core_input: Some(1),
-                                        name: "index".into(),
-                                        borrowed: false,
-                                    }],
-                                    _ => vec![],
-                                },
                                 ..Default::default()
-                            }],
+                            }),
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "i64".into(),
+                            arity: 0,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "Unit".into(),
+                            arity: 0,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                            name: format!("egglog.core.vec.{key}"),
+                            typing: Some(pb::host_primitive::Typing::Signature(
+                                pb::GenericSignature {
+                                    type_params: if key == "range" {
+                                        vec![]
+                                    } else {
+                                        vec!["T".into()]
+                                    },
+                                    inputs: inputs
+                                        .iter()
+                                        .map(|(name, sort)| pb::Arg {
+                                            name: (*name).into(),
+                                            sort: *sort,
+                                        })
+                                        .collect(),
+                                    output: Some(output),
+                                    varargs: varargs
+                                        .iter()
+                                        .map(|(name, sort)| pb::Arg {
+                                            name: (*name).into(),
+                                            sort: *sort,
+                                        })
+                                        .collect(),
+                                    equality_type_params: if key == "union" {
+                                        vec![0]
+                                    } else {
+                                        vec![]
+                                    },
+                                },
+                            )),
+                        })),
+                        bindings: Some(pb::CallableBindings {
+                            python: Some(pb::PythonBindings {
+                                views: vec![pb::PythonCallable {
+                                    kind: match key {
+                                        "of" => pb::PythonCallKind::Initializer,
+                                        "empty" => pb::PythonCallKind::ClassMethod,
+                                        _ => pb::PythonCallKind::Method,
+                                    }
+                                    .into(),
+                                    path: match key {
+                                        "of" => vec![],
+                                        "union" => vec!["__or__".into()],
+                                        "get" => vec!["__getitem__".into()],
+                                        _ => vec![key.into()],
+                                    },
+                                    owner: Some(pb::BindingOwner {
+                                        kind: Some(pb::binding_owner::Kind::Sort(
+                                            if key == "range" { 2 } else { 1 },
+                                        )),
+                                    }),
+                                    receiver: receiver.then_some(0),
+                                    params: parameters
+                                        .clone()
+                                        .map(|(i, (name, _))| pb::PythonParameter {
+                                            core_input: Some(i as u32),
+                                            name: if key == "of" { "args" } else { name }.into(),
+                                            default_expr: None,
+                                        })
+                                        .collect(),
+                                    mutates: None,
+                                    tail_repetitions: None,
+                                }],
+                            }),
+                            rust: Some(pb::RustBindings {
+                                views: vec![pb::RustCallable {
+                                    path: vec![key.into()],
+                                    owner: Some(pb::BindingOwner {
+                                        kind: Some(pb::binding_owner::Kind::Sort(
+                                            if key == "range" { 2 } else { 1 },
+                                        )),
+                                    }),
+                                    receiver: receiver.then_some(pb::RustReceiver {
+                                        core_input: Some(0),
+                                        borrowed: key != "range",
+                                    }),
+                                    params: parameters
+                                        .map(|(i, (name, _))| pb::RustParameter {
+                                            core_input: Some(i as u32),
+                                            name: (*name).into(),
+                                            borrowed: false,
+                                        })
+                                        .collect(),
+                                    ..Default::default()
+                                }],
+                            }),
+                            egglog: Some(pb::EgglogBindings {
+                                views: vec![pb::EgglogCallable {
+                                    symbol: alias.into(),
+                                    datatype_member: false,
+                                }],
+                            }),
                         }),
-                        egglog: Some(pb::EgglogBindings {
-                            views: vec![pb::EgglogCallable {
-                                symbol: alias.into(),
-                                datatype_member: false,
-                            }],
-                        }),
-                    }),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }
         })
         .collect()
     }
@@ -357,6 +395,24 @@ impl ContainerSort for VecSort {
             .type_info
             .instantiate_builtin("egglog.core.vec.get", &arc)
             .unwrap();
+        let append = eg
+            .type_info
+            .instantiate_builtin("egglog.core.vec.append", &arc)
+            .unwrap();
+        let [push, pop, length, contains, not_contains, set, remove] = [
+            "push",
+            "pop",
+            "length",
+            "contains",
+            "not_contains",
+            "set",
+            "remove",
+        ]
+        .map(|key| {
+            eg.type_info
+                .instantiate_builtin(&format!("egglog.core.vec.{key}"), &arc)
+                .unwrap()
+        });
 
         // The proof "term form" of a vec: `(vec-of e0 e1 ...)`, or `(vec-empty)`
         // when empty, matching `reconstruct_termdag`. The validator lets the
@@ -401,26 +457,29 @@ impl ContainerSort for VecSort {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs                     .collect()
         } }, vec_of_validator);
-        add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
+        add_primitive!(eg, "vec-append" [instance = append] = {self.clone(): VecSort} [xs: @VecContainer] -> @VecContainer { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.flat_map(|x| x.data).collect()
         } });
 
-        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (arc), x: # (self.element())| -> @VecContainer (arc) {{ xs.data.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (arc)                       | -> @VecContainer (arc) {{ xs.data.pop();   xs }});
+        add_primitive!(eg, "vec-push" [instance = push] = |mut xs: @VecContainer, x: #| -> @VecContainer {{ xs.data.push(x); xs }});
+        add_primitive!(eg, "vec-pop" [instance = pop] = |mut xs: @VecContainer| -> @VecContainer {{ xs.data.pop();   xs }});
 
-        add_primitive_with_validator!(eg, "vec-length"       = |xs: @VecContainer (arc)| -> i64 { xs.data.len() as i64 }, vec_length_validator);
-        add_primitive_with_validator!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, vec_contains_validator);
-        add_primitive_with_validator!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, vec_not_contains_validator);
+        add_primitive_with_validator!(eg, "vec-length" [instance = length] = |xs: @VecContainer| -> i64 { xs.data.len() as i64 }, vec_length_validator);
+        add_primitive_with_validator!(eg, "vec-contains" [instance = contains] = |xs: @VecContainer, x: #| -?> () { ( xs.data.contains(&x)).then_some(()) }, vec_contains_validator);
+        add_primitive_with_validator!(eg, "vec-not-contains" [instance = not_contains] = |xs: @VecContainer, x: #| -?> () { (!xs.data.contains(&x)).then_some(()) }, vec_not_contains_validator);
 
         add_primitive_with_validator!(eg, "vec-get" [instance = get] = |xs: @VecContainer, i: i64| -?> # { xs.data.get(i as usize).copied() }, vec_get_validator);
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data[idx] = x; Some(xs) } }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -?> @VecContainer (arc) {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data.remove(idx); Some(xs) } }});
+        add_primitive!(eg, "vec-set" [instance = set] = |mut xs: @VecContainer, i: i64, x: #| -?> @VecContainer {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data[idx] = x; Some(xs) } }});
+        add_primitive!(eg, "vec-remove" [instance = remove] = |mut xs: @VecContainer, i: i64| -?> @VecContainer {{ let idx = usize::try_from(i).ok()?; if idx >= xs.data.len() { None } else { xs.data.remove(idx); Some(xs) } }});
         if self.element.is_eq_sort() {
             eg.add_write_primitive(
                 Union {
                     name: "vec-union".into(),
-                    vec: arc.clone(),
+                    instance: eg
+                        .type_info
+                        .instantiate_builtin("egglog.core.vec.union", &arc)
+                        .unwrap(),
                 },
                 None,
             );
@@ -575,7 +634,7 @@ impl PurePrim for VecMap {
 #[derive(Clone)]
 struct Union {
     name: String,
-    vec: ArcSort,
+    instance: builtin::BuiltinInstance,
 }
 
 // `Union` unions the corresponding entries of two vecs of equal length.
@@ -588,12 +647,11 @@ impl Primitive for Union {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.clone(), self.vec.clone()],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
