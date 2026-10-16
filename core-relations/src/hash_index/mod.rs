@@ -202,35 +202,17 @@ impl<TI: PositionedIndexBase> Index<TI> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SubsetTable {
     keys: RowBuffer,
-    hash: Pooled<HashTable<TableEntry<BufferedSubset>>>,
-}
-
-impl Clone for SubsetTable {
-    fn clone(&self) -> Self {
-        SubsetTable {
-            keys: self.keys.clone(),
-            hash: Pooled::cloned_with(&self.hash, |target, source| {
-                if target.capacity() < source.len() {
-                    *target = source.clone();
-                    return;
-                }
-                // HashTable's default clone_from replaces its bucket allocation.
-                target.reserve(source.len(), |entry| entry.hash);
-                for entry in source.iter() {
-                    target.insert_unique(entry.hash, entry.clone(), |entry| entry.hash);
-                }
-            }),
-        }
-    }
+    hash: HashTable<TableEntry<BufferedSubset>>,
 }
 
 impl SubsetTable {
     fn new(key_arity: usize) -> SubsetTable {
         SubsetTable {
             keys: RowBuffer::new(key_arity),
-            hash: with_pool_set(|ps| ps.get()),
+            hash: HashTable::new(),
         }
     }
 }
@@ -305,10 +287,11 @@ pub(crate) trait PositionedIndexBase: IndexBase {
     );
 }
 
+#[derive(Clone)]
 struct ColumnIndexShard {
     /// It's important that table is implemented using IndexMap instead of the more efficient
     /// HashMap because we want stable enumeration order.
-    table: Pooled<IndexMap<Value, BufferedSubset>>,
+    table: IndexMap<Value, BufferedSubset>,
     subsets: SubsetBuffer,
 }
 
@@ -417,23 +400,6 @@ fn subset_partition<'a>(subset: SubsetRef<'a>, start: usize, end: usize) -> Subs
             RowId::from_usize(range.start.index() + end),
         )),
         SubsetRef::Sparse(rows) => SubsetRef::Sparse(rows.subslice(start, end)),
-    }
-}
-
-impl Clone for ColumnIndexShard {
-    fn clone(&self) -> Self {
-        ColumnIndexShard {
-            table: Pooled::cloned_with(&self.table, |target, source| {
-                if target.capacity() < source.len() {
-                    target.clone_from(source);
-                    return;
-                }
-                // IndexMap::clone_from replaces its internal hash table.
-                target.reserve(source.len());
-                target.extend(source.iter().map(|(key, value)| (*key, value.clone())));
-            }),
-            subsets: self.subsets.clone(),
-        }
     }
 }
 
@@ -911,15 +877,13 @@ fn merge_sorted_blocks_dedup(
 
 impl ColumnIndex {
     pub(crate) fn new() -> ColumnIndex {
-        with_pool_set(|ps| {
-            let shard_data = ShardData::new(num_shards());
-            let mut shards = IdVec::with_capacity(shard_data.n_shards());
-            shards.resize_with(shard_data.n_shards(), || ColumnIndexShard {
-                table: ps.get(),
-                subsets: SubsetBuffer::default(),
-            });
-            ColumnIndex { shard_data, shards }
-        })
+        let shard_data = ShardData::new(num_shards());
+        let mut shards = IdVec::with_capacity(shard_data.n_shards());
+        shards.resize_with(shard_data.n_shards(), || ColumnIndexShard {
+            table: IndexMap::default(),
+            subsets: SubsetBuffer::default(),
+        });
+        ColumnIndex { shard_data, shards }
     }
 
     /// Build each key's subset from `pairs`, which must be sorted by (Value, RowId) and

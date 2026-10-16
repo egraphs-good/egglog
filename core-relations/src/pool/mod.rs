@@ -22,8 +22,7 @@ pub(crate) use bitset::ReusableBitSet;
 use crate::{
     RowId,
     action::{Instr, PredictedVals},
-    common::{HashMap, HashSet, IndexMap, IndexSet, ShardId, Value},
-    hash_index::{BufferedSubset, TableEntry},
+    common::{HashMap, HashSet, IndexSet, ShardId, Value},
     offsets::SortedOffsetVector,
     table::TableEntry as SwTableEntry,
     table_spec::Constraint,
@@ -114,18 +113,6 @@ impl<K, V> Clear for HashMap<K, V> {
     }
     fn bytes(&self) -> usize {
         self.capacity() * mem::size_of::<(K, V)>()
-    }
-}
-
-impl<K, V> Clear for IndexMap<K, V> {
-    fn clear(&mut self) {
-        self.clear()
-    }
-    fn reuse(&self) -> bool {
-        self.capacity() > 0
-    }
-    fn bytes(&self) -> usize {
-        self.capacity() * (mem::size_of::<u64>() + mem::size_of::<(K, V)>())
     }
 }
 
@@ -312,15 +299,8 @@ impl<T: Clear + InPoolSet<PoolSet> + 'static> Pooled<T> {
 
 impl<T: Clear + Clone + InPoolSet<PoolSet>> Pooled<T> {
     pub(crate) fn cloned(this: &Pooled<T>) -> Pooled<T> {
-        Self::cloned_with(this, T::clone_from)
-    }
-}
-
-impl<T: Clear + InPoolSet<PoolSet>> Pooled<T> {
-    /// Copy into an empty pooled value using a storage-preserving operation.
-    pub(crate) fn cloned_with(this: &Pooled<T>, clone: impl FnOnce(&mut T, &T)) -> Pooled<T> {
         let mut result = with_pool_set(|ps| ps.get::<T>());
-        clone(&mut result, this);
+        result.clone_from(this);
         result
     }
 }
@@ -425,11 +405,9 @@ pool_set! {
         // between vec_vals and shared_vals.
         rows: Vec<RowId> [ 1 << 25 ],
         offset_vec: SortedOffsetVector [ 1 << 20 ],
-        column_index: IndexMap<Value, BufferedSubset> [ 1 << 20 ],
         constraints: Vec<Constraint> [ 1 << 20 ],
         bitsets: ReusableBitSet [ 1 << 20 ],
         instrs: Vec<Instr> [ 1 << 20 ],
-        tuple_indexes: HashTable<TableEntry<BufferedSubset>> [ 1 << 20 ],
         staged_outputs: HashTable<SwTableEntry> [ 1 << 25 ],
         predicted_vals: PredictedVals [ 1 << 20 ],
         shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
