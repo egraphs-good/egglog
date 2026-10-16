@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_COST_MODEL"],"struct":["AdditiveCostModel","ExtractedTerm","ExtractedTermVariants","ExtractedTerms","TreeCostModelFromDag","TreeExtractor"],"trait":["Cost","DagCostModel","MonoidCost","TreeCostModel"],"type":["DefaultCost"]};
