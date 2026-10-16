@@ -24,7 +24,7 @@ expression: snapshot_content_across_treatments
               (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
               t_6
               t_7))))
-(let t_9 (substitution (a t_1) (b t_3) (@rewrite_var__ t_0)))
+(let t_9 (substitution (a t_1) (@rewrite_var___0 t_0) (b t_3)))
 (Trans
   (= t_0 t_2)
   (Sym
