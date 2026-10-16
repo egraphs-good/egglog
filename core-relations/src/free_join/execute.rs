@@ -1572,6 +1572,69 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }};
         }
 
+        // A leaf group has already supplied its bindings. Serial execution can
+        // advance directly; forkable buffers still clone the live state through
+        // the normal frame-drain path. Keep early returns inside the closure so
+        // the caller always restores its cover and factorized binding stack.
+        macro_rules! advance_leaf {
+            ($can_fork:expr) => {{
+                (|| {
+                    if self.exec_state.should_stop() {
+                        return;
+                    }
+                    if $can_fork {
+                        let mut updates = FrameUpdates::with_capacity(1);
+                        updates.finish_frame();
+                        drain_updates_parallel!(updates);
+                    } else if cur + 1 >= instr_order.len() {
+                        action_buf.push_bindings_factorized(
+                            action,
+                            &mut binding_info.bindings,
+                            &binding_info.binding_sets,
+                            &self.exec_state,
+                        );
+                    } else {
+                        self.run_plan(
+                            stages,
+                            prepared,
+                            atoms,
+                            action,
+                            instr_order,
+                            leaf_scans,
+                            cur + 1,
+                            None,
+                            remaining_after_current,
+                            binding_info,
+                            action_buf,
+                        );
+                    }
+                })();
+            }};
+        }
+
+        // A singleton has no Cartesian product to defer. Store its values
+        // directly to avoid an Arc and later expansion. Multirow groups
+        // retain factorized execution.
+        macro_rules! bind_leaf_rows {
+            ($rows:expr, $bind:expr) => {{
+                let can_fork = cur < free_join_fork_depth() && action_buf.supports_parallel_drain();
+                let singleton = $rows.len() == 1;
+                if singleton {
+                    let (_, row) = $rows.iter().next().unwrap();
+                    for ((_, var), value) in $bind.iter().zip(row) {
+                        binding_info.bindings.insert(*var, *value);
+                    }
+                } else {
+                    let vars = $bind.iter().map(|(_, var)| *var).collect();
+                    binding_info.binding_sets.push((vars, Arc::new($rows)));
+                }
+                advance_leaf!(can_fork);
+                if !singleton {
+                    binding_info.binding_sets.pop();
+                }
+            }};
+        }
+
         // A sharded top-level job enumerates only its assigned physical index
         // shard. Every recursive call clears `top_partition`, so this macro is
         // used only by the leading prober of the initial `Intersect` stage.
@@ -1877,7 +1940,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     let cover_subset = cover_node.subset();
 
                     let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
-                    let vars = bind.iter().map(|(_, var)| *var).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
                     let (scan_start, scan_size) =
                         cover_scan_bounds(top_partition, cover_subset.size());
@@ -1895,11 +1957,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         return;
                     }
 
-                    binding_info.binding_sets.push((vars, Arc::new(buf)));
-                    let mut updates = FrameUpdates::with_capacity(1);
-                    updates.finish_frame();
-                    drain_updates!(updates);
-                    binding_info.binding_sets.pop();
+                    bind_leaf_rows!(buf, bind);
                     binding_info.move_back_node(cover_atom, cover_node);
                 } else {
                     let keep_cover = atom_tail_use(
@@ -2099,7 +2157,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     binding_info.materializations.unwrap_val(*cover)
                 };
                 (|| {
-                    let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
                     let mut row_scratch: SmallVec<[Value; 8]> = SmallVec::new();
                     match mode {
@@ -2153,11 +2210,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     if buf.is_empty() {
                         return;
                     }
-                    binding_info.binding_sets.push((vars, Arc::new(buf)));
-                    let mut updates = FrameUpdates::with_capacity(1);
-                    updates.finish_frame();
-                    drain_updates!(updates);
-                    binding_info.binding_sets.pop();
+                    bind_leaf_rows!(buf, bind);
                 })();
                 if restore_materialization {
                     let previous = binding_info.materializations.insert(*cover, cover_mat);
