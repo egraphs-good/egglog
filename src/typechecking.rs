@@ -1172,7 +1172,7 @@ impl TypeInfo {
     // Standalone expressions/actions use action lowering. Top-level commands
     // pass `Full`; function `:merge` reuses this path with `Write` because
     // merge expressions run during table updates.
-    fn typecheck_standalone_actions(
+    pub(crate) fn typecheck_standalone_actions(
         &self,
         symbol_gen: &mut SymbolGen,
         actions: &Actions,

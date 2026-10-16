@@ -158,6 +158,132 @@ pub enum ExecutionEvent<'a> {
     },
 }
 
+/// A temporary native action compiler with typed local bindings. This is not a
+/// stored program or a new command language: ordinary actions use the same
+/// typechecker and backend lowering as top-level actions, in one execution
+/// boundary. Fresh bindings and captures are positioned among those actions.
+pub struct ScopedActionBuilder<'a> {
+    translator: BackendRule<'a>,
+    symbol_gen: &'a mut SymbolGen,
+    bindings: IndexMap<String, (Span, ArcSort)>,
+    captured: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+}
+
+impl ScopedActionBuilder<'_> {
+    /// Typecheck and compile an ordinary action without promoting local lets
+    /// to global nullary tables. Global references still undergo native global
+    /// removal, and all actions retain their authored order.
+    pub fn action(&mut self, action: Action) -> Result<(), Error> {
+        if let Action::Let(_, name, _) = &action
+            && self.bindings.contains_key(name)
+        {
+            return Err(Error::BackendError(format!("local {name} already bound")));
+        }
+        let bindings = self
+            .bindings
+            .iter()
+            .map(|(name, binding)| (name.as_str(), binding.clone()))
+            .collect();
+        let resolved = self.translator.type_info.typecheck_standalone_actions(
+            self.symbol_gen,
+            &Actions::singleton(action),
+            &bindings,
+            Context::Full,
+        )?;
+        let resolved = ResolvedActions::new(
+            resolved
+                .0
+                .into_iter()
+                .map(|action| {
+                    action.map_exprs(&mut |expr| remove_globals::remove_globals_expr(expr.clone()))
+                })
+                .collect(),
+        );
+        let mut bound = self
+            .bindings
+            .iter()
+            .map(|(name, (_, sort))| ResolvedVar {
+                name: name.clone(),
+                sort: sort.clone(),
+                is_global_ref: false,
+            })
+            .collect();
+        let mut context = CoreActionContext::new(
+            self.translator.type_info,
+            &mut bound,
+            self.symbol_gen,
+            false,
+        );
+        let (core, _) = resolved.to_core_actions(&mut context)?;
+        self.translator.actions(&core)?;
+        for action in resolved.0 {
+            if let ResolvedAction::Let(span, variable, _) = action {
+                self.bindings.insert(variable.name, (span, variable.sort));
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind a fresh equality class at this position if execution reaches it.
+    /// Merely compiling this operation cannot allocate an identity.
+    pub fn fresh_eq_class(&mut self, name: String, sort: &str, span: Span) -> Result<(), Error> {
+        if self.bindings.contains_key(&name) {
+            return Err(Error::BackendError(format!("local {name} already bound")));
+        }
+        let sort = self
+            .translator
+            .type_info
+            .sorts
+            .get(sort)
+            .filter(|sort| sort.is_eq_sort())
+            .ok_or_else(|| Error::BackendError(format!("unknown equality sort {sort}")))?
+            .clone();
+        let value = self.translator.rb.fresh_eq_class(Arc::from(sort.name()));
+        let variable = ResolvedVar {
+            name: name.clone(),
+            sort: sort.clone(),
+            is_global_ref: false,
+        };
+        self.translator
+            .entries
+            .insert(ResolvedAtomTerm::Var(span.clone(), variable), value.into());
+        self.bindings.insert(name, (span, sort));
+        Ok(())
+    }
+
+    /// Retain an equality local once this position has completed. Captures
+    /// preceding a failing later action are returned by `eval_scoped_actions`.
+    pub fn capture_eq_class(&mut self, name: &str) -> Result<(), Error> {
+        let (span, sort) = self
+            .bindings
+            .get(name)
+            .filter(|(_, sort)| sort.is_eq_sort())
+            .ok_or_else(|| Error::BackendError(format!("unbound equality local {name}")))?;
+        let argument = self.translator.entry(&ResolvedAtomTerm::Var(
+            span.clone(),
+            ResolvedVar {
+                name: name.to_owned(),
+                sort: sort.clone(),
+                is_global_ref: false,
+            },
+        ));
+        let captured = self.captured.clone();
+        let name = name.to_owned();
+        self.translator.rb.call_scoped_infallible(
+            Box::new(make_external_func(move |_, args| {
+                let [value] = args else {
+                    unreachable!("capture has one argument")
+                };
+                captured.lock().unwrap().push((name.clone(), *value));
+                Some(*value)
+            })),
+            &[argument],
+            ColumnTy::Id,
+        );
+        Ok(())
+    }
+}
+
 /// Methods shared by every kind-specific primitive trait.
 ///
 /// `name` and `get_type_constraints` aren't capability-dependent, so
@@ -1561,6 +1687,89 @@ impl EGraph {
         }
     }
 
+    /// Compile one table-free action block with request-owned equality locals.
+    /// `execute = false` performs the identical lowering without invoking any
+    /// action, fresh allocation, or capture. Callers should validate against a
+    /// disposable compiler clone, as with `validate_program`.
+    ///
+    /// Captures completed before a runtime failure are returned alongside the
+    /// error. This uses the same single rule/recovery boundary as `eval_actions`;
+    /// it emits neither a schedule output nor an extra user-visible run report.
+    /// Encoded modes must use their ordinary action/proof lowering instead.
+    pub fn eval_scoped_actions(
+        &mut self,
+        inputs: &[(String, String, Value)],
+        execute: bool,
+        compile: impl FnOnce(&mut ScopedActionBuilder<'_>) -> Result<(), Error>,
+    ) -> (Result<(), Error>, Vec<(String, Value)>) {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let result = (|| {
+            if self.proof_state.original_typechecking.is_some() {
+                return Err(Error::BackendError(
+                    "scoped equality actions require normal execution mode".into(),
+                ));
+            }
+            let mut bindings = IndexMap::default();
+            let mut entries = HashMap::default();
+            for (name, sort, value) in inputs {
+                let sort = self
+                    .type_info
+                    .sorts
+                    .get(sort)
+                    .filter(|sort| sort.is_eq_sort())
+                    .ok_or_else(|| Error::BackendError(format!("unknown equality sort {sort}")))?
+                    .clone();
+                if bindings
+                    .insert(name.clone(), (Span::Panic, sort.clone()))
+                    .is_some()
+                {
+                    return Err(Error::BackendError(format!("local {name} already bound")));
+                }
+                let value = if execute {
+                    self.backend.get_canon_repr(*value, ColumnTy::Id)
+                } else {
+                    *value
+                };
+                entries.insert(
+                    ResolvedAtomTerm::Var(
+                        Span::Panic,
+                        ResolvedVar {
+                            name: name.clone(),
+                            sort,
+                            is_global_ref: false,
+                        },
+                    ),
+                    QueryEntry::Const {
+                        val: value,
+                        ty: ColumnTy::Id,
+                    },
+                );
+            }
+            let functions = &self.functions;
+            let type_info = &self.type_info;
+            let symbol_gen = &mut self.parser.symbol_gen;
+            self.backend
+                .run_scoped_rule("scoped_actions", execute, Some(type_info), |rule| {
+                    let mut translator = BackendRule::new(rule, functions, type_info, true);
+                    translator.entries = entries;
+                    let mut builder = ScopedActionBuilder {
+                        translator,
+                        symbol_gen,
+                        bindings,
+                        captured: captured.clone(),
+                    };
+                    compile(&mut builder)?;
+                    Ok(builder.translator.build())
+                })
+                .map_err(|error| Error::BackendError(error.to_string()))
+        })();
+        let mut captured = std::mem::take(&mut *captured.lock().unwrap());
+        for (_, value) in &mut captured {
+            *value = self.backend.get_canon_repr(*value, ColumnTy::Id);
+        }
+        (result, captured)
+    }
+
     fn eval_actions(&mut self, actions: &ResolvedActions, execute: bool) -> Result<(), Error> {
         let mut binding = IndexSet::default();
         let mut ctx = CoreActionContext::new(
@@ -2881,15 +3090,17 @@ impl EGraph {
     /// proof validators, maintenance or user-defined runtime commands. Extension
     /// declarations may opt into [`UserDefinedCommand::prepare`].
     /// No backend IDs or speculative definitions are transferred to this graph.
+    /// Returns the disposable compiler clone for further compile-only validation.
     /// Runtime errors such as a missing witness are left to actual execution.
-    pub fn validate_program(&self, program: Vec<Command>) -> Result<(), Error> {
-        self.clone().process_program_internal(
+    pub fn validate_program(&self, program: Vec<Command>) -> Result<Self, Error> {
+        let mut compiler = self.clone();
+        compiler.process_program_internal(
             program,
             ProcessingMode::Compile,
             &mut |_, _, _| {},
             &mut |_, _| {},
         )?;
-        Ok(())
+        Ok(compiler)
     }
 
     /// Prepares an explicitly opted-in extension declaration without invoking
@@ -3778,6 +3989,130 @@ mod tests {
     use crate::*;
 
     use crate::PureState;
+
+    #[test]
+    fn scoped_actions_compile_inert_prefix_and_canonical_inputs() {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(None, "(datatype A (N i64)) (function keep () A :merge old)")
+            .unwrap();
+        let before_report = serde_json::to_value(&graph.overall_run_report).unwrap();
+        let compile = |builder: &mut ScopedActionBuilder<'_>| {
+            builder.fresh_eq_class("u".into(), "A", span!())?;
+            builder.capture_eq_class("u")?;
+            builder.action(Action::Set(
+                span!(),
+                "keep".into(),
+                vec![],
+                Expr::Var(span!(), "u".into()),
+            ))?;
+            builder.action(Action::Panic(span!(), "stop after capture".into()))
+        };
+        let (result, captured) = graph.eval_scoped_actions(&[], false, compile);
+        result.unwrap();
+        assert!(captured.is_empty());
+        assert!(graph.materialized_eq_classes().is_empty());
+        assert_eq!(graph.num_tuples(), 0);
+        let (result, captured) = graph.eval_scoped_actions(&[], true, compile);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("stop after capture")
+        );
+        let [(name, value)] = captured.as_slice() else {
+            panic!("missing prefix capture")
+        };
+        assert_eq!(name, "u");
+        assert_eq!(graph.materialized_eq_classes().len(), 1);
+        assert_eq!(graph.num_tuples(), 1);
+        let inputs = vec![(name.clone(), "A".into(), *value)];
+        let (result, captured) = graph.eval_scoped_actions(&inputs, true, |builder| {
+            builder.action(Action::Let(
+                span!(),
+                "member".into(),
+                Expr::Call(
+                    span!(),
+                    "N".into(),
+                    vec![Expr::Lit(span!(), Literal::Int(7))],
+                ),
+            ))?;
+            builder.action(Action::Union(
+                span!(),
+                Expr::Var(span!(), "u".into()),
+                Expr::Var(span!(), "member".into()),
+            ))?;
+            builder.capture_eq_class("u")
+        });
+        result.unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(graph.materialized_eq_classes().len(), 1);
+        graph
+            .parse_and_run_program(None, "(check (= (keep) (N 7)))")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&graph.overall_run_report).unwrap(),
+            before_report
+        );
+        let prefix = graph.materialized_eq_classes();
+        let (result, captured) = graph.eval_scoped_actions(&[], true, |builder| {
+            builder.fresh_eq_class("unused".into(), "A", span!())?;
+            builder.action(Action::Expr(
+                span!(),
+                Expr::Call(span!(), "missing".into(), vec![]),
+            ))
+        });
+        assert!(result.is_err());
+        assert!(captured.is_empty());
+        assert_eq!(graph.materialized_eq_classes(), prefix);
+    }
+
+    #[test]
+    fn scoped_actions_preserve_escaping_function_value_callbacks() {
+        let mut graph = EGraph::default();
+        graph.parse_and_run_program(None, "(datatype A (N i64)) (sort F (UnstableFn (i64) A)) (function saved () F :merge old)").unwrap();
+        let commands = graph
+            .parse_program(None, "(set (saved) (unstable-fn \"N\"))")
+            .unwrap();
+        let mut baseline = graph.clone();
+        baseline.run_program(commands.clone()).unwrap();
+        // A query must not construct its missing witness, even natively.
+        assert!(matches!(
+            baseline.parse_and_run_program(None, "(check (= (unstable-app (saved) 7) (N 7)))"),
+            Err(Error::CheckError(..))
+        ));
+        let (result, captures) = graph.eval_scoped_actions(&[], true, |builder| {
+            for command in commands {
+                let Command::Action(action) = command else {
+                    unreachable!()
+                };
+                builder.action(action)?;
+            }
+            Ok(())
+        });
+        result.unwrap();
+        assert!(captures.is_empty());
+        baseline
+            .parse_and_run_program(None, "(unstable-app (saved) 7)")
+            .unwrap();
+        graph
+            .parse_and_run_program(None, "(unstable-app (saved) 7)")
+            .unwrap();
+        assert_eq!(graph.materialized_eq_classes().len(), 1);
+        assert_eq!(graph.num_tuples(), baseline.num_tuples());
+        // Constructor function values reject a read-only query application.
+        // This deliberately invokes the cached panic callback after the scoped
+        // rule has been released, and must retain the ordinary native error.
+        let query = "(check (= (unstable-app (saved) 7) (N 7)))";
+        let native_error = baseline.parse_and_run_program(None, query).unwrap_err();
+        let scoped_error = graph.parse_and_run_program(None, query).unwrap_err();
+        assert!(
+            native_error
+                .to_string()
+                .contains("not valid for this call site")
+        );
+        assert_eq!(scoped_error.to_string(), native_error.to_string());
+    }
 
     #[derive(Clone)]
     struct InnerProduct {

@@ -24,6 +24,126 @@ use crate::{
 };
 
 #[test]
+fn scoped_action_rule_owns_callbacks_and_rule_slots() {
+    struct Dropped(Arc<AtomicUsize>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for case in 0..4 {
+        let mut graph = EGraph::new(1);
+        let control = graph.new_rule("control", false).build();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let token = Arc::new(Dropped(dropped.clone()));
+        let sort: Arc<str> = "Scoped".into();
+        let mut built = None;
+        let result = graph.run_scoped_rule("temporary", case != 0, None, |mut rule| {
+            let fresh = rule.fresh_eq_class(sort.clone());
+            rule.call_scoped_infallible(
+                Box::new(make_external_func(move |_, values| {
+                    let _token = &token;
+                    Some(values[0])
+                })),
+                &[fresh.into()],
+                ColumnTy::Id,
+            );
+            if case == 2 {
+                // A compile failure after callback registration must not reserve
+                // an unfilled rule slot or leave either callback registered.
+                anyhow::bail!("compile failure");
+            }
+            if case == 3 {
+                rule.panic("runtime failure".into());
+            }
+            let id = rule.build();
+            built = Some(id);
+            Ok(id)
+        });
+        assert_eq!(result.is_err(), case >= 2);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        // Fresh's captured sort is released too; successful execution retains
+        // exactly its inventory membership, not the allocation callback.
+        assert_eq!(
+            Arc::strong_count(&sort),
+            if case == 1 || case == 3 { 2 } else { 1 }
+        );
+        assert_eq!(
+            graph.materialized_eq_classes().len(),
+            usize::from(case == 1 || case == 3)
+        );
+        if let Some(id) = built {
+            assert!(graph.rules.take(id).is_none());
+        }
+        let next = graph.new_rule("reused", false).build();
+        assert_eq!(next.index(), control.index() + 1);
+        graph.free_rule(next);
+        assert!(graph.rules.take(control).is_some());
+    }
+}
+
+#[test]
+fn scoped_action_fallbacks_release_on_every_exit() {
+    struct Dropped(Arc<AtomicUsize>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for case in 0..5 {
+        let mut graph = EGraph::new(1);
+        let int = graph.base_values_mut().register_type::<i64>();
+        let value = graph.base_values_mut().get(7i64);
+        let table = graph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Base(int)],
+            eq_sorts: vec![None],
+            default: DefaultVal::Fail,
+            merge: MergeFn::AssertEq,
+            name: "lookup".into(),
+            can_subsume: false,
+        });
+        if case != 3 {
+            graph.add_values([(table, vec![value])]);
+        }
+        let control = graph.new_rule("control", false).build();
+        let primitive = graph.register_external_func(Box::new(make_external_func(move |_, _| {
+            (case != 4).then_some(value)
+        })));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let lookup_token = Arc::new(Dropped(dropped.clone()));
+        let primitive_token = Arc::new(Dropped(dropped.clone()));
+        let mut built = None;
+        let result = graph.run_scoped_rule("temporary fallbacks", case != 0, None, |mut rule| {
+            rule.lookup(table, &[], move || {
+                let _token = lookup_token;
+                "lookup failure".into()
+            });
+            rule.call_external_func(primitive, &[], ColumnTy::Base(int), move || {
+                let _token = primitive_token;
+                "primitive failure".into()
+            });
+            if case == 2 {
+                anyhow::bail!("compile failure");
+            }
+            let id = rule.build();
+            built = Some(id);
+            Ok(id)
+        });
+        assert_eq!(result.is_err(), case >= 2);
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
+        if let Some(id) = built {
+            assert!(graph.rules.take(id).is_none());
+        }
+        let id = graph.new_rule("reuse", false).build();
+        assert_eq!(id.index(), control.index() + 1);
+        graph.free_rule(id);
+        assert!(graph.rules.take(control).is_some());
+        // This callback was borrowed, not owned by the temporary action scope.
+        graph.free_external_func(primitive);
+    }
+}
+
+#[test]
 fn typed_class_inventory_staged_new_merge() {
     // The environment forces serial or parallel table insertion in separate runs.
     for case in 0..3 {

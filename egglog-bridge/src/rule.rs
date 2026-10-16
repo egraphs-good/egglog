@@ -102,7 +102,7 @@ pub(crate) struct Query {
     uf_table: TableId,
     id_counter: CounterId,
     ts_counter: CounterId,
-    rule_id: RuleId,
+    rule_id: Option<RuleId>,
     vars: DenseIdMap<VariableId, VarInfo>,
     atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
     /// The builders for queries in this module essentially wrap the lower-level
@@ -126,19 +126,87 @@ pub struct RuleBuilder<'a> {
     egraph: &'a mut EGraph,
     desc: Arc<str>,
     query: Query,
+    scoped: Option<&'a mut ScopedHandles>,
+}
+
+#[derive(Default)]
+struct ScopedHandles {
+    functions: Vec<ExternalFunctionId>,
+    rule: Option<RuleId>,
+}
+
+struct ScopedRule<'a> {
+    egraph: &'a mut EGraph,
+    handles: ScopedHandles,
+}
+
+impl Drop for ScopedRule<'_> {
+    fn drop(&mut self) {
+        if let Some(rule) = self.handles.rule.take() {
+            self.egraph.free_rule(rule);
+        }
+        for function in self.handles.functions.drain(..) {
+            self.egraph.free_external_func(function);
+        }
+    }
 }
 
 impl EGraph {
     /// Add a rewrite rule for this [`EGraph`] using a [`RuleBuilder`].
     /// If you aren't sure, use `egraph.new_rule("", true)`.
     pub fn new_rule(&mut self, desc: &str, seminaive: bool) -> RuleBuilder<'_> {
-        let uf_table = self.uf_table;
-        let id_counter = self.id_counter;
-        let ts_counter = self.timestamp_counter;
-        let rule_id = self.rules.reserve_slot();
-        RuleBuilder {
+        RuleBuilder::new(self, desc, seminaive, None)
+    }
+
+    /// Compile and optionally execute one temporary action rule. The builder
+    /// reserves its rule slot only on successful construction. All per-rule
+    /// callbacks and the completed rule are released on every exit, including
+    /// compilation errors and native recovery failures.
+    pub fn run_scoped_rule(
+        &mut self,
+        desc: &str,
+        execute: bool,
+        context: crate::core_relations::ExternalContext<'_>,
+        compile: impl FnOnce(RuleBuilder<'_>) -> Result<RuleId>,
+    ) -> Result<()> {
+        let mut scope = ScopedRule {
             egraph: self,
+            handles: ScopedHandles::default(),
+        };
+        let rule = compile(RuleBuilder::new(
+            scope.egraph,
+            desc,
+            false,
+            Some(&mut scope.handles),
+        ))?;
+        assert_eq!(scope.handles.rule, Some(rule));
+        if execute {
+            scope.egraph.run_rules(&[rule], context)?;
+        }
+        Ok(())
+    }
+
+    /// Remove a rewrite rule from this [`EGraph`].
+    pub fn free_rule(&mut self, id: RuleId) {
+        self.rules.take(id);
+    }
+}
+
+impl<'a> RuleBuilder<'a> {
+    fn new(
+        egraph: &'a mut EGraph,
+        desc: &str,
+        seminaive: bool,
+        scoped: Option<&'a mut ScopedHandles>,
+    ) -> Self {
+        let uf_table = egraph.uf_table;
+        let id_counter = egraph.id_counter;
+        let ts_counter = egraph.timestamp_counter;
+        let rule_id = scoped.is_none().then(|| egraph.rules.reserve_slot());
+        RuleBuilder {
+            egraph,
             desc: Arc::from(desc),
+            scoped,
             query: Query {
                 uf_table,
                 id_counter,
@@ -153,11 +221,6 @@ impl EGraph {
                 no_decomp: false,
             },
         }
-    }
-
-    /// Remove a rewrite rule from this [`EGraph`].
-    pub fn free_rule(&mut self, id: RuleId) {
-        self.rules.take(id);
     }
 }
 
@@ -295,7 +358,13 @@ impl RuleBuilder<'_> {
         if self.query.atoms.len() == 1 {
             self.query.plan_strategy = PlanStrategy::MinCover;
         }
-        let res = self.query.rule_id;
+        let res = self
+            .query
+            .rule_id
+            .unwrap_or_else(|| self.egraph.rules.reserve_slot());
+        if let Some(scoped) = self.scoped {
+            assert!(scoped.rule.replace(res).is_none());
+        }
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
             query: self.query,
@@ -394,7 +463,7 @@ impl RuleBuilder<'_> {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
         // External functions that fail on the RHS of a rule should cause a panic.
-        let panic_fn = self.egraph.new_panic_lazy(panic_msg);
+        let panic_fn = self.new_panic_lazy(panic_msg);
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let args = inner.convert_all(&args);
             let var = rb.call_external_with_fallback(func, &args, panic_fn, &[])?;
@@ -402,6 +471,59 @@ impl RuleBuilder<'_> {
             Ok(())
         }));
         res
+    }
+
+    fn new_panic_lazy(
+        &mut self,
+        message: impl FnOnce() -> String + Send + 'static,
+    ) -> ExternalFunctionId {
+        let function = self.egraph.new_panic_lazy(message);
+        if let Some(scoped) = &mut self.scoped {
+            scoped.functions.push(function);
+        }
+        function
+    }
+
+    /// Register and call an infallible temporary operation at this action
+    /// position. It must return `Some` for each active lane. Unlike fallible
+    /// primitive calls this creates no fallback callback. The operation may
+    /// not escape the temporary rule; its registration is owned by the scope.
+    pub fn call_scoped_infallible(
+        &mut self,
+        function: Box<dyn crate::core_relations::ExternalFunction>,
+        args: &[QueryEntry],
+        ret_ty: ColumnTy,
+    ) -> Variable {
+        let scoped = self.scoped.as_mut().expect("temporary rule required");
+        let function = self.egraph.register_external_func(function);
+        scoped.functions.push(function);
+        let args = args.to_vec();
+        let result = self.new_var(ret_ty);
+        self.add_callback(move |inner, rb| {
+            let args = inner.convert_all(&args);
+            let value = rb.call_external(function, &args)?;
+            inner.mapping.insert(result.id, value.into());
+            Ok(())
+        });
+        result
+    }
+
+    /// Bind a fresh typed equality identity when this action position runs,
+    /// never during compilation. No table or constructor row is introduced.
+    pub fn fresh_eq_class(&mut self, sort: Arc<str>) -> Variable {
+        let counter = self.query.id_counter;
+        self.call_scoped_infallible(
+            Box::new(crate::core_relations::make_external_func(
+                move |state, args| {
+                    assert!(args.is_empty());
+                    let value = Value::from_usize(state.inc_counter(counter));
+                    state.materialize_eq_value(sort.clone(), value);
+                    Some(value)
+                },
+            )),
+            &[],
+            ColumnTy::Id,
+        )
     }
 
     /// Add the given table atom to query. As elsewhere in the crate, the last
@@ -571,7 +693,7 @@ impl RuleBuilder<'_> {
                 })
             }
             DefaultVal::Fail => {
-                let panic_func = self.egraph.new_panic_lazy(panic_msg);
+                let panic_func = self.new_panic_lazy(panic_msg);
                 Box::new(move |inner, rb| {
                     let dst_vars = inner.convert_all(&entries);
                     let var = rb.lookup_with_fallback(
@@ -694,7 +816,11 @@ impl RuleBuilder<'_> {
 
     /// Panic with a given message.
     pub fn panic(&mut self, message: String) {
-        let panic = self.egraph.new_panic(message.clone());
+        let panic = if self.scoped.is_some() {
+            self.new_panic_lazy(move || message)
+        } else {
+            self.egraph.new_panic(message)
+        };
         let ret_ty = ColumnTy::Id;
         let res = self.new_var(ret_ty);
         self.query.add_rule.push(Box::new(move |inner, rb| {
