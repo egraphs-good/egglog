@@ -1394,6 +1394,29 @@ fn closed_default(p: &pb::Program, root: u32) -> Result<(), String> {
                     V::String(_) => "String",
                     V::Bool(_) => "bool",
                     V::Unit(_) => "Unit",
+                    V::Maybe(v) => {
+                        let Some(pb::sort::Kind::Family(f)) = &p.sorts[n.sort_id as usize].kind
+                        else {
+                            return Err("default Maybe sort mismatch".into());
+                        };
+                        if f.name != "Maybe" || f.args.len() != 1 {
+                            return Err("default Maybe sort mismatch".into());
+                        }
+                        if let Some(member) = v.value
+                            && p.nodes
+                                .get(member as usize)
+                                .ok_or("default Maybe child out of bounds")?
+                                .sort_id
+                                != f.args[0]
+                        {
+                            return Err("default Maybe child sort mismatch".into());
+                        }
+                        node_edges(&mut kind, |i| {
+                            pending.push(*i);
+                            Ok(())
+                        })?;
+                        continue;
+                    }
                     V::Vec(v) => {
                         let Some(pb::sort::Kind::Family(f)) = &p.sorts[n.sort_id as usize].kind
                         else {

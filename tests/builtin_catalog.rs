@@ -4070,6 +4070,172 @@ fn vec_tail_receiver_and_equality_restriction_are_exact() {
 }
 
 #[test]
+fn closed_maybe_defaults_preserve_optional_zero_and_reject_wrong_children() {
+    // This exercises declaration validation only, not a substitute provider.
+    let base = proto::Program {
+        ir_version: 1,
+        sorts: vec![
+            proto::Sort {
+                kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                    name: "i64".into(),
+                    args: vec![],
+                })),
+                ..Default::default()
+            },
+            proto::Sort {
+                kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                    name: "Maybe".into(),
+                    args: vec![0],
+                })),
+                ..Default::default()
+            },
+            proto::Sort {
+                kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                    name: "Maybe".into(),
+                    args: vec![1],
+                })),
+                ..Default::default()
+            },
+        ],
+        nodes: vec![
+            proto::Node {
+                sort_id: 0,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::I64(0)),
+                })),
+                ..Default::default()
+            },
+            proto::Node {
+                sort_id: 1,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::Maybe(proto::MaybeValue {
+                        value: None,
+                    })),
+                })),
+                ..Default::default()
+            },
+            proto::Node {
+                sort_id: 1,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::Maybe(proto::MaybeValue {
+                        value: Some(0),
+                    })),
+                })),
+                ..Default::default()
+            },
+            proto::Node {
+                sort_id: 2,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::Maybe(proto::MaybeValue {
+                        value: Some(1),
+                    })),
+                })),
+                ..Default::default()
+            },
+        ],
+        declarations: vec![proto::Declaration {
+            kind: Some(proto::declaration::Kind::Function(proto::Function {
+                name: "take_maybe".into(),
+                inputs: vec![proto::Arg {
+                    name: "value".into(),
+                    sort: 1,
+                }],
+                output: 0,
+                merge: None,
+            })),
+            bindings: Some(proto::CallableBindings {
+                python: Some(proto::PythonBindings {
+                    views: vec![proto::PythonCallable {
+                        kind: proto::PythonCallKind::Function.into(),
+                        path: vec!["test".into(), "take_maybe".into()],
+                        params: vec![proto::PythonParameter {
+                            core_input: Some(0),
+                            name: "value".into(),
+                            default_expr: Some(1),
+                        }],
+                        ..Default::default()
+                    }],
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for root in 1..=3 {
+        let mut program = base.clone();
+        let Some(proto::declaration::Kind::Function(function)) = &mut program.declarations[0].kind
+        else {
+            panic!()
+        };
+        function.inputs[0].sort = program.nodes[root].sort_id;
+        program.declarations[0]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python
+            .as_mut()
+            .unwrap()
+            .views[0]
+            .params[0]
+            .default_expr = Some(root as u32);
+        let mut installed = proto::Program::default();
+        builtin::definitions::reconcile_declarations(&program, &mut installed).unwrap();
+        let frozen = installed.clone();
+        builtin::definitions::reconcile_declarations(&program, &mut installed).unwrap();
+        assert_eq!(installed, frozen);
+        for mutation in 0..5 {
+            let mut malformed = program.clone();
+            match mutation {
+                0 => {
+                    malformed.nodes[root].kind =
+                        Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                            value: Some(proto::primitive_value::Value::Maybe(proto::MaybeValue {
+                                value: Some(99),
+                            })),
+                        }))
+                }
+                1 => {
+                    malformed.nodes[root].kind =
+                        Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                            value: Some(proto::primitive_value::Value::Maybe(proto::MaybeValue {
+                                value: Some(root as u32),
+                            })),
+                        }))
+                }
+                2 => {
+                    malformed.sorts[program.nodes[root].sort_id as usize].kind =
+                        Some(proto::sort::Kind::Family(proto::HostSort {
+                            name: "Vec".into(),
+                            args: vec![0],
+                        }))
+                }
+                3 => {
+                    malformed.sorts[program.nodes[root].sort_id as usize].kind =
+                        Some(proto::sort::Kind::Family(proto::HostSort {
+                            name: "Maybe".into(),
+                            args: vec![],
+                        }))
+                }
+                _ => malformed.nodes[root].kind = Some(proto::node::Kind::Var("free".into())),
+            }
+            assert!(
+                builtin::definitions::reconcile_declarations(
+                    &malformed,
+                    &mut proto::Program::default()
+                )
+                .is_err(),
+                "root {root}, mutation {mutation}"
+            );
+            assert!(
+                builtin::definitions::reconcile_declarations(&malformed, &mut installed).is_err()
+            );
+            assert_eq!(installed, frozen);
+        }
+    }
+}
+
+#[test]
 fn closed_defaults_enforce_exact_equality_binders_after_substitution() {
     let definition = VecSort::builtin_definitions().into_iter().find(|p| p.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostPrimitive(h)) if h.name == "egglog.core.vec.union"))).unwrap();
     for element in [
