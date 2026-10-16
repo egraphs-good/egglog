@@ -496,6 +496,11 @@ impl SchedulerRuleInfo {
         // shadow a user table in the name-indexed registry.
         let decided_name = egraph.parser.symbol_gen.fresh("scheduler_decided");
         let decided = egraph.backend.add_table(FunctionConfig {
+            eq_sorts: free_vars
+                .iter()
+                .map(|v| v.sort.is_eq_sort().then(|| Arc::<str>::from(v.sort.name())))
+                .chain(std::iter::once(None))
+                .collect(),
             schema,
             default: DefaultVal::Const(unit),
             merge: MergeFn::AssertEq,

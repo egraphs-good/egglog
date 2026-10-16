@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    common::IndexSet,
+    common::{HashSet, IndexSet},
     hash_index::IndexCatalog,
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
@@ -29,7 +29,8 @@ use crate::{
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
     table_spec::{
-        ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable, WrappedTableRef,
+        ColumnId, Constraint, EqClassInventory, MutationBuffer, Table, TableSpec, WrappedTable,
+        WrappedTableRef,
     },
 };
 
@@ -312,6 +313,7 @@ impl Counters {
 /// A database also owns the memory pools used by its tables.
 #[derive(Clone, Default)]
 pub struct Database {
+    pub(crate) eq_classes: EqClassInventory,
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
     pub(crate) tables: DenseIdMap<TableId, TableInfo>,
@@ -336,6 +338,18 @@ pub struct Database {
 }
 
 impl Database {
+    /// Collect all membership partitions without flushing or scanning rows.
+    /// The caller canonicalizes these IDs using its native union-find.
+    pub fn materialized_eq_classes(&self) -> HashSet<(Arc<str>, Value)> {
+        let mut classes = self.eq_classes.0.lock().unwrap().clone();
+        for (_, info) in self.tables.iter() {
+            info.table.visit_eq_classes(&mut |sort, value| {
+                classes.insert((sort.clone(), value));
+            });
+        }
+        classes
+    }
+
     /// Create an empty Database.
     ///
     /// Queries use the currently installed egglog thread pool. If no pool is
@@ -503,6 +517,7 @@ impl Database {
     /// every [`ExecutionState`] built from the view will expose.
     pub(crate) fn read_only_view_with<'a>(&'a self, context: ExternalContext<'a>) -> DbView<'a> {
         DbView {
+            eq_classes: &self.eq_classes,
             external_context: context,
             table_info: &self.tables,
             counters: &self.counters,

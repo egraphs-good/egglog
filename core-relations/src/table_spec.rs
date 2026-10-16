@@ -8,6 +8,7 @@ use std::{
     any::Any,
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    sync::{Arc, Mutex},
 };
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
@@ -19,7 +20,7 @@ use crate::{
         Bindings, ExecutionState,
         mask::{Mask, MaskIter, ValueSource},
     },
-    common::Value,
+    common::{HashSet, Value},
     hash_index::{IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
     pool::{PoolSet, Pooled, with_pool_set},
@@ -27,6 +28,24 @@ use crate::{
 };
 
 define_id!(pub ColumnId, u32, "a particular column in a table", pretty "Col");
+
+/// A partition of native typed class membership, independent of surviving rows.
+#[derive(Default)]
+pub(crate) struct EqClassInventory(pub(crate) Mutex<HashSet<(Arc<str>, Value)>>);
+
+impl Clone for EqClassInventory {
+    fn clone(&self) -> Self {
+        Self(Mutex::new(self.0.lock().unwrap().clone()))
+    }
+}
+
+impl EqClassInventory {
+    pub(crate) fn record(&self, sort: Arc<str>, value: Value) {
+        assert!(!value.is_stale(), "a stale row marker is not a class");
+        self.0.lock().unwrap().insert((sort, value));
+    }
+}
+
 define_id!(
     pub Generation,
     u64,
@@ -166,6 +185,16 @@ pub struct Row {
 
 /// An interface for a table.
 pub trait Table: Any + Send + Sync {
+    /// Logical equality-sort tags, excluding containers and bookkeeping columns.
+    /// Untyped table implementations contribute no inferred class identities.
+    fn eq_sorts(&self) -> &[Option<Arc<str>>] {
+        &[]
+    }
+
+    /// Visit introduced identities, including those whose rows no longer exist.
+    /// Call only at a quiescent boundary; this does not flush pending writes.
+    fn visit_eq_classes(&self, _visit: &mut dyn FnMut(&Arc<str>, Value)) {}
+
     /// A variant of clone that returns a boxed trait object; this trait object
     /// must contain all of the data associated with the current table.
     fn dyn_clone(&self) -> Box<dyn Table>;

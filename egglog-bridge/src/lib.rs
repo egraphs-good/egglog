@@ -182,6 +182,9 @@ impl Default for EGraph {
 pub struct FunctionConfig {
     /// The function's schema. The last column in the schema is the return type.
     pub schema: Vec<ColumnTy>,
+    /// Resolved equality-sort names, aligned with schema. Base and container
+    /// columns are None even when their storage uses IDs.
+    pub eq_sorts: Vec<Option<Arc<str>>>,
     /// The behavior of the function when lookups are made on keys not currently present.
     pub default: DefaultVal,
     /// How to resolve FD conflicts for the function.
@@ -373,6 +376,24 @@ impl EGraph {
     /// Generate a fresh id.
     pub fn fresh_id(&mut self) -> Value {
         Value::from_usize(self.db.inc_counter(self.id_counter))
+    }
+
+    /// Introduce a bare equality class, with no constructor or carrier row.
+    /// The caller supplies its resolved native equality-sort name.
+    pub fn fresh_eq_class(&mut self, sort: Arc<str>) -> Value {
+        let value = self.fresh_id();
+        self.with_execution_state(None, |state| state.materialize_eq_value(sort, value));
+        value
+    }
+
+    /// Read canonical typed membership at a quiescent boundary. Does not rebuild,
+    /// flush, or introduce rows; classes whose last row was deleted remain here.
+    pub fn materialized_eq_classes(&self) -> std::collections::BTreeSet<(Arc<str>, Value)> {
+        self.db
+            .materialized_eq_classes()
+            .into_iter()
+            .map(|(sort, value)| (sort, self.get_canon_in_uf(value)))
+            .collect()
     }
 
     /// Look up the canonical value for `val` in the union-find.
@@ -583,6 +604,7 @@ impl EGraph {
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
         let FunctionConfig {
             schema,
+            mut eq_sorts,
             default,
             merge,
             name,
@@ -592,6 +614,19 @@ impl EGraph {
             !schema.is_empty(),
             "must have at least one column in schema"
         );
+        assert_eq!(
+            eq_sorts.len(),
+            schema.len(),
+            "equality metadata arity mismatch"
+        );
+        for (sort, ty) in eq_sorts.iter().zip(&schema) {
+            if sort.is_some() {
+                assert!(
+                    matches!(ty, ColumnTy::Id),
+                    "equality columns require ID storage"
+                );
+            }
+        }
         let to_rebuild: Vec<ColumnId> = schema
             .iter()
             .enumerate()
@@ -608,7 +643,9 @@ impl EGraph {
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
-        let merge_fn = merge.to_callback(schema_math, &name, self);
+        let merge_fn =
+            merge.to_callback(schema_math, &name, eq_sorts.last().unwrap().clone(), self);
+        eq_sorts.resize(n_cols, None);
         let table = install_thread_pool(self.thread_pool(), || {
             SortedWritesTable::new(
                 n_args,
@@ -617,6 +654,7 @@ impl EGraph {
                 to_rebuild,
                 merge_fn,
             )
+            .with_eq_sorts(eq_sorts)
         });
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
@@ -1272,6 +1310,7 @@ impl MergeFn {
         &self,
         schema_math: SchemaMath,
         function_name: &str,
+        output_sort: Option<Arc<str>>,
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
         let resolved = self.resolve(function_name, egraph);
@@ -1285,6 +1324,9 @@ impl MergeFn {
                 let cur = cur[schema_math.ret_val_col()];
                 let new = new[schema_math.ret_val_col()];
                 let out = resolved.run(state, cur, new, timestamp);
+                if let Some(sort) = &output_sort {
+                    state.materialize_eq_value(sort.clone(), out);
+                }
                 changed |= cur != out;
                 out
             };

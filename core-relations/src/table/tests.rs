@@ -12,6 +12,197 @@ use crate::{
 
 use super::sharded_hash_table::ShardedHashTable;
 
+#[test]
+fn typed_class_inventory_clear_and_live_buffer_clone() {
+    empty_execution_state!(state);
+    let mut table = super::SortedWritesTable::new(
+        1,
+        2,
+        None,
+        vec![ColumnId::new(1)],
+        Box::new(|_, _, new, out| {
+            out.extend_from_slice(new);
+            true
+        }),
+    )
+    .with_eq_sorts(vec![None, Some("A".into())]);
+    let mut buffer = table.new_buffer();
+    buffer.stage_insert(&[v(0), v(10)]);
+    drop(buffer);
+    table.clear();
+    table.merge(&mut state);
+    assert_eq!(table.len(), 0);
+    assert_eq!(
+        *table.pending_state.eq_classes.0.lock().unwrap(),
+        [("A".into(), v(10))].into_iter().collect()
+    );
+
+    let mut buffer = table.new_buffer();
+    buffer.stage_insert(&[v(1), v(11)]);
+    let mut cloned = table.clone();
+    buffer.stage_insert(&[v(2), v(12)]);
+    // Clear does not cancel local rows in a still-live buffer.
+    table.clear();
+    drop(buffer);
+    table.merge(&mut state);
+    cloned.merge(&mut state);
+    assert_eq!(table.len(), 2);
+    assert_eq!(cloned.len(), 0);
+    assert_eq!(
+        *table.pending_state.eq_classes.0.lock().unwrap(),
+        [
+            ("A".into(), v(10)),
+            ("A".into(), v(11)),
+            ("A".into(), v(12))
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        *cloned.pending_state.eq_classes.0.lock().unwrap(),
+        [("A".into(), v(10)), ("A".into(), v(11))]
+            .into_iter()
+            .collect()
+    );
+    let generation = table.generation;
+    for value in 20..40 {
+        table.new_buffer().stage_insert(&[v(0), v(value)]);
+        table.merge(&mut state);
+    }
+    assert_ne!(table.generation, generation, "stale rows were compacted");
+    assert_eq!(table.len(), 3);
+    assert_eq!(
+        *table.pending_state.eq_classes.0.lock().unwrap(),
+        [10, 11, 12]
+            .into_iter()
+            .chain(20..40)
+            .map(|value| ("A".into(), v(value)))
+            .collect()
+    );
+}
+
+#[test]
+fn typed_class_inventory_selected_lookup_without_staging() {
+    use crate::action::{Bindings, Instr, QueryEntry};
+    for case in 0..3 {
+        let mut db = crate::Database::new();
+        let table = db.add_table(
+            super::SortedWritesTable::new(
+                1,
+                2,
+                None,
+                vec![ColumnId::new(1)],
+                Box::new(|_, _, _, _| false),
+            )
+            .with_eq_sorts(vec![None, Some("A".into())]),
+            [],
+            [],
+        );
+        let value = v(41);
+        let output = crate::Variable::new(0);
+        let instruction = if case == 0 {
+            Instr::LookupWithDefault {
+                table,
+                args: vec![QueryEntry::Const(v(0))],
+                dst_col: ColumnId::new(1),
+                dst_var: output,
+                default: QueryEntry::Const(value),
+            }
+        } else {
+            let func =
+                db.add_external_function(Box::new(crate::make_external_func(move |_, _| {
+                    (case == 1).then_some(value)
+                })));
+            Instr::LookupWithFallback {
+                table,
+                table_key: vec![QueryEntry::Const(v(0))],
+                func,
+                func_args: vec![],
+                dst_col: ColumnId::new(1),
+                dst_var: output,
+            }
+        };
+        let mut bindings = Bindings::new(1);
+        let matches = db.with_execution_state(None, |state| {
+            state.run_instrs(&[instruction], &mut bindings)
+        });
+        assert_eq!(matches, usize::from(case != 2));
+        assert_eq!(db.get_table(table).len(), 0);
+        let expected = if case == 2 {
+            vec![]
+        } else {
+            vec![("A".into(), value)]
+        };
+        assert_eq!(db.materialized_eq_classes(), expected.into_iter().collect());
+        let saved = db.clone();
+        db.with_execution_state(None, |state| state.materialize_eq_value("B".into(), v(42)));
+        assert!(
+            !saved
+                .materialized_eq_classes()
+                .contains(&("B".into(), v(42)))
+        );
+    }
+
+    // A hit, a successful fallback, and a failed fallback share one active mask.
+    let mut db = crate::Database::new();
+    let table = db.add_table(
+        super::SortedWritesTable::new(
+            1,
+            2,
+            None,
+            vec![ColumnId::new(1)],
+            Box::new(|_, _, _, _| false),
+        )
+        .with_eq_sorts(vec![None, Some("A".into())]),
+        [],
+        [],
+    );
+    db.new_buffer(table).stage_insert(&[v(0), v(40)]);
+    db.merge_all();
+    let func = db.add_external_function(Box::new(crate::make_external_func(|_, args| {
+        (args[0] == v(1)).then_some(v(41))
+    })));
+    let key = crate::Variable::new(0);
+    let output = crate::Variable::new(1);
+    let mut bindings = Bindings::new(3);
+    bindings.insert(key, &[v(0), v(1), v(2)]);
+    let instruction = Instr::LookupWithFallback {
+        table,
+        table_key: vec![key.into()],
+        func,
+        func_args: vec![key.into()],
+        dst_col: ColumnId::new(1),
+        dst_var: output,
+    };
+    assert_eq!(
+        db.with_execution_state(None, |state| state
+            .run_instrs(&[instruction], &mut bindings)),
+        2
+    );
+    assert_eq!(bindings[output][..2], [v(40), v(41)]);
+    // An eager default on a hit never becomes a selected result.
+    let mut bindings = Bindings::new(1);
+    let hit = Instr::LookupWithDefault {
+        table,
+        args: vec![QueryEntry::Const(v(0))],
+        dst_col: ColumnId::new(1),
+        dst_var: output,
+        default: QueryEntry::Const(v(42)),
+    };
+    assert_eq!(
+        db.with_execution_state(None, |state| state.run_instrs(&[hit], &mut bindings)),
+        1
+    );
+    assert_eq!(bindings[output], [v(40)]);
+    assert_eq!(
+        db.materialized_eq_classes(),
+        [("A".into(), v(40)), ("A".into(), v(41))]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(db.get_table(table).len(), 1);
+}
+
 fn dump_buf(buf: &TaggedRowBuffer) -> Vec<(RowId, Vec<Value>)> {
     let mut res = Vec::new();
     buf.iter()

@@ -32,8 +32,8 @@ use crate::{
     pool::with_pool_set,
     row_buffer::{ParallelRowBufWriter, RowBuffer},
     table_spec::{
-        ColumnId, Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSpec,
-        TableVersion,
+        ColumnId, Constraint, EqClassInventory, Generation, MutationBuffer, Offset, Row, Table,
+        TableSpec, TableVersion,
     },
 };
 
@@ -239,6 +239,13 @@ impl MutationBuffer for Buffer {
         self.pending_rows
             .get_or_insert(shard, || RowBuffer::new(self.n_cols as _))
             .add_row(row);
+        if let Some(state) = self.state.upgrade() {
+            for (sort, value) in state.eq_sorts.iter().zip(row) {
+                if let Some(sort) = sort {
+                    state.eq_classes.record(sort.clone(), *value);
+                }
+            }
+        }
     }
     fn stage_remove(&mut self, key: &[Value]) {
         let (shard, _) = hash_code(self.shard_data, key, self.n_keys as _);
@@ -287,6 +294,16 @@ impl Drop for Buffer {
 }
 
 impl Table for SortedWritesTable {
+    fn eq_sorts(&self) -> &[Option<Arc<str>>] {
+        &self.pending_state.eq_sorts
+    }
+
+    fn visit_eq_classes(&self, visit: &mut dyn FnMut(&Arc<str>, Value)) {
+        for (sort, value) in self.pending_state.eq_classes.0.lock().unwrap().iter() {
+            visit(sort, *value);
+        }
+    }
+
     fn dyn_clone(&self) -> Box<dyn Table> {
         Box::new(self.clone())
     }
@@ -575,6 +592,33 @@ impl Table for SortedWritesTable {
 }
 
 impl SortedWritesTable {
+    /// Attach resolved equality-sort metadata before any buffers or rows exist.
+    /// Rebuildable ID storage is necessary, but is not sufficient to infer a tag:
+    /// container columns must remain untagged.
+    pub fn with_eq_sorts(mut self, sorts: Vec<Option<Arc<str>>>) -> Self {
+        assert_eq!(
+            sorts.len(),
+            self.n_columns,
+            "equality metadata arity mismatch"
+        );
+        assert_eq!(self.generation, Generation::new(0));
+        assert_eq!(self.data.data.len(), 0);
+        assert_eq!(self.pending_state.total_rows.load(Ordering::Acquire), 0);
+        for (index, sort) in sorts.iter().enumerate() {
+            if sort.is_some() {
+                assert!(
+                    self.to_rebuild.contains(&ColumnId::from_usize(index)),
+                    "equality column must use rebuildable ID storage"
+                );
+            }
+        }
+        let state = Arc::get_mut(&mut self.pending_state)
+            .expect("configure equality metadata before creating buffers");
+        assert!(state.eq_sorts.is_empty(), "equality metadata is immutable");
+        state.eq_sorts = sorts;
+        self
+    }
+
     /// Create a new [`SortedWritesTable`] with the given number of keys,
     /// columns, and an optional sort column.
     ///
@@ -1282,6 +1326,8 @@ fn hash_code(shard_data: ShardData, row: &[Value], n_keys: usize) -> (ShardId, u
 
 /// A simple struct for packaging up pending mutations to a `SortedWritesTable`.
 struct PendingState {
+    eq_sorts: Vec<Option<Arc<str>>>,
+    eq_classes: EqClassInventory,
     pending_rows: DenseIdMap<ShardId, SegQueue<RowBuffer>>,
     pending_removals: DenseIdMap<ShardId, SegQueue<ArbitraryRowBuffer>>,
     total_removals: AtomicUsize,
@@ -1299,6 +1345,8 @@ impl PendingState {
         }
 
         PendingState {
+            eq_sorts: vec![],
+            eq_classes: Default::default(),
             pending_rows,
             pending_removals,
             total_removals: AtomicUsize::new(0),
@@ -1351,6 +1399,8 @@ impl PendingState {
         }
 
         PendingState {
+            eq_sorts: self.eq_sorts.clone(),
+            eq_classes: self.eq_classes.clone(),
             pending_rows,
             pending_removals,
             total_removals: AtomicUsize::new(self.total_removals.load(Ordering::Acquire)),

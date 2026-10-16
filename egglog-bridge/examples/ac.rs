@@ -15,6 +15,7 @@ fn main() {
         let mut egraph = EGraph::default();
         let int_base = egraph.base_values_mut().register_type::<i64>();
         let num_table = egraph.add_table(FunctionConfig {
+            eq_sorts: vec![None, Some("Term".into())],
             schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
@@ -22,6 +23,11 @@ fn main() {
             can_subsume: false,
         });
         let add_table = egraph.add_table(FunctionConfig {
+            eq_sorts: vec![
+                Some("Term".into()),
+                Some("Term".into()),
+                Some("Term".into()),
+            ],
             schema: vec![ColumnTy::Id; 3],
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,

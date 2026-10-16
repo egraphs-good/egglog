@@ -1109,6 +1109,12 @@ impl EGraph {
 
         use egglog_bridge::{DefaultVal, MergeFn};
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+            eq_sorts: func_type
+                .input
+                .iter()
+                .chain([&func_type.output])
+                .map(|sort| sort.is_eq_sort().then(|| Arc::<str>::from(sort.name())))
+                .collect(),
             schema: func_type
                 .input
                 .iter()
@@ -2951,6 +2957,26 @@ impl EGraph {
             .sum()
     }
 
+    /// Native typed class inventory, including empty and unreachable classes.
+    /// Read only after native maintenance has settled. Encoded-mode helper sorts
+    /// retain their native names; logical projection is the caller's responsibility.
+    pub fn materialized_eq_classes(&self) -> std::collections::BTreeSet<(Arc<str>, Value)> {
+        self.backend.materialized_eq_classes()
+    }
+
+    /// Allocate an empty native equality class without introducing a table row.
+    pub fn fresh_eq_class(&mut self, sort: &str) -> Result<Value, Error> {
+        let resolved = self
+            .get_sort_by_name(sort)
+            .ok_or_else(|| Error::BackendError(format!("unknown equality sort {sort}")))?;
+        if !resolved.is_eq_sort() {
+            return Err(Error::BackendError(format!(
+                "{sort} is not an equality sort"
+            )));
+        }
+        Ok(self.backend.fresh_eq_class(Arc::from(resolved.name())))
+    }
+
     /// Returns a sort based on the type.
     pub fn get_sort<S: Sort>(&self) -> Arc<S> {
         self.type_info.get_sort()
@@ -4085,6 +4111,130 @@ mod tests {
         }
         let egraph = EGraph::default();
         assert!(is_send(&egraph) && is_sync(&egraph));
+    }
+
+    #[test]
+    fn typed_class_inventory_native_modes_and_logical_projection() {
+        for mode in 0..4 {
+            let graph = EGraph::default();
+            let mut graph = match mode {
+                0 => graph,
+                1 => graph.with_term_encoding_enabled(),
+                2 => graph.with_proofs_enabled(),
+                _ => graph.with_proofs_enabled().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(datatype A (AItem i64)) (datatype B (BItem i64)) (sort Unused)
+                 (AItem 11) (AItem 22) (BItem 11)
+                 (union (AItem 11) (AItem 22))
+                 (check (= (AItem 11) (AItem 22)))",
+                )
+                .unwrap();
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(delete (AItem 11)) (delete (AItem 22)) (delete (BItem 11)) (run 1)",
+                )
+                .unwrap();
+            for (name, retained_terms) in [("AItem", 2), ("BItem", 1)] {
+                if mode != 0 {
+                    let views: Vec<_> = graph
+                        .functions_iter()
+                        .filter(|(_, function)| {
+                            function.term_constructor().is_some_and(|term| term == name)
+                        })
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    assert_eq!(views.len(), 1);
+                    assert_eq!(graph.get_size(&views[0]), 0, "mode {mode}: deleted view");
+                    // Encoded Delete intentionally retains immutable term tables.
+                    assert_eq!(graph.get_size(name), retained_terms);
+                    graph.clear_function(name).unwrap();
+                }
+                assert_eq!(graph.get_size(name), 0, "mode {mode}: no producer rows");
+            }
+            let classes = graph.materialized_eq_classes();
+            for (sort, _) in &classes {
+                assert!(graph.get_sort_by_name(sort).unwrap().is_eq_sort());
+            }
+            assert!(!classes.iter().any(|(sort, _)| sort.as_ref() == "Unused"));
+            for sort in ["A", "B"] {
+                let mut logical = HashSet::default();
+                for (_, value) in classes.iter().filter(|(name, _)| name.as_ref() == sort) {
+                    let mut leader = *value;
+                    // Existing encoding metadata, not helper-name reconstruction.
+                    if let Some(uf) = graph.proof_state.uf_parent.get(sort) {
+                        graph
+                            .backend
+                            .for_each(graph.functions[uf].backend_id, |row| {
+                                if row.vals[0] == *value {
+                                    leader = row.vals[1];
+                                }
+                            });
+                    }
+                    logical.insert(leader);
+                }
+                assert_eq!(logical.len(), 1, "mode {mode}, sort {sort}");
+            }
+            let rows = graph.num_tuples();
+            let report = serde_json::to_value(&graph.overall_run_report).unwrap();
+            assert_eq!(graph.materialized_eq_classes(), classes);
+            assert_eq!(graph.num_tuples(), rows);
+            assert_eq!(
+                serde_json::to_value(&graph.overall_run_report).unwrap(),
+                report
+            );
+            let bare = graph.fresh_eq_class("Unused").unwrap();
+            assert!(
+                graph
+                    .materialized_eq_classes()
+                    .contains(&("Unused".into(), bare))
+            );
+            assert_eq!(graph.num_tuples(), rows);
+        }
+    }
+
+    #[test]
+    fn typed_class_inventory_scopes_bare_classes_and_empty_native_name() {
+        for use_pop in [false, true] {
+            let mut graph = EGraph::default();
+            graph
+                .add_sort(
+                    EqSort {
+                        name: String::new(),
+                    },
+                    span!(),
+                )
+                .unwrap();
+            let unnamed = graph.fresh_eq_class("").unwrap();
+            assert!(graph.fresh_eq_class("i64").is_err());
+            assert!(graph.fresh_eq_class("unknown").is_err());
+            graph
+                .parse_and_run_program(None, "(datatype A (AItem i64)) (AItem 1)")
+                .unwrap();
+            let prefix = graph.materialized_eq_classes();
+            assert!(prefix.contains(&(Arc::<str>::from(""), unnamed)));
+            let saved = graph.clone();
+            if use_pop {
+                graph.push();
+            }
+            graph.parse_and_run_program(None, "(AItem 2)").unwrap();
+            let bare = graph.fresh_eq_class("A").unwrap();
+            assert_eq!(graph.materialized_eq_classes().len(), prefix.len() + 2);
+            if use_pop {
+                graph.pop().unwrap();
+            } else {
+                graph.restore_from(saved);
+            }
+            assert_eq!(graph.materialized_eq_classes(), prefix);
+            graph.parse_and_run_program(None, "(AItem 3)").unwrap();
+            assert_eq!(graph.fresh_eq_class("A").unwrap(), bare);
+            graph.clear_function("AItem").unwrap();
+            assert_eq!(graph.num_tuples(), 0);
+            assert_eq!(graph.materialized_eq_classes().len(), prefix.len() + 2);
+        }
     }
 
     #[test]

@@ -26,7 +26,7 @@ use crate::{
     offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
     row_buffer::TaggedRowBuffer,
-    table_spec::{ColumnId, Constraint, MutationBuffer},
+    table_spec::{ColumnId, Constraint, EqClassInventory, MutationBuffer},
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
@@ -327,6 +327,7 @@ impl PredictedVals {
 
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
+    pub(crate) eq_classes: &'a EqClassInventory,
     pub(crate) external_context: ExternalContext<'a>,
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
@@ -436,6 +437,12 @@ impl Clone for ExecutionState<'_> {
 }
 
 impl<'a> ExecutionState<'a> {
+    /// Record an actual typed result that can escape without entering a row.
+    /// The current database owns this membership, never the callback closure.
+    pub fn materialize_eq_value(&self, sort: Arc<str>, value: Value) {
+        self.db.eq_classes.record(sort, value);
+    }
+
     pub(crate) fn new(
         db: DbView<'a>,
         buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
@@ -807,6 +814,11 @@ impl ExecutionState<'_> {
                 table.lookup_with_default_vectorized(
                     mask, bindings, args, *dst_col, *default, *dst_var,
                 );
+                if let Some(Some(sort)) = table.eq_sorts().get(dst_col.index()) {
+                    mask.iter(&bindings[*dst_var]).for_each(|value| {
+                        self.db.eq_classes.record(sort.clone(), *value);
+                    });
+                }
             }
             Instr::Lookup {
                 table,
@@ -854,6 +866,11 @@ impl ExecutionState<'_> {
                 // succeeded.
                 lookup_result.union(&to_call_func);
                 *mask = lookup_result;
+                if let Some(Some(sort)) = table.eq_sorts().get(dst_col.index()) {
+                    mask.iter(&bindings[*dst_var]).for_each(|value| {
+                        self.db.eq_classes.record(sort.clone(), *value);
+                    });
+                }
             }
             Instr::Insert { table, vals } => {
                 for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
