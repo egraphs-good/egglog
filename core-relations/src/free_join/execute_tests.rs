@@ -342,7 +342,7 @@ fn binding_info_with_sizes(sizes: &[usize]) -> BindingInfo<'static, 'static> {
 }
 
 #[test]
-fn mixed_recursive_dvo_counts_refinements_from_the_executed_prefix() {
+fn speculative_dvo_counts_refinements_from_the_physical_prefix() {
     let stages = vec![
         intersect_stage(0, 0),
         intersect_stage(1, 0),
@@ -361,16 +361,15 @@ fn mixed_recursive_dvo_counts_refinements_from_the_executed_prefix() {
             );
         }
 
-        // Stage 1 ran first in this branch, refining atom 1. Stage 2 can use
-        // its refined residual. Counting the unexecuted logical stage 0
-        // instead would incorrectly prioritize atom 0, even when its residual
-        // is much larger. Equal sizes check that the actual prefix determines
-        // which stage has a positive refinement score.
+        // Stage 1 precedes this speculative suffix, refining atom 1. Stage 2
+        // can use its refined residual. Counting logical stage 0 instead would
+        // incorrectly prioritize atom 0, even when its residual is much larger.
+        // Equal sizes check that the physical prefix determines the depth.
         let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
         sort_plan_by_size_inner(
             &mut order,
             1..3,
-            JoinOrderContext::Runtime { start: 1 },
+            JoinOrderContext::Initial,
             &stages,
             &mut binding_info,
         );
@@ -380,6 +379,87 @@ fn mixed_recursive_dvo_counts_refinements_from_the_executed_prefix() {
             InstrOrder::from_iter([1, 2, 0, 3].into_iter()),
             "residual sizes: {residual_sizes:?}"
         );
+    }
+}
+
+#[test]
+fn runtime_dvo_compares_residual_rows_regardless_of_prior_refinement() {
+    let stages = vec![
+        intersect_stage(0, 0),
+        intersect_stage(1, 0),
+        intersect_stage(1, 1),
+    ];
+    for (residual_sizes, expected) in [
+        ([7_582, 70], [1, 2, 0]),
+        ([70, 7_582], [1, 0, 2]),
+        ([1, 2], [1, 0, 2]),
+        ([100, 100], [1, 0, 2]),
+    ] {
+        let mut binding_info = binding_info_with_sizes(&residual_sizes);
+        // Only atom 1 has been refined. The smaller residual wins, with the
+        // current physical order deciding a tie, even if atom 0 is unrefined.
+        let mut order = InstrOrder::from_iter([1, 0, 2].into_iter());
+        sort_plan_by_size_inner(
+            &mut order,
+            1..3,
+            JoinOrderContext::Runtime { start: 1 },
+            &stages,
+            &mut binding_info,
+        );
+        assert_eq!(
+            order,
+            InstrOrder::from_iter(expected.into_iter()),
+            "residual sizes: {residual_sizes:?}"
+        );
+    }
+}
+
+#[test]
+fn runtime_dvo_breaks_equal_row_counts_by_number_of_scans() {
+    let stages = vec![
+        intersect_stage(0, 0),
+        intersect_stage(0, 1),
+        intersect_atoms_stage(&[1, 2], 2),
+    ];
+    let mut binding_info = binding_info_with_sizes(&[100, 100, 200]);
+    let mut order = InstrOrder::from_iter(0..stages.len());
+
+    // Both candidates can scan 100 rows. The two unrefined scans take
+    // precedence over a single scan of the already refined atom.
+    sort_plan_by_size_inner(
+        &mut order,
+        1..3,
+        JoinOrderContext::Runtime { start: 1 },
+        &stages,
+        &mut binding_info,
+    );
+    assert_eq!(order, InstrOrder::from_iter([0, 2, 1].into_iter()));
+}
+
+#[test]
+fn runtime_dvo_preserves_physical_order_when_rows_and_scans_tie() {
+    let stages = vec![
+        intersect_stage(0, 0),
+        intersect_stage(1, 0),
+        intersect_stage(1, 1),
+        intersect_stage(0, 1),
+        intersect_stage(1, 2),
+    ];
+    for physical_order in [[0, 1, 2, 3, 4], [0, 1, 2, 4, 3]] {
+        let mut binding_info = binding_info_with_sizes(&[100, 100]);
+        let original = InstrOrder::from_iter(physical_order.into_iter());
+        let mut order = original.clone();
+
+        // Atom 0 has depth one and atom 1 has depth two. Neither depth nor
+        // logical stage number should break a tie in the immediate choice.
+        sort_plan_by_size_inner(
+            &mut order,
+            3..5,
+            JoinOrderContext::Runtime { start: 3 },
+            &stages,
+            &mut binding_info,
+        );
+        assert_eq!(order, original);
     }
 }
 
@@ -410,9 +490,9 @@ fn runtime_dvo_uses_live_sizes_only_for_the_next_stage() {
         );
         assert_eq!(initial, original);
 
-        // The immediate choice uses atom 1's smaller live residual. Atom 2's
-        // singleton has no prior refinement, so it cannot displace atom 1,
-        // even when atom 1 has two rows. The rest retains refinement priority.
+        // Atom 2's unrefined singleton wins when atom 1 has two rows; when
+        // both have one row, physical order selects atom 1. Only the winning
+        // stage and the current stage swap; the suffix is not sorted again.
         let mut order = original;
         let mut leaf_scans = smallvec![false; stages.len()];
         sort_plan_by_size(
@@ -422,29 +502,30 @@ fn runtime_dvo_uses_live_sizes_only_for_the_next_stage() {
             &stages,
             &mut binding_info,
         );
-        assert_eq!(
-            order,
-            InstrOrder::from_iter([0, 1, 2, 3, 5, 4, 6].into_iter())
-        );
+        let expected = if small_rows == 1 {
+            [0, 1, 2, 3, 5, 4, 6]
+        } else {
+            [0, 1, 2, 3, 6, 5, 4]
+        };
+        assert_eq!(order, InstrOrder::from_iter(expected.into_iter()));
     }
 }
 
 #[test]
-fn runtime_dvo_retains_refinements_from_stages_just_scheduled() {
+fn runtime_dvo_leaves_unexecuted_suffix_in_its_existing_order() {
     let stages = vec![
-        intersect_stage(0, 0),
+        intersect_atoms_stage(&[0, 2], 0),
         intersect_atoms_stage(&[0, 1], 1),
-        intersect_atoms_stage(&[0, 3], 2),
-        intersect_atoms_stage(&[1, 2], 3),
+        intersect_atoms_stage(&[2, 4], 2),
+        intersect_atoms_stage(&[0, 3], 3),
     ];
-    let mut binding_info = binding_info_with_sizes(&[160, 66, 2, 160]);
+    let mut binding_info = binding_info_with_sizes(&[160, 66, 80, 160, 80]);
     let mut order = InstrOrder::from_iter(0..stages.len());
     let mut leaf_scans = smallvec![false; stages.len()];
 
-    // Stage 1 wins the immediate choice: it uses a refined atom and has 66
-    // rows versus stage 2's 160. Scheduling it raises atom 0's depth to two.
-    // Stage 2 must then precede stage 3 (two rows, depth one), since the live
-    // sizes do not yet include the filtering that stage 1 will perform.
+    // Stage 1 wins with 66 rows versus 80 and 160. Speculatively counting its
+    // refinements would move stage 3 ahead of stage 2. Runtime ordering must
+    // leave both alone until stage 1 has executed and its residuals are known.
     sort_plan_by_size(
         &mut order,
         &mut leaf_scans,
@@ -453,6 +534,39 @@ fn runtime_dvo_retains_refinements_from_stages_just_scheduled() {
         &mut binding_info,
     );
     assert_eq!(order, InstrOrder::from_iter([0, 1, 2, 3].into_iter()));
+}
+
+#[test]
+fn runtime_dvo_reconsiders_the_next_stage_after_residuals_change() {
+    let stages = vec![
+        intersect_stage(0, 0),
+        intersect_stage(0, 1),
+        intersect_stage(1, 0),
+        intersect_stage(2, 0),
+    ];
+    let mut binding_info = binding_info_with_sizes(&[160, 66, 80]);
+    let mut order = InstrOrder::from_iter(0..stages.len());
+    let mut leaf_scans = smallvec![false; stages.len()];
+    sort_plan_by_size(
+        &mut order,
+        &mut leaf_scans,
+        JoinOrderContext::Runtime { start: 1 },
+        &stages,
+        &mut binding_info,
+    );
+    assert_eq!(order, InstrOrder::from_iter([0, 2, 1, 3].into_iter()));
+
+    // Model the residuals after the chosen stage executes. The immediately
+    // following choice must observe them even at physical position two.
+    binding_info = binding_info_with_sizes(&[5, 66, 2]);
+    sort_plan_by_size(
+        &mut order,
+        &mut leaf_scans,
+        JoinOrderContext::Runtime { start: 2 },
+        &stages,
+        &mut binding_info,
+    );
+    assert_eq!(order, InstrOrder::from_iter([0, 2, 3, 1].into_iter()));
 }
 
 #[test]
@@ -472,12 +586,13 @@ fn runtime_dvo_does_not_restart_live_size_priority_after_a_barrier() {
     ];
     for start in [2, 3] {
         let mut binding_info = binding_info_with_sizes(&[65, 1]);
-        let mut order = InstrOrder::from_iter(0..stages.len());
+        let original = InstrOrder::from_iter([0, 1, 2, 3, 5, 4].into_iter());
+        let mut order = original.clone();
         let mut leaf_scans = smallvec![false; stages.len()];
 
         // Whether the next position is the sole stage before the barrier or
-        // the barrier itself, the later phase still needs speculative ordering:
-        // atom 0's depth of two takes priority over atom 1's singleton.
+        // the barrier itself, the later phase keeps its existing order. Even
+        // the old speculative depth preference must not move atom 0 ahead.
         sort_plan_by_size(
             &mut order,
             &mut leaf_scans,
@@ -485,8 +600,22 @@ fn runtime_dvo_does_not_restart_live_size_priority_after_a_barrier() {
             &stages,
             &mut binding_info,
         );
-        assert_eq!(order, InstrOrder::from_iter(0..stages.len()));
+        assert_eq!(order, original);
     }
+
+    // Once the barrier has executed, the new phase can select its own next
+    // stage from fresh residuals, without changing the executed prefix.
+    let mut binding_info = binding_info_with_sizes(&[65, 1]);
+    let mut order = InstrOrder::from_iter(0..stages.len());
+    let mut leaf_scans = smallvec![false; stages.len()];
+    sort_plan_by_size(
+        &mut order,
+        &mut leaf_scans,
+        JoinOrderContext::Runtime { start: 4 },
+        &stages,
+        &mut binding_info,
+    );
+    assert_eq!(order, InstrOrder::from_iter([0, 1, 2, 3, 5, 4].into_iter()));
 }
 
 fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
