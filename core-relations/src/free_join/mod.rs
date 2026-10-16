@@ -40,6 +40,7 @@ use self::plan::{Plan, SharedHeaderSubset};
 use crate::action::{ExecutionState, ExternalContext};
 use crate::common::HashMap;
 
+mod bag_cache;
 pub(crate) mod execute;
 pub(crate) mod frame_update;
 mod join_tail;
