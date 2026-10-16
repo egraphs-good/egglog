@@ -1050,11 +1050,28 @@ fn fixed_tail_views_reject_invalid_counts_slots_types_and_defaults_transactional
             );
             assert_eq!(destination, before);
             let mut empty = pb::Program::default();
-            assert!(
-                reconcile_declarations(&changed, &mut empty).is_err(),
-                "first supply: python={python}, case={invalid}"
-            );
-            assert_eq!(empty, pb::Program::default());
+            if invalid == 0 {
+                // Without the count, receiver0 consumes the first homogeneous
+                // tail operand and parameter1 maps its remainder. This is a
+                // valid first supply, but changes the frozen binding above.
+                reconcile_declarations(&changed, &mut empty).unwrap();
+                let installed = empty.clone();
+                assert!(
+                    reconcile_declarations(&changed, &mut empty)
+                        .unwrap()
+                        .iter()
+                        .all(|changed| !changed)
+                );
+                assert_eq!(empty, installed);
+                assert!(reconcile_declarations(&source, &mut empty).is_err());
+                assert_eq!(empty, installed);
+            } else {
+                assert!(
+                    reconcile_declarations(&changed, &mut empty).is_err(),
+                    "first supply: python={python}, case={invalid}"
+                );
+                assert_eq!(empty, pb::Program::default());
+            }
         }
     }
     for invalid in 0..3 {
