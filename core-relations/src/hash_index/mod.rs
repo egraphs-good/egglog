@@ -103,6 +103,18 @@ impl<TI: IndexBase> Index<TI> {
         table.version() != self.updated_to
     }
 
+    /// Physical rows that refreshing this index would scan, without refreshing it.
+    pub(crate) fn refresh_work(&self, current: TableVersion) -> (usize, bool, usize) {
+        let same_generation = current.major == self.updated_to.major;
+        let indexed_rows = if same_generation {
+            self.updated_to.minor.index()
+        } else {
+            0
+        };
+        let pending = current.minor.index().saturating_sub(indexed_rows);
+        (pending, same_generation, indexed_rows)
+    }
+
     pub(crate) fn refresh(&mut self, table: WrappedTableRef) {
         let cur_version = table.version();
         if cur_version == self.updated_to {
@@ -1544,6 +1556,14 @@ fn num_shards() -> usize {
 /// pool behind those locks.
 static INDEX_THREAD_POOL: Lazy<ThreadPool> =
     Lazy::new(|| ThreadPool::new(parallel::current_num_threads().max(1)));
+
+/// Estimate the pool available for a parallel refresh without initializing it.
+/// A library client may install a different caller pool on subsequent runs.
+pub(crate) fn index_pool_threads() -> usize {
+    Lazy::get(&INDEX_THREAD_POOL)
+        .map(ThreadPool::thread_count)
+        .unwrap_or_else(parallel::current_num_threads)
+}
 
 fn run_in_index_thread_pool<R>(f: impl FnOnce() -> R) -> R {
     INDEX_THREAD_POOL.install(f)

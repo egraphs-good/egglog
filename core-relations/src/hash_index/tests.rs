@@ -522,3 +522,42 @@ fn positions_survive_incremental_insertions() {
         assert_eq!(tuple_positions.len(), tuple.len());
     });
 }
+
+#[test]
+fn refresh_work_accounts_for_unindexed_rows_and_generation_changes() {
+    use crate::table_spec::{Generation, Offset, TableVersion};
+
+    let version = |major, minor| TableVersion {
+        major: Generation::new(major),
+        minor: Offset::new(minor),
+    };
+    let mut index = Index::new(vec![ColumnId::new(0)], ColumnIndex::new());
+    // An untouched generation-zero index is cold even though the major
+    // versions match. Its first refresh must scan every physical row.
+    assert_eq!(index.refresh_work(version(0, 12)), (12, true, 0));
+
+    index.updated_to = version(3, 100);
+    assert_eq!(index.refresh_work(version(3, 140)), (40, true, 100));
+    assert_eq!(index.refresh_work(version(3, 100)), (0, true, 100));
+    // Compaction invalidates the old offsets. Even if the new table is
+    // smaller, every current physical row needs indexing.
+    assert_eq!(index.refresh_work(version(4, 20)), (20, false, 0));
+    assert_eq!(index.refresh_work(version(4, 0)), (0, false, 0));
+    // Estimating work must leave the actual index refresh cursor intact.
+    assert_eq!(index.updated_to, version(3, 100));
+}
+
+#[test]
+fn index_pool_estimate_survives_changing_the_caller_pool() {
+    let initial = egglog_concurrency::ThreadPool::new(2);
+    let actual =
+        initial.install(|| super::run_in_index_thread_pool(crate::parallel::current_num_threads));
+    // Other tests may have initialized the global pool already. Choose a
+    // different caller size from whichever index pool actually exists.
+    let caller_threads = if actual == 4 { 2 } else { 4 };
+    let caller = egglog_concurrency::ThreadPool::new(caller_threads);
+    caller.install(|| {
+        assert_ne!(crate::parallel::current_num_threads(), actual);
+        assert_eq!(super::index_pool_threads(), actual);
+    });
+}
