@@ -23,9 +23,7 @@ macro_rules! insert_row {
         let row = $row;
         let this = &*$this;
         let next_ts = $next_ts;
-        if let Some(sort_by) = this.sort_by {
-            row[sort_by.index()] = next_ts;
-        }
+        row[this.sort_by.index()] = next_ts;
         $mutation_buf.stage_insert(row);
     }};
 }
@@ -108,9 +106,7 @@ impl SortedWritesTable {
             mutation_buf.stage_remove_row(row_id, &current_row[0..self.n_keys]);
             refreshed_row.clear();
             refreshed_row.extend_from_slice(current_row);
-            if let Some(sort_by) = self.sort_by {
-                refreshed_row[sort_by.index()] = next_ts;
-            }
+            refreshed_row[self.sort_by.index()] = next_ts;
             mutation_buf.stage_insert(&refreshed_row);
             changed = true;
         }

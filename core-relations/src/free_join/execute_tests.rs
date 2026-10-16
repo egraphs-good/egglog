@@ -57,7 +57,7 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
         free_join::{
             Database, get_column_index_from_tableinfo, get_index_from_tableinfo, plan::Plan,
         },
-        table::SortedWritesTable,
+        table_shortcuts::TimestampedTable,
         table_shortcuts::v,
         table_spec::Constraint,
     };
@@ -67,11 +67,9 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
     let tables = (0..3)
         .map(|_| {
             db.add_table(
-                SortedWritesTable::new(
+                TimestampedTable::new(
                     arity,
                     arity,
-                    None,
-                    vec![],
                     Box::new(|_, old, new, _| {
                         assert_eq!(old, new);
                         false
@@ -235,7 +233,7 @@ fn shared_packed_root_keys_are_canonical_and_single_flight() {
     };
     let mut db = crate::free_join::Database::new();
     let table = db.add_table(
-        crate::table::SortedWritesTable::new(2, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        crate::table_shortcuts::TimestampedTable::new(2, 2, Box::new(|_, _, _, _| false)),
         std::iter::empty(),
         std::iter::empty(),
     );

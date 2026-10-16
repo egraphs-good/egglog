@@ -89,8 +89,7 @@ mod catalog_filter {
     use crate::{
         free_join::{Database, get_column_index_from_tableinfo, get_index_from_tableinfo},
         offsets::OffsetRange,
-        table::SortedWritesTable,
-        table_shortcuts::v,
+        table_shortcuts::{TimestampedTable, v},
         table_spec::{ColumnId, Constraint},
     };
 
@@ -106,11 +105,9 @@ mod catalog_filter {
     fn stale_db() -> (Database, crate::TableId) {
         let mut db = Database::new();
         let table = db.add_table(
-            SortedWritesTable::new(
+            TimestampedTable::new(
                 2,
                 2,
-                None,
-                vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new);
                     false
