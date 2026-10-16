@@ -210,6 +210,8 @@ pub struct TypeInfo {
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
+    // Text-compiler names for already registered sorts; enumeration stays unique.
+    source_sort_aliases: HashMap<String, ArcSort>,
     pub(crate) primitives: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_primitives: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_definitions: HashMap<String, Arc<proto::Program>>,
@@ -247,6 +249,9 @@ impl EGraph {
         span: Span,
     ) -> Result<(), TypeError> {
         let name = name.into();
+        if self.type_info.source_sort_aliases.contains_key(&name) {
+            return Err(TypeError::SortAlreadyBound(name, span));
+        }
         if self.type_info.func_types.contains_key(&name) {
             return Err(TypeError::FunctionAlreadyBound(name, span));
         }
@@ -267,6 +272,9 @@ impl EGraph {
 
     /// Add a user-defined sort to the e-graph.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
+        if self.type_info.source_sort_aliases.contains_key(sort.name()) {
+            return Err(TypeError::SortAlreadyBound(sort.name().into(), span));
+        }
         sort.register_type(&mut self.backend);
 
         let name = sort.name();
@@ -278,6 +286,47 @@ impl EGraph {
                 Ok(())
             }
         }
+    }
+
+    /// Bind a text-compiler alias without registering another native instance.
+    /// The target must be a registered non-equality sort, never another alias.
+    pub fn bind_source_sort_alias(
+        &mut self,
+        alias: &str,
+        target: &str,
+        span: Span,
+    ) -> Result<(), String> {
+        let sort = self
+            .type_info
+            .sorts
+            .get(target)
+            .filter(|sort| !sort.is_eq_sort())
+            .cloned()
+            .ok_or_else(|| {
+                format!("source sort alias requires a registered non-equality sort: {target}")
+            })?;
+        if self.type_info.get_sort_by_name(alias).is_some() {
+            return Err(TypeError::SortAlreadyBound(alias.into(), span).to_string());
+        }
+        if self.type_info.func_types.contains_key(alias) {
+            return Err(TypeError::FunctionAlreadyBound(alias.into(), span).to_string());
+        }
+        self.names
+            .check_shadowing(&ResolvedNCommand::Sort {
+                span,
+                name: alias.into(),
+                presort_and_args: None,
+                uf: None,
+                proof_func: None,
+                container_rebuild: None,
+                proof_constructors: None,
+                unionable: true,
+            })
+            .map_err(|error| error.to_string())?;
+        self.type_info
+            .source_sort_aliases
+            .insert(alias.into(), sort);
+        Ok(())
     }
 
     /// Register a [`PurePrim`]. Pass `None` for the validator if not
@@ -475,7 +524,10 @@ impl EGraph {
                 // If this is a let binding, add it to global_sorts
                 // This preserves bahavior for lets after desugaring
                 if resolved.internal_let {
-                    let output_sort = self.type_info.sorts.get(&fdecl.schema.output).unwrap();
+                    let output_sort = self
+                        .type_info
+                        .get_sort_by_name(&fdecl.schema.output)
+                        .unwrap();
                     self.type_info
                         .global_sorts
                         .insert(fdecl.name.clone(), output_sort.clone());
@@ -859,14 +911,14 @@ impl TypeInfo {
             .input
             .iter()
             .map(|name| {
-                if let Some(sort) = self.sorts.get(name) {
+                if let Some(sort) = self.get_sort_by_name(name) {
                     Ok(sort.clone())
                 } else {
                     Err(TypeError::UndefinedSort(name.clone(), func.span.clone()))
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let output = if let Some(sort) = self.sorts.get(&func.schema.output) {
+        let output = if let Some(sort) = self.get_sort_by_name(&func.schema.output) {
             Ok(sort.clone())
         } else {
             Err(TypeError::UndefinedSort(
@@ -888,7 +940,7 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         fdecl: &FunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
-        if self.sorts.contains_key(&fdecl.name) {
+        if self.get_sort_by_name(&fdecl.name).is_some() {
             return Err(TypeError::SortAlreadyBound(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
@@ -919,7 +971,7 @@ impl TypeInfo {
             ));
         }
         let mut bound_vars = IndexMap::default();
-        let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
+        let output_type = self.get_sort_by_name(&fdecl.schema.output).unwrap();
         if fdecl.subtype == FunctionSubtype::Constructor && !output_type.is_eq_sort() {
             return Err(TypeError::ConstructorOutputNotSort(
                 fdecl.name.clone(),
@@ -1234,7 +1286,9 @@ impl TypeInfo {
     }
 
     pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {
-        self.sorts.get(sym)
+        self.sorts
+            .get(sym)
+            .or_else(|| self.source_sort_aliases.get(sym))
     }
 
     pub fn get_prims(&self, sym: &str) -> Option<&[PrimitiveWithId]> {

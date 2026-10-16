@@ -3,6 +3,134 @@ use egglog::{
     proto as pb,
 };
 
+#[test]
+fn structural_sort_aliases_merge_and_survive_alias_only_relocation() {
+    let mut destination = pb::Program::default();
+    for (symbol, reversed) in [("A", false), ("Z", true), ("A", true)] {
+        let scalar = pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "i64".into(),
+                args: vec![],
+            })),
+            ..Default::default()
+        };
+        let applied = pb::Sort {
+            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                name: "Vec".into(),
+                args: vec![u32::from(reversed)],
+            })),
+            egglog_aliases: vec![pb::EgglogTypeBinding {
+                symbol: symbol.into(),
+            }],
+            ..Default::default()
+        };
+        let source = pb::Program {
+            ir_version: 1,
+            sorts: if reversed {
+                vec![applied, scalar]
+            } else {
+                vec![scalar, applied]
+            },
+            ..Default::default()
+        };
+        reconcile_declarations(&source, &mut destination).unwrap();
+        assert_eq!(
+            destination.sorts.len(),
+            2,
+            "alias-only sort and child survive"
+        );
+    }
+    assert_eq!(
+        destination.sorts[1]
+            .egglog_aliases
+            .iter()
+            .map(|a| a.symbol.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "Z"]
+    );
+    let mut plain = destination.sorts.clone();
+    plain[1].egglog_aliases.clear();
+    assert_eq!(
+        egglog::builtin::import_sort(&plain, 1, &mut destination.sorts).unwrap(),
+        1
+    );
+    assert_eq!(destination.sorts.len(), 2);
+    retain_rulesets(&mut destination, &[]).unwrap();
+    assert_eq!(destination.sorts.len(), 2);
+    assert_eq!(destination.sorts[1].egglog_aliases.len(), 2);
+}
+
+#[test]
+fn compiler_sort_aliases_share_types_without_registering_native_instances() {
+    let mut graph = egglog::EGraph::default();
+    graph
+        .parse_and_run_program(None, "(sort A (Vec i64))")
+        .unwrap();
+    graph
+        .bind_source_sort_alias("Z", "A", egglog::span!())
+        .unwrap();
+    assert_eq!(graph.type_info().get_sort_by_name("Z").unwrap().name(), "A");
+    assert_eq!(
+        graph
+            .type_info()
+            .get_arcsorts_by(|sort| sort.name() == "A")
+            .len(),
+        1
+    );
+    let command = graph
+        .parse_program(None, "(function same (Z) A :merge new)")
+        .unwrap()
+        .remove(0);
+    graph.resolve_command_preserving_globals(command).unwrap();
+    graph.parse_and_run_program(None, "(push)").unwrap();
+    graph
+        .bind_source_sort_alias("Scoped", "A", egglog::span!())
+        .unwrap();
+    graph.parse_and_run_program(None, "(pop)").unwrap();
+    assert!(graph.type_info().get_sort_by_name("Scoped").is_none());
+    graph
+        .bind_source_sort_alias("Scoped", "A", egglog::span!())
+        .unwrap();
+    assert!(
+        graph
+            .bind_source_sort_alias("Z", "A", egglog::span!())
+            .is_err()
+    );
+    assert!(
+        graph
+            .bind_source_sort_alias("same", "A", egglog::span!())
+            .is_err()
+    );
+    assert!(
+        graph
+            .bind_source_sort_alias("Missing", "unknown", egglog::span!())
+            .is_err()
+    );
+    graph.parse_and_run_program(None, "(sort Nominal)").unwrap();
+    assert!(
+        graph
+            .bind_source_sort_alias("Other", "Nominal", egglog::span!())
+            .is_err()
+    );
+    assert!(graph.parse_and_run_program(None, "(sort Z)").is_err());
+    assert!(
+        graph
+            .parse_and_run_program(None, "(function Z () i64 :merge new)")
+            .is_err()
+    );
+    graph
+        .parse_and_run_program(None, "(sort B (Vec i64))")
+        .unwrap();
+    assert_eq!(graph.type_info().get_sort_by_name("B").unwrap().name(), "B");
+    assert_eq!(
+        graph
+            .type_info()
+            .get_arcsorts_by(|sort| matches!(sort.name(), "A" | "B"))
+            .len(),
+        2
+    );
+}
+
 // Ordered graph fixtures deliberately share the same rule body/index: only
 // ruleset occurrence topology distinguishes the negative cases.
 fn occurrence_fixture(children: &[&[u32]]) -> pb::Program {

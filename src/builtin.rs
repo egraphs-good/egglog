@@ -394,6 +394,11 @@ pub fn import_sort(
             .iter()
             .position(|existing| existing.kind == sort.kind)
         {
+            for alias in sort.egglog_aliases {
+                if !destination[existing].egglog_aliases.contains(&alias) {
+                    destination[existing].egglog_aliases.push(alias);
+                }
+            }
             cache.insert(index, existing as u32);
             return Ok(existing as u32);
         }

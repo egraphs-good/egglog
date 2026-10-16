@@ -1073,6 +1073,12 @@ pub fn reconcile_declarations(
 fn retain_imported_closures(p: &mut pb::Program, previous: &pb::Program) -> Result<(), String> {
     let mut nodes = (0..previous.nodes.len() as u32).collect::<HashSet<_>>();
     let mut sorts = (0..previous.sorts.len() as u32).collect::<HashSet<_>>();
+    sorts.extend(
+        p.sorts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, sort)| (!sort.egglog_aliases.is_empty()).then_some(index as u32)),
+    );
     let mut files = (0..previous.files.len() as u32).collect::<HashSet<_>>();
     let mut pending = nodes.iter().copied().collect::<Vec<_>>();
     for d in &p.declarations {
