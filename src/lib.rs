@@ -299,9 +299,11 @@ pub trait Primitive: Send + Sync + 'static {
     /// The canonical protobuf definition, when this registration has migrated
     /// to catalog-driven typing. Missing definitions remain explicit inventory
     /// gaps; they are not inferred from opaque native constraints.
-    fn builtin_definition(&self) -> Option<&proto::Program> {
+    /// The explicit root is independent of declaration ordering in its closed
+    /// default-expression context. Helpers remain evidence, not registrations.
+    fn builtin_definition(&self) -> Option<(&str, &proto::Program)> {
         self.builtin_instance()
-            .map(|instance| instance.definition.as_ref())
+            .map(|instance| (instance.root_key.as_str(), instance.definition.as_ref()))
     }
 
     /// Checked instantiation of a presort-owned definition, when applicable.

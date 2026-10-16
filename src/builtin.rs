@@ -30,6 +30,7 @@ pub struct BuiltinCatalog {
 #[derive(Clone)]
 pub struct BuiltinInstance {
     pub(crate) definition: Arc<pb::Program>,
+    pub(crate) root_key: String,
     pub(crate) dispatch_name: String,
     binding: InstanceBinding,
 }
@@ -67,15 +68,7 @@ impl BuiltinInstance {
         output: Option<(std::any::TypeId, bool)>,
         varargs: bool,
     ) -> Result<(), String> {
-        let declaration = self
-            .definition
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                Some(pb::declaration::Kind::HostPrimitive(p)) => Some(p),
-                _ => None,
-            })
-            .unwrap();
+        let (_, declaration) = definition_root(&self.definition, &self.root_key)?;
         let exact = match &self.binding {
             InstanceBinding::Open => {
                 return Err("open native domain has no exact implementation ABI".into());
@@ -172,15 +165,8 @@ impl BuiltinInstance {
             !matches!(self.binding, InstanceBinding::Open),
             "open builtin implementations must retain their native type constraints"
         );
-        let declaration = self
-            .definition
-            .declarations
-            .iter()
-            .find(|d| matches!(d.kind, Some(pb::declaration::Kind::HostPrimitive(_))))
-            .unwrap();
-        let Some(pb::declaration::Kind::HostPrimitive(p)) = &declaration.kind else {
-            unreachable!()
-        };
+        let (declaration, p) =
+            definition_root(&self.definition, &self.root_key).expect("invalid owned builtin root");
         let Some(pb::host_primitive::Typing::Signature(signature)) = &p.typing else {
             unreachable!()
         };
@@ -238,15 +224,7 @@ impl BuiltinInstance {
     /// Validate the complete canonical recipe before deriving either native
     /// flat constraints or source-call packing. Indices stay in the descriptor.
     pub(crate) fn vec_pair_facade_pattern(&self) -> Result<[u32; 5], String> {
-        let primitive = self
-            .definition
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                Some(pb::declaration::Kind::HostPrimitive(p)) => Some(p),
-                _ => None,
-            })
-            .ok_or("missing Map definition")?;
+        let (_, primitive) = definition_root(&self.definition, &self.root_key)?;
         let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
             return Err("expected fixed Map signature".into());
         };
@@ -329,6 +307,7 @@ impl BuiltinInstance {
                     .builtin_instance()
                     .is_some_and(|other| {
                         matches!(other.binding, InstanceBinding::Open)
+                            && self.root_key == other.root_key
                             && Arc::ptr_eq(&self.definition, &other.definition)
                     })
             })
@@ -675,7 +654,9 @@ pub fn homogeneous_signature(
         ..Default::default()
     });
     let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
-        &mut program.declarations.last_mut().unwrap().kind
+        &mut program.declarations.iter_mut().find(|declaration| {
+            matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+        }).unwrap().kind
     else {
         unreachable!()
     };
@@ -713,6 +694,31 @@ pub fn signature_sorts(
             _ => Err("builtin signature requires a symbolic-family compiler beyond this scalar slice".into()),
         }
     }).collect()
+}
+
+/// Selects a root by canonical identity, never by declaration or view order.
+/// Even a matching first entry cannot conceal a duplicate root declaration.
+fn definition_root<'a>(
+    program: &'a pb::Program,
+    key: &str,
+) -> Result<(&'a pb::Declaration, &'a pb::HostPrimitive), String> {
+    if key.is_empty() {
+        return Err("empty builtin root identity".into());
+    }
+    let mut roots = program
+        .declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key => {
+                Some((declaration, primitive))
+            }
+            _ => None,
+        });
+    let root = roots.next().ok_or("missing builtin root definition")?;
+    if roots.next().is_some() {
+        return Err("duplicate builtin root definition".into());
+    }
+    Ok(root)
 }
 
 pub(crate) fn definition_key(program: &pb::Program) -> Result<&str, String> {
@@ -756,6 +762,21 @@ pub fn import_definition(
     let key = definition_key(definition)?.to_owned();
     definitions::reconcile_declarations(definition, destination)?;
     Ok(key)
+}
+
+/// Imports an explicitly rooted, already registered default context. Helpers
+/// are declarations only; this never installs or invokes native implementations.
+/// The legacy single-definition import above deliberately remains strict.
+pub fn import_rooted_definition(
+    key: &str,
+    definition: &pb::Program,
+    destination: &mut pb::Program,
+) -> Result<String, String> {
+    let (_, primitive) = definition_root(definition, key)?;
+    normalized_signature(definition, primitive, &mut vec![])?;
+    definitions::check_builtin_context(definition, key, |_| Ok(definition.clone()))?;
+    definitions::reconcile_declarations(definition, destination)?;
+    Ok(key.into())
 }
 
 /// Build closed scalar member/operator views from the canonical signature.
@@ -918,22 +939,23 @@ impl TypeConstraint for SignatureConstraint {
 /// they never replace this registered signature or its implementation.
 pub fn type_constraints(definition: &pb::Program, span: &Span) -> Box<dyn TypeConstraint> {
     let key = definition_key(definition).expect("invalid native builtin definition");
-    let (primitive, diagnostic_name) = definition
-        .declarations
-        .iter()
-        .find_map(|declaration| match &declaration.kind {
-            Some(pb::declaration::Kind::HostPrimitive(primitive)) => Some((
-                primitive,
-                declaration
-                    .bindings
-                    .as_ref()
-                    .and_then(|bindings| bindings.egglog.as_ref())
-                    .and_then(|bindings| bindings.views.first())
-                    .map_or(key, |view| view.symbol.as_str()),
-            )),
-            _ => None,
-        })
-        .unwrap();
+    rooted_type_constraints(key, definition, span)
+}
+
+/// Compiles only the explicitly named registration root, not its default helpers.
+pub fn rooted_type_constraints(
+    key: &str,
+    definition: &pb::Program,
+    span: &Span,
+) -> Box<dyn TypeConstraint> {
+    let (declaration, primitive) =
+        definition_root(definition, key).expect("invalid native builtin root");
+    let diagnostic_name = declaration
+        .bindings
+        .as_ref()
+        .and_then(|bindings| bindings.egglog.as_ref())
+        .and_then(|bindings| bindings.views.first())
+        .map_or(key, |view| view.symbol.as_str());
     let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
         unreachable!()
     };
@@ -977,6 +999,157 @@ pub fn type_constraints(definition: &pb::Program, span: &Span) -> Box<dyn TypeCo
 }
 
 impl TypeInfo {
+    /// Builds a full default context before native publication. The callback
+    /// receives read-only registration evidence and cannot alter the generated
+    /// root's native signature, even by changing its referenced sort records.
+    /// Unlike legacy `[id]` registration, this path rejects collisions eagerly.
+    pub fn prepare_builtin_context(
+        &self,
+        key: &str,
+        alias: &str,
+        generated: pb::Program,
+        supply: impl FnOnce(&TypeInfo, &str, &mut pb::Program) -> Result<(), String>,
+    ) -> Result<pb::Program, String> {
+        if definition_key(&generated)? != key {
+            return Err("generated builtin root identity mismatch".into());
+        }
+        let mut family_keys = HashSet::default();
+        for declaration in &generated.declarations {
+            if let Some(pb::declaration::Kind::HostSortFamily(family)) = &declaration.kind
+                && !family_keys.insert(family.name.as_str())
+            {
+                return Err(format!(
+                    "duplicate generated builtin family {}",
+                    family.name
+                ));
+            }
+        }
+        let mut sorts = vec![];
+        let (_, primitive) = definition_root(&generated, key)?;
+        let signature = normalized_signature(&generated, primitive, &mut sorts)?;
+        // Generated family records are structural placeholders, not permission
+        // for the new root to author family presentation. Supply only the
+        // already registered records needed by this generated sort arena first.
+        let families = pb::Program {
+            ir_version: 1,
+            files: self.builtin_families.files.clone(),
+            declarations: self.builtin_families.declarations.iter().filter(|declaration| {
+                matches!(&declaration.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if generated.sorts.iter().any(|sort| matches!(&sort.kind, Some(pb::sort::Kind::Family(sort)) if sort.name == family.name)))
+            }).cloned().collect(),
+            ..Default::default()
+        };
+        let mut supplied = pb::Program::default();
+        definitions::reconcile_declarations(&families, &mut supplied)?;
+        definitions::reconcile_declarations(&generated, &mut supplied)?;
+        supply(self, key, &mut supplied)?;
+        if supplied.ir_version != 1
+            || !supplied.commands.is_empty()
+            || !supplied.rules.is_empty()
+            || !supplied.rulesets.is_empty()
+        {
+            return Err("invalid builtin context header".into());
+        }
+        let (_, primitive) = definition_root(&supplied, key)?;
+        if normalized_signature(&supplied, primitive, &mut sorts)? != signature {
+            return Err("builtin context changed the generated native signature".into());
+        }
+        // Validate the raw supply before reconciliation can coalesce duplicate
+        // helper identities or discard malformed/unreachable arena evidence.
+        self.check_builtin_registration_context(key, alias, &supplied)?;
+        // The callback may relocate the draft and choose declaration order.
+        // Original language supplies remain assertions, not overwrite targets.
+        definitions::reconcile_declarations(&generated, &mut supplied)?;
+        let mut context = pb::Program::default();
+        definitions::reconcile_declarations(&supplied, &mut context)?;
+        self.check_builtin_registration_context(key, alias, &context)?;
+        Ok(context)
+    }
+
+    /// Validates helper authority and name availability without mutating any
+    /// runtime map, allocating context IDs, or invoking native code/providers.
+    pub(crate) fn check_builtin_registration_context(
+        &self,
+        key: &str,
+        alias: &str,
+        context: &pb::Program,
+    ) -> Result<(), String> {
+        if !self.builtin_errors.is_empty() {
+            return Err(self.builtin_errors.join("; "));
+        }
+        if key == alias
+            || alias.is_empty()
+            || self.is_primitive(key)
+            || self.get_func_type(key).is_some()
+            || self.is_primitive(alias)
+            || self.get_func_type(alias).is_some()
+        {
+            return Err(format!(
+                "builtin context registration collision: {key}/{alias}"
+            ));
+        }
+        let (_, primitive) = definition_root(context, key)?;
+        normalized_signature(context, primitive, &mut vec![])?;
+        definitions::check_builtin_context_families(context, &self.builtin_families)?;
+        for declaration in &context.declarations {
+            if let Some(pb::declaration::Kind::HostSortFamily(family)) = &declaration.kind
+                && (!context.sorts.iter().any(|sort| {
+                    matches!(&sort.kind, Some(pb::sort::Kind::Family(sort)) if sort.name == family.name)
+                }) || !self.builtin_families.declarations.iter().any(|known| {
+                    matches!(&known.kind, Some(pb::declaration::Kind::HostSortFamily(known)) if known.name == family.name && known.arity == family.arity)
+                }))
+            {
+                return Err(format!("unregistered or unused builtin context family {}", family.name));
+            }
+        }
+        for sort in &context.sorts {
+            if let Some(pb::sort::Kind::Family(sort)) = &sort.kind
+                && !self.builtin_families.declarations.iter().any(|known| {
+                    matches!(&known.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.name == sort.name && family.arity as usize == sort.args.len())
+                })
+            {
+                return Err(format!("unregistered builtin context family sort {}", sort.name));
+            }
+        }
+        definitions::check_builtin_context(context, key, |helper| {
+            let definition = self
+                .builtin_definitions
+                .get(helper)
+                .ok_or_else(|| format!("unregistered builtin context helper {helper}"))?;
+            let implementations = self
+                .builtin_primitives
+                .get(helper)
+                .filter(|implementations| !implementations.is_empty())
+                .ok_or_else(|| {
+                    format!("builtin context helper {helper} has no registered implementation")
+                })?;
+            for implementation in implementations {
+                let (root, registered) = implementation
+                    .primitive
+                    .builtin_definition()
+                    .ok_or("registered helper has no rooted definition")?;
+                if root != helper
+                    || registered != definition.as_ref()
+                    || !implementation
+                        .context_ids
+                        .iter()
+                        .any(|(_, id)| id.is_some())
+                    || implementation
+                        .primitive
+                        .builtin_instance()
+                        .is_some_and(|instance| {
+                            instance.root_key != helper
+                                || !Arc::ptr_eq(definition, &instance.definition)
+                        })
+                {
+                    return Err(format!(
+                        "builtin context helper {helper} lacks native ownership"
+                    ));
+                }
+            }
+            Ok(definition.as_ref().clone())
+        })
+    }
+
     /// Export a named function target from its complete exact native signature.
     /// Source projection supplies specialized capture sorts before erasure;
     /// result encoding additionally checks the retained runtime primitive IDs.
@@ -1039,10 +1212,11 @@ impl TypeInfo {
                 if let Some(key) = primitive.primitive.export_program_definition(destination)? {
                     key
                 } else {
-                    let definition = primitive.primitive.builtin_definition().ok_or_else(|| {
-                        format!("function target {name} has no catalog definition yet")
-                    })?;
-                    let key = import_definition(definition, destination)?;
+                    let (key, definition) =
+                        primitive.primitive.builtin_definition().ok_or_else(|| {
+                            format!("function target {name} has no catalog definition yet")
+                        })?;
+                    let key = import_rooted_definition(key, definition, destination)?;
                     self.export_builtin_definition(&key, destination)?;
                     key
                 };
@@ -1115,7 +1289,7 @@ impl TypeInfo {
             ..Default::default()
         };
         definitions::reconcile_declarations(&families, &mut staged)?;
-        import_definition(definition, &mut staged)?;
+        import_rooted_definition(key, definition, &mut staged)?;
         *destination = staged;
         Ok(())
     }
@@ -1287,7 +1461,7 @@ impl TypeInfo {
     /// input/result sorts. This is pure evidence checking, never native dispatch.
     pub(crate) fn check_native_signature(
         &self,
-        definition: &pb::Program,
+        (key, definition): (&str, &pb::Program),
         native: &[ArcSort],
     ) -> Result<(), String> {
         // A logical binder can occur at differently named native container or
@@ -1477,14 +1651,7 @@ impl TypeInfo {
             }
             Ok(())
         }
-        let primitive = definition
-            .declarations
-            .iter()
-            .find_map(|declaration| match &declaration.kind {
-                Some(pb::declaration::Kind::HostPrimitive(primitive)) => Some(primitive),
-                _ => None,
-            })
-            .ok_or("missing builtin definition")?;
+        let (_, primitive) = definition_root(definition, key)?;
         for root in native {
             validate_native_sort(root, self)?;
         }
@@ -1586,14 +1753,7 @@ impl TypeInfo {
         if !self.builtin_owners.contains_key(key) {
             return Err("builtin definition is not registry-owned".into());
         }
-        let primitive = definition
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                Some(pb::declaration::Kind::HostPrimitive(p)) => Some(p),
-                _ => None,
-            })
-            .ok_or("missing builtin definition")?;
+        let (_, primitive) = definition_root(&definition, key)?;
         let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
             return Err("complete signature binding requires a signature descriptor".into());
         };
@@ -1606,7 +1766,7 @@ impl TypeInfo {
             .chain([output])
             .cloned()
             .collect::<Vec<_>>();
-        self.check_native_signature(&definition, &sorts)?;
+        self.check_native_signature((key, &definition), &sorts)?;
         let mut dispatch_name = format!(
             "__egglog_signature_{}_{}_{}_{}",
             key.len(),
@@ -1619,6 +1779,7 @@ impl TypeInfo {
         }
         Ok(BuiltinInstance {
             definition,
+            root_key: key.into(),
             dispatch_name,
             binding: InstanceBinding::Exact {
                 sorts,
@@ -1642,6 +1803,7 @@ impl TypeInfo {
         }
         Ok(BuiltinInstance {
             definition,
+            root_key: key.into(),
             dispatch_name: format!("__egglog_open_{}_{}", key.len(), key),
             binding: InstanceBinding::Open,
         })
@@ -1659,13 +1821,22 @@ impl TypeInfo {
             .get(key)
             .ok_or("unknown builtin definition")?
             .clone();
-        if definition.declarations.iter().any(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostPrimitive(p)) if matches!(p.typing, Some(pb::host_primitive::Typing::Application(_))))) {
-            let function = native.clone().as_arc_any().downcast::<FunctionSort>().map_err(|_| "application instance requires a native function sort")?;
+        let (_, primitive) = definition_root(&definition, key)?;
+        if matches!(
+            primitive.typing,
+            Some(pb::host_primitive::Typing::Application(_))
+        ) {
+            let function = native
+                .clone()
+                .as_arc_any()
+                .downcast::<FunctionSort>()
+                .map_err(|_| "application instance requires a native function sort")?;
             if self.builtin_owners.get(key).copied() != Some("UnstableFn") {
                 return Err("application definition belongs to another provider".into());
             }
             return Ok(BuiltinInstance {
                 definition,
+                root_key: key.into(),
                 dispatch_name: format!("__egglog_instance_{}_{}_{}", key.len(), key, native.name()),
                 binding: InstanceBinding::Application(function),
             });
@@ -1677,17 +1848,14 @@ impl TypeInfo {
         if self.builtin_owners.get(key) != Some(family) {
             return Err("builtin definition belongs to another family".into());
         }
-        for declaration in &definition.declarations {
-            if let Some(pb::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind
-                && let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing
-                && signature.equality_type_params.iter().any(|i| {
-                    parameters
-                        .get(*i as usize)
-                        .is_none_or(|sort| !sort.is_eq_sort())
-                })
-            {
-                return Err("builtin type parameter requires an equality sort".into());
-            }
+        if let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing
+            && signature.equality_type_params.iter().any(|i| {
+                parameters
+                    .get(*i as usize)
+                    .is_none_or(|sort| !sort.is_eq_sort())
+            })
+        {
+            return Err("builtin type parameter requires an equality sort".into());
         }
         let mut resolved = vec![None; definition.sorts.len()];
         fn resolve(
@@ -1773,6 +1941,7 @@ impl TypeInfo {
         }
         Ok(BuiltinInstance {
             definition,
+            root_key: key.into(),
             dispatch_name: format!("__egglog_instance_{}_{}_{}", key.len(), key, native.name()),
             binding: InstanceBinding::Owner(resolved.into_iter().map(Option::unwrap).collect()),
         })
@@ -1858,7 +2027,7 @@ impl TypeInfo {
         {
             return Err("native instance binding disagrees with wire sort".into());
         }
-        self.check_native_signature(definition, native_sorts)?;
+        self.check_native_signature((name, definition), native_sorts)?;
         let candidates: Vec<_> = self
             .builtin_primitives
             .get(name)
@@ -1940,19 +2109,7 @@ impl TypeInfo {
             .builtin_definitions
             .get(&primitive.name)
             .ok_or_else(|| format!("unknown builtin definition {}", primitive.name))?;
-        let declaration = definition
-            .declarations
-            .iter()
-            .find(|declaration| {
-                matches!(
-                    &declaration.kind,
-                    Some(pb::declaration::Kind::HostPrimitive(_))
-                )
-            })
-            .unwrap();
-        let Some(pb::declaration::Kind::HostPrimitive(expected)) = &declaration.kind else {
-            unreachable!()
-        };
+        let (_, expected) = definition_root(definition, &primitive.name)?;
         let mut sorts = vec![];
         if normalized_signature(program, primitive, &mut sorts)?
             != normalized_signature(definition, expected, &mut sorts)?

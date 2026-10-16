@@ -427,6 +427,18 @@ impl EGraph {
     {
         let primitive: Arc<dyn Primitive> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
+        // Valid legacy one-root registrations retain their deferred catalog
+        // collision behavior. Helper-bearing or malformed rooted evidence must
+        // be rejected before backend IDs or native lookup entries are published.
+        if let Some((key, definition)) = primitive.builtin_definition()
+            && crate::builtin::definition_key(definition).ok() != Some(key)
+            && let Err(error) = self
+                .type_info
+                .check_builtin_registration_context(key, &name, definition)
+        {
+            self.type_info.builtin_errors.push(error);
+            return;
+        }
         let context_ids = EnumMap::from_fn(|ctx| {
             valid_ctxs.contains(&ctx).then(|| {
                 self.backend
@@ -445,13 +457,14 @@ impl EGraph {
                 "native alias {name} collides with a builtin definition key"
             ));
         }
-        if let Some(definition) = registered.primitive.builtin_definition() {
-            match crate::builtin::definition_key(definition) {
-                Ok(key)
-                    if key != name
-                        && !self.type_info.primitives.contains_key(key)
-                        && !self.type_info.func_types.contains_key(key)
-                        && !self.type_info.builtin_definitions.contains_key(key) =>
+        if let Some((root_key, definition)) = registered.primitive.builtin_definition() {
+            // The non-legacy branch was validated, including its explicit root,
+            // before publication above. Do not re-infer its root from ordering.
+            match root_key {
+                key if key != name
+                    && !self.type_info.primitives.contains_key(key)
+                    && !self.type_info.func_types.contains_key(key)
+                    && !self.type_info.builtin_definitions.contains_key(key) =>
                 {
                     // A second lookup key for the SAME registration and context
                     // ids, not another implementation or semantic declaration.
@@ -462,35 +475,32 @@ impl EGraph {
                         .builtin_definitions
                         .insert(key.into(), Arc::new(definition.clone()));
                 }
-                Ok(key)
-                    if registered
-                        .primitive
-                        .builtin_instance()
-                        .is_some_and(|instance| {
-                            self.type_info
+                key if registered
+                    .primitive
+                    .builtin_instance()
+                    .is_some_and(|instance| {
+                        instance.root_key == key
+                            && self.type_info.builtin_definitions.get(key).is_some_and(
+                                |definition| Arc::ptr_eq(definition, &instance.definition),
+                            )
+                            && self
+                                .type_info
+                                .builtin_instances
+                                .get(&instance.dispatch_name)
+                                .is_none_or(|existing| instance.can_share_dispatch(existing))
+                            && !self
+                                .type_info
                                 .builtin_definitions
-                                .get(key)
-                                .is_some_and(|definition| {
-                                    Arc::ptr_eq(definition, &instance.definition)
-                                })
-                                && self
-                                    .type_info
-                                    .builtin_instances
-                                    .get(&instance.dispatch_name)
-                                    .is_none_or(|existing| instance.can_share_dispatch(existing))
-                                && !self
-                                    .type_info
-                                    .builtin_definitions
-                                    .contains_key(&instance.dispatch_name)
-                                && !self
-                                    .type_info
-                                    .primitives
-                                    .contains_key(&instance.dispatch_name)
-                                && !self
-                                    .type_info
-                                    .func_types
-                                    .contains_key(&instance.dispatch_name)
-                        }) =>
+                                .contains_key(&instance.dispatch_name)
+                            && !self
+                                .type_info
+                                .primitives
+                                .contains_key(&instance.dispatch_name)
+                            && !self
+                                .type_info
+                                .func_types
+                                .contains_key(&instance.dispatch_name)
+                    }) =>
                 {
                     let instance = registered.primitive.builtin_instance().unwrap();
                     self.type_info
@@ -504,11 +514,10 @@ impl EGraph {
                         .or_default()
                         .push(registered.clone());
                 }
-                Ok(key) => self
+                key => self
                     .type_info
                     .builtin_errors
                     .push(format!("builtin definition key collision: {key}")),
-                Err(error) => self.type_info.builtin_errors.push(error),
             }
         }
         self.type_info

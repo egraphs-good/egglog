@@ -1976,3 +1976,350 @@ fn grouped_defaults_and_surface_slots_validate_without_evaluation() {
     assert_eq!(BODY.load(Ordering::SeqCst), 0);
     assert_eq!(VALIDATOR.load(Ordering::SeqCst), 0);
 }
+
+mod manual_root_context {
+    use super::*;
+
+    const ROOT: &str = "test.manual_context_root";
+    const HELPER: &str = "test.manual_context_helper";
+    static HELPER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Clone)]
+    struct Manual(std::sync::Arc<pb::Program>);
+
+    impl Primitive for Manual {
+        fn name(&self) -> &str {
+            "manual-context-root"
+        }
+        fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn constraint::TypeConstraint> {
+            builtin::rooted_type_constraints(ROOT, &self.0, span)
+        }
+        fn builtin_definition(&self) -> Option<(&str, &pb::Program)> {
+            Some((ROOT, &self.0))
+        }
+    }
+
+    impl PurePrim for Manual {
+        fn apply<'a, 'db>(&self, _: PureState<'a, 'db>, _: &[Value]) -> Option<Value> {
+            panic!("manual context validation must not execute the root")
+        }
+    }
+
+    struct Template;
+    impl Presort for Template {
+        fn presort_name() -> &'static str {
+            "ManualContextTemplate"
+        }
+        fn reserved_primitives() -> Vec<&'static str> {
+            vec![]
+        }
+        fn builtin_definitions() -> Vec<pb::Program> {
+            vec![pb::Program {
+                ir_version: 1,
+                sorts: vec![pb::Sort {
+                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                        name: "i64".into(),
+                        args: vec![],
+                    })),
+                    ..Default::default()
+                }],
+                declarations: vec![pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                        name: HELPER.into(),
+                        typing: Some(pb::host_primitive::Typing::Signature(
+                            pb::GenericSignature {
+                                output: Some(0),
+                                ..Default::default()
+                            },
+                        )),
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]
+        }
+        fn make_sort(
+            _: &mut TypeInfo,
+            _: String,
+            _: &[ast::Expr],
+            _: ast::Span,
+        ) -> Result<ArcSort, TypeError> {
+            panic!("default context validation must not instantiate the template")
+        }
+    }
+
+    fn prepare(types: &TypeInfo) -> Result<pb::Program, String> {
+        let integer = types.get_sort_by_name("i64").unwrap().clone();
+        let generated = builtin::closed_signature(
+            ROOT,
+            "manual-context-root",
+            &[("value", integer.clone())],
+            &[],
+            integer,
+        )?;
+        types.prepare_builtin_context(ROOT, "manual-context-root", generated, |types, key, draft| {
+            let mut context = pb::Program::default();
+            types.export_builtin_definition(HELPER, &mut context)?;
+            let root = draft.declarations.iter_mut().find(|declaration| {
+                matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+            }).unwrap();
+            let Some(pb::declaration::Kind::HostPrimitive(primitive)) = &root.kind else {
+                unreachable!()
+            };
+            let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+                unreachable!()
+            };
+            let default = draft.nodes.len() as u32;
+            draft.nodes.push(pb::Node {
+                sort_id: signature.output.unwrap(),
+                kind: Some(pb::node::Kind::Call(pb::Call {
+                    func: HELPER.into(),
+                    args: vec![],
+                })),
+                ..Default::default()
+            });
+            root.bindings.as_mut().unwrap().python = Some(pb::PythonBindings {
+                views: vec![pb::PythonCallable {
+                    kind: pb::PythonCallKind::Function.into(),
+                    path: vec!["test".into(), "manual_context_root".into()],
+                    params: vec![pb::PythonParameter {
+                        core_input: Some(0),
+                        name: "value".into(),
+                        default_expr: Some(default),
+                    }],
+                    ..Default::default()
+                }],
+            });
+            builtin::definitions::reconcile_declarations(draft, &mut context)?;
+            *draft = context;
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn explicit_manual_root_follows_helper_first_evidence() {
+        let mut graph = EGraph::default();
+        add_literal_prim!(
+            &mut graph,
+            "manual-context-helper"[id = "test.manual_context_helper"] = || -> i64 {
+                {
+                    HELPER_CALLS.fetch_add(1, Ordering::SeqCst);
+                    17
+                }
+            }
+        );
+        let integer = graph.get_sort_by_name("i64").unwrap().clone();
+        let helper = ResolvedCall::from_resolution(
+            "manual-context-helper",
+            std::slice::from_ref(&integer),
+            graph.type_info(),
+            Context::Pure,
+            &ast::Span::Panic,
+        )
+        .unwrap();
+        let definition = prepare(graph.type_info()).unwrap();
+        let order = definition
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                Some(pb::declaration::Kind::HostPrimitive(primitive)) => {
+                    Some(primitive.name.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(order, [HELPER, ROOT]);
+        let mut destination = pb::Program::default();
+        assert!(builtin::import_definition(&definition, &mut destination).is_err());
+        assert_eq!(destination, pb::Program::default());
+
+        graph.add_pure_primitive(Manual(std::sync::Arc::new(definition)), None);
+        let signature = [integer.clone(), integer.clone()];
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let root = ResolvedCall::from_resolution(
+                ROOT,
+                &signature,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            );
+            let alias = ResolvedCall::from_resolution(
+                "manual-context-root",
+                &signature,
+                graph.type_info(),
+                context,
+                &ast::Span::Panic,
+            );
+            match (root, alias) {
+                (Ok(root), Ok(alias)) => assert_eq!(root, alias),
+                (Err(_), Err(_)) => (),
+                _ => panic!("explicit root changed native context availability"),
+            }
+        }
+        assert!(
+            ResolvedCall::from_resolution(
+                ROOT,
+                &signature,
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic,
+            )
+            .is_ok()
+        );
+        assert!(
+            ResolvedCall::from_resolution(
+                ROOT,
+                std::slice::from_ref(&integer),
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            helper,
+            ResolvedCall::from_resolution(
+                "manual-context-helper",
+                std::slice::from_ref(&integer),
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            graph
+                .type_info()
+                .get_prims("manual-context-helper")
+                .unwrap()
+                .len(),
+            1
+        );
+        graph
+            .type_info()
+            .export_builtin_definition(ROOT, &mut destination)
+            .unwrap();
+        assert!(destination.nodes.iter().any(|node| {
+            matches!(&node.kind, Some(pb::node::Kind::Call(call)) if call.func == HELPER)
+        }));
+        assert!(graph.type_info().builtin_catalog().is_ok());
+        assert_eq!(HELPER_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn malformed_manual_contexts_fail_before_alias_publication() {
+        for mutation in [
+            "unknown",
+            "forged",
+            "duplicate",
+            "root",
+            "family",
+            "node",
+            "unreachable",
+        ] {
+            let mut graph = EGraph::default();
+            add_literal_prim!(
+                &mut graph,
+                "manual-context-helper"[id = "test.manual_context_helper"] = || -> i64 {
+                    {
+                        HELPER_CALLS.fetch_add(1, Ordering::SeqCst);
+                        17
+                    }
+                }
+            );
+            let mut definition = prepare(graph.type_info()).unwrap();
+            let helper = definition.declarations.iter().position(|declaration| {
+                matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == HELPER)
+            }).unwrap();
+            let root = definition.declarations.iter().position(|declaration| {
+                matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == ROOT)
+            }).unwrap();
+            match mutation {
+                "unknown" => {
+                    let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
+                        &mut definition.declarations[helper].kind
+                    else {
+                        unreachable!()
+                    };
+                    primitive.name = "test.unregistered_manual_helper".into();
+                    for node in &mut definition.nodes {
+                        if let Some(pb::node::Kind::Call(call)) = &mut node.kind {
+                            call.func = "test.unregistered_manual_helper".into();
+                        }
+                    }
+                }
+                "forged" => definition.declarations[helper].doc = Some("forged helper".into()),
+                "duplicate" => definition
+                    .declarations
+                    .push(definition.declarations[helper].clone()),
+                "root" => {
+                    let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
+                        &mut definition.declarations[root].kind
+                    else {
+                        unreachable!()
+                    };
+                    primitive.name = "test.wrong_manual_root".into();
+                }
+                "family" => {
+                    let family = definition
+                        .declarations
+                        .iter_mut()
+                        .find_map(|declaration| match &mut declaration.kind {
+                            Some(pb::declaration::Kind::HostSortFamily(family)) => Some(family),
+                            _ => None,
+                        })
+                        .unwrap();
+                    family.arity += 1;
+                }
+                "node" => definition.nodes.clear(),
+                "unreachable" => {
+                    definition.declarations[root]
+                        .bindings
+                        .as_mut()
+                        .unwrap()
+                        .python = None
+                }
+                _ => unreachable!(),
+            }
+            graph.add_pure_primitive(Manual(std::sync::Arc::new(definition)), None);
+            assert!(
+                !graph.type_info().is_primitive("manual-context-root"),
+                "{mutation}"
+            );
+            assert!(!graph.type_info().is_primitive(ROOT), "{mutation}");
+            assert!(graph.type_info().builtin_catalog().is_err(), "{mutation}");
+            assert_eq!(
+                graph
+                    .type_info()
+                    .get_prims("manual-context-helper")
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(HELPER_CALLS.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn template_only_helper_cannot_supply_native_default_authority() {
+        let mut graph = EGraph::default();
+        graph
+            .type_info()
+            .add_presort::<Template>(ast::Span::Panic)
+            .unwrap();
+        let mut exported = pb::Program::default();
+        graph
+            .type_info()
+            .export_builtin_definition(HELPER, &mut exported)
+            .unwrap();
+        assert!(exported.declarations.iter().any(|declaration| {
+            matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == HELPER)
+        }));
+        assert!(graph.type_info().get_prims(HELPER).is_none());
+        let error = prepare(graph.type_info()).unwrap_err();
+        assert!(error.contains("no registered implementation"), "{error}");
+        assert!(!graph.type_info().is_primitive("manual-context-root"));
+        assert!(!graph.type_info().is_primitive(ROOT));
+        assert!(graph.type_info().builtin_catalog().is_ok());
+    }
+}

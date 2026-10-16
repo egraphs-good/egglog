@@ -55,12 +55,12 @@ impl SpecializedPrimitive {
         &self,
         destination: &mut crate::proto::Program,
     ) -> Result<String, String> {
-        let definition = self
+        let (key, definition) = self
             .prim_with_id
             .primitive
             .builtin_definition()
             .ok_or_else(|| format!("primitive {} has no catalog definition yet", self.name()))?;
-        crate::builtin::import_definition(definition, destination)
+        crate::builtin::import_rooted_definition(key, definition, destination)
     }
 
     /// Composes a canonical call from valid, already-lowered child closures.

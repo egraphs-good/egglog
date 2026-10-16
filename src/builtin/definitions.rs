@@ -1002,6 +1002,210 @@ fn merge_bindings(
     Ok(())
 }
 
+/// Family evidence cannot first-supply presentation on behalf of its registered
+/// owner. Compare complete records after relocating diagnostic file references;
+/// ordinary reconciliation deliberately permits more than this authority check.
+pub(crate) fn check_builtin_context_families(
+    source: &pb::Program,
+    authoritative: &pb::Program,
+) -> Result<(), String> {
+    let mut staged = pb::Program::default();
+    let (_, source_files) = import_arenas(source, &mut staged)?;
+    let (_, authoritative_files) = import_arenas(authoritative, &mut staged)?;
+    let mut seen = HashSet::default();
+    for declaration in &source.declarations {
+        let Some(pb::declaration::Kind::HostSortFamily(family)) = &declaration.kind else {
+            continue;
+        };
+        if !seen.insert(family.name.as_str()) {
+            return Err(format!("duplicate builtin context family {}", family.name));
+        }
+        let mut matches = authoritative.declarations.iter().filter(|known| {
+            matches!(&known.kind, Some(pb::declaration::Kind::HostSortFamily(known)) if known.name == family.name)
+        });
+        let mut expected = matches
+            .next()
+            .ok_or("unregistered builtin context family")?
+            .clone();
+        if matches.next().is_some() {
+            return Err("duplicate registered builtin context family".into());
+        }
+        let mut supplied = declaration.clone();
+        relocate_span(&mut supplied.span, source, &source_files)?;
+        relocate_span(&mut expected.span, authoritative, &authoritative_files)?;
+        if supplied != expected {
+            return Err(format!(
+                "conflicting builtin context family {}",
+                family.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Checks a rooted builtin context without installing declarations. Helpers must
+/// already be registered; the callback returns their authoritative contexts.
+/// The caller separately checks the root's generated native signature.
+pub(crate) fn check_builtin_context(
+    source: &pb::Program,
+    root_key: &str,
+    mut helper: impl FnMut(&str) -> Result<pb::Program, String>,
+) -> Result<(), String> {
+    if source.ir_version != 1
+        || !source.commands.is_empty()
+        || !source.rules.is_empty()
+        || !source.rulesets.is_empty()
+    {
+        return Err("invalid builtin context header".into());
+    }
+    let mut keys = HashSet::default();
+    for declaration in &source.declarations {
+        declaration_identity(declaration)?;
+        match &declaration.kind {
+            Some(pb::declaration::Kind::HostPrimitive(primitive)) => {
+                if !keys.insert(primitive.name.as_str()) {
+                    return Err(format!("duplicate builtin context key {}", primitive.name));
+                }
+            }
+            Some(pb::declaration::Kind::HostSortFamily(_)) => (),
+            _ => return Err("unsupported builtin context declaration".into()),
+        }
+    }
+    if !keys.contains(root_key) {
+        return Err(format!("missing builtin context root {root_key}"));
+    }
+
+    let mut staged = pb::Program::default();
+    reconcile_declarations(source, &mut staged)?;
+    let callables = staged
+        .declarations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, declaration)| match &declaration.kind {
+            Some(pb::declaration::Kind::HostPrimitive(primitive)) => {
+                Some((primitive.name.clone(), index))
+            }
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let root = callables[root_key];
+    let mut pending = vec![root];
+    let mut reached = HashSet::default();
+    let mut walked = HashSet::default();
+    while let Some(index) = pending.pop() {
+        if !reached.insert(index) {
+            continue;
+        }
+        let supplied = staged.declarations[index].clone();
+        if index != root {
+            let (_, key) = declaration_identity(&supplied)?;
+            let authoritative = helper(key)?;
+            if authoritative.ir_version != 1 {
+                return Err("unsupported helper context IR version".into());
+            }
+            let mut matches = authoritative.declarations.iter().filter(|declaration| {
+                declaration_identity(declaration).ok() == Some((Namespace::Callable, key))
+            });
+            let mut expected = matches
+                .next()
+                .ok_or("registered helper context is missing its declaration")?
+                .clone();
+            if matches.next().is_some()
+                || !matches!(
+                    &expected.kind,
+                    Some(pb::declaration::Kind::HostPrimitive(_))
+                )
+            {
+                return Err("invalid registered helper context declaration".into());
+            }
+            let (sorts, files) = import_arenas(&authoritative, &mut staged)?;
+            relocate_span(&mut expected.span, &authoritative, &files)?;
+            let mut importer = NodeImport {
+                source: &authoritative,
+                sorts: &sorts,
+                files: &files,
+                nodes: &mut staged.nodes,
+                imported: HashMap::default(),
+                active: HashSet::default(),
+            };
+            declaration_refs(
+                &mut expected,
+                |index| {
+                    *index = *sorts
+                        .get(*index as usize)
+                        .ok_or("helper declaration sort out of bounds")?;
+                    Ok(())
+                },
+                |index| {
+                    *index = importer.import(*index)?;
+                    Ok(())
+                },
+            )?;
+
+            // Unlike language reconciliation, helper evidence cannot enrich or
+            // omit any authoritative field, including an absent language block.
+            let mut declarations = [supplied.clone(), expected];
+            let mut roots = [Vec::new(), Vec::new()];
+            for (declaration, roots) in declarations.iter_mut().zip(&mut roots) {
+                declaration_refs(
+                    declaration,
+                    |_| Ok(()),
+                    |index| {
+                        roots.push(*index);
+                        *index = 0;
+                        Ok(())
+                    },
+                )?;
+            }
+            if declarations[0] != declarations[1] || roots[0].len() != roots[1].len() {
+                return Err(format!("conflicting builtin context helper {key}"));
+            }
+            let mut comparison = NodeComparison::default();
+            for (&left, &right) in roots[0].iter().zip(&roots[1]) {
+                if !comparison.equal(&staged, left, right)? {
+                    return Err(format!("conflicting builtin context helper defaults {key}"));
+                }
+            }
+        }
+
+        let mut nodes = supplied
+            .bindings
+            .iter()
+            .filter_map(|bindings| bindings.python.as_ref())
+            .flat_map(|bindings| &bindings.views)
+            .flat_map(|view| &view.params)
+            .filter_map(|parameter| parameter.default_expr)
+            .collect::<Vec<_>>();
+        while let Some(index) = nodes.pop() {
+            if !walked.insert(index) {
+                continue;
+            }
+            let mut kind = staged
+                .nodes
+                .get(index as usize)
+                .and_then(|node| node.kind.clone())
+                .ok_or("missing builtin context default node")?;
+            if let pb::node::Kind::Call(call) = &kind {
+                pending.push(
+                    *callables
+                        .get(&call.func)
+                        .ok_or("unknown builtin context default callee")?,
+                );
+            }
+            node_edges(&mut kind, |index| {
+                nodes.push(*index);
+                Ok(())
+            })?;
+        }
+    }
+    for (key, index) in callables {
+        if !reached.contains(&index) {
+            return Err(format!("unreachable builtin context helper {key}"));
+        }
+    }
+    Ok(())
+}
+
 /// Transactionally imports declaration closures and reconciles each language's
 /// first supplied block. The returned flags identify newly installed definitions
 /// in source order; compatible resupplies never ask a native engine to redeclare.

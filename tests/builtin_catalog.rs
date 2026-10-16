@@ -7,6 +7,724 @@ use std::sync::{
 };
 
 #[test]
+fn builtin_default_context_baseline_gap_isolated_and_legacy_multiroot() {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    CALLS.store(0, Ordering::SeqCst);
+    let mut graph = EGraph::default();
+    add_literal_prim!(
+        &mut graph,
+        "default-helper"[id = "test.default_helper"] = || -> i64 {
+            {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                17
+            }
+        }
+    );
+    let integer = graph.get_sort_by_name("i64").unwrap().clone();
+    let mut isolated = builtin::closed_signature(
+        "test.default_consumer",
+        "default-consumer",
+        &[("value", integer.clone())],
+        &[],
+        integer,
+    )
+    .unwrap();
+    let root = isolated.declarations.last_mut().unwrap();
+    let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &root.kind else {
+        unreachable!()
+    };
+    let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+        unreachable!()
+    };
+    isolated.nodes.push(proto::Node {
+        sort_id: signature.output.unwrap(),
+        kind: Some(proto::node::Kind::Call(proto::Call {
+            func: "test.default_helper".into(),
+            args: vec![],
+        })),
+        ..Default::default()
+    });
+    root.bindings.as_mut().unwrap().python = Some(proto::PythonBindings {
+        views: vec![proto::PythonCallable {
+            kind: proto::PythonCallKind::Function.into(),
+            path: vec!["test".into(), "default_consumer".into()],
+            params: vec![proto::PythonParameter {
+                core_input: Some(0),
+                name: "value".into(),
+                default_expr: Some(0),
+            }],
+            ..Default::default()
+        }],
+    });
+    let mut destination = proto::Program::default();
+    let before = destination.clone();
+    let error =
+        builtin::definitions::reconcile_declarations(&isolated, &mut destination).unwrap_err();
+    assert!(error.contains("unknown default callee"), "{error}");
+    assert_eq!(destination, before);
+
+    let mut complete = proto::Program::default();
+    graph
+        .type_info()
+        .export_builtin_definition("test.default_helper", &mut complete)
+        .unwrap();
+    builtin::definitions::reconcile_declarations(&isolated, &mut complete).unwrap();
+    assert_eq!(
+        complete
+            .declarations
+            .iter()
+            .filter(|declaration| {
+                matches!(
+                    declaration.kind,
+                    Some(proto::declaration::Kind::HostPrimitive(_))
+                )
+            })
+            .count(),
+        2
+    );
+    let error = builtin::import_definition(&complete, &mut destination).unwrap_err();
+    assert!(error.contains("exactly one builtin"), "{error}");
+    assert_eq!(destination, before);
+    assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+}
+
+mod rooted_default_context {
+    use super::*;
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    // Compose a genuine helper export with a generated root, including all
+    // index relocation. Reordering happens only after the closed import.
+    fn supply(
+        types: &TypeInfo,
+        key: &str,
+        draft: &mut proto::Program,
+        helper: &str,
+        helper_first: bool,
+        relocated: bool,
+        argument: bool,
+    ) -> Result<(), String> {
+        let mut consumer = draft.clone();
+        let root = consumer.declarations.iter().position(|declaration| {
+            matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+        }).unwrap();
+        let Some(proto::declaration::Kind::HostPrimitive(primitive)) =
+            &consumer.declarations[root].kind
+        else {
+            unreachable!()
+        };
+        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            unreachable!()
+        };
+        let output = signature.output.unwrap();
+        let args = if argument {
+            let index = consumer.nodes.len() as u32;
+            consumer.nodes.push(proto::Node {
+                sort_id: output,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::I64(3)),
+                })),
+                ..Default::default()
+            });
+            vec![index]
+        } else {
+            vec![]
+        };
+        let default = consumer.nodes.len() as u32;
+        consumer.files.push(proto::SourceFile {
+            name: "default.egg".into(),
+            contents: Some("helper".into()),
+        });
+        consumer.nodes.push(proto::Node {
+            sort_id: output,
+            kind: Some(proto::node::Kind::Call(proto::Call {
+                func: helper.into(),
+                args,
+            })),
+            span: Some(proto::Span {
+                file: 0,
+                start: 0,
+                end: 6,
+            }),
+        });
+        consumer.declarations[root]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .python = Some(proto::PythonBindings {
+            views: vec![proto::PythonCallable {
+                kind: proto::PythonCallKind::Function.into(),
+                path: vec!["test".into(), key.replace('.', "_")],
+                params: vec![proto::PythonParameter {
+                    core_input: Some(0),
+                    name: "value".into(),
+                    default_expr: Some(default),
+                }],
+                ..Default::default()
+            }],
+        });
+        let mut complete = proto::Program {
+            ir_version: 1,
+            ..Default::default()
+        };
+        if relocated {
+            complete.sorts.push(proto::Sort {
+                kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                    name: "String".into(),
+                    args: vec![],
+                })),
+                ..Default::default()
+            });
+            complete.nodes.push(proto::Node {
+                sort_id: 0,
+                kind: Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                    value: Some(proto::primitive_value::Value::String("unused".into())),
+                })),
+                ..Default::default()
+            });
+            complete.files.push(proto::SourceFile {
+                name: "padding.egg".into(),
+                contents: None,
+            });
+        }
+        types.export_builtin_definition(helper, &mut complete)?;
+        builtin::definitions::reconcile_declarations(&consumer, &mut complete)?;
+        if !helper_first {
+            let root = complete.declarations.iter().position(|declaration| {
+                matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+            }).unwrap();
+            let helper = complete.declarations.iter().position(|declaration| {
+                matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == helper)
+            }).unwrap();
+            complete.declarations.swap(root, helper);
+        }
+        *draft = complete;
+        Ok(())
+    }
+
+    #[test]
+    fn macro_context_retains_root_closure_and_native_helper_identity() {
+        for (helper_first, relocated) in [(true, false), (false, true)] {
+            let mut graph = EGraph::default();
+            add_literal_prim!(
+                &mut graph,
+                "context-helper"[id = "test.context_helper"] = || -> i64 {
+                    {
+                        CALLS.fetch_add(1, Ordering::SeqCst);
+                        17
+                    }
+                }
+            );
+            let integer = graph.get_sort_by_name("i64").unwrap().clone();
+            let before = ResolvedCall::from_resolution(
+                "context-helper",
+                std::slice::from_ref(&integer),
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            let count = CALLS.load(Ordering::SeqCst);
+            add_literal_prim!(&mut graph, "context-root"[id = "test.context_root", context = |types, key, draft| {
+                supply(types, key, draft, "test.context_helper", helper_first, relocated, false)
+            }] = |value: i64| -> i64 { value });
+            for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+                let alias = ResolvedCall::from_resolution(
+                    "context-root",
+                    &[integer.clone(), integer.clone()],
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic,
+                )
+                .unwrap();
+                let keyed = ResolvedCall::from_resolution(
+                    "test.context_root",
+                    &[integer.clone(), integer.clone()],
+                    graph.type_info(),
+                    context,
+                    &ast::Span::Panic,
+                )
+                .unwrap();
+                assert_eq!(alias, keyed);
+            }
+            let after = ResolvedCall::from_resolution(
+                "context-helper",
+                std::slice::from_ref(&integer),
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic,
+            )
+            .unwrap();
+            assert_eq!(before, after);
+            let (ResolvedCall::Primitive(before), ResolvedCall::Primitive(after)) = (before, after)
+            else {
+                unreachable!()
+            };
+            assert!(Arc::ptr_eq(
+                before.validator().unwrap(),
+                after.validator().unwrap()
+            ));
+            assert_eq!(
+                graph
+                    .type_info()
+                    .get_prims("test.context_helper")
+                    .unwrap()
+                    .len(),
+                1
+            );
+            let mut exported = proto::Program::default();
+            graph
+                .type_info()
+                .export_builtin_definition("test.context_root", &mut exported)
+                .unwrap();
+            let root = exported.declarations.iter().find(|declaration| {
+                matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == "test.context_root")
+            }).unwrap();
+            let default = root
+                .bindings
+                .as_ref()
+                .unwrap()
+                .python
+                .as_ref()
+                .unwrap()
+                .views[0]
+                .params[0]
+                .default_expr
+                .unwrap();
+            if !relocated {
+                assert_eq!(default, 0);
+            }
+            assert!(
+                matches!(&exported.nodes[default as usize].kind, Some(proto::node::Kind::Call(call)) if call.func == "test.context_helper" && call.args.is_empty())
+            );
+            assert_eq!(
+                CALLS.load(Ordering::SeqCst),
+                count,
+                "metadata must invoke neither body nor validator"
+            );
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(check (= (context-root 5) 5) (= (context-helper) 17))",
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn context_rejects_mutation_unknown_helpers_and_atomic_duplicates() {
+        let mut graph = EGraph::default();
+        add_literal_prim!(
+            &mut graph,
+            "context-helper"[id = "test.context_helper"] = || -> i64 { 17 }
+        );
+        let integer = graph.get_sort_by_name("i64").unwrap().clone();
+        let generated = builtin::closed_signature(
+            "test.context_root",
+            "context-root",
+            &[("value", integer.clone())],
+            &[],
+            integer.clone(),
+        )
+        .unwrap();
+        for mutation in 0..13 {
+            let before = graph.type_info().builtin_catalog().unwrap().definitions;
+            let error = graph.type_info().prepare_builtin_context("test.context_root", "context-root", generated.clone(), |types, key, draft| {
+                supply(types, key, draft, "test.context_helper", true, true, false)?;
+                let helper = draft.declarations.iter().position(|declaration| {
+                    matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == "test.context_helper")
+                }).unwrap();
+                let root = draft.declarations.iter().position(|declaration| {
+                    matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+                }).unwrap();
+                let default = draft.declarations[root].bindings.as_ref().unwrap().python.as_ref().unwrap().views[0].params[0].default_expr.unwrap();
+                match mutation {
+                    0 => draft.declarations[helper].bindings.as_mut().unwrap().python = Some(proto::PythonBindings::default()),
+                    1 => draft.declarations[helper].bindings.as_mut().unwrap().rust = Some(proto::RustBindings::default()),
+                    2 => draft.declarations[helper].bindings.as_mut().unwrap().egglog = None,
+                    3 => draft.declarations[helper].doc = Some("forged helper".into()),
+                    4 => if let Some(proto::node::Kind::Call(call)) = &mut draft.nodes[default as usize].kind { call.func = "test.unknown".into(); },
+                    5 => if let Some(proto::node::Kind::Call(call)) = &mut draft.nodes[default as usize].kind { call.args.push(999); },
+                    6 => draft.nodes[default as usize].kind = Some(proto::node::Kind::Var("free".into())),
+                    7 => draft.nodes[default as usize].sort_id = 0,
+                    8 => {
+                        let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &draft.declarations[root].kind else { unreachable!() };
+                        let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing else { unreachable!() };
+                        draft.sorts[signature.output.unwrap() as usize].kind = Some(proto::sort::Kind::Family(proto::HostSort { name: "String".into(), args: vec![] }));
+                    }
+                    9 => draft.declarations.push(draft.declarations[root].clone()),
+                    10 => types.export_builtin_definition("egglog.core.i64.add", draft)?,
+                    11 => draft.ir_version = 0,
+                    12 => draft.declarations.push(draft.declarations[helper].clone()),
+                    _ => unreachable!(),
+                }
+                Ok(())
+            }).unwrap_err();
+            assert!(!error.is_empty());
+            assert_eq!(
+                graph.type_info().builtin_catalog().unwrap().definitions,
+                before
+            );
+            assert!(graph.type_info().get_prims("context-root").is_none());
+        }
+        add_literal_prim!(&mut graph, "context-root"[id = "test.context_root", context = |types, key, draft| {
+            supply(types, key, draft, "test.context_helper", false, false, false)
+        }] = |value: i64| -> i64 { value });
+        let before = ResolvedCall::from_resolution(
+            "context-root",
+            &[integer.clone(), integer.clone()],
+            graph.type_info(),
+            Context::Pure,
+            &ast::Span::Panic,
+        )
+        .unwrap();
+        let catalog = graph.type_info().builtin_catalog().unwrap().definitions;
+        assert!(
+            graph
+                .type_info()
+                .prepare_builtin_context(
+                    "test.context_root",
+                    "second-root",
+                    generated,
+                    |_, _, _| Ok(())
+                )
+                .is_err()
+        );
+        assert_eq!(
+            graph.type_info().builtin_catalog().unwrap().definitions,
+            catalog
+        );
+        assert!(graph.type_info().get_prims("second-root").is_none());
+        let after = ResolvedCall::from_resolution(
+            "context-root",
+            &[integer.clone(), integer],
+            graph.type_info(),
+            Context::Pure,
+            &ast::Span::Panic,
+        )
+        .unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn context_follows_helper_defaults_even_with_explicit_call_arguments() {
+        let mut graph = EGraph::default();
+        add_literal_prim!(
+            &mut graph,
+            "context-leaf"[id = "test.context_leaf"] = || -> i64 { 9 }
+        );
+        add_literal_prim!(&mut graph, "context-middle"[id = "test.context_middle", context = |types, key, draft| {
+            supply(types, key, draft, "test.context_leaf", true, false, false)
+        }] = |value: i64| -> i64 { value });
+        let integer = graph.get_sort_by_name("i64").unwrap().clone();
+        let generated = builtin::closed_signature(
+            "test.context_root",
+            "context-root",
+            &[("value", integer.clone())],
+            &[],
+            integer,
+        )
+        .unwrap();
+        let prepared = graph
+            .type_info()
+            .prepare_builtin_context(
+                "test.context_root",
+                "context-root",
+                generated.clone(),
+                |types, key, draft| {
+                    supply(types, key, draft, "test.context_middle", true, true, true)
+                },
+            )
+            .unwrap();
+        for key in [
+            "test.context_leaf",
+            "test.context_middle",
+            "test.context_root",
+        ] {
+            assert!(prepared.declarations.iter().any(|declaration| {
+                matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+            }));
+        }
+        let mut relocated = proto::Program {
+            ir_version: 1,
+            sorts: vec![proto::Sort {
+                kind: Some(proto::sort::Kind::Family(proto::HostSort {
+                    name: "String".into(),
+                    args: vec![],
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        builtin::import_rooted_definition("test.context_root", &prepared, &mut relocated).unwrap();
+        let once = relocated.clone();
+        builtin::import_rooted_definition("test.context_root", &prepared, &mut relocated).unwrap();
+        assert_eq!(
+            relocated, once,
+            "equivalent defaults survive arena relocation"
+        );
+        let error = graph.type_info().prepare_builtin_context("test.context_root", "context-root", generated.clone(), |types, key, draft| {
+            supply(types, key, draft, "test.context_middle", true, true, true)?;
+            let helper = draft.declarations.iter().find(|declaration| {
+                matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == "test.context_middle")
+            }).unwrap();
+            let default = helper.bindings.as_ref().unwrap().python.as_ref().unwrap().views[0].params[0].default_expr.unwrap();
+            draft.nodes[default as usize].kind = Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
+                value: Some(proto::primitive_value::Value::I64(99)),
+            }));
+            Ok(())
+        }).unwrap_err();
+        assert!(error.contains("helper defaults"), "{error}");
+        let error = graph.type_info().prepare_builtin_context("test.context_root", "context-root", generated, |types, key, draft| {
+            supply(types, key, draft, "test.context_middle", false, false, true)?;
+            draft.declarations.retain(|declaration| {
+                !matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == "test.context_leaf")
+            });
+            Ok(())
+        }).unwrap_err();
+        assert!(error.contains("callee"), "{error}");
+    }
+
+    #[test]
+    fn root_context_preserves_absent_empty_and_first_language_supplies() {
+        let mut graph = EGraph::default();
+        let integer = graph.get_sort_by_name("i64").unwrap().clone();
+        let generated = builtin::closed_signature(
+            "test.language_root",
+            "language-root",
+            &[("value", integer.clone())],
+            &[],
+            integer,
+        )
+        .unwrap();
+        for python in [false, true] {
+            for empty_first in [false, true] {
+                let mut first = generated.clone();
+                let root = first.declarations.last_mut().unwrap();
+                let Some(proto::declaration::Kind::HostPrimitive(primitive)) = &root.kind else {
+                    unreachable!()
+                };
+                let Some(proto::host_primitive::Typing::Signature(signature)) = &primitive.typing
+                else {
+                    unreachable!()
+                };
+                let presentation =
+                    builtin::scalar_member_bindings(signature, "method", "method", &[], None, None);
+                if python {
+                    root.bindings.as_mut().unwrap().python = if empty_first {
+                        Some(proto::PythonBindings::default())
+                    } else {
+                        presentation.python
+                    };
+                } else {
+                    root.bindings.as_mut().unwrap().rust = if empty_first {
+                        Some(proto::RustBindings::default())
+                    } else {
+                        presentation.rust
+                    };
+                }
+                let prepared = graph
+                    .type_info()
+                    .prepare_builtin_context(
+                        "test.language_root",
+                        "language-root",
+                        generated.clone(),
+                        |_, _, draft| {
+                            draft.declarations.last_mut().unwrap().bindings =
+                                first.declarations.last().unwrap().bindings.clone();
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                let frozen = prepared.clone();
+                let mut absent = generated.clone();
+                builtin::definitions::reconcile_declarations(&prepared, &mut absent).unwrap();
+                assert_eq!(absent, prepared);
+                let mut changed = first;
+                let bindings = changed
+                    .declarations
+                    .last_mut()
+                    .unwrap()
+                    .bindings
+                    .as_mut()
+                    .unwrap();
+                if python {
+                    let views = &mut bindings.python.as_mut().unwrap().views;
+                    if empty_first {
+                        views.push(proto::PythonCallable {
+                            kind: proto::PythonCallKind::Function.into(),
+                            path: vec!["different".into()],
+                            params: vec![proto::PythonParameter {
+                                core_input: Some(0),
+                                name: "value".into(),
+                                default_expr: None,
+                            }],
+                            ..Default::default()
+                        });
+                    } else {
+                        views.clear();
+                    }
+                } else {
+                    let views = &mut bindings.rust.as_mut().unwrap().views;
+                    if empty_first {
+                        views.push(proto::RustCallable {
+                            path: vec!["different".into()],
+                            params: vec![proto::RustParameter {
+                                core_input: Some(0),
+                                name: "value".into(),
+                                borrowed: false,
+                            }],
+                            ..Default::default()
+                        });
+                    } else {
+                        views.clear();
+                    }
+                }
+                let mut destination = prepared;
+                assert!(
+                    builtin::definitions::reconcile_declarations(&changed, &mut destination)
+                        .is_err()
+                );
+                assert_eq!(destination, frozen);
+            }
+        }
+    }
+
+    #[test]
+    fn context_family_evidence_cannot_first_supply_absent_languages() {
+        #[derive(Debug)]
+        struct ContextScalar;
+        impl prelude::BaseSort for ContextScalar {
+            type Base = i64;
+            fn name(&self) -> &str {
+                "ContextScalar"
+            }
+            fn reconstruct_termdag(
+                &self,
+                _: &sort::BaseValues,
+                _: Value,
+                _: &mut TermDag,
+            ) -> TermId {
+                panic!("family metadata must not reconstruct a native value")
+            }
+        }
+        for outer_present in [false, true] {
+            let mut graph = EGraph::default();
+            prelude::add_base_sort(&mut graph, ContextScalar, ast::Span::Panic).unwrap();
+            graph
+                .type_info()
+                .register_builtin_family(proto::HostSortFamily {
+                    name: "ContextScalar".into(),
+                    arity: 0,
+                    bindings: outer_present.then(proto::SortBindings::default),
+                })
+                .unwrap();
+            let scalar = graph.get_sort_by_name("ContextScalar").unwrap().clone();
+            let generated = builtin::closed_signature(
+                "test.family_root",
+                "family-root",
+                &[("value", scalar.clone())],
+                &[],
+                scalar,
+            )
+            .unwrap();
+            let before = graph.type_info().builtin_catalog().unwrap().definitions;
+            let prepared = graph
+                .type_info()
+                .prepare_builtin_context(
+                    "test.family_root",
+                    "family-root",
+                    generated.clone(),
+                    |_, _, _| Ok(()),
+                )
+                .unwrap();
+            let family = prepared
+                .declarations
+                .iter()
+                .find_map(|declaration| match &declaration.kind {
+                    Some(proto::declaration::Kind::HostSortFamily(family))
+                        if family.name == "ContextScalar" =>
+                    {
+                        Some(family)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                family.bindings,
+                outer_present.then(proto::SortBindings::default)
+            );
+            for mutation in 0..3 {
+                if mutation == 0 && outer_present {
+                    continue;
+                }
+                let error = graph
+                    .type_info()
+                    .prepare_builtin_context(
+                        "test.family_root",
+                        "family-root",
+                        generated.clone(),
+                        |_, _, draft| {
+                            let family = draft
+                                .declarations
+                                .iter_mut()
+                                .find_map(|declaration| match &mut declaration.kind {
+                                    Some(proto::declaration::Kind::HostSortFamily(family))
+                                        if family.name == "ContextScalar" =>
+                                    {
+                                        Some(family)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap();
+                            if mutation == 0 {
+                                family.bindings = Some(proto::SortBindings::default());
+                            } else {
+                                let forged = proto::TypeBinding {
+                                    path: vec!["forged".into(), "ContextScalar".into()],
+                                    ..Default::default()
+                                };
+                                let bindings = family.bindings.get_or_insert_default();
+                                if mutation == 1 {
+                                    bindings.python = Some(forged);
+                                } else {
+                                    bindings.rust = Some(forged);
+                                }
+                            }
+                            Ok(())
+                        },
+                    )
+                    .unwrap_err();
+                assert!(error.contains("context family"), "{error}");
+                assert_eq!(
+                    graph.type_info().builtin_catalog().unwrap().definitions,
+                    before
+                );
+                assert!(!graph.type_info().is_primitive("family-root"));
+            }
+            for duplicate in [false, true] {
+                let error = graph.type_info().prepare_builtin_context("test.family_root", "family-root", generated.clone(), |_, _, draft| {
+                    let family = draft.declarations.iter().position(|declaration| {
+                        matches!(&declaration.kind, Some(proto::declaration::Kind::HostSortFamily(family)) if family.name == "ContextScalar")
+                    }).unwrap();
+                    if duplicate { draft.declarations.push(draft.declarations[family].clone()); }
+                    else {
+                        draft.files.push(proto::SourceFile { name: "forged-family.egg".into(), contents: Some("family".into()) });
+                        draft.declarations[family].span = Some(proto::Span { file: 0, start: 0, end: 6 });
+                    }
+                    Ok(())
+                }).unwrap_err();
+                assert!(error.contains("context family"), "{error}");
+                assert_eq!(
+                    graph.type_info().builtin_catalog().unwrap().definitions,
+                    before
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn native_signature_all_selection_routes_intersect_native_predicate() {
     // This regression uses only baseline APIs, so the same test can demonstrate
     // behavioral red-before/fix-after independently of the new binding APIs.
@@ -27,8 +745,8 @@ fn native_signature_all_selection_routes_intersect_native_predicate() {
             )
             .into_box()
         }
-        fn builtin_definition(&self) -> Option<&proto::Program> {
-            Some(&self.definition)
+        fn builtin_definition(&self) -> Option<(&str, &proto::Program)> {
+            Some(("test.signature_intersection", &self.definition))
         }
     }
     impl PurePrim for Narrowed {
@@ -4683,8 +5401,8 @@ fn empty_definition_keys_are_rejected_by_import_and_registration() {
         fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn constraint::TypeConstraint> {
             builtin::type_constraints(&self.0, span)
         }
-        fn builtin_definition(&self) -> Option<&proto::Program> {
-            Some(&self.0)
+        fn builtin_definition(&self) -> Option<(&str, &proto::Program)> {
+            Some(("", &self.0))
         }
     }
     impl PurePrim for Invalid {
@@ -4751,8 +5469,8 @@ fn canonical_signature_drives_native_checking_and_export() {
         fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn constraint::TypeConstraint> {
             builtin::type_constraints(&self.0, span)
         }
-        fn builtin_definition(&self) -> Option<&proto::Program> {
-            Some(&self.0)
+        fn builtin_definition(&self) -> Option<(&str, &proto::Program)> {
+            Some(("test.identity", &self.0))
         }
     }
     impl PurePrim for Identity {
