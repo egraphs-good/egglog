@@ -396,28 +396,48 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
     )
 }
 
-/// Reorder a suffix of the cached logical plan using the DVO policy.
+/// Whether ordering prepares a new plan or resumes an executing join.
+#[derive(Clone, Copy)]
+pub(super) enum JoinOrderContext {
+    Initial,
+    /// Select only the next execution position, `start`. Later positions and
+    /// phases keep their order until execution provides fresh residual sizes.
+    Runtime {
+        start: usize,
+    },
+}
+
+/// Reorder a suffix of the current execution schedule using the DVO policy.
 ///
-/// Within each phase, the greedy key is decreasing refinement count in the
-/// logical plan prefix, increasing live residual size, then decreasing number
-/// of intersected relations. Materialization stages that do not commute remain
-/// fixed barriers. Reordering can also change factorized leaf-scan eligibility,
-/// so [`recompute_leaf_scans`] runs after every change.
+/// At runtime, select only the next executable stage by increasing residual
+/// row count, then decreasing number of intersected relations. Exact ties keep
+/// the first stage in physical order. Rows bound the candidates an intersection
+/// or fused cover can enumerate and already reflect earlier filtering.
+///
+/// Swap the selected stage into the next position without sorting the rest of
+/// the suffix: its cardinalities will change when that stage executes. Initial
+/// ordering retains the existing greedy policy with refinement depth first.
+/// Materialization stages that do not commute remain fixed barriers.
+/// [`recompute_leaf_scans`] updates factorization flags for the resulting order.
 pub(super) fn sort_plan_by_size(
     order: &mut InstrOrder,
     leaf_scans: &mut LeafScans,
-    start: usize,
+    context: JoinOrderContext,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
+    let start = match context {
+        JoinOrderContext::Initial => 0,
+        JoinOrderContext::Runtime { start } => start,
+    };
     let mut last_pos = start;
     for i in start..instrs.len() {
         if is_reorder_barrier(&instrs[i]) {
-            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
+            sort_plan_by_size_inner(order, last_pos..i, context, instrs, binding_info);
             last_pos = i + 1;
         }
     }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
+    sort_plan_by_size_inner(order, last_pos..instrs.len(), context, instrs, binding_info);
     recompute_leaf_scans(order, leaf_scans, instrs, start);
 }
 
@@ -521,9 +541,28 @@ pub(super) fn recompute_leaf_scans(
 pub(super) fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
+    context: JoinOrderContext,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
+    // Choose only the immediate stage at runtime. A later phase cannot use
+    // these cardinalities until its preceding barrier has actually executed.
+    if let JoinOrderContext::Runtime { start } = context {
+        if range.start != start {
+            return;
+        }
+        let best = range.clone().min_by_key(|&position| {
+            let stage = &instrs[order.get(position)];
+            (
+                estimate_size(stage, binding_info),
+                -num_intersected_rels(stage),
+            )
+        });
+        if let Some(best) = best {
+            order.data.swap(start, best);
+        }
+        return;
+    }
     // Nothing to sort if there's 0 or 1 element.
     if range.len() <= 1 {
         return;
@@ -555,21 +594,13 @@ pub(super) fn sort_plan_by_size_inner(
             }
         };
 
-    // Count how many times each atom has been refined in the logical plan
-    // prefix, as the DVO heuristic does.
-    for stage in &instrs[..range.start] {
-        update_refinements(stage, &mut times_refined);
+    // Initial ordering counts the prefix in physical order. Earlier choices
+    // may have moved stages away from their logical positions, including
+    // stages scheduled in a phase before a materialization barrier.
+    for position in 0..range.start {
+        update_refinements(&instrs[order.get(position)], &mut times_refined);
     }
 
-    // We prioritize stages by
-    //
-    //   (1) how many times an atom used by the stage has been refined,
-    //   (2) then by the estimated input rows (smaller → earlier),
-    //   (3) then by how many relations the stage joins (more → earlier).
-    //
-    // Estimate size is second so that very small inputs (e.g. FunDep
-    // consequents with exactly one value) run before multi-relation stages
-    // that happen to have a larger current estimate.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo<'_, '_>,
                   refinements: &DenseIdMap<AtomId, i64>| {
@@ -585,11 +616,11 @@ pub(super) fn sort_plan_by_size_inner(
                 .unwrap_or_default(),
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
-        (
-            -refine,
-            estimate_size(join_stage, binding_info),
-            -num_intersected_rels(join_stage),
-        )
+        let rows = estimate_size(join_stage, binding_info);
+        let relations = num_intersected_rels(join_stage);
+        // Initial choices use unchanged row estimates, although earlier
+        // stages in this schedule will refine them before they execute.
+        (-refine, rows, -relations, 0)
     };
 
     for i in range.clone() {
