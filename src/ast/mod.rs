@@ -1499,35 +1499,29 @@ where
     /// (Typechecking preserves the original AST this way,
     /// and allows terms and proof instrumentation to do the same).
     pub(crate) fn to_query(
-        &self,
+        facts: &[GenericFact<Head, Leaf>],
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (Query<HeadOrEq<Head>, Leaf>, Vec<MappedFact<Head, Leaf>>) {
         let mut atoms = vec![];
-        let mut new_body = vec![];
+        let mut new_body = Vec::with_capacity(facts.len());
 
-        for fact in self.0.iter() {
+        for fact in facts {
             match fact {
                 GenericFact::Eq(span, e1, e2) => {
-                    let mut to_equate = vec![];
-                    let mut process = |expr: &GenericExpr<Head, Leaf>| {
-                        let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
-                        atoms.extend(child_atoms);
-                        to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
-                        expr
-                    };
-                    let e1 = process(e1);
-                    let e2 = process(e2);
+                    let e1 = e1.to_query(typeinfo, fresh_gen, &mut atoms);
+                    let at1 = e1.get_corresponding_var_or_lit(typeinfo);
+                    let e2 = e2.to_query(typeinfo, fresh_gen, &mut atoms);
+                    let at2 = e2.get_corresponding_var_or_lit(typeinfo);
                     atoms.push(GenericAtom {
                         span: span.clone(),
                         head: HeadOrEq::Eq,
-                        args: to_equate,
+                        args: vec![at1, at2],
                     });
                     new_body.push(GenericFact::Eq(span.clone(), e1, e2));
                 }
                 GenericFact::Fact(expr) => {
-                    let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
-                    atoms.extend(child_atoms);
+                    let expr = expr.to_query(typeinfo, fresh_gen, &mut atoms);
                     new_body.push(GenericFact::Fact(expr));
                 }
             }

@@ -484,7 +484,7 @@ impl<Var, Value> Default for Problem<Var, Value> {
 /// This is the result of constraint solving.
 /// Uses an immutable HashMap for efficient cloning during constraint solving.
 #[derive(Clone)]
-pub struct Assignment<Var, Value>(pub HashMap<Var, Value>);
+pub struct Assignment<Var, Value>(pub HashMap<Var, Value, crate::util::BuildHasher>);
 
 impl<Var, Value> Assignment<Var, Value>
 where
