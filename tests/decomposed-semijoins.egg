@@ -1,0 +1,25 @@
+; x and y sharing a t through x-r-t and y-s-t. With the triangle a-b-c, the bag binds (y, t) from a
+; message and scans (x, t) as a semijoin with t bound; it and that message's lookup reject other t's
+(relation ab (i64 i64))
+(relation bc (i64 i64))
+(relation ca (i64 i64))
+(relation ax (i64 i64))
+(relation ay (i64 i64))
+(relation xr (i64 i64))
+(relation ys (i64 i64))
+(relation rt (i64 i64))
+(relation st (i64 i64))
+(relation found (i64 i64))
+
+(rule ((ab a b) (bc b c) (ca c a) (ax a x) (ay a y) (xr x r) (ys y s) (rt r t) (st s t))
+      ((found x y)))
+
+(ab 1 2) (bc 2 3) (ca 3 1)
+(ax 1 10) (xr 10 30) (rt 30 50)
+(ax 1 11) (xr 11 31) (rt 31 60)
+(ay 1 20) (ys 20 40) (st 40 60)
+(ay 1 21) (ys 21 41) (st 41 50)
+(run 1)
+(check (found 10 21) (found 11 20))
+(fail (check (found 10 20)))
+(fail (check (found 11 21)))

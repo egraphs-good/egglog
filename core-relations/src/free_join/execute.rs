@@ -44,8 +44,8 @@ use super::{
     frame_update::{FrameUpdates, UpdateInstr},
     join_tail::{
         BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
-        MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
-        materialization_is_live_in_tail, sort_plan_by_size,
+        MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, bound_before,
+        estimate_size, materialization_is_live_in_tail, sort_plan_by_size,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
@@ -1260,7 +1260,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
-        sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
+        sort_plan_by_size(&mut order, &mut leaf_scans, 0, stages, binding_info);
         let all_stages = prepared.all_stage_mask::<M>();
         debug_assert!(
             all_stages.is_some()
@@ -1430,7 +1430,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
             // resulting atom-local successor choice safe to cache again.
-            sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
+            sort_plan_by_size(instr_order, leaf_scans, cur, stages, binding_info);
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 
@@ -2148,7 +2148,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                 }
                             }
                         }
-                        MatScanMode::Lookup(_) => unreachable!("guarded above"),
+                        _ => unreachable!("guarded above"),
                     }
                     if buf.is_empty() {
                         return;
@@ -2283,6 +2283,44 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
+                                    }
+                                }
+                            }
+                        }
+                        MatScanMode::Semijoin => {
+                            let bound: SmallVec<[(usize, Value); 4]> = bind
+                                .iter()
+                                .filter(|(_, var)| {
+                                    bound_before(instr_order, &stages.instrs, cur, *var)
+                                })
+                                .map(|(col, var)| (col.index(), binding_info.bindings[*var]))
+                                .collect();
+                            // Fully bound, it probes one key, still refining the atoms it reads.
+                            if bound.len() == bind.len() {
+                                let key: SmallVec<[Value; 4]> =
+                                    bound.iter().map(|(_, val)| *val).collect();
+                                if cover_mat.contains_key(key.as_slice()) {
+                                    if prune_probers(&mut updates, Some(&key), None) {
+                                        updates.finish_frame();
+                                    } else {
+                                        updates.rollback();
+                                    }
+                                }
+                            } else {
+                                for group_key in cover_mat.keys() {
+                                    if bound.iter().any(|(col, val)| group_key[*col] != *val) {
+                                        continue;
+                                    }
+                                    for (col, var) in bind.iter() {
+                                        updates.push_binding(*var, group_key[col.index()]);
+                                    }
+                                    if prune_probers(&mut updates, Some(group_key), None) {
+                                        updates.finish_frame();
+                                    } else {
+                                        updates.rollback();
+                                    }
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates!(updates);
                                     }
                                 }
                             }

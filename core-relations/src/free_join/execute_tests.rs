@@ -20,7 +20,8 @@ use crate::{
 use crate::free_join::{
     join_tail::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
-        packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
+        packed_child_shape_in_tail, recompute_leaf_scans, scan_atom_tail_use,
+        sort_plan_by_size_inner, suffix_stage_mask,
     },
     packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
@@ -342,9 +343,33 @@ fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
     // still anchors the recursive ordering to stage 0 / atom 0. Using the
     // physical prefix here would instead promote stage 2 / atom 1.
     let mut order = InstrOrder::from_iter([1, 0, 2, 3].into_iter());
-    sort_plan_by_size_inner(&mut order, 1..3, &stages, &mut binding_info);
+    sort_plan_by_size_inner(&mut order, 1..3, &stages, usize::MAX, &mut binding_info);
 
     assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3].into_iter()));
+}
+
+#[test]
+fn a_semijoin_blocks_an_earlier_leaf_binding_its_variables() {
+    // Stage 1 binds y, which the semijoin reads as a scalar: a leaf only after it.
+    let stages = [
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(0),
+            mode: MatScanMode::Semijoin,
+            bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(2))],
+            to_intersect: Vec::new(),
+        },
+        JoinStage::FusedIntersect {
+            cover: scan(5),
+            bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(2))],
+            to_intersect: Vec::new(),
+        },
+    ];
+    for (order, leaves) in [([1, 0], [false, false]), ([0, 1], [false, true])] {
+        let order = InstrOrder::from_iter(order.into_iter());
+        let mut leaf_scans = smallvec![true; 2];
+        recompute_leaf_scans(&order, &mut leaf_scans, &stages, 0);
+        assert_eq!(leaf_scans[..], leaves);
+    }
 }
 
 fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
@@ -828,4 +853,99 @@ fn row_handle_cardinality_tracks_each_storage_representation() {
         drop(rows);
         assert_eq!(clone.size(), clone.subset().size());
     }
+}
+
+#[test]
+fn branches_that_order_a_semijoin_differently_agree_on_a_shared_child() {
+    use crate::{
+        Database, RuleSetBuilder,
+        free_join::plan::{DecomposedPlan, JoinStageBlocks, JoinStages, MatSpec, Plan},
+        table::SortedWritesTable,
+        table_shortcuts::v,
+    };
+    use egglog_reports::ReportLevel;
+
+    // A packed child is cached under its atom's node, so its shape must follow from the
+    // node. Both z branches bind x = 1 first, and the w stage builds a's child after the
+    // fully bound semijoin for z = 10 and before it for z = 11; only refining a keeps them apart.
+    let mut db = Database::default();
+    let [a, b, c, pxy, pz, found] = [(); 6].map(|()| {
+        db.add_table(
+            SortedWritesTable::new(2, 2, None, vec![], Box::new(|_, _, _, _| false)),
+            std::iter::empty(),
+            std::iter::empty(),
+        )
+    });
+    // (table, n, x, dx, y, dy): rows (x + i * dx, y + i * dy) for i < n.
+    for (table, n, x, dx, y, dy) in [
+        (a, 50, 1, 0, 0, 1),
+        (b, 45, 0, 1, 10, 0),
+        (b, 60, 45, 1, 11, 0),
+        (c, 35, 1, 1, 10, 0),
+        (c, 35, 1, 1, 11, 0),
+        (pxy, 105, 1, 0, 0, 1),
+        (pz, 2, 10, 1, 0, 0),
+    ] {
+        let mut buf = db.new_buffer(table);
+        (0..n).for_each(|i| buf.stage_insert(&[v(x + i * dx), v(y + i * dy)]));
+    }
+    db.merge_all();
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let [x, w, y, z, j] = [(); 5].map(|()| query.new_var());
+    query.add_atom(a, &[x.into(), w.into()], &[]).unwrap();
+    query.add_atom(b, &[y.into(), z.into()], &[]).unwrap();
+    query.add_atom(c, &[x.into(), z.into()], &[]).unwrap();
+    query.add_atom(pxy, &[x.into(), y.into()], &[]).unwrap();
+    query.add_atom(pz, &[z.into(), j.into()], &[]).unwrap();
+    let mut rule = query.build();
+    rule.insert(found, &[x.into(), y.into()]).unwrap();
+    rule.build_with_description("semijoin-reordered-across-branches");
+    let mut rules = rsb.build();
+
+    let (_, (plan, _, _)) = rules.plans.iter_mut().next().unwrap();
+    let intersect = |var, scans: &[(usize, usize)]| JoinStage::Intersect {
+        var,
+        scans: scans
+            .iter()
+            .map(|&(atom, column)| SingleScanSpec {
+                atom: AtomId::from_usize(atom),
+                column: ColumnId::from_usize(column),
+                cs: Vec::new(),
+            })
+            .collect(),
+    };
+    let message = (
+        JoinStages::new(vec![intersect(x, &[(3, 0)]), intersect(y, &[(3, 1)])]),
+        MatSpec {
+            msg_vars: smallvec![x, y],
+            val_vars: SmallVec::new(),
+        },
+    );
+    let bag = vec![
+        intersect(z, &[(4, 0), (1, 1), (2, 1)]),
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(0),
+            mode: MatScanMode::Semijoin,
+            bind: smallvec![(ColumnId::from_usize(0), x), (ColumnId::from_usize(1), y)],
+            to_intersect: vec![(scan(0), smallvec![ColumnId::from_usize(0)])],
+        },
+        intersect(x, &[(0, 0), (2, 0)]),
+        intersect(w, &[(0, 1)]),
+        intersect(y, &[(1, 0)]),
+    ];
+    *plan = Plan::DecomposedPlan(DecomposedPlan {
+        atoms: plan.atoms(),
+        header: Vec::new(),
+        stages: JoinStageBlocks {
+            blocks: vec![message],
+        },
+        result_block: JoinStages::new(bag),
+        actions: plan.actions(),
+    });
+    db.intern_access_families(plan);
+
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(db.get_table(found).len(), 105);
 }
