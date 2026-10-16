@@ -179,7 +179,7 @@ fn compile_only_validation_registers_and_compiles_without_execution() {
             let program = graph
                 .parse_program(None, &format!("{source} {suffix}"))
                 .unwrap();
-            let result = graph.validate_program(program);
+            let result = graph.validate_program(program).map(|_| ());
             assert_eq!(result.is_ok(), suffix.is_empty(), "mode {mode}: {result:?}");
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             assert_eq!(validations.load(Ordering::SeqCst), 0);
@@ -202,7 +202,7 @@ fn compile_only_validation_registers_and_compiles_without_execution() {
         for command in ungrounded.clone() {
             resolve_only.resolve_command_before_proofs(command).unwrap();
         }
-        let error = graph.validate_program(ungrounded).unwrap_err();
+        let error = graph.validate_program(ungrounded).err().unwrap();
         assert!(
             matches!(error, Error::TypeError(egglog::TypeError::Ungrounded(_, _))),
             "{error}"
@@ -241,7 +241,7 @@ fn validation_defers_requested_check_planning_but_not_internal_queries() {
             .unwrap();
         for source in ["(check (= (+ x 1) 2))", "(fail (check (= (+ x 1) 2)))"] {
             let program = graph.parse_program(None, source).unwrap();
-            let result = graph.validate_program(program);
+            let result = graph.validate_program(program).map(|_| ());
             // ProofTesting puts this query in an internal helper rule; the
             // requested ProveExists anchor cannot catch its planning failure.
             assert_eq!(result.is_ok(), mode != 3, "mode {mode}: {result:?}");
