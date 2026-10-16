@@ -7,6 +7,95 @@ use std::sync::{
 };
 
 #[test]
+fn native_signature_all_selection_routes_intersect_native_predicate() {
+    // This regression uses only baseline APIs, so the same test can demonstrate
+    // behavioral red-before/fix-after independently of the new binding APIs.
+    #[derive(Clone)]
+    struct Narrowed {
+        definition: proto::Program,
+        native: ArcSort,
+    }
+    impl Primitive for Narrowed {
+        fn name(&self) -> &str {
+            "signature-intersection"
+        }
+        fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn constraint::TypeConstraint> {
+            constraint::SimpleTypeConstraint::new(
+                self.name(),
+                vec![self.native.clone(), self.native.clone()],
+                span.clone(),
+            )
+            .into_box()
+        }
+        fn builtin_definition(&self) -> Option<&proto::Program> {
+            Some(&self.definition)
+        }
+    }
+    impl PurePrim for Narrowed {
+        fn apply<'a, 'db>(&self, _: PureState<'a, 'db>, _: &[Value]) -> Option<Value> {
+            panic!("signature validation must not execute this fixture")
+        }
+    }
+    let mut graph = EGraph::default();
+    let integer = graph.get_sort_by_name("i64").unwrap().clone();
+    let string = graph.get_sort_by_name("String").unwrap().clone();
+    let definition = builtin::closed_signature(
+        "test.signature_intersection",
+        "signature-intersection",
+        &[("input", integer.clone())],
+        &[],
+        string,
+    )
+    .unwrap();
+    graph.add_pure_primitive(
+        Narrowed {
+            definition,
+            native: integer.clone(),
+        },
+        Some(Arc::new(|_: &mut TermDag, _: &[TermId]| {
+            panic!("signature validation must not execute a validator")
+        })),
+    );
+    let actual = [integer.clone(), integer];
+    let types = graph.type_info();
+    for key in ["signature-intersection", "test.signature_intersection"] {
+        assert!(
+            !types.get_prims(key).unwrap()[0].accept(&actual, types),
+            "native identity constraints must also satisfy the String-result descriptor"
+        );
+        for ctx in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            assert!(
+                ResolvedCall::from_resolution(key, &actual, types, ctx, &ast::Span::Panic).is_err()
+            );
+        }
+        assert!(
+            types
+                .export_function_target(
+                    key,
+                    &actual[..1],
+                    &actual[1],
+                    None,
+                    &mut proto::Program::default()
+                )
+                .is_err()
+        );
+    }
+    graph
+        .parse_and_run_program(
+            None,
+            "(sort F (UnstableFn (i64) i64)) (function saved () F :merge new)",
+        )
+        .unwrap();
+    for key in ["signature-intersection", "test.signature_intersection"] {
+        assert!(
+            graph
+                .parse_and_run_program(None, &format!("(set (saved) (unstable-fn {key:?}))"))
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn function_value_observer_keeps_typed_occurrences() {
     let mut graph = EGraph::default();
     graph

@@ -172,6 +172,15 @@ impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
     /// Returns whether the primitive is compatible with this signature.
     pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
+        // Every complete-signature route passes here, including native aliases,
+        // named functions and export. The pure matcher never calls accept or
+        // the implementation's constraint object, so open domains retain their
+        // original predicate without an instance-constraint recursion.
+        if let Some(definition) = self.primitive.builtin_definition()
+            && typeinfo.check_native_signature(definition, tys).is_err()
+        {
+            return false;
+        }
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
             .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
@@ -464,9 +473,14 @@ impl EGraph {
                                 .is_some_and(|definition| {
                                     Arc::ptr_eq(definition, &instance.definition)
                                 })
-                                && !self
+                                && self
                                     .type_info
                                     .builtin_instances
+                                    .get(&instance.dispatch_name)
+                                    .is_none_or(|existing| instance.can_share_dispatch(existing))
+                                && !self
+                                    .type_info
+                                    .builtin_definitions
                                     .contains_key(&instance.dispatch_name)
                                 && !self
                                     .type_info
@@ -481,7 +495,9 @@ impl EGraph {
                     let instance = registered.primitive.builtin_instance().unwrap();
                     self.type_info
                         .builtin_instances
-                        .insert(instance.dispatch_name.clone(), vec![registered.clone()]);
+                        .entry(instance.dispatch_name.clone())
+                        .or_default()
+                        .push(registered.clone());
                     self.type_info
                         .builtin_primitives
                         .entry(key.into())

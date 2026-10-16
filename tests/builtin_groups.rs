@@ -8,6 +8,928 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+mod native_signature {
+    use super::*;
+    use egglog::constraint::{Constraint, TypeConstraint};
+
+    // An owner for test descriptors only; no production family/primitive is added.
+    struct Provider<const CASE: u8>;
+    impl<const CASE: u8> Presort for Provider<CASE> {
+        fn presort_name() -> &'static str {
+            "NativeSignatureFixture"
+        }
+        fn reserved_primitives() -> Vec<&'static str> {
+            vec![]
+        }
+        fn builtin_definitions() -> Vec<pb::Program> {
+            use pb::sort::Kind;
+            let mut sorts = vec![
+                Kind::Var(0),
+                Kind::Var(1),
+                Kind::Family(pb::HostSort {
+                    name: "Vec".into(),
+                    args: vec![0],
+                }),
+                Kind::Family(pb::HostSort {
+                    name: "Vec".into(),
+                    args: vec![1],
+                }),
+                Kind::Func(pb::FuncSort {
+                    params: vec![0],
+                    result: 1,
+                }),
+                Kind::Func(pb::FuncSort {
+                    params: vec![2],
+                    result: 3,
+                }),
+                Kind::Family(pb::HostSort {
+                    name: "Vec".into(),
+                    args: vec![2],
+                }),
+                Kind::Family(pb::HostSort {
+                    name: "Vec".into(),
+                    args: vec![3],
+                }),
+                Kind::Family(pb::HostSort {
+                    name: "i64".into(),
+                    args: vec![],
+                }),
+                Kind::Family(pb::HostSort {
+                    name: "String".into(),
+                    args: vec![],
+                }),
+                Kind::Eq("E".into()),
+            ];
+            let (inputs, output, binders) = match CASE {
+                0 => (vec![4, 2], 3, 2),
+                1 | 2 | 6 | 7 => (vec![0, 0], 0, if CASE == 7 { 2 } else { 1 }),
+                3 => (vec![8], 9, 0),
+                4 => (vec![5, 6], 7, 2),
+                5 => (vec![], 2, 1),
+                8 => (vec![10], 10, 0),
+                _ => unreachable!(),
+            };
+            if CASE == 2 {
+                sorts[0] = Kind::Var(2); // Outside the descriptor's binder scope.
+            }
+            vec![pb::Program {
+                ir_version: 1,
+                sorts: sorts
+                    .into_iter()
+                    .map(|kind| pb::Sort {
+                        kind: Some(kind),
+                        ..Default::default()
+                    })
+                    .collect(),
+                declarations: vec![pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                        name: "test.native_signature".into(),
+                        typing: Some(pb::host_primitive::Typing::Signature(
+                            pb::GenericSignature {
+                                type_params: (0..binders).map(|i| format!("T{i}")).collect(),
+                                equality_type_params: if CASE == 6 { vec![0] } else { vec![] },
+                                inputs: inputs
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, sort)| pb::Arg {
+                                        name: format!("arg{i}"),
+                                        sort,
+                                    })
+                                    .collect(),
+                                output: Some(output),
+                                ..Default::default()
+                            },
+                        )),
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]
+        }
+        fn make_sort(
+            _: &mut TypeInfo,
+            _: String,
+            _: &[ast::Expr],
+            span: ast::Span,
+        ) -> Result<ArcSort, TypeError> {
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().into(),
+                span,
+            ))
+        }
+    }
+
+    #[derive(Clone)]
+    struct Exact(builtin::BuiltinInstance);
+    impl Primitive for Exact {
+        fn name(&self) -> &str {
+            "signature-exact"
+        }
+        fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn TypeConstraint> {
+            self.0.type_constraints(span)
+        }
+        fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+            Some(&self.0)
+        }
+    }
+    impl PurePrim for Exact {
+        fn apply<'a, 'db>(&self, _: PureState<'a, 'db>, _: &[Value]) -> Option<Value> {
+            panic!("signature checks must not execute the fixture")
+        }
+    }
+
+    #[derive(Clone)]
+    struct Open {
+        instance: builtin::BuiltinInstance,
+        equality: Option<bool>,
+    }
+    impl Primitive for Open {
+        fn name(&self) -> &str {
+            "signature-open"
+        }
+        fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn TypeConstraint> {
+            Box::new(OpenConstraint {
+                equality: self.equality,
+                span: span.clone(),
+            })
+        }
+        fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+            Some(&self.instance)
+        }
+    }
+    impl PurePrim for Open {
+        fn apply<'a, 'db>(&self, _: PureState<'a, 'db>, _: &[Value]) -> Option<Value> {
+            panic!("open-domain selection must not execute the fixture")
+        }
+    }
+    impl WritePrim for Open {
+        fn apply<'a, 'db>(&self, _: WriteState<'a, 'db>, _: &[Value]) -> Option<Value> {
+            panic!("open-domain selection must not execute the write fixture")
+        }
+    }
+    struct OpenConstraint {
+        equality: Option<bool>,
+        span: ast::Span,
+    }
+    impl TypeConstraint for OpenConstraint {
+        fn get(
+            &self,
+            arguments: &[AtomTerm],
+            types: &TypeInfo,
+        ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+            let signatures = types
+                .get_arcsorts_by(|sort| self.equality.is_none_or(|eq| sort.is_eq_sort() == eq));
+            vec![constraint::xor(
+                signatures
+                    .into_iter()
+                    .map(|sort| {
+                        constraint::SimpleTypeConstraint::new(
+                            "signature-open",
+                            vec![sort.clone(); arguments.len()],
+                            self.span.clone(),
+                        )
+                        .get(arguments, types)
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                    })
+                    .map(constraint::and)
+                    .collect(),
+            )]
+        }
+    }
+
+    #[derive(Clone)]
+    struct NativeApplication {
+        instance: builtin::BuiltinInstance,
+        signature: Vec<ArcSort>,
+    }
+    impl Primitive for NativeApplication {
+        fn name(&self) -> &str {
+            "signature-application"
+        }
+        fn get_type_constraints(&self, span: &ast::Span) -> Box<dyn TypeConstraint> {
+            constraint::SimpleTypeConstraint::new(self.name(), self.signature.clone(), span.clone())
+                .into_box()
+        }
+        fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+            Some(&self.instance)
+        }
+    }
+    impl PurePrim for NativeApplication {
+        fn apply<'a, 'db>(&self, _: PureState<'a, 'db>, _: &[Value]) -> Option<Value> {
+            panic!("Application selection must not execute the native fixture")
+        }
+    }
+
+    // Counts actual metadata reads, giving the DAG regression a deterministic
+    // work bound instead of a timing assertion or an exponentially slow oracle.
+    #[derive(Debug)]
+    struct CountedPair {
+        native: ArcSort,
+        reads: std::sync::Arc<AtomicUsize>,
+    }
+    impl sort::Sort for CountedPair {
+        fn name(&self) -> &str {
+            assert!(
+                self.reads.fetch_add(1, Ordering::Relaxed) < 200_000,
+                "shared Pair comparison repeated its sub-DAG"
+            );
+            self.native.name()
+        }
+        fn column_ty(&self, backend: &egglog_bridge::EGraph) -> sort::ColumnTy {
+            self.native.column_ty(backend)
+        }
+        fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+            self.native.register_type(backend)
+        }
+        fn as_arc_any(
+            self: std::sync::Arc<Self>,
+        ) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+        fn inner_sorts(&self) -> Vec<ArcSort> {
+            self.native.inner_sorts()
+        }
+        fn is_container_sort(&self) -> bool {
+            true
+        }
+        fn value_type(&self) -> Option<TypeId> {
+            self.native.value_type()
+        }
+    }
+
+    fn fixture_graph<const CASE: u8>() -> EGraph {
+        let mut graph = EGraph::default();
+        graph
+            .type_info()
+            .add_presort::<Provider<CASE>>(ast::Span::Panic)
+            .unwrap();
+        graph
+    }
+
+    // Exercises both wire selection and direct/canonical/private native selection,
+    // comparing complete original registrations rather than adding diagnostic APIs.
+    fn selected(graph: &mut EGraph, roots: &[ArcSort], native_name: &str) -> String {
+        let mut program = pb::Program::default();
+        let mut ids = roots
+            .iter()
+            .map(|s| graph.export_sort(s, &mut program.sorts).unwrap())
+            .collect::<Vec<_>>();
+        let output = ids.pop().unwrap();
+        let types = graph.type_info();
+        let key = types
+            .resolve_builtin(&program, "test.native_signature", &ids, output, roots)
+            .unwrap();
+        for ctx in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let native =
+                ResolvedCall::from_resolution(native_name, roots, types, ctx, &ast::Span::Panic);
+            for alias in ["test.native_signature", &key] {
+                let selected =
+                    ResolvedCall::from_resolution(alias, roots, types, ctx, &ast::Span::Panic);
+                match (&native, selected) {
+                    (Ok(native), Ok(selected)) => {
+                        assert_eq!(native, &selected);
+                        let (ResolvedCall::Primitive(native), ResolvedCall::Primitive(selected)) =
+                            (native, &selected)
+                        else {
+                            panic!("expected native primitives")
+                        };
+                        match (native.validator(), selected.validator()) {
+                            (Some(native), Some(selected)) => {
+                                assert!(std::sync::Arc::ptr_eq(native, selected))
+                            }
+                            (None, None) => (),
+                            _ => panic!("alias changed the native validator"),
+                        }
+                    }
+                    (Err(_), Err(_)) => (),
+                    _ => panic!("alias changed native context availability"),
+                }
+            }
+        }
+        assert_eq!(
+            types
+                .export_function_target(
+                    native_name,
+                    &roots[..roots.len() - 1],
+                    roots.last().unwrap(),
+                    None,
+                    &mut pb::Program::default()
+                )
+                .unwrap(),
+            "test.native_signature"
+        );
+        key
+    }
+
+    // A complete negative must agree across native/canonical/private selection,
+    // exported targets, wire selection, and named-function construction.
+    fn rejected(
+        graph: &mut EGraph,
+        roots: &[ArcSort],
+        private: &str,
+        context: Context,
+        table: &str,
+    ) {
+        let aliases = ["signature-open", "test.native_signature", private];
+        let mut wire = pb::Program::default();
+        let mut ids = roots
+            .iter()
+            .map(|sort| graph.export_sort(sort, &mut wire.sorts).unwrap())
+            .collect::<Vec<_>>();
+        let output = ids.pop().unwrap();
+        let types = graph.type_info();
+        for alias in aliases {
+            assert!(
+                ResolvedCall::from_resolution(alias, roots, types, context, &ast::Span::Panic)
+                    .is_err(),
+                "{alias}"
+            );
+            assert!(
+                types
+                    .export_function_target(
+                        alias,
+                        &roots[..roots.len() - 1],
+                        roots.last().unwrap(),
+                        None,
+                        &mut pb::Program::default()
+                    )
+                    .is_err(),
+                "{alias}"
+            );
+        }
+        assert!(
+            types
+                .resolve_builtin(&wire, "test.native_signature", &ids, output, roots)
+                .is_err()
+        );
+        let inputs = roots[..roots.len() - 1]
+            .iter()
+            .map(|sort| sort.name())
+            .collect::<Vec<_>>()
+            .join(" ");
+        graph.parse_and_run_program(None, &format!("(sort {table}Fn (UnstableFn ({inputs}) {})) (function {table} () {table}Fn :merge new)", roots.last().unwrap().name())).unwrap();
+        for alias in aliases {
+            assert!(
+                graph
+                    .parse_and_run_program(
+                        None,
+                        &format!("(set ({table}) (unstable-fn {alias:?}))")
+                    )
+                    .is_err(),
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_signature_keeps_alias_roots_per_occurrence_and_function() {
+        let mut graph = fixture_graph::<1>();
+        graph.parse_and_run_program(None, "(sort V (Vec i64)) (sort W (Vec i64)) (sort F (UnstableFn (i64) i64)) (sort G (UnstableFn (i64) i64))").unwrap();
+        let v = graph.get_sort_by_name("V").unwrap().clone();
+        let w = graph.get_sort_by_name("W").unwrap().clone();
+        let f = graph.get_sort_by_name("F").unwrap().clone();
+        let g = graph.get_sort_by_name("G").unwrap().clone();
+        let signatures = [
+            vec![v.clone(), w.clone(), v],
+            vec![w.clone(), graph.get_sort_by_name("V").unwrap().clone(), w],
+            vec![f.clone(), g.clone(), f],
+            vec![g.clone(), graph.get_sort_by_name("F").unwrap().clone(), g],
+        ];
+        let before = graph.type_info().builtin_catalog().unwrap().definitions;
+        for roots in &signatures {
+            let instance = graph
+                .type_info()
+                .instantiate_builtin_signature("test.native_signature", &roots[..2], &[], &roots[2])
+                .unwrap();
+            instance.check_abi(&[None, None], None, false).unwrap();
+            graph.add_pure_primitive(Exact(instance), None);
+        }
+        let mut keys = hashbrown::HashSet::new();
+        for roots in signatures {
+            assert!(keys.insert(selected(&mut graph, &roots, "signature-exact")));
+        }
+        assert_eq!(
+            graph.type_info().builtin_catalog().unwrap().definitions,
+            before
+        );
+        assert!(
+            ResolvedCall::from_resolution(
+                "signature-exact",
+                &vec![graph.get_sort_by_name("V").unwrap().clone(); 3],
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn native_signature_nested_functions_result_binders_and_eq_bounds() {
+        let mut graph = fixture_graph::<4>();
+        graph.parse_and_run_program(None, "(sort X (Vec i64)) (sort Y (Vec String)) (sort XX (Vec X)) (sort YY (Vec Y)) (sort F (UnstableFn (X) Y)) (sort Bad (UnstableFn (X X) Y))").unwrap();
+        let roots = ["F", "XX", "YY"].map(|name| graph.get_sort_by_name(name).unwrap().clone());
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_signature("test.native_signature", &roots[..2], &[], &roots[2])
+            .unwrap();
+        graph.add_pure_primitive(Exact(instance), None);
+        selected(&mut graph, &roots, "signature-exact");
+        assert!(
+            graph
+                .type_info()
+                .instantiate_builtin_signature("test.native_signature", &roots[..2], &[], &roots[1])
+                .is_err()
+        );
+        let bad = graph.get_sort_by_name("Bad").unwrap().clone();
+        assert!(
+            graph
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.native_signature",
+                    &[bad, roots[1].clone()],
+                    &[],
+                    &roots[2]
+                )
+                .is_err()
+        );
+
+        let mut zero = fixture_graph::<5>();
+        zero.parse_and_run_program(None, "(sort V (Vec i64))")
+            .unwrap();
+        let v = zero.get_sort_by_name("V").unwrap().clone();
+        let instance = zero
+            .type_info()
+            .instantiate_builtin_signature("test.native_signature", &[], &[], &v)
+            .unwrap();
+        zero.add_pure_primitive(Exact(instance), None);
+        selected(&mut zero, &[v], "signature-exact");
+        let mut missing = fixture_graph::<7>();
+        let i = missing.get_sort_by_name("i64").unwrap().clone();
+        assert!(
+            missing
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.native_signature",
+                    &[i.clone(), i.clone()],
+                    &[],
+                    &i
+                )
+                .is_err()
+        );
+        let mut malformed = fixture_graph::<2>();
+        assert!(
+            malformed
+                .type_info()
+                .builtin_catalog()
+                .err()
+                .unwrap()
+                .contains("unbound builtin type parameter")
+        );
+        assert_eq!(
+            malformed
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.native_signature",
+                    &[i.clone(), i.clone()],
+                    &[],
+                    &i
+                )
+                .err()
+                .as_deref(),
+            Some("unknown builtin definition")
+        );
+        let mut eq = fixture_graph::<6>();
+        eq.parse_and_run_program(None, "(sort E) (sort V (Vec E))")
+            .unwrap();
+        for (name, valid) in [("E", true), ("V", false)] {
+            let sort = eq.get_sort_by_name(name).unwrap().clone();
+            assert_eq!(
+                eq.type_info()
+                    .instantiate_builtin_signature(
+                        "test.native_signature",
+                        &[sort.clone(), sort.clone()],
+                        &[],
+                        &sort
+                    )
+                    .is_ok(),
+                valid
+            );
+        }
+        let mut nominal = fixture_graph::<8>();
+        nominal
+            .parse_and_run_program(None, "(sort E) (sort Other)")
+            .unwrap();
+        let e = nominal.get_sort_by_name("E").unwrap().clone();
+        let other = nominal.get_sort_by_name("Other").unwrap().clone();
+        assert!(
+            nominal
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.native_signature",
+                    std::slice::from_ref(&e),
+                    &[],
+                    &e
+                )
+                .is_ok()
+        );
+        assert!(
+            nominal
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.native_signature",
+                    std::slice::from_ref(&other),
+                    &[],
+                    &other
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn native_signature_open_domains_keep_late_sorts_and_reject_overlap() {
+        let mut graph = fixture_graph::<1>();
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_open("test.native_signature")
+            .unwrap();
+        assert!(instance.check_abi(&[None, None], None, false).is_err());
+        let validator: PrimitiveValidator = std::sync::Arc::new(|_: &mut TermDag, _: &[TermId]| {
+            panic!("selection must not run the original validator")
+        });
+        graph.add_write_primitive(
+            Open {
+                instance: instance.clone(),
+                equality: Some(false),
+            },
+            Some(validator.clone()),
+        );
+        graph.add_pure_primitive(
+            Open {
+                instance: instance.clone(),
+                equality: Some(true),
+            },
+            None,
+        );
+        let i = graph.get_sort_by_name("i64").unwrap().clone();
+        let roots = vec![i; 3];
+        let private = selected(&mut graph, &roots, "signature-open");
+        let before = ResolvedCall::from_resolution(
+            "signature-open",
+            &roots,
+            graph.type_info(),
+            Context::Write,
+            &ast::Span::Panic,
+        )
+        .unwrap();
+        let ResolvedCall::Primitive(original) = &before else {
+            panic!("expected native primitive")
+        };
+        assert!(std::sync::Arc::ptr_eq(
+            original.validator().unwrap(),
+            &validator
+        ));
+        assert!(
+            ResolvedCall::from_resolution(
+                "signature-open",
+                &roots,
+                graph.type_info(),
+                Context::Pure,
+                &ast::Span::Panic
+            )
+            .is_err()
+        );
+        graph.parse_and_run_program(None, "(sort Later) (sort V (Vec i64)) (sort W (Vec i64)) (sort F (UnstableFn (i64) i64)) (function saved () F :merge new)").unwrap();
+        for name in ["i64", "Later"] {
+            let root = graph.get_sort_by_name(name).unwrap().clone();
+            assert_eq!(
+                selected(
+                    &mut graph,
+                    &[root.clone(), root.clone(), root],
+                    "signature-open"
+                ),
+                private
+            );
+        }
+        let after = ResolvedCall::from_resolution(
+            "signature-open",
+            &roots,
+            graph.type_info(),
+            Context::Write,
+            &ast::Span::Panic,
+        )
+        .unwrap();
+        assert_eq!(before, after);
+        let ResolvedCall::Primitive(after) = after else {
+            panic!("expected native primitive")
+        };
+        assert!(std::sync::Arc::ptr_eq(
+            after.validator().unwrap(),
+            &validator
+        ));
+        let v = graph.get_sort_by_name("V").unwrap().clone();
+        let w = graph.get_sort_by_name("W").unwrap().clone();
+        // The descriptor agrees structurally; the original nominal predicate
+        // still rejects differently named argument occurrences.
+        assert!(
+            graph
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.native_signature",
+                    &[v.clone(), w.clone()],
+                    &[],
+                    &v
+                )
+                .is_ok()
+        );
+        rejected(
+            &mut graph,
+            &[v.clone(), w, v],
+            &private,
+            Context::Write,
+            "mixed",
+        );
+        // Named-function construction captures one input; no fixture body runs.
+        for alias in ["signature-open", "test.native_signature", private.as_str()] {
+            graph
+                .parse_and_run_program(None, &format!("(set (saved) (unstable-fn {alias:?} 1))"))
+                .unwrap();
+        }
+        graph.add_pure_primitive(
+            Open {
+                instance,
+                equality: None,
+            },
+            None,
+        );
+        rejected(&mut graph, &roots, &private, Context::Write, "overlap");
+    }
+
+    #[test]
+    fn native_signature_native_acceptance_cannot_bypass_descriptor() {
+        let mut control = fixture_graph::<1>();
+        let instance = control
+            .type_info()
+            .instantiate_builtin_open("test.native_signature")
+            .unwrap();
+        control.add_pure_primitive(
+            Open {
+                instance,
+                equality: None,
+            },
+            None,
+        );
+        let i = control.get_sort_by_name("i64").unwrap().clone();
+        let private = selected(&mut control, &[i.clone(), i.clone(), i], "signature-open");
+        let mut graph = fixture_graph::<3>();
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_open("test.native_signature")
+            .unwrap();
+        graph.add_pure_primitive(
+            Open {
+                instance,
+                equality: None,
+            },
+            None,
+        );
+        let i = graph.get_sort_by_name("i64").unwrap().clone();
+        let roots = [i.clone(), i.clone()]; // Native identity predicate accepts; descriptor requires String.
+        let types = graph.type_info();
+        for key in ["signature-open", "test.native_signature", private.as_str()] {
+            assert!(!types.get_prims(key).unwrap()[0].accept(&roots, types));
+            assert!(
+                ResolvedCall::from_resolution(key, &roots, types, Context::Pure, &ast::Span::Panic)
+                    .is_err()
+            );
+            assert!(
+                types
+                    .export_function_target(
+                        key,
+                        &roots[..1],
+                        &roots[1],
+                        None,
+                        &mut pb::Program::default()
+                    )
+                    .is_err()
+            );
+        }
+        graph
+            .parse_and_run_program(
+                None,
+                "(sort F (UnstableFn (i64) i64)) (function saved () F :merge new)",
+            )
+            .unwrap();
+        for key in ["signature-open", "test.native_signature", private.as_str()] {
+            assert!(
+                graph
+                    .parse_and_run_program(None, &format!("(set (saved) (unstable-fn {key:?}))"))
+                    .is_err()
+            );
+        }
+        let mut wire = pb::Program::default();
+        let id = graph.export_sort(&i, &mut wire.sorts).unwrap();
+        assert!(
+            graph
+                .type_info()
+                .resolve_builtin(&wire, "test.native_signature", &[id], id, &roots)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn native_signature_instances_cannot_cross_registry_owners() {
+        let mut first = fixture_graph::<1>();
+        let instance = first
+            .type_info()
+            .instantiate_builtin_open("test.native_signature")
+            .unwrap();
+        let mut other = fixture_graph::<1>();
+        other.add_pure_primitive(
+            Open {
+                instance,
+                equality: None,
+            },
+            None,
+        );
+        assert!(other.type_info().builtin_catalog().is_err());
+    }
+
+    #[test]
+    fn native_signature_exact_tail_groups_and_converter_abi_are_checked() {
+        let mut graph = grouped_graph();
+        let i = graph.get_sort_by_name("i64").unwrap().clone();
+        let f = graph.get_sort_by_name("f64").unwrap().clone();
+        let g = graph.get_sort_by_name("G").unwrap().clone();
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_signature(
+                "test.grouped",
+                std::slice::from_ref(&i),
+                &[i.clone(), f.clone()],
+                &g,
+            )
+            .unwrap();
+        assert!(
+            instance
+                .check_abi(
+                    &[None, None, None],
+                    Some((TypeId::of::<VecContainer>(), true)),
+                    true
+                )
+                .is_err()
+        );
+        assert!(
+            instance
+                .check_abi(&[None, None, None], None, false)
+                .is_err()
+        );
+        assert!(
+            graph
+                .type_info()
+                .instantiate_builtin_signature(
+                    "test.grouped",
+                    std::slice::from_ref(&i),
+                    std::slice::from_ref(&i),
+                    &g
+                )
+                .is_err()
+        );
+        // The direct alias selects this implementation separately from the
+        // existing grouped owner aliases; the canonical group now overlaps.
+        graph.add_pure_primitive(Exact(instance), None);
+        let types = graph.type_info();
+        for roots in [
+            vec![i.clone(), g.clone()],
+            vec![i.clone(), i.clone(), f.clone(), g.clone()],
+            vec![i.clone(), i.clone(), g.clone()],
+        ] {
+            assert_eq!(
+                types.get_prims("signature-exact").unwrap()[0].accept(&roots, types),
+                roots.len() != 3
+            );
+        }
+    }
+
+    #[test]
+    fn native_signature_shared_pair_aliases_use_bounded_native_acceptance() {
+        let mut graph = fixture_graph::<1>();
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_open("test.native_signature")
+            .unwrap();
+        graph.add_pure_primitive(
+            Open {
+                instance,
+                equality: None,
+            },
+            None,
+        );
+        let reads = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut left = graph.get_sort_by_name("i64").unwrap().clone();
+        let mut right = left.clone();
+        for level in 0..24 {
+            for (prefix, child) in [("A", left.clone()), ("B", right.clone())] {
+                let name = format!("Shared{prefix}{level}");
+                let args = [
+                    ast::Expr::Var(ast::Span::Panic, child.name().into()),
+                    ast::Expr::Var(ast::Span::Panic, child.name().into()),
+                ];
+                let native =
+                    sort::PairSort::make_sort(graph.type_info(), name, &args, ast::Span::Panic)
+                        .unwrap();
+                let root: ArcSort = std::sync::Arc::new(CountedPair {
+                    native,
+                    reads: reads.clone(),
+                });
+                graph
+                    .type_info()
+                    .register_builtin_sort("Pair", root.clone(), vec![child.clone(), child])
+                    .unwrap();
+                graph.add_arcsort(root.clone(), ast::Span::Panic).unwrap();
+                if prefix == "A" {
+                    left = root;
+                } else {
+                    right = root;
+                }
+            }
+        }
+        let roots = [left.clone(), right, left];
+        // No export_sort call: that is a separate existing recursive path.
+        reads.store(0, Ordering::Relaxed);
+        let types = graph.type_info();
+        assert!(!types.get_prims("signature-open").unwrap()[0].accept(&roots, types));
+        reads.store(0, Ordering::Relaxed);
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_signature("test.native_signature", &roots[..2], &[], &roots[2])
+            .unwrap();
+        graph.add_pure_primitive(Exact(instance), None);
+        reads.store(0, Ordering::Relaxed);
+        let types = graph.type_info();
+        assert!(types.get_prims("signature-exact").unwrap()[0].accept(&roots, types));
+        assert!(reads.load(Ordering::Relaxed) < 200_000);
+    }
+
+    #[test]
+    fn native_signature_application_rejects_detached_function_roots() {
+        let mut graph = EGraph::default();
+        let integer = graph.get_sort_by_name("i64").unwrap().clone();
+        let args = [
+            ast::Expr::Call(ast::Span::Panic, "i64".into(), vec![]),
+            ast::Expr::Var(ast::Span::Panic, "i64".into()),
+        ];
+        let function = sort::FunctionSort::make_sort(
+            graph.type_info(),
+            "Detached".into(),
+            &args,
+            ast::Span::Panic,
+        )
+        .unwrap();
+        assert!(graph.get_sort_by_name("Detached").is_none());
+        let roots = vec![function.clone(), integer.clone(), integer];
+        let instance = graph
+            .type_info()
+            .instantiate_builtin_open("egglog.core.fn.apply")
+            .unwrap();
+        graph.add_pure_primitive(
+            NativeApplication {
+                instance,
+                signature: roots.clone(),
+            },
+            None,
+        );
+        let types = graph.type_info();
+        assert!(!types.get_prims("signature-application").unwrap()[0].accept(&roots, types));
+        assert!(
+            ResolvedCall::from_resolution(
+                "signature-application",
+                &roots,
+                types,
+                Context::Pure,
+                &ast::Span::Panic
+            )
+            .is_err()
+        );
+        graph.add_arcsort(function, ast::Span::Panic).unwrap();
+        // Installation also adds the standard Apply implementation, so use the
+        // fixture's native alias to isolate this same-root membership control.
+        let types = graph.type_info();
+        assert!(types.get_prims("signature-application").unwrap()[0].accept(&roots, types));
+        assert!(
+            ResolvedCall::from_resolution(
+                "signature-application",
+                &roots,
+                types,
+                Context::Pure,
+                &ast::Span::Panic
+            )
+            .is_ok()
+        );
+    }
+}
+
 // Reuse actual Map storage without installing Map's own provenance/primitives
 // for these distinct test providers. Their canonical signatures stay independent.
 #[derive(Debug)]
