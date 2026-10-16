@@ -22,7 +22,6 @@ num-rational = { workspace = true }
 log = { workspace = true }
 indexmap = { workspace = true }
 web-time = { workspace = true }
-dyn-clone = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
 
