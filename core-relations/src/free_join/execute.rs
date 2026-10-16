@@ -43,9 +43,9 @@ use super::{
     ActionId, AtomId, ColumnIds, Database, TableId, Variable,
     frame_update::{FrameUpdates, UpdateInstr},
     join_tail::{
-        BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
-        MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
-        materialization_is_live_in_tail, sort_plan_by_size,
+        BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, JoinOrderContext, LeafScans,
+        LocalState, MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use,
+        estimate_size, materialization_is_live_in_tail, sort_plan_by_size,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
@@ -1260,7 +1260,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
-        sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
+        sort_plan_by_size(
+            &mut order,
+            &mut leaf_scans,
+            JoinOrderContext::Initial,
+            &stages.instrs,
+            binding_info,
+        );
         let all_stages = prepared.all_stage_mask::<M>();
         debug_assert!(
             all_stages.is_some()
@@ -1430,7 +1436,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
             // resulting atom-local successor choice safe to cache again.
-            sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
+            sort_plan_by_size(
+                instr_order,
+                leaf_scans,
+                JoinOrderContext::Runtime { start: cur },
+                &stages.instrs,
+                binding_info,
+            );
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 

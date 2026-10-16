@@ -396,28 +396,45 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
     )
 }
 
+/// Whether ordering prepares a new plan or resumes an executing join.
+#[derive(Clone, Copy)]
+pub(super) enum JoinOrderContext {
+    Initial,
+    /// `start` is the next execution position, shared across all reorderable
+    /// phases. Later phases must not treat their first stage as executable yet.
+    Runtime {
+        start: usize,
+    },
+}
+
 /// Reorder a suffix of the current execution schedule using the DVO policy.
 ///
-/// Within each phase, the greedy key is decreasing refinement count in the
-/// scheduled prefix, increasing live residual size, then decreasing number
-/// of intersected relations. Materialization stages that do not commute remain
-/// fixed barriers. Reordering can also change factorized leaf-scan eligibility,
-/// so [`recompute_leaf_scans`] runs after every change.
+/// At runtime, choose the next executable stage by positive refinement score,
+/// increasing live residual size, decreasing number of intersected relations,
+/// then decreasing refinement score. For the remaining schedule, and during
+/// initial ordering, refinement depth comes first: the current residual sizes
+/// do not reflect bindings from stages just scheduled but not yet executed.
+/// Materialization stages that do not commute remain fixed barriers.
+/// [`recompute_leaf_scans`] updates factorization flags for the resulting order.
 pub(super) fn sort_plan_by_size(
     order: &mut InstrOrder,
     leaf_scans: &mut LeafScans,
-    start: usize,
+    context: JoinOrderContext,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
+    let start = match context {
+        JoinOrderContext::Initial => 0,
+        JoinOrderContext::Runtime { start } => start,
+    };
     let mut last_pos = start;
     for i in start..instrs.len() {
         if is_reorder_barrier(&instrs[i]) {
-            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
+            sort_plan_by_size_inner(order, last_pos..i, context, instrs, binding_info);
             last_pos = i + 1;
         }
     }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
+    sort_plan_by_size_inner(order, last_pos..instrs.len(), context, instrs, binding_info);
     recompute_leaf_scans(order, leaf_scans, instrs, start);
 }
 
@@ -521,6 +538,7 @@ pub(super) fn recompute_leaf_scans(
 pub(super) fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
+    context: JoinOrderContext,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
@@ -563,18 +581,10 @@ pub(super) fn sort_plan_by_size_inner(
         update_refinements(&instrs[order.get(position)], &mut times_refined);
     }
 
-    // We prioritize stages by
-    //
-    //   (1) how many times an atom used by the stage has been refined,
-    //   (2) then by the estimated input rows (smaller → earlier),
-    //   (3) then by how many relations the stage joins (more → earlier).
-    //
-    // Estimate size is second so that very small inputs (e.g. FunDep
-    // consequents with exactly one value) run before multi-relation stages
-    // that happen to have a larger current estimate.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo<'_, '_>,
-                  refinements: &DenseIdMap<AtomId, i64>| {
+                  refinements: &DenseIdMap<AtomId, i64>,
+                  next_runtime_stage: bool| {
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
@@ -587,17 +597,36 @@ pub(super) fn sort_plan_by_size_inner(
                 .unwrap_or_default(),
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
-        (
-            -refine,
-            estimate_size(join_stage, binding_info),
-            -num_intersected_rels(join_stage),
-        )
+        let rows = estimate_size(join_stage, binding_info);
+        let relations = num_intersected_rels(join_stage);
+        if next_runtime_stage {
+            // The live sizes include filtering already performed. Preserve
+            // preference for a positive refinement score, but do not let its
+            // depth hide a small residual for the immediate choice.
+            return (i64::from(refine == 0), rows, -relations, -refine);
+        }
+        // Later choices use the same row estimates, although earlier stages
+        // in this proposed schedule will refine them before they execute.
+        // Retain refinement depth as a proxy for those future restrictions.
+        (-refine, rows, -relations, 0)
     };
 
     for i in range.clone() {
-        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
+        let next_runtime_stage =
+            matches!(context, JoinOrderContext::Runtime { start } if i == start);
+        let mut key_i = key_fn(
+            &instrs[order.get(i)],
+            binding_info,
+            &times_refined,
+            next_runtime_stage,
+        );
         for j in (i + 1)..range.end {
-            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
+            let key_j = key_fn(
+                &instrs[order.get(j)],
+                binding_info,
+                &times_refined,
+                next_runtime_stage,
+            );
             if key_j < key_i {
                 order.data.swap(i, j);
                 key_i = key_j;
