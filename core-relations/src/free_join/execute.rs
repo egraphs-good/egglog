@@ -26,7 +26,7 @@ use web_time::Instant;
 
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
-    action::{Bindings, ExecutionState, ExecutionStateSeed, ExternalContext},
+    action::{Bindings, ExecutionState, ExecutionStateSeed, ExternalContext, QueryEntry},
     common::{DashMap, HashMap, IndexMap, Value},
     numeric_id::{DenseIdMap, NumericId},
     offsets::{Offsets, RowId, SortedOffsetVector, Subset},
@@ -56,7 +56,7 @@ use super::{
     },
     probe::{
         AtomRows, AtomRowsKind, CatalogFilter, Descent, LazyArenaHandle, PackedProbe, ProbeIndex,
-        ProbeRequest, Prober, SortedScalarProbe, seek_sorted_key,
+        ProbeMatch, ProbeRequest, Prober, SortedScalarProbe, seek_sorted_key,
     },
     residual_index::{SMALL_RESIDUAL, SmallColumnIndex, SmallExactProbe},
     with_pool_set,
@@ -574,6 +574,10 @@ struct JoinState<'db, 'state, 'exec> {
     db: &'db Database,
     /// Copyable query-side database view and shared early-stop flag.
     exec_state: ExecutionStateSeed<'db, 'state>,
+    /// Query primitives share one lazily created state on this worker. The
+    /// borrow ends before recursion, so primitive chains reuse it safely. Keep
+    /// the state boxed so ordinary queries do not carry its inline footprint.
+    primitive_state: RefCell<Option<Box<ExecutionState<'db>>>>,
     /// Cached thread-local pool for SortedOffsetVector allocations.
     /// Stored here to avoid a per-call `with_pool_set` TLS access in `get_index`.
     pool: Pool<SortedOffsetVector>,
@@ -598,6 +602,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         Self {
             db,
             exec_state,
+            primitive_state: RefCell::new(None),
             pool: with_pool_set(|ps| ps.get_pool()),
             trie_cache,
             arena,
@@ -1170,7 +1175,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 workers,
                 MIN_TOP_COVER_ROWS_PER_PARTITION,
             ),
-            JoinStage::FusedIntersectMat { .. } => None,
+            JoinStage::FusedIntersectMat { .. } | JoinStage::Primitive { .. } => None,
         }
     }
 
@@ -1316,6 +1321,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                             instr_order,
                             leaf_scans,
                             0,
+                            0,
                             Some(partition),
                             all_stages,
                             binding_info,
@@ -1333,6 +1339,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             action,
             &mut order,
             &mut leaf_scans,
+            0,
             0,
             None,
             all_stages,
@@ -1388,6 +1395,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         instr_order: &mut InstrOrder,
         leaf_scans: &mut LeafScans,
         cur: usize,
+        // Primitive lookups do not fan out. Keep their positions out of the
+        // scan-depth budget so they cannot disable subsequent parallel scans.
+        scan_depth: usize,
         top_partition: Option<TopLevelPartition>,
         remaining_stages: Option<M>,
         binding_info: &mut BindingInfo<'rows, 'exec>,
@@ -1425,7 +1435,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             || estimate_size(&stages.instrs[instr_order.get(cur)], binding_info),
             TopLevelPartition::scan_size,
         );
-        let chunk_size = action_buf.morsel_size(cur, instr_order.len());
+        let chunk_size = action_buf.morsel_size(scan_depth, instr_order.len());
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
@@ -1497,6 +1507,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     instr_order,
                                     leaf_scans,
                                     cur + 1,
+                                    scan_depth + 1,
                                     None,
                                     remaining_after_current,
                                     binding_info,
@@ -1518,7 +1529,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 // TODO: `supports_parallel_drain` is a hack because currently
                 // `drain_updates_parallel!` is a bit slower because of the additional
                 // `ExecutionState` clone.
-                if cur < free_join_fork_depth() && action_buf.supports_parallel_drain() {
+                if scan_depth < free_join_fork_depth() && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
                     $updates.drain(|update| match update {
@@ -1552,6 +1563,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                     instr_order,
                                     leaf_scans,
                                     cur + 1,
+                                    scan_depth + 1,
                                     None,
                                     remaining_after_current,
                                     binding_info,
@@ -1597,10 +1609,109 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             match stage {
                 JoinStage::Intersect { scans, .. } => scans.len(),
                 JoinStage::FusedIntersect { to_intersect, .. }
-                | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len(),
+                | JoinStage::FusedIntersectMat { to_intersect, .. }
+                | JoinStage::Primitive { to_intersect, .. } => to_intersect.len(),
             }
         );
         match stage {
+            JoinStage::Primitive {
+                function,
+                args,
+                output,
+                bind_output,
+                to_intersect,
+            } => {
+                let values: SmallVec<[Value; 4]> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        QueryEntry::Var(var) => binding_info.bindings[*var],
+                        QueryEntry::Const(value) => *value,
+                    })
+                    .collect();
+                let result = {
+                    let mut state = self.primitive_state.borrow_mut();
+                    state
+                        .get_or_insert_with(|| Box::new(self.exec_state.to_execution_state()))
+                        .call_external_func(*function, &values)
+                };
+                let Some(result) = result else {
+                    return;
+                };
+                if self.exec_state.should_stop() {
+                    return;
+                }
+                match output {
+                    QueryEntry::Var(var) if *bind_output => {
+                        binding_info.bindings.insert(*var, result);
+                    }
+                    QueryEntry::Var(var) if binding_info.bindings[*var] != result => return,
+                    QueryEntry::Const(expected) if *expected != result => return,
+                    _ => {}
+                }
+
+                // A computed output restricts every stored atom containing
+                // it. Keep each prober's source so backtracking restores the
+                // parent residual after this single forward lookup.
+                let probers = to_intersect
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (spec, _))| {
+                        let tail = atom_tail_use(
+                            spec.to_index.atom,
+                            &stages.instrs,
+                            prepared,
+                            remaining_after_current,
+                            instr_order,
+                            cur + 1,
+                        );
+                        self.get_index(
+                            atoms,
+                            binding_info,
+                            ProbeRequest::tuple(
+                                spec,
+                                tail.keep_rows,
+                                tail.child_shape,
+                                prepared.resolve(&prepared_indexes[i]),
+                            ),
+                        )
+                    })
+                    .collect::<SmallVec<[Prober<'_, 'rows, 'exec>; 4]>>();
+                let mut matched = true;
+                for ((spec, columns), prober) in to_intersect.iter().zip(&probers) {
+                    // Repeated output occurrences correspond to repeated
+                    // zero columns in the primitive's one-value result row.
+                    let key: SmallVec<[Value; 4]> = columns.iter().map(|_| result).collect();
+                    match prober.get_subset(&key) {
+                        Some(ProbeMatch::Rows(rows)) => {
+                            binding_info.insert_node(spec.to_index.atom, rows);
+                        }
+                        Some(ProbeMatch::Present) => {}
+                        None => {
+                            matched = false;
+                            break;
+                        }
+                    }
+                }
+                if matched {
+                    self.run_plan(
+                        stages,
+                        prepared,
+                        atoms,
+                        action,
+                        instr_order,
+                        leaf_scans,
+                        cur + 1,
+                        scan_depth,
+                        None,
+                        remaining_after_current,
+                        binding_info,
+                        action_buf,
+                    );
+                }
+                for ((spec, _), prober) in to_intersect.iter().zip(probers) {
+                    binding_info.move_back(spec.to_index.atom, prober);
+                }
+            }
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
                 [a] => {

@@ -6,6 +6,8 @@ use std::sync::{
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
+    ExternalFunctionId,
+    action::QueryEntry,
     common::{IndexMap, Value},
     free_join::{
         AtomId, SubAtom, Variable,
@@ -20,7 +22,8 @@ use crate::{
 use crate::free_join::{
     join_tail::{
         BindingInfo, InstrOrder, for_each_stage_atom, materialization_is_live_in_tail,
-        packed_child_shape_in_tail, scan_atom_tail_use, sort_plan_by_size_inner, suffix_stage_mask,
+        packed_child_shape_in_tail, recompute_leaf_scans, scan_atom_tail_use, sort_plan_by_size,
+        sort_plan_by_size_inner, suffix_stage_mask,
     },
     packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
@@ -318,6 +321,243 @@ fn intersect_stage(atom: usize, column: usize) -> JoinStage {
 }
 
 #[test]
+fn primitive_reads_require_scalar_bindings() {
+    let variable = Variable::from_usize(0);
+    let other = Variable::from_usize(1);
+    for (args, output, bind_output, expected_leaf) in [
+        (vec![variable.into()], other.into(), true, false),
+        (vec![], variable.into(), false, false),
+        (vec![other.into()], other.into(), false, true),
+    ] {
+        let stages = vec![
+            JoinStage::FusedIntersect {
+                cover: scan(0),
+                bind: smallvec![(ColumnId::from_usize(0), variable)],
+                to_intersect: Vec::new(),
+            },
+            JoinStage::Primitive {
+                function: ExternalFunctionId::from_usize(0),
+                args,
+                output,
+                bind_output,
+                to_intersect: Vec::new(),
+            },
+        ];
+        let order = InstrOrder::from_iter(0..stages.len());
+        let mut leaves = smallvec![false; stages.len()];
+        recompute_leaf_scans(&order, &mut leaves, &stages, 0);
+        assert_eq!(leaves.as_slice(), &[expected_leaf, false]);
+    }
+}
+
+#[test]
+fn primitive_early_stop_prevents_rhs_execution_and_resets_between_runs() {
+    use crate::{Database, make_external_func};
+    use egglog_reports::ReportLevel;
+
+    let mut db = Database::new();
+    let query_calls = Arc::new(AtomicUsize::new(0));
+    let query_calls_in_callback = Arc::clone(&query_calls);
+    let stop = db.add_external_function(Box::new(make_external_func(move |state, args| {
+        assert!(args.is_empty());
+        query_calls_in_callback.fetch_add(1, Ordering::Relaxed);
+        state.trigger_early_stop();
+        Some(Value::new(1))
+    })));
+    let action_calls = Arc::new(AtomicUsize::new(0));
+    let action_calls_in_callback = Arc::clone(&action_calls);
+    let action = db.add_external_function(Box::new(make_external_func(move |_, args| {
+        action_calls_in_callback.fetch_add(1, Ordering::Relaxed);
+        Some(args[0])
+    })));
+    let mut builder = db.new_rule_set();
+    let mut query = builder.new_rule();
+    let output = query.new_var();
+    query.add_primitive(stop, &[], output.into());
+    let mut rule = query.build();
+    rule.call_external(action, &[output.into()]).unwrap();
+    rule.build_with_description("primitive-early-stop");
+    let rules = builder.build();
+
+    for run in 1..=2 {
+        let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        assert_eq!(query_calls.load(Ordering::Relaxed), run);
+        assert_eq!(action_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(report.num_matches("primitive-early-stop"), 0);
+    }
+}
+
+#[test]
+fn primitive_stage_keeps_dvo_and_tail_masks_within_dependency_phases() {
+    let stages = vec![
+        intersect_stage(0, 0),
+        intersect_stage(1, 1),
+        JoinStage::Primitive {
+            function: ExternalFunctionId::from_usize(0),
+            args: vec![Variable::from_usize(0).into()],
+            output: QueryEntry::Var(Variable::from_usize(2)),
+            bind_output: true,
+            to_intersect: vec![(scan(0), smallvec![ColumnId::from_usize(0)])],
+        },
+        intersect_stage(0, 3),
+        intersect_stage(2, 4),
+    ];
+    let mut bindings = BindingInfo::default();
+    for (atom, rows) in [100, 20, 1].into_iter().enumerate() {
+        bindings.insert_subset(
+            AtomId::from_usize(atom),
+            Subset::Dense(crate::OffsetRange::new(
+                crate::RowId::from_usize(0),
+                crate::RowId::from_usize(rows),
+            )),
+        );
+    }
+    let mut order = InstrOrder::from_iter(0..stages.len());
+    let mut leaves = smallvec![false; stages.len()];
+    sort_plan_by_size(&mut order, &mut leaves, 0, &stages, &mut bindings);
+    assert_eq!(
+        order.get(2),
+        2,
+        "the primitive must remain a dependency barrier"
+    );
+    assert!((0..2).all(|position| order.get(position) < 2));
+    assert!((3..5).all(|position| order.get(position) > 2));
+    assert_tail_masks_match_scanner::<u64>(&stages, &[vec![0, 1, 2, 3, 4], vec![1, 0, 2, 4, 3]], 3);
+}
+
+#[test]
+fn primitive_prefix_preserves_parallel_scan_dispatch() {
+    use super::*;
+    use crate::{PlanStrategy, make_external_func, table_shortcuts::TimestampedTable};
+
+    // Run dispatched work inline while counting the exact scheduling boundary.
+    // This checks parallel eligibility without relying on thread timing.
+    #[derive(Default)]
+    struct DispatchCounter {
+        dispatches: usize,
+        matches: usize,
+    }
+    impl<'scope, 'exec: 'scope> ActionBuffer<'scope, 'exec, ActionId> for DispatchCounter {
+        type AsLocal<'a>
+            = Self
+        where
+            'scope: 'a;
+        type AsGlobalSerial<'a>
+            = Self
+        where
+            'scope: 'a;
+
+        fn push_bindings(
+            &mut self,
+            _action: ActionId,
+            _bindings: &DenseIdMap<Variable, Value>,
+            _to_exec_state: impl FnMut() -> ExecutionState<'scope>,
+        ) {
+            self.matches += 1;
+        }
+
+        fn flush(&mut self, _exec_state: &mut ExecutionState) {}
+
+        fn recur<'local, 'rows>(
+            &mut self,
+            mut local: BorrowedLocalState<'local, 'rows, 'exec>,
+            subset_clone_plan: SubsetClonePlan<'_>,
+            _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+            work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+        ) where
+            'rows: 'scope,
+        {
+            self.dispatches += 1;
+            let mut inner = local.clone_state(subset_clone_plan);
+            work(inner.borrow_mut(), self);
+        }
+
+        fn recur_global_serial<'local, 'rows>(
+            &mut self,
+            _local: BorrowedLocalState<'local, 'rows, 'exec>,
+            _subset_clone_plan: SubsetClonePlan<'_>,
+            _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+            _work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'scope, 'exec>, &mut Self) + Send + 'scope,
+        ) where
+            'rows: 'scope,
+        {
+            unreachable!("this test exercises recursive fallback dispatch");
+        }
+    }
+
+    for strategy in [
+        PlanStrategy::Gj,
+        PlanStrategy::PureSize,
+        PlanStrategy::MinCover,
+    ] {
+        let mut db = Database::new();
+        let facts = db.add_table(
+            TimestampedTable::new(1, 1, Box::new(|_, _, _, _| false)),
+            [],
+            [],
+        );
+        {
+            let mut buffer = db.new_buffer(facts);
+            for value in 0..4096 {
+                buffer.stage_insert(&[Value::new(value)]);
+            }
+        }
+        db.merge_all();
+        let identity = db.add_external_function(Box::new(make_external_func(|_, args| {
+            Some(args.first().copied().unwrap_or(Value::new(0)))
+        })));
+        let mut builder = db.new_rule_set();
+        let mut query = builder.new_rule();
+        query.set_plan_strategy(strategy);
+        let x = query.new_var();
+        query.add_atom(facts, &[x.into()], []).unwrap();
+        // Both calls are ready before the scan and must not spend its fork
+        // budget. The final call forces a scalar scan rather than a leaf factor.
+        query.add_primitive(identity, &[], Value::new(0).into());
+        query.add_primitive(identity, &[], Value::new(0).into());
+        query.add_primitive(identity, &[x.into()], x.into());
+        query.build().build();
+        let rules = builder.build();
+        let (plan, _, _) = rules.plans.values().next().unwrap();
+        let Plan::SinglePlan(single) = plan else {
+            panic!("expected primitive query in one bag");
+        };
+        assert!(
+            single.stages.instrs[..2]
+                .iter()
+                .all(|stage| matches!(stage, JoinStage::Primitive { .. }))
+        );
+        let arena = SharedArena::new();
+        let exec_state = ExecutionState::new(db.read_only_view(), Default::default());
+        let join = JoinState::new(&db, exec_state.seed(), None, &arena);
+        let prepared = PreparedPlanIndexes::new(&db, plan);
+        let PreparedPlanIndexes::Single(prepared) = &prepared else {
+            unreachable!();
+        };
+        let mut bindings = BindingInfo::default();
+        for (atom, info) in single.atoms.iter() {
+            let headers: SmallVec<[&JoinHeader; 2]> =
+                single.header.iter().filter(|h| h.atom == atom).collect();
+            bindings.insert_node(atom, join.root_node(info.table, &headers).unwrap());
+        }
+        let mut counter = DispatchCounter::default();
+        join.run_join_stages(
+            &single.stages,
+            prepared,
+            &single.atoms,
+            single.actions,
+            &mut bindings,
+            &mut counter,
+        );
+        assert_eq!(counter.matches, 4096);
+        assert!(
+            counter.dispatches > 1,
+            "the stored scan must still split into jobs"
+        );
+    }
+}
+
+#[test]
 fn mixed_recursive_dvo_keeps_the_plan_prefix_as_its_refinement_anchor() {
     let stages = vec![
         intersect_stage(0, 0),
@@ -356,7 +596,8 @@ fn prepared_for(stages: &[JoinStage]) -> PreparedJoinLayout {
                     scans.iter().map(|scan| scan.atom).collect::<Vec<_>>()
                 }
                 JoinStage::FusedIntersect { to_intersect, .. }
-                | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect
+                | JoinStage::FusedIntersectMat { to_intersect, .. }
+                | JoinStage::Primitive { to_intersect, .. } => to_intersect
                     .iter()
                     .map(|(scan, _)| scan.to_index.atom)
                     .collect(),

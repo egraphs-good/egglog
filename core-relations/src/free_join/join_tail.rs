@@ -13,6 +13,7 @@ use crossbeam::utils::CachePadded;
 use smallvec::SmallVec;
 
 use crate::{
+    action::QueryEntry,
     common::{IndexMap, Value},
     numeric_id::{DenseIdMap, IdVec},
     offsets::Subset,
@@ -48,7 +49,8 @@ pub(super) fn for_each_stage_atom(stage: &JoinStage, mut f: impl FnMut(AtomId)) 
                 .iter()
                 .for_each(|(scan, _)| f(scan.to_index.atom));
         }
-        JoinStage::FusedIntersectMat { to_intersect, .. } => {
+        JoinStage::FusedIntersectMat { to_intersect, .. }
+        | JoinStage::Primitive { to_intersect, .. } => {
             to_intersect
                 .iter()
                 .for_each(|(scan, _)| f(scan.to_index.atom));
@@ -73,7 +75,8 @@ pub(super) fn for_each_stage_indexed_access(
                 .for_each(|(scan, slot)| f(scan.atom, slot.access));
         }
         JoinStage::FusedIntersect { to_intersect, .. }
-        | JoinStage::FusedIntersectMat { to_intersect, .. } => {
+        | JoinStage::FusedIntersectMat { to_intersect, .. }
+        | JoinStage::Primitive { to_intersect, .. } => {
             debug_assert_eq!(to_intersect.len(), prepared.len());
             to_intersect
                 .iter()
@@ -215,7 +218,9 @@ pub(super) fn packed_child_shape_in_tail<M: StageMask>(
 
 fn for_each_stage_materialization(stage: &JoinStage, mut f: impl FnMut(MatId)) {
     match stage {
-        JoinStage::Intersect { .. } | JoinStage::FusedIntersect { .. } => {}
+        JoinStage::Intersect { .. }
+        | JoinStage::FusedIntersect { .. }
+        | JoinStage::Primitive { .. } => {}
         JoinStage::FusedIntersectMat { cover, .. } => f(*cover),
     }
 }
@@ -375,6 +380,7 @@ pub(super) fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo<'
             .unwrap_or(0),
         JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
         JoinStage::FusedIntersectMat { cover, .. } => binding_info.materializations[*cover].len(), // TODO: len() might be expensive.
+        JoinStage::Primitive { .. } => 1,
     }
 }
 
@@ -382,7 +388,8 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
         JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
-        JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32,
+        JoinStage::FusedIntersectMat { to_intersect, .. }
+        | JoinStage::Primitive { to_intersect, .. } => to_intersect.len() as i32,
     }
 }
 
@@ -392,7 +399,7 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
         JoinStage::FusedIntersectMat {
             mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
             ..
-        }
+        } | JoinStage::Primitive { .. }
     )
 }
 
@@ -434,7 +441,7 @@ pub(super) fn sort_plan_by_size(
 /// `FusedIntersect` or `FusedIntersectMat { mode: Full | KeyOnly | Value }`,
 /// has an empty `to_intersect`, and no later stage either (a) references the
 /// same cover atom for `FusedIntersect`, or (b) reads one of its bound variables
-/// as a scalar through `FusedIntersectMat { mode: Value | Lookup }`.
+/// as a scalar through a primitive or `FusedIntersectMat { mode: Value | Lookup }`.
 /// `FusedIntersectMat::Lookup` binds nothing itself and is never a leaf scan.
 pub(super) fn recompute_leaf_scans(
     order: &InstrOrder,
@@ -475,6 +482,26 @@ pub(super) fn recompute_leaf_scans(
         let mut blocked = false;
         for j in (i + 1)..order.len() {
             match &instrs[order.get(j)] {
+                JoinStage::Primitive {
+                    args,
+                    output,
+                    bind_output,
+                    to_intersect,
+                    ..
+                } => {
+                    let reads_bound_var = |term: &QueryEntry| matches!(term, QueryEntry::Var(var) if bind_vars.contains(var));
+                    if args.iter().any(reads_bound_var)
+                        || (!bind_output && reads_bound_var(output))
+                        || cover_atom.is_some_and(|atom| {
+                            to_intersect
+                                .iter()
+                                .any(|(scan, _)| scan.to_index.atom == atom)
+                        })
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
                 JoinStage::Intersect { scans, .. } => {
                     if let Some(ca) = cover_atom
                         && scans.iter().any(|scan| scan.atom == ca)
@@ -547,7 +574,8 @@ pub(super) fn sort_plan_by_size_inner(
                         spec.to_index.vars.len() as i64;
                 });
             }
-            JoinStage::FusedIntersectMat { to_intersect, .. } => {
+            JoinStage::FusedIntersectMat { to_intersect, .. }
+            | JoinStage::Primitive { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
                     *refinements.get_or_default(spec.to_index.atom) +=
                         spec.to_index.vars.len() as i64;
@@ -584,6 +612,7 @@ pub(super) fn sort_plan_by_size_inner(
                 .copied()
                 .unwrap_or_default(),
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
+            JoinStage::Primitive { .. } => 0,
         };
         (
             -refine,
