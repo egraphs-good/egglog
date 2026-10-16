@@ -2664,6 +2664,7 @@ fn default_calls_determine_all_generic_parameters_including_empty_results() {
                         } else {
                             vec![]
                         },
+                        ..Default::default()
                     },
                 )),
             })),

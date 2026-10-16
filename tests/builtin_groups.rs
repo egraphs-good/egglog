@@ -110,6 +110,7 @@ impl Presort for Grouped {
                                     },
                                 ],
                                 output: Some(2),
+                                ..Default::default()
                             },
                         )),
                     })),
