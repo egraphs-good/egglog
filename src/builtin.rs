@@ -11,9 +11,11 @@ pub mod definitions;
 /// Migrated definitions plus explicit remaining registration gaps. This is not
 /// a complete engine snapshot and must not be used as a successful Freeze.
 pub struct BuiltinCatalog {
-    /// Canonical protobuf definitions with remapped, shared sort indices.
+    /// Canonical host declarations and portable authored computations, with
+    /// remapped, shared sort indices. Source facades and native-only helpers do
+    /// not acquire duplicate semantic declarations.
     pub definitions: pb::Program,
-    /// One entry per native registration lacking a definition; aliases can repeat.
+    /// Semantic registrations lacking a portable definition; aliases can repeat.
     pub undescribed_primitives: Vec<String>,
     /// Presort factories whose generic definitions have not migrated yet.
     pub undescribed_families: Vec<String>,
@@ -2058,25 +2060,18 @@ impl TypeInfo {
                 ir_version: 1,
                 ..Default::default()
             },
-            undescribed_primitives: self
-                .primitives
-                .values()
-                .flatten()
-                .filter(|primitive| primitive.primitive.builtin_definition().is_none())
-                .map(|primitive| primitive.primitive.name().to_owned())
-                .collect(),
+            undescribed_primitives: vec![],
             undescribed_families: self
                 .mksorts
-                .keys()
-                .filter(|family| {
-                    !self.builtin_families.declarations.iter().any(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(f)) if &f.name == *family))
+                .iter()
+                .filter(|(family, provider)| {
+                    provider.requires_catalog_family && !self.builtin_families.declarations.iter().any(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(f)) if &f.name == *family))
                 })
-                .cloned()
+                .map(|(family, _)| family.clone())
                 .collect(),
             undescribed_family_primitives: self.builtin_family_gaps.clone(),
             undescribed_sorts: vec![],
         };
-        catalog.undescribed_primitives.sort();
         catalog.undescribed_families.sort();
         catalog.undescribed_family_primitives.sort();
         let mut families = self.builtin_families.clone();
@@ -2087,6 +2082,22 @@ impl TypeInfo {
         for key in keys {
             self.export_builtin_definition(key, &mut catalog.definitions)?;
         }
+        let mut primitives = self.primitives.values().flatten().collect::<Vec<_>>();
+        primitives.sort_by_key(|primitive| primitive.primitive.name());
+        for primitive in primitives {
+            let primitive = &primitive.primitive;
+            if primitive.builtin_definition().is_none()
+                && primitive
+                    .export_program_definition(&mut catalog.definitions)?
+                    .is_none()
+                && primitive.requires_catalog_definition()
+            {
+                catalog
+                    .undescribed_primitives
+                    .push(primitive.name().to_owned());
+            }
+        }
+        catalog.undescribed_primitives.sort();
         catalog.undescribed_sorts = self.sorts.values().filter(|sort| {
             !sort.is_eq_sort() && !(*sort).clone().as_arc_any().is::<FunctionSort>() && !self.builtin_sorts.contains_key(sort.name()) && !catalog.definitions.declarations.iter().any(|declaration| matches!(&declaration.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.name == sort.name()))
         }).map(|sort| sort.name().to_owned()).collect();

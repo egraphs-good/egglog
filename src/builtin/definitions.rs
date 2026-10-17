@@ -17,9 +17,9 @@ fn declaration_identity(d: &pb::Declaration) -> Result<(Namespace, &str), String
         pb::declaration::Kind::HostSortFamily(s) => (Namespace::HostSortFamily, s.name.as_str()),
         pb::declaration::Kind::Constructor(c) => (Namespace::Callable, c.name.as_str()),
         pb::declaration::Kind::Function(f) => (Namespace::Callable, f.name.as_str()),
+        pb::declaration::Kind::Relation(r) => (Namespace::Callable, r.name.as_str()),
         pb::declaration::Kind::Primitive(p) => (Namespace::Callable, p.name.as_str()),
         pb::declaration::Kind::HostPrimitive(p) => (Namespace::Callable, p.name.as_str()),
-        _ => return Err("declaration reconciliation does not support this kind yet".into()),
     };
     if identity.1.is_empty() {
         return Err("empty declaration name".into());
@@ -108,6 +108,11 @@ fn declaration_refs(
                 node(i)?;
             }
         }
+        pb::declaration::Kind::Relation(r) => {
+            for a in &mut r.inputs {
+                sort(&mut a.sort)?;
+            }
+        }
         pb::declaration::Kind::Primitive(p) => {
             for a in &mut p.inputs {
                 sort(&mut a.sort)?;
@@ -127,7 +132,6 @@ fn declaration_refs(
             }
         }
         pb::declaration::Kind::EqSort(_) | pb::declaration::Kind::HostSortFamily(_) => (),
-        _ => return Err("unsupported declaration kind".into()),
     }
     if let Some(b) = &mut d.bindings {
         for owner in b
@@ -892,6 +896,11 @@ fn compatible_semantics(
                     a.name.clear();
                 }
             }
+            pb::declaration::Kind::Relation(r) => {
+                for a in &mut r.inputs {
+                    a.name.clear();
+                }
+            }
             pb::declaration::Kind::Primitive(c) => {
                 for a in &mut c.inputs {
                     a.name.clear();
@@ -910,7 +919,6 @@ fn compatible_semantics(
                     pb::host_primitive::Typing::Application(_) => (),
                 }
             }
-            _ => return Err("unsupported declaration comparison".into()),
         }
         declaration_refs(
             d,
@@ -1721,8 +1729,30 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
         if matches!(&d.kind, Some(pb::declaration::Kind::HostPrimitive(h)) if matches!(h.typing, Some(pb::host_primitive::Typing::Application(_))))
         {
             if let Some(b) = &d.bindings {
-                if b.rust.as_ref().is_some_and(|b| !b.views.is_empty()) {
-                    return Err("function application Rust views are not supported yet".into());
+                if let Some(rust) = &b.rust {
+                    if rust.views.len() > 1 {
+                        return Err("function application accepts at most one Rust view".into());
+                    }
+                    for v in &rust.views {
+                        if v.path.len() != 1
+                            || v.path[0].is_empty()
+                            || !matches!(
+                                v.owner.as_ref().and_then(|o| o.kind.as_ref()),
+                                Some(pb::binding_owner::Kind::Function(_))
+                            )
+                            || v.receiver
+                                != Some(pb::RustReceiver {
+                                    core_input: Some(0),
+                                    borrowed: true,
+                                })
+                            || !matches!(v.params.as_slice(), [p] if p.core_input == Some(1) && !p.name.is_empty() && !p.borrowed)
+                            || v.trait_impl.is_some()
+                            || v.borrowed_self
+                            || v.tail_repetitions.is_some()
+                        {
+                            return Err("invalid function application Rust view".into());
+                        }
+                    }
                 }
                 if let Some(python) = &b.python {
                     if python.views.len() > 1 {
@@ -1769,8 +1799,9 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                     }
                     continue;
                 }
-                pb::declaration::Kind::Constructor(c) => (&c.inputs, c.output, &[][..], 0),
-                pb::declaration::Kind::Function(f) => (&f.inputs, f.output, &[][..], 0),
+                pb::declaration::Kind::Constructor(c) => (&c.inputs, Some(c.output), &[][..], 0),
+                pb::declaration::Kind::Function(f) => (&f.inputs, Some(f.output), &[][..], 0),
+                pb::declaration::Kind::Relation(r) => (&r.inputs, None, &[][..], 0),
                 pb::declaration::Kind::Primitive(primitive) => {
                     let root = primitive.body.ok_or("missing primitive body")?;
                     if p.nodes
@@ -1814,7 +1845,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                             Ok(())
                         })?;
                     }
-                    (&primitive.inputs, primitive.output, &[][..], 0)
+                    (&primitive.inputs, Some(primitive.output), &[][..], 0)
                 }
                 pb::declaration::Kind::HostPrimitive(h) => {
                     let Some(pb::host_primitive::Typing::Signature(s)) = &h.typing else {
@@ -1829,17 +1860,16 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
                     }
                     (
                         &s.inputs,
-                        s.output.ok_or("missing signature result")?,
+                        Some(s.output.ok_or("missing signature result")?),
                         s.varargs.as_slice(),
                         s.type_params.len(),
                     )
                 }
-                _ => return Err("unsupported declaration bindings".into()),
             };
         for i in inputs
             .iter()
             .map(|a| a.sort)
-            .chain([output])
+            .chain(output)
             .chain(tail.iter().map(|a| a.sort))
         {
             pattern_scope(p, i, parameters)?;
@@ -1884,7 +1914,7 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
             if v.tail_repetitions.is_none() && effective.len() > inputs.len() && kind != K::Method {
                 return Err("only a method can consume a tail receiver".into());
             }
-            if kind == K::Initializer && owner != Some(output) {
+            if kind == K::Initializer && output.is_none_or(|output| owner != Some(output)) {
                 return Err("initializer result differs from owner".into());
             }
             if let Some(r) = v.receiver
@@ -1916,7 +1946,9 @@ fn validate_bindings(p: &pb::Program) -> Result<(), String> {
             }
             if let Some(m) = v.mutates
                 && (kind == K::Initializer
-                    || inputs.get(m as usize).map(|a| a.sort) != Some(output))
+                    || output.is_none_or(|output| {
+                        inputs.get(m as usize).map(|a| a.sort) != Some(output)
+                    }))
             {
                 return Err("invalid mutated input".into());
             }

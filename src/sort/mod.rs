@@ -158,6 +158,17 @@ pub trait Sort: Any + Send + Sync + Debug {
 pub trait Presort {
     fn presort_name() -> &'static str;
     fn reserved_primitives() -> Vec<&'static str>;
+    /// Whether this text factory denotes a HostSortFamily, rather than an
+    /// intrinsic structural sort such as FuncSort.
+    fn requires_catalog_family() -> bool {
+        true
+    }
+    /// Whether a reserved text alias needs its own callable declaration.
+    /// A facade may opt out only when its resolved calls lower to existing
+    /// canonical nodes/declarations without executing the native operation.
+    fn requires_catalog_primitive(_name: &str) -> bool {
+        true
+    }
     /// Canonical generic definitions, available before any instance exists.
     /// Each fragment owns one callable and its referenced family declarations.
     fn builtin_definitions() -> Vec<proto::Program> {
@@ -183,6 +194,7 @@ pub type MkSort = fn(&mut TypeInfo, String, &[Expr], Span) -> Result<ArcSort, Ty
 pub(crate) struct PresortProvider {
     pub make_sort: MkSort,
     pub container_type: Option<TypeId>,
+    pub requires_catalog_family: bool,
 }
 
 #[derive(Debug)]

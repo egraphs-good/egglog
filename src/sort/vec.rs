@@ -62,7 +62,7 @@ impl Presort for VecSort {
 
     fn builtin_definitions() -> Vec<proto::Program> {
         use proto as pb;
-        [
+        let mut definitions: Vec<_> = [
             ("empty", "vec-empty", vec![], vec![], 1),
             ("of", "vec-of", vec![], vec![("values", 0)], 1),
             ("get", "vec-get", vec![("vec", 1), ("index", 2)], vec![], 0),
@@ -298,7 +298,85 @@ impl Presort for VecSort {
                 ..Default::default()
             }
         })
-        .collect()
+        .collect();
+        definitions.push(pb::Program {
+            ir_version: 1,
+            sorts: vec![
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Var(0)),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Var(1)),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                        name: "Vec".into(),
+                        args: vec![0],
+                    })),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                        name: "Vec".into(),
+                        args: vec![1],
+                    })),
+                    ..Default::default()
+                },
+                pb::Sort {
+                    kind: Some(pb::sort::Kind::Func(pb::FuncSort {
+                        params: vec![0],
+                        result: 1,
+                    })),
+                    ..Default::default()
+                },
+            ],
+            declarations: vec![
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                        name: "Vec".into(),
+                        arity: 1,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                        name: "egglog.core.vec.map".into(),
+                        typing: Some(pb::host_primitive::Typing::Signature(
+                            pb::GenericSignature {
+                                type_params: vec!["T".into(), "U".into()],
+                                inputs: vec![
+                                    pb::Arg {
+                                        name: "f".into(),
+                                        sort: 4,
+                                    },
+                                    pb::Arg {
+                                        name: "xs".into(),
+                                        sort: 2,
+                                    },
+                                ],
+                                output: Some(3),
+                                ..Default::default()
+                            },
+                        )),
+                    })),
+                    bindings: Some(pb::CallableBindings {
+                        egglog: Some(pb::EgglogBindings {
+                            views: vec![pb::EgglogCallable {
+                                symbol: "unstable-vec-map".into(),
+                                datatype_member: false,
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        definitions
     }
     fn presort_name() -> &'static str {
         "Vec"
@@ -555,6 +633,15 @@ pub(crate) fn try_registering_vec_map(
     eg.add_pure_primitive(
         VecMap {
             name: "unstable-vec-map".into(),
+            instance: eg
+                .type_info
+                .instantiate_builtin_signature(
+                    "egglog.core.vec.map",
+                    &[fn_.clone(), input_vec.clone()],
+                    &[],
+                    &output_vec,
+                )
+                .unwrap(),
             vec: input_vec,
             output_vec,
             fn_: fn_.clone(),
@@ -579,6 +666,7 @@ pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<Fun
 #[derive(Clone)]
 struct VecMap {
     name: String,
+    instance: builtin::BuiltinInstance,
     vec: ArcSort,
     output_vec: ArcSort,
     fn_: Arc<FunctionSort>,
@@ -595,6 +683,10 @@ impl Primitive for VecMap {
             span.clone(),
         )
         .into_box()
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 

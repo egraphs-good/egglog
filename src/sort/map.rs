@@ -329,6 +329,10 @@ impl Presort for MapSort {
         "Map"
     }
 
+    fn requires_catalog_primitive(name: &str) -> bool {
+        name != "map-of" // The flat facade lowers to map.of(Vec<Pair>).
+    }
+
     fn reserved_primitives() -> Vec<&'static str> {
         vec![
             "map-empty",
@@ -573,6 +577,10 @@ struct MapOf {
 impl Primitive for MapOf {
     fn name(&self) -> &str {
         "map-of"
+    }
+
+    fn requires_catalog_definition(&self) -> bool {
+        false // lower_builtin_call imports the canonical Map/Pair/Vec recipe.
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

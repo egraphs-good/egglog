@@ -57,6 +57,448 @@ impl MultiSetSort {
 }
 
 impl Presort for MultiSetSort {
+    fn container_type() -> Option<TypeId> {
+        Some(TypeId::of::<<Self as ContainerSort>::Container>())
+    }
+
+    fn builtin_definitions() -> Vec<proto::Program> {
+        use proto as pb;
+        let mut definitions: Vec<_> = [
+            ("of", vec![], vec![("args", 0)], 1),
+            ("single", vec![("x", 0), ("i", 2)], vec![], 1),
+            ("pick", vec![("multiset", 1)], vec![], 0),
+            ("insert", vec![("multiset", 1), ("value", 0)], vec![], 1),
+            ("remove", vec![("multiset", 1), ("value", 0)], vec![], 1),
+            ("remove_swapped", vec![("x", 0), ("xs", 1)], vec![], 1),
+            ("subtract", vec![("multiset", 1), ("other", 1)], vec![], 1),
+            ("subtract_swapped", vec![("x", 1), ("xs", 1)], vec![], 1),
+            ("length", vec![("multiset", 1)], vec![], 2),
+            ("contains", vec![("multiset", 1), ("value", 0)], vec![], 3),
+            (
+                "not_contains",
+                vec![("multiset", 1), ("value", 0)],
+                vec![],
+                3,
+            ),
+            ("contains_swapped", vec![("x", 0), ("xs", 1)], vec![], 3),
+            ("not_contains_swapped", vec![("x", 0), ("xs", 1)], vec![], 3),
+            (
+                "intersection",
+                vec![("multiset", 1), ("other", 1)],
+                vec![],
+                1,
+            ),
+            ("sum", vec![("multiset", 1), ("other", 1)], vec![], 1),
+            ("reset_counts", vec![("multiset", 1)], vec![], 1),
+            ("pick_max", vec![("multiset", 1)], vec![], 0),
+            ("count", vec![("multiset", 1), ("value", 0)], vec![], 2),
+            ("sum_multisets", vec![("xs", 4)], vec![], 1),
+            ("union_values", vec![("multiset", 1)], vec![], 0),
+        ]
+        .into_iter()
+        .map(|(key, inputs, varargs, output)| {
+            let free = key.ends_with("_swapped");
+            let receiver = !free && !matches!(key, "of" | "single" | "sum_multisets");
+            let owner = (!free).then_some(pb::BindingOwner {
+                kind: Some(pb::binding_owner::Kind::Sort(1)),
+            });
+            let parameters = inputs
+                .iter()
+                .chain(&varargs)
+                .enumerate()
+                .skip(usize::from(receiver));
+            pb::Program {
+                ir_version: 1,
+                sorts: [
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Var(0)),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "MultiSet".into(),
+                            args: vec![0],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "i64".into(),
+                            args: vec![],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "Unit".into(),
+                            args: vec![],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Sort {
+                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            name: "MultiSet".into(),
+                            args: vec![1],
+                        })),
+                        ..Default::default()
+                    },
+                ]
+                .into_iter()
+                .take(if key == "sum_multisets" { 5 } else { 4 })
+                .collect(),
+                declarations: vec![
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "MultiSet".into(),
+                            arity: 1,
+                            bindings: Some(pb::SortBindings {
+                                python: Some(pb::TypeBinding {
+                                    path: vec![
+                                        "egglog".into(),
+                                        "builtins".into(),
+                                        "MultiSet".into(),
+                                    ],
+                                    type_params: vec!["T".into()],
+                                }),
+                                rust: Some(pb::TypeBinding {
+                                    path: vec![
+                                        "egglog_experimental".into(),
+                                        "typed".into(),
+                                        "builtins".into(),
+                                        "MultiSet".into(),
+                                    ],
+                                    type_params: vec!["T".into()],
+                                }),
+                                ..Default::default()
+                            }),
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "i64".into(),
+                            arity: 0,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
+                            name: "Unit".into(),
+                            arity: 0,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Declaration {
+                        kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                            name: format!("egglog.core.multiset.{key}"),
+                            typing: Some(pb::host_primitive::Typing::Signature(
+                                pb::GenericSignature {
+                                    type_params: vec!["T".into()],
+                                    inputs: inputs
+                                        .iter()
+                                        .map(|(name, sort)| pb::Arg {
+                                            name: (*name).into(),
+                                            sort: *sort,
+                                        })
+                                        .collect(),
+                                    varargs: varargs
+                                        .iter()
+                                        .map(|(name, sort)| pb::Arg {
+                                            name: (*name).into(),
+                                            sort: *sort,
+                                        })
+                                        .collect(),
+                                    output: Some(output),
+                                    equality_type_params: if key == "union_values" {
+                                        vec![0]
+                                    } else {
+                                        vec![]
+                                    },
+                                },
+                            )),
+                        })),
+                        bindings: Some(pb::CallableBindings {
+                            python: Some(pb::PythonBindings {
+                                views: vec![pb::PythonCallable {
+                                    kind: if free {
+                                        pb::PythonCallKind::Function
+                                    } else {
+                                        match key {
+                                            "of" => pb::PythonCallKind::Initializer,
+                                            "single" | "sum_multisets" => {
+                                                pb::PythonCallKind::ClassMethod
+                                            }
+                                            _ => pb::PythonCallKind::Method,
+                                        }
+                                    }
+                                    .into(),
+                                    path: if free {
+                                        vec![
+                                            "egglog".into(),
+                                            "builtins".into(),
+                                            format!("multiset_{key}"),
+                                        ]
+                                    } else {
+                                        match key {
+                                            "of" => vec![],
+                                            "subtract" => vec!["__sub__".into()],
+                                            "intersection" => vec!["__and__".into()],
+                                            "sum" => vec!["__add__".into()],
+                                            _ => vec![key.into()],
+                                        }
+                                    },
+                                    owner,
+                                    receiver: receiver.then_some(0),
+                                    params: parameters
+                                        .clone()
+                                        .map(|(i, (name, _))| pb::PythonParameter {
+                                            core_input: Some(i as u32),
+                                            name: (*name).into(),
+                                            default_expr: None,
+                                        })
+                                        .collect(),
+                                    ..Default::default()
+                                }],
+                            }),
+                            rust: Some(pb::RustBindings {
+                                views: vec![pb::RustCallable {
+                                    path: if free {
+                                        vec![
+                                            "egglog_experimental".into(),
+                                            "typed".into(),
+                                            "builtins".into(),
+                                            format!("multiset_{key}"),
+                                        ]
+                                    } else {
+                                        vec![if key == "of" { "new" } else { key }.into()]
+                                    },
+                                    owner,
+                                    receiver: receiver.then_some(pb::RustReceiver {
+                                        core_input: Some(0),
+                                        borrowed: true,
+                                    }),
+                                    params: parameters
+                                        .map(|(i, (name, _))| pb::RustParameter {
+                                            core_input: Some(i as u32),
+                                            name: (*name).into(),
+                                            borrowed: false,
+                                        })
+                                        .collect(),
+                                    ..Default::default()
+                                }],
+                            }),
+                            egglog: Some(pb::EgglogBindings {
+                                views: vec![pb::EgglogCallable {
+                                    symbol: format!("multiset-{}", key.replace('_', "-")),
+                                    datatype_member: false,
+                                }],
+                            }),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }
+        })
+        .collect();
+
+        // Reuse the same owned family declarations; only these seven callable
+        // records add structural function patterns to the ordinary catalog.
+        let families = definitions[0]
+            .declarations
+            .iter()
+            .filter(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(_))))
+            .cloned()
+            .collect::<Vec<_>>();
+        definitions.extend(
+            [
+                ("map", vec![("f", 4), ("xs", 1)], 3, vec![0], 2, Some(1)),
+                ("filter", vec![("f", 4), ("xs", 1)], 1, vec![0], 2, Some(1)),
+                (
+                    "filter_not",
+                    vec![("f", 4), ("xs", 1)],
+                    1,
+                    vec![0],
+                    2,
+                    Some(1),
+                ),
+                (
+                    "reduce",
+                    vec![("f", 4), ("initial", 0), ("xs", 1)],
+                    0,
+                    vec![0, 0],
+                    0,
+                    None,
+                ),
+                ("flat_map", vec![("f", 4), ("xs", 1)], 1, vec![0], 1, None),
+                (
+                    "fill_index",
+                    vec![("multiset", 1), ("f", 4)],
+                    2,
+                    vec![1, 0],
+                    3,
+                    Some(0),
+                ),
+                (
+                    "clear_index",
+                    vec![("multiset", 1), ("f", 4)],
+                    2,
+                    vec![1, 0],
+                    3,
+                    Some(0),
+                ),
+            ]
+            .into_iter()
+            .map(|(key, inputs, output, params, result, receiver)| {
+                let map = key == "map";
+                let free = receiver.is_none();
+                let owner = (!free).then_some(pb::BindingOwner {
+                    kind: Some(pb::binding_owner::Kind::Sort(1)),
+                });
+                let name = if key == "reduce" {
+                    "multiset_fold".to_owned()
+                } else if free {
+                    format!("multiset_{key}")
+                } else {
+                    key.to_owned()
+                };
+                let parameters = inputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| receiver != Some(*i as u32));
+                let mut declarations = families.clone();
+                declarations.push(pb::Declaration {
+                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
+                        name: format!("egglog.core.multiset.{key}"),
+                        typing: Some(pb::host_primitive::Typing::Signature(
+                            pb::GenericSignature {
+                                type_params: if map {
+                                    vec!["T".into(), "V".into()]
+                                } else {
+                                    vec!["T".into()]
+                                },
+                                inputs: inputs
+                                    .iter()
+                                    .map(|(name, sort)| pb::Arg {
+                                        name: (*name).into(),
+                                        sort: *sort,
+                                    })
+                                    .collect(),
+                                output: Some(output),
+                                ..Default::default()
+                            },
+                        )),
+                    })),
+                    bindings: Some(pb::CallableBindings {
+                        python: Some(pb::PythonBindings {
+                            views: vec![pb::PythonCallable {
+                                kind: if free {
+                                    pb::PythonCallKind::Function
+                                } else {
+                                    pb::PythonCallKind::Method
+                                }
+                                .into(),
+                                path: if free {
+                                    vec!["egglog".into(), "builtins".into(), name.clone()]
+                                } else {
+                                    vec![name.clone()]
+                                },
+                                owner,
+                                receiver,
+                                params: parameters
+                                    .clone()
+                                    .map(|(i, (name, _))| pb::PythonParameter {
+                                        core_input: Some(i as u32),
+                                        name: (*name).into(),
+                                        default_expr: None,
+                                    })
+                                    .collect(),
+                                ..Default::default()
+                            }],
+                        }),
+                        rust: Some(pb::RustBindings {
+                            views: vec![pb::RustCallable {
+                                path: if free {
+                                    vec![
+                                        "egglog_experimental".into(),
+                                        "typed".into(),
+                                        "builtins".into(),
+                                        name,
+                                    ]
+                                } else {
+                                    vec![name]
+                                },
+                                owner,
+                                receiver: receiver.map(|i| pb::RustReceiver {
+                                    core_input: Some(i),
+                                    borrowed: true,
+                                }),
+                                params: parameters
+                                    .map(|(i, (name, _))| pb::RustParameter {
+                                        core_input: Some(i as u32),
+                                        name: (*name).into(),
+                                        borrowed: false,
+                                    })
+                                    .collect(),
+                                ..Default::default()
+                            }],
+                        }),
+                        egglog: Some(pb::EgglogBindings {
+                            views: vec![pb::EgglogCallable {
+                                symbol: format!("unstable-multiset-{}", key.replace('_', "-")),
+                                datatype_member: false,
+                            }],
+                        }),
+                    }),
+                    ..Default::default()
+                });
+                pb::Program {
+                    ir_version: 1,
+                    sorts: vec![
+                        pb::Sort {
+                            kind: Some(pb::sort::Kind::Var(0)),
+                            ..Default::default()
+                        },
+                        pb::Sort {
+                            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                                name: "MultiSet".into(),
+                                args: vec![0],
+                            })),
+                            ..Default::default()
+                        },
+                        pb::Sort {
+                            kind: Some(if map {
+                                pb::sort::Kind::Var(1)
+                            } else {
+                                pb::sort::Kind::Family(pb::HostSort {
+                                    name: "Unit".into(),
+                                    args: vec![],
+                                })
+                            }),
+                            ..Default::default()
+                        },
+                        pb::Sort {
+                            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                                name: if map { "MultiSet" } else { "i64" }.into(),
+                                args: if map { vec![2] } else { vec![] },
+                            })),
+                            ..Default::default()
+                        },
+                        pb::Sort {
+                            kind: Some(pb::sort::Kind::Func(pb::FuncSort { params, result })),
+                            ..Default::default()
+                        },
+                    ],
+                    declarations,
+                    ..Default::default()
+                }
+            }),
+        );
+        definitions
+    }
+
     fn presort_name() -> &'static str {
         "MultiSet"
     }
@@ -148,6 +590,53 @@ impl ContainerSort for MultiSetSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
+        eg.type_info
+            .register_builtin_sort("MultiSet", arc.clone(), vec![self.element.clone()])
+            .expect("invalid MultiSet family instance");
+        let [
+            of,
+            single,
+            pick,
+            insert,
+            remove,
+            remove_swapped,
+            subtract,
+            subtract_swapped,
+            length,
+            contains,
+            not_contains,
+            contains_swapped,
+            not_contains_swapped,
+            intersection,
+            sum,
+            reset_counts,
+            pick_max,
+            count,
+        ] = [
+            "of",
+            "single",
+            "pick",
+            "insert",
+            "remove",
+            "remove_swapped",
+            "subtract",
+            "subtract_swapped",
+            "length",
+            "contains",
+            "not_contains",
+            "contains_swapped",
+            "not_contains_swapped",
+            "intersection",
+            "sum",
+            "reset_counts",
+            "pick_max",
+            "count",
+        ]
+        .map(|key| {
+            eg.type_info
+                .instantiate_builtin(&format!("egglog.core.multiset.{key}"), &arc)
+                .unwrap()
+        });
 
         // Proof term form of a multiset: `(multiset-of e0 e1 ...)`, matching
         // `reconstruct_termdag`. (Count merging for proof checking of
@@ -175,43 +664,43 @@ impl ContainerSort for MultiSetSort {
                 (!contains).then(|| termdag.lit(Literal::Unit))
             };
 
-        add_primitive_with_validator!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
+        add_primitive_with_validator!(eg, "multiset-of" [instance = of] = {self.clone(): MultiSetSort} [xs: #] -> @MultiSetContainer { MultiSetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
         } }, multiset_of_validator);
 
-        add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -?> @MultiSetContainer (arc) {
+        add_primitive!(eg, "multiset-single" [instance = single] = {self.clone(): MultiSetSort} |x: #, i: i64| -?> @MultiSetContainer {
             i.try_into().ok().map(|i|
                 MultiSetContainer {
                 do_rebuild: self.ctx.is_eq_container_sort(),
                 data: std::iter::repeat_n(x, i).collect()
             })
         });
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -?> # (self.element()) { xs.data.pick().copied() });
-        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
-        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
-        add_primitive!(eg, "multiset-remove-swapped" = |x: # (self.element()), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs }) });
-        add_primitive!(eg, "multiset-subtract" = |mut xs: @MultiSetContainer (arc), other: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
-        add_primitive!(eg, "multiset-subtract-swapped" = |other: @MultiSetContainer (arc), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
-        add_primitive_with_validator!(eg, "multiset-length"       = |xs: @MultiSetContainer (arc)| -> i64 { xs.data.len() as i64 }, multiset_length_validator);
-        add_primitive_with_validator!(eg, "multiset-contains"     = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, multiset_contains_validator);
-        add_primitive_with_validator!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, multiset_not_contains_validator);
-        add_primitive!(eg, "multiset-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-not-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (!xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-intersection" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.intersection(ys.data), ..xs } });
-        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
+        add_primitive!(eg, "multiset-pick" [instance = pick] = |xs: @MultiSetContainer| -?> # { xs.data.pick().copied() });
+        add_primitive!(eg, "multiset-insert" [instance = insert] = |mut xs: @MultiSetContainer, x: #| -> @MultiSetContainer { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
+        add_primitive!(eg, "multiset-remove" [instance = remove] = |mut xs: @MultiSetContainer, x: #| -?> @MultiSetContainer { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
+        add_primitive!(eg, "multiset-remove-swapped" [instance = remove_swapped] = |x: #, mut xs: @MultiSetContainer| -?> @MultiSetContainer { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs }) });
+        add_primitive!(eg, "multiset-subtract" [instance = subtract] = |mut xs: @MultiSetContainer, other: @MultiSetContainer| -?> @MultiSetContainer { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
+        add_primitive!(eg, "multiset-subtract-swapped" [instance = subtract_swapped] = |other: @MultiSetContainer, mut xs: @MultiSetContainer| -?> @MultiSetContainer { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
+        add_primitive_with_validator!(eg, "multiset-length" [instance = length] = |xs: @MultiSetContainer| -> i64 { xs.data.len() as i64 }, multiset_length_validator);
+        add_primitive_with_validator!(eg, "multiset-contains" [instance = contains] = |xs: @MultiSetContainer, x: #| -?> () { ( xs.data.contains(&x)).then_some(()) }, multiset_contains_validator);
+        add_primitive_with_validator!(eg, "multiset-not-contains" [instance = not_contains] = |xs: @MultiSetContainer, x: #| -?> () { (!xs.data.contains(&x)).then_some(()) }, multiset_not_contains_validator);
+        add_primitive!(eg, "multiset-contains-swapped" [instance = contains_swapped] = |x: #, xs: @MultiSetContainer| -?> () { (xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-not-contains-swapped" [instance = not_contains_swapped] = |x: #, xs: @MultiSetContainer| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-intersection" [instance = intersection] = |xs: @MultiSetContainer, ys: @MultiSetContainer| -> @MultiSetContainer { MultiSetContainer { data: xs.data.intersection(ys.data), ..xs } });
+        add_primitive!(eg, "multiset-sum" [instance = sum] = |xs: @MultiSetContainer, ys: @MultiSetContainer| -> @MultiSetContainer { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
         // Set counts to one
-        add_primitive!(eg, "multiset-reset-counts" = |mut xs: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { {
+        add_primitive!(eg, "multiset-reset-counts" [instance = reset_counts] = |mut xs: @MultiSetContainer| -> @MultiSetContainer { {
             let mut new_data = MultiSet::<Value>::new();
             for (v, _) in xs.data.iter_counts() {
                 new_data.insert_multiple_mut(v, 1);
             }
             MultiSetContainer { data: new_data, ..xs }
         }});
-        add_primitive!(eg, "multiset-pick-max" = |xs: @MultiSetContainer (arc)| -?>  # (self.element()) {
+        add_primitive!(eg, "multiset-pick-max" [instance = pick_max] = |xs: @MultiSetContainer| -?> # {
             Some(xs.data.iter_counts().max_by_key(|(_, c)| *c)?.0)
         });
-        add_primitive!(eg, "multiset-count" = |xs: @MultiSetContainer (arc), x: # (self.element())| -> i64 {
+        add_primitive!(eg, "multiset-count" [instance = count] = |xs: @MultiSetContainer, x: #| -> i64 {
             xs.data.iter_counts().find(|(v, _)| *v == x).map(|(_, c)| c as i64).unwrap_or(0)
         });
 
@@ -225,7 +714,15 @@ impl ContainerSort for MultiSetSort {
                 SumMultisets {
                     name: "multiset-sum-multisets".into(),
                     multiset: other_multiset_sort.clone(),
-                    multiset_of_multisets: arc.clone(),
+                    instance: eg
+                        .type_info
+                        .instantiate_builtin_signature(
+                            "egglog.core.multiset.sum_multisets",
+                            std::slice::from_ref(&arc),
+                            &[],
+                            &other_multiset_sort,
+                        )
+                        .unwrap(),
                 },
                 None,
             );
@@ -246,8 +743,15 @@ impl ContainerSort for MultiSetSort {
             eg.add_write_primitive(
                 UnionValues {
                     name: "multiset-union-values".into(),
-                    multiset: arc.clone(),
-                    element: self.element.clone(),
+                    instance: eg
+                        .type_info
+                        .instantiate_builtin_signature(
+                            "egglog.core.multiset.union_values",
+                            std::slice::from_ref(&arc),
+                            &[],
+                            &self.element,
+                        )
+                        .unwrap(),
                 },
                 None,
             );
@@ -298,9 +802,15 @@ pub(crate) fn try_registering_multiset_map(
     eg.add_pure_primitive(
         Map {
             name: "unstable-multiset-map".into(),
-            multiset: input_ms,
-            output_multiset: output_ms,
-            fn_: fn_.clone(),
+            instance: eg
+                .type_info
+                .instantiate_builtin_signature(
+                    "egglog.core.multiset.map",
+                    &[fn_.clone(), input_ms.clone()],
+                    &[],
+                    &output_ms,
+                )
+                .unwrap(),
         },
         None,
     );
@@ -335,8 +845,15 @@ fn try_registering_multiset_non_map_primitives(
         eg.add_pure_primitive(
             Filter {
                 name: "unstable-multiset-filter".into(),
-                multiset: multiset.clone(),
-                fn_: fn_.clone(),
+                instance: eg
+                    .type_info
+                    .instantiate_builtin_signature(
+                        "egglog.core.multiset.filter",
+                        &[fn_.clone(), multiset.clone()],
+                        &[],
+                        &multiset,
+                    )
+                    .unwrap(),
                 skip_empty: true,
             },
             None,
@@ -344,8 +861,15 @@ fn try_registering_multiset_non_map_primitives(
         eg.add_pure_primitive(
             Filter {
                 name: "unstable-multiset-filter-not".into(),
-                multiset: multiset.clone(),
-                fn_: fn_.clone(),
+                instance: eg
+                    .type_info
+                    .instantiate_builtin_signature(
+                        "egglog.core.multiset.filter_not",
+                        &[fn_.clone(), multiset.clone()],
+                        &[],
+                        &multiset,
+                    )
+                    .unwrap(),
                 skip_empty: false,
             },
             None,
@@ -360,9 +884,15 @@ fn try_registering_multiset_non_map_primitives(
         eg.add_pure_primitive(
             Reduce {
                 name: "unstable-multiset-reduce".into(),
-                multiset: multiset.clone(),
-                fn_: fn_.clone(),
-                element: element.clone(),
+                instance: eg
+                    .type_info
+                    .instantiate_builtin_signature(
+                        "egglog.core.multiset.reduce",
+                        &[fn_.clone(), element.clone(), multiset.clone()],
+                        &[],
+                        &element,
+                    )
+                    .unwrap(),
             },
             None,
         );
@@ -377,18 +907,30 @@ fn try_registering_multiset_non_map_primitives(
         eg.add_full_primitive(
             FillIndex {
                 name: "unstable-multiset-fill-index".into(),
-                multiset: multiset.clone(),
-                unit: unit.clone(),
-                fn_: fn_.clone(),
+                instance: eg
+                    .type_info
+                    .instantiate_builtin_signature(
+                        "egglog.core.multiset.fill_index",
+                        &[multiset.clone(), fn_.clone()],
+                        &[],
+                        &unit,
+                    )
+                    .unwrap(),
             },
             None,
         );
         eg.add_write_primitive(
             ClearIndex {
                 name: "unstable-multiset-clear-index".into(),
-                multiset: multiset.clone(),
-                unit,
-                fn_: fn_.clone(),
+                instance: eg
+                    .type_info
+                    .instantiate_builtin_signature(
+                        "egglog.core.multiset.clear_index",
+                        &[multiset.clone(), fn_.clone()],
+                        &[],
+                        &unit,
+                    )
+                    .unwrap(),
             },
             None,
         );
@@ -401,8 +943,15 @@ fn try_registering_multiset_non_map_primitives(
         eg.add_pure_primitive(
             FlatMap {
                 name: "unstable-multiset-flat-map".into(),
-                multiset,
-                fn_: fn_.clone(),
+                instance: eg
+                    .type_info
+                    .instantiate_builtin_signature(
+                        "egglog.core.multiset.flat_map",
+                        &[fn_.clone(), multiset.clone()],
+                        &[],
+                        &multiset,
+                    )
+                    .unwrap(),
             },
             None,
         );
@@ -412,9 +961,7 @@ fn try_registering_multiset_non_map_primitives(
 #[derive(Clone)]
 struct Map {
     name: String,
-    multiset: ArcSort,
-    fn_: Arc<FunctionSort>,
-    output_multiset: ArcSort,
+    instance: builtin::BuiltinInstance,
 }
 
 impl Primitive for Map {
@@ -422,16 +969,11 @@ impl Primitive for Map {
         &self.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            &self.name,
-            vec![
-                self.fn_.clone(),
-                self.multiset.clone(),
-                self.output_multiset.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -470,9 +1012,7 @@ impl PurePrim for Map {
 #[derive(Clone)]
 struct FillIndex {
     name: String,
-    multiset: ArcSort,
-    unit: ArcSort,
-    fn_: Arc<FunctionSort>,
+    instance: builtin::BuiltinInstance,
 }
 
 // `FillIndex` reads the target table to skip already-filled rows
@@ -487,12 +1027,11 @@ impl Primitive for FillIndex {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.multiset.clone(), self.fn_.clone(), self.unit.clone()],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -521,7 +1060,11 @@ impl FullPrim for FillIndex {
         let unit_val = state.base_values().get::<()>(());
         let es = state.raw_exec_state();
         for (v, c) in multiset.data.iter_counts() {
-            let mut row = vec![args[0], v];
+            let mut row: Vec<_> =
+                fc.1.iter()
+                    .map(|(_, value)| *value)
+                    .chain([args[0], v])
+                    .collect();
             // Skip the whole fill if any index row already exists.
             // This relies on `unstable-multiset-fill-index` writing all
             // rows for a given multiset in one pass.
@@ -540,9 +1083,7 @@ impl FullPrim for FillIndex {
 #[derive(Clone)]
 struct ClearIndex {
     name: String,
-    multiset: ArcSort,
-    unit: ArcSort,
-    fn_: Arc<FunctionSort>,
+    instance: builtin::BuiltinInstance,
 }
 
 // `ClearIndex` removes table rows; action-only.
@@ -552,12 +1093,11 @@ impl Primitive for ClearIndex {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.multiset.clone(), self.fn_.clone(), self.unit.clone()],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -586,7 +1126,12 @@ impl WritePrim for ClearIndex {
         let unit_val = state.base_values().get::<()>(());
         let es = state.raw_exec_state();
         for (v, _) in multiset.data.iter_counts() {
-            action.remove(es, &[args[0], v]);
+            let row: Vec<_> =
+                fc.1.iter()
+                    .map(|(_, value)| *value)
+                    .chain([args[0], v])
+                    .collect();
+            action.remove(es, &row);
         }
         Some(unit_val)
     }
@@ -598,8 +1143,7 @@ impl WritePrim for ClearIndex {
 #[derive(Clone)]
 struct FlatMap {
     name: String,
-    multiset: ArcSort,
-    fn_: Arc<FunctionSort>,
+    instance: builtin::BuiltinInstance,
 }
 
 impl Primitive for FlatMap {
@@ -607,16 +1151,11 @@ impl Primitive for FlatMap {
         &self.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            &self.name,
-            vec![
-                self.fn_.clone(),
-                self.multiset.clone(),
-                self.multiset.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -665,8 +1204,7 @@ impl PurePrim for FlatMap {
 #[derive(Clone)]
 struct Filter {
     name: String,
-    multiset: ArcSort,
-    fn_: Arc<FunctionSort>,
+    instance: builtin::BuiltinInstance,
     skip_empty: bool,
 }
 
@@ -675,16 +1213,11 @@ impl Primitive for Filter {
         &self.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            &self.name,
-            vec![
-                self.fn_.clone(),
-                self.multiset.clone(),
-                self.multiset.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -726,7 +1259,7 @@ impl PurePrim for Filter {
 struct SumMultisets {
     name: String,
     multiset: ArcSort,
-    multiset_of_multisets: ArcSort,
+    instance: builtin::BuiltinInstance,
 }
 
 // `SumMultisets` flattens a multiset of multisets. Only reads container
@@ -737,12 +1270,11 @@ impl Primitive for SumMultisets {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.multiset_of_multisets.clone(), self.multiset.clone()],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -781,9 +1313,7 @@ impl PurePrim for SumMultisets {
 #[derive(Clone)]
 struct Reduce {
     name: String,
-    multiset: ArcSort,
-    fn_: Arc<FunctionSort>,
-    element: ArcSort,
+    instance: builtin::BuiltinInstance,
 }
 
 impl Primitive for Reduce {
@@ -791,17 +1321,11 @@ impl Primitive for Reduce {
         &self.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            &self.name,
-            vec![
-                self.fn_.clone(),
-                self.element.clone(),
-                self.multiset.clone(),
-                self.element.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 
@@ -841,8 +1365,7 @@ impl PurePrim for Reduce {
 #[derive(Clone)]
 struct UnionValues {
     name: String,
-    multiset: ArcSort,
-    element: ArcSort,
+    instance: builtin::BuiltinInstance,
 }
 
 // `UnionValues` writes to the union-find; action-only.
@@ -852,12 +1375,11 @@ impl Primitive for UnionValues {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.multiset.clone(), self.element.clone()],
-            span.clone(),
-        )
-        .into_box()
+        self.instance.type_constraints(span)
+    }
+
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 }
 

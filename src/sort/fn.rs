@@ -114,6 +114,26 @@ impl Presort for FunctionSort {
                     },
                 )),
                 bindings: Some(proto::CallableBindings {
+                    rust: Some(proto::RustBindings {
+                        views: vec![proto::RustCallable {
+                            path: vec!["call".into()],
+                            owner: Some(proto::BindingOwner {
+                                kind: Some(proto::binding_owner::Kind::Function(
+                                    proto::FunctionTypeOwner {},
+                                )),
+                            }),
+                            receiver: Some(proto::RustReceiver {
+                                core_input: Some(0),
+                                borrowed: true,
+                            }),
+                            params: vec![proto::RustParameter {
+                                core_input: Some(1),
+                                name: "args".into(),
+                                borrowed: false,
+                            }],
+                            ..Default::default()
+                        }],
+                    }),
                     python: Some(proto::PythonBindings {
                         views: vec![proto::PythonCallable {
                             kind: proto::PythonCallKind::Method.into(),
@@ -148,6 +168,14 @@ impl Presort for FunctionSort {
 
     fn presort_name() -> &'static str {
         "UnstableFn"
+    }
+
+    fn requires_catalog_family() -> bool {
+        false // The portable sort is FuncSort, not a named family.
+    }
+
+    fn requires_catalog_primitive(name: &str) -> bool {
+        name != "unstable-fn" // Construction lowers to PartialCall.
     }
 
     fn reserved_primitives() -> Vec<&'static str> {
@@ -513,6 +541,10 @@ struct Ctor {
 impl Primitive for Ctor {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn requires_catalog_definition(&self) -> bool {
+        false // lower_builtin_call exports the structural PartialCall.
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

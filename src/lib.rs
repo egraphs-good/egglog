@@ -311,6 +311,14 @@ pub trait Primitive: Send + Sync + 'static {
         None
     }
 
+    /// Whether this native registration denotes an independent portable
+    /// callable. Source facades with an inert canonical lowering and internal
+    /// compiler helpers may opt out; ordinary providers must retain the default
+    /// so a missing definition remains an explicit export gap.
+    fn requires_catalog_definition(&self) -> bool {
+        true
+    }
+
     /// Imports a genuine program-defined computation and its portable code.
     /// This is separate from the host catalog: it must not execute the body,
     /// a validator, or any provider. Exact native selection is checked by the
@@ -740,10 +748,10 @@ impl Default for EGraph {
         add_primitive!(&mut eg, "value-eq" [id = "egglog.core.value_eq"] = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
-        add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
+        add_primitive!(&mut eg, "ordering-min" [catalog = false] = |a: #, b: #| -> # {
             if a < b { a } else { b }
         });
-        add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
+        add_primitive!(&mut eg, "ordering-max" [catalog = false] = |a: #, b: #| -> # {
             if a > b { a } else { b }
         });
 

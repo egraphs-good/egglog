@@ -808,6 +808,7 @@ impl TypeInfo {
                 e.insert(PresortProvider {
                     make_sort: S::make_sort,
                     container_type: S::container_type(),
+                    requires_catalog_family: S::requires_catalog_family(),
                 });
                 self.reserved_primitives.extend(S::reserved_primitives());
                 for definition in S::builtin_definitions() {
@@ -838,18 +839,19 @@ impl TypeInfo {
                     self.builtin_definitions.insert(key, Arc::new(definition));
                 }
                 for alias in S::reserved_primitives() {
-                    if !self
-                        .builtin_owners
-                        .iter()
-                        .filter(|(_, owner)| **owner == name)
-                        .any(|(key, _)| {
-                            self.builtin_definitions[key].declarations.iter().any(|d| {
-                                d.bindings
-                                    .as_ref()
-                                    .and_then(|b| b.egglog.as_ref())
-                                    .is_some_and(|b| b.views.iter().any(|v| v.symbol == alias))
+                    if S::requires_catalog_primitive(alias)
+                        && !self
+                            .builtin_owners
+                            .iter()
+                            .filter(|(_, owner)| **owner == name)
+                            .any(|(key, _)| {
+                                self.builtin_definitions[key].declarations.iter().any(|d| {
+                                    d.bindings
+                                        .as_ref()
+                                        .and_then(|b| b.egglog.as_ref())
+                                        .is_some_and(|b| b.views.iter().any(|v| v.symbol == alias))
+                                })
                             })
-                        })
                     {
                         self.builtin_family_gaps.push(format!("{name}::{alias}"));
                     }

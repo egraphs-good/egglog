@@ -3,6 +3,278 @@ use egglog::{
     proto as pb,
 };
 
+fn relation_definition_fixture(reversed: bool) -> pb::Program {
+    let list = pb::Sort {
+        kind: Some(pb::sort::Kind::Eq("IList".into())),
+        ..Default::default()
+    };
+    let number = pb::Sort {
+        kind: Some(pb::sort::Kind::Family(pb::HostSort {
+            name: "i64".into(),
+            args: vec![],
+        })),
+        ..Default::default()
+    };
+    let (sorts, list_sort, number_sort) = if reversed {
+        (vec![number, list], 1, 0)
+    } else {
+        (vec![list, number], 0, 1)
+    };
+    pb::Program {
+        ir_version: 1,
+        sorts,
+        nodes: vec![pb::Node {
+            sort_id: number_sort,
+            kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::I64(7)),
+            })),
+            ..Default::default()
+        }],
+        declarations: vec![
+            pb::Declaration {
+                kind: Some(pb::declaration::Kind::EqSort(pb::EqSort {
+                    name: "IList".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            pb::Declaration {
+                kind: Some(pb::declaration::Kind::Relation(pb::Relation {
+                    name: "ordered_inputs".into(),
+                    inputs: vec![
+                        pb::Arg {
+                            sort: list_sort,
+                            name: "list".into(),
+                        },
+                        pb::Arg {
+                            sort: number_sort,
+                            name: "index".into(),
+                        },
+                    ],
+                })),
+                bindings: Some(pb::CallableBindings {
+                    rust: Some(pb::RustBindings {
+                        views: vec![pb::RustCallable {
+                            path: vec!["ordered_inputs".into()],
+                            owner: Some(pb::BindingOwner {
+                                kind: Some(pb::binding_owner::Kind::Sort(list_sort)),
+                            }),
+                            receiver: Some(pb::RustReceiver {
+                                core_input: Some(0),
+                                borrowed: true,
+                            }),
+                            params: vec![pb::RustParameter {
+                                core_input: Some(1),
+                                name: "index".into(),
+                                borrowed: false,
+                            }],
+                            ..Default::default()
+                        }],
+                    }),
+                    python: Some(pb::PythonBindings {
+                        views: vec![pb::PythonCallable {
+                            kind: pb::PythonCallKind::Method.into(),
+                            path: vec!["ordered_inputs".into()],
+                            owner: Some(pb::BindingOwner {
+                                kind: Some(pb::binding_owner::Kind::Sort(list_sort)),
+                            }),
+                            receiver: Some(0),
+                            params: vec![pb::PythonParameter {
+                                core_input: Some(1),
+                                name: "index".into(),
+                                default_expr: Some(0),
+                            }],
+                            ..Default::default()
+                        }],
+                    }),
+                    egglog: Some(pb::EgglogBindings {
+                        views: vec![pb::EgglogCallable {
+                            symbol: "ordered_inputs".into(),
+                            datatype_member: false,
+                        }],
+                    }),
+                }),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn relation_definitions_reconcile_and_relocate_input_only_records() {
+    let source = relation_definition_fixture(false);
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&source, &mut destination)
+        .expect("canonical input-only Relation must participate in declaration reconciliation");
+    let installed = destination.clone();
+    let mut relocated = relation_definition_fixture(true);
+    let Some(pb::declaration::Kind::Relation(relation)) = &mut relocated.declarations[1].kind
+    else {
+        unreachable!()
+    };
+    relation.inputs[0].name = "renamed_list".into();
+    relation.inputs[1].name = "renamed_index".into();
+    reconcile_declarations(&relocated, &mut destination).unwrap();
+    assert_eq!(
+        destination, installed,
+        "compatible resupply must not grow the closure"
+    );
+    let relations = destination
+        .declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            Some(pb::declaration::Kind::Relation(relation)) => Some(relation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(relations.len(), 1);
+    let relation = relations[0];
+    assert_eq!(relation.name, "ordered_inputs");
+    assert!(matches!(
+        &destination.sorts[relation.inputs[0].sort as usize].kind,
+        Some(pb::sort::Kind::Eq(name)) if name == "IList"
+    ));
+    assert!(matches!(
+        &destination.sorts[relation.inputs[1].sort as usize].kind,
+        Some(pb::sort::Kind::Family(family)) if family.name == "i64" && family.args.is_empty()
+    ));
+    assert_eq!(
+        destination.nodes.len(),
+        1,
+        "the default expression is relocated, not copied per view"
+    );
+    assert_eq!(
+        destination.declarations.len(),
+        2,
+        "no synthetic Function/Constructor output carrier"
+    );
+}
+
+#[test]
+fn relation_definitions_kind_signature_and_reference_conflicts_are_atomic() {
+    let source = relation_definition_fixture(false);
+    let mut destination = pb::Program::default();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    for case in [
+        "arity",
+        "order",
+        "unknown-sort",
+        "function",
+        "constructor",
+        "empty-name",
+    ] {
+        let mut conflicting = source.clone();
+        let Some(pb::declaration::Kind::Relation(relation)) = &mut conflicting.declarations[1].kind
+        else {
+            unreachable!()
+        };
+        match case {
+            "arity" => {
+                relation.inputs.pop();
+            }
+            "order" => relation.inputs.swap(0, 1),
+            "unknown-sort" => relation.inputs[0].sort = 99,
+            "empty-name" => relation.name.clear(),
+            "function" => {
+                conflicting.declarations[1].kind =
+                    Some(pb::declaration::Kind::Function(pb::Function {
+                        name: relation.name.clone(),
+                        inputs: relation.inputs.clone(),
+                        output: 1,
+                        ..Default::default()
+                    }));
+            }
+            "constructor" => {
+                conflicting.declarations[1].kind =
+                    Some(pb::declaration::Kind::Constructor(pb::Constructor {
+                        name: relation.name.clone(),
+                        inputs: relation.inputs.clone(),
+                        output: 0,
+                        ..Default::default()
+                    }));
+            }
+            _ => unreachable!(),
+        }
+        let before = destination.clone();
+        assert!(
+            reconcile_declarations(&conflicting, &mut destination).is_err(),
+            "{case}"
+        );
+        assert_eq!(
+            destination, before,
+            "{case}: rejected metadata must not partially publish"
+        );
+    }
+}
+
+#[test]
+fn relation_definitions_validate_binding_slots_and_freeze_presentations() {
+    let source = relation_definition_fixture(false);
+    let mut destination = pb::Program::default();
+    let mut bare = source.clone();
+    bare.declarations[1].bindings = None;
+    reconcile_declarations(&bare, &mut destination).unwrap();
+    reconcile_declarations(&source, &mut destination).unwrap();
+    let installed = destination.clone();
+    reconcile_declarations(&bare, &mut destination).unwrap();
+    assert_eq!(
+        destination, installed,
+        "absent language blocks do not erase supplied presentation"
+    );
+    for case in [
+        "receiver-slot",
+        "duplicate-slot",
+        "owner-sort",
+        "initializer",
+        "mutated-owner",
+        "datatype-member",
+        "changed-language",
+    ] {
+        let mut invalid = source.clone();
+        let bindings = invalid.declarations[1].bindings.as_mut().unwrap();
+        match case {
+            "receiver-slot" => {
+                bindings.rust.as_mut().unwrap().views[0]
+                    .receiver
+                    .as_mut()
+                    .unwrap()
+                    .core_input = Some(9)
+            }
+            "duplicate-slot" => {
+                bindings.rust.as_mut().unwrap().views[0].params[0].core_input = Some(0)
+            }
+            "owner-sort" => {
+                bindings.rust.as_mut().unwrap().views[0]
+                    .owner
+                    .as_mut()
+                    .unwrap()
+                    .kind = Some(pb::binding_owner::Kind::Sort(1))
+            }
+            "initializer" => {
+                bindings.python.as_mut().unwrap().views[0].kind =
+                    pb::PythonCallKind::Initializer.into()
+            }
+            "mutated-owner" => bindings.python.as_mut().unwrap().views[0].mutates = Some(0),
+            "datatype-member" => bindings.egglog.as_mut().unwrap().views[0].datatype_member = true,
+            "changed-language" => bindings.rust.as_mut().unwrap().views.clear(),
+            _ => unreachable!(),
+        }
+        let before = destination.clone();
+        assert!(
+            reconcile_declarations(&invalid, &mut destination).is_err(),
+            "{case}"
+        );
+        assert_eq!(destination, before, "{case}");
+        if case != "changed-language" {
+            assert!(
+                reconcile_declarations(&invalid, &mut pb::Program::default()).is_err(),
+                "fresh {case}"
+            );
+        }
+    }
+}
+
 #[test]
 fn structural_sort_aliases_merge_and_survive_alias_only_relocation() {
     let mut destination = pb::Program::default();

@@ -81,6 +81,9 @@ impl Parse for AddPrimitiveWithValidator {
 ///   default-expression context before registration. The callback takes
 ///   `(&TypeInfo, &str, &mut proto::Program)` and returns `Result<(), String>`.
 ///   It is mutually exclusive with the signature-only `bindings` callback.
+///   `[catalog = false]` instead marks a native compiler helper that has no
+///   independent portable callable; it does not create a definition or change
+///   the helper's runtime typing.
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parse_macro_input!(input), None)
@@ -100,6 +103,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         builtin_instance,
         builtin_bindings,
         builtin_context,
+        catalog_required,
         context,
         is_varargs,
         args,
@@ -285,6 +289,11 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     let instance_method = builtin_instance.as_ref().map(|_| quote! {
         fn builtin_instance(&self) -> Option<&::egglog::builtin::BuiltinInstance> { Some(&self.__instance) }
     });
+    let catalog_method = (!catalog_required).then(|| {
+        quote! {
+            fn requires_catalog_definition(&self) -> bool { false }
+        }
+    });
 
     // Create the function body for `apply`.
     let apply = {
@@ -388,6 +397,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             }
             #builtin_definition
             #instance_method
+            #catalog_method
         }
 
         impl PurePrim for Prim {
@@ -415,6 +425,7 @@ struct AddPrimitive {
     builtin_instance: Option<Expr>,
     builtin_bindings: Option<Expr>,
     builtin_context: Option<Expr>,
+    catalog_required: bool,
     context: Context,
     args: Vec<Arg>,
     ret: Type,
@@ -432,6 +443,7 @@ impl Parse for AddPrimitive {
         let mut builtin_instance = None;
         let mut builtin_bindings = None;
         let mut builtin_context = None;
+        let mut catalog_required = true;
         if input.peek(syn::token::Bracket) {
             let options;
             bracketed!(options in input);
@@ -441,8 +453,13 @@ impl Parse for AddPrimitive {
                 builtin_id = Some(options.parse()?);
             } else if option == "instance" {
                 builtin_instance = Some(options.parse()?);
+            } else if option == "catalog" {
+                catalog_required = options.parse::<syn::LitBool>()?.value;
             } else {
-                return Err(syn::Error::new_spanned(option, "expected id or instance"));
+                return Err(syn::Error::new_spanned(
+                    option,
+                    "expected id, instance or catalog",
+                ));
             }
             if !options.is_empty() {
                 options.parse::<Token![,]>()?;
@@ -478,6 +495,7 @@ impl Parse for AddPrimitive {
             builtin_instance,
             builtin_bindings,
             builtin_context,
+            catalog_required,
             context,
             args,
             ret,

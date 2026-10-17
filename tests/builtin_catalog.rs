@@ -1005,7 +1005,14 @@ fn function_application_python_view_is_provider_owned() {
         bindings.egglog.as_ref().unwrap().views[0].symbol,
         "unstable-app"
     );
-    assert!(bindings.rust.is_none());
+    assert_eq!(bindings.rust.as_ref().unwrap().views[0].path, ["call"]);
+    assert!(matches!(
+        bindings.rust.as_ref().unwrap().views[0]
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.kind.as_ref()),
+        Some(proto::binding_owner::Kind::Function(_))
+    ));
     assert_eq!(
         bindings
             .python
@@ -1034,6 +1041,7 @@ fn function_application_python_view_is_provider_owned() {
 #[test]
 fn function_application_python_metadata_reconciles_and_rejects_malformed_views() {
     let mut definition = <sort::FunctionSort as Presort>::builtin_definitions().remove(0);
+    definition.declarations[0].bindings.as_mut().unwrap().rust = None;
     let view = proto::PythonCallable {
         kind: proto::PythonCallKind::Method.into(),
         path: vec!["__call__".into()],
@@ -1222,7 +1230,7 @@ fn function_application_python_metadata_reconciles_and_rejects_malformed_views()
         let error = builtin::definitions::reconcile_declarations(&invalid, &mut destination)
             .expect_err(case);
         if case == "rust" {
-            assert!(error.contains("Rust views are not supported"));
+            assert!(error.contains("invalid function application Rust view"));
         }
         assert_eq!(
             destination,
@@ -1230,6 +1238,73 @@ fn function_application_python_metadata_reconciles_and_rejects_malformed_views()
             "{case} must be transactional"
         );
     }
+}
+
+#[test]
+fn function_application_rust_metadata_rejects_malformed_views() {
+    let definition = <sort::FunctionSort as Presort>::builtin_definitions().remove(0);
+    builtin::definitions::reconcile_declarations(&definition, &mut proto::Program::default())
+        .unwrap();
+    for case in 0..13 {
+        let mut invalid = definition.clone();
+        let bindings = invalid.declarations[0]
+            .bindings
+            .as_mut()
+            .unwrap()
+            .rust
+            .as_mut()
+            .unwrap();
+        let view = &mut bindings.views[0];
+        match case {
+            0 => view.path.clear(),
+            1 => view.path[0].clear(),
+            2 => view.owner = None,
+            3 => view.owner = Some(proto::BindingOwner::default()),
+            4 => view.receiver = None,
+            5 => view.receiver.as_mut().unwrap().core_input = Some(1),
+            6 => view.receiver.as_mut().unwrap().borrowed = false,
+            7 => view.params.clear(),
+            8 => view.params[0].core_input = Some(0),
+            9 => view.params[0].borrowed = true,
+            10 => view.borrowed_self = true,
+            11 => view.tail_repetitions = Some(1),
+            _ => {
+                let duplicate = view.clone();
+                bindings.views.push(duplicate);
+            }
+        }
+        assert!(
+            builtin::definitions::reconcile_declarations(&invalid, &mut proto::Program::default())
+                .is_err(),
+            "malformed Rust application view {case}"
+        );
+    }
+}
+
+#[test]
+fn multiset_index_operations_preserve_function_capture_prefixes() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(
+            None,
+            r#"
+        (sort PrefixMS (MultiSet i64))
+        (sort PrefixFn (UnstableFn (PrefixMS i64) i64))
+        (function prefix-index (i64 PrefixMS i64) i64 :merge new)
+        (let xs (multiset-of 1 1 2))
+        (let f (unstable-fn "prefix-index" 41))
+        (set (prefix-index 42 xs 1) 99)
+        (unstable-multiset-fill-index xs f)
+        (check (= (prefix-index 41 xs 1) 2))
+        (check (= (prefix-index 41 xs 2) 1))
+        (check (= (prefix-index 42 xs 1) 99))
+        (unstable-multiset-clear-index xs f)
+        (fail (check (= (prefix-index 41 xs 1) 2)))
+        (fail (check (= (prefix-index 41 xs 2) 1)))
+        (check (= (prefix-index 42 xs 1) 99))
+    "#,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -3760,15 +3835,36 @@ fn family_metadata_is_optional_and_frozen_per_language() {
 
 #[test]
 fn authoritative_family_exports_without_a_described_callable() {
+    struct CatalogOnly;
+    impl Presort for CatalogOnly {
+        fn presort_name() -> &'static str {
+            "CatalogOnly"
+        }
+        fn reserved_primitives() -> Vec<&'static str> {
+            vec![]
+        }
+        fn make_sort(
+            _: &mut TypeInfo,
+            _: String,
+            _: &[ast::Expr],
+            _: ast::Span,
+        ) -> Result<ArcSort, TypeError> {
+            panic!("catalog export must not instantiate a native factory")
+        }
+    }
     let mut graph = EGraph::default();
     graph
         .type_info()
+        .add_presort::<CatalogOnly>(ast::Span::Panic)
+        .unwrap();
+    graph
+        .type_info()
         .register_builtin_family(proto::HostSortFamily {
-            name: "MultiSet".into(),
+            name: "CatalogOnly".into(),
             arity: 1,
             bindings: Some(proto::SortBindings {
                 python: Some(proto::TypeBinding {
-                    path: vec!["test".into(), "MultiSet".into()],
+                    path: vec!["test".into(), "CatalogOnly".into()],
                     type_params: vec!["T".into()],
                 }),
                 ..Default::default()
@@ -3776,12 +3872,12 @@ fn authoritative_family_exports_without_a_described_callable() {
         })
         .unwrap();
     let catalog = graph.type_info().builtin_catalog().unwrap();
-    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "MultiSet" && f.bindings.is_some())));
+    assert!(catalog.definitions.declarations.iter().any(|d| matches!(&d.kind, Some(proto::declaration::Kind::HostSortFamily(f)) if f.name == "CatalogOnly" && f.bindings.is_some())));
     assert!(
         !catalog
             .undescribed_families
             .iter()
-            .any(|name| name == "MultiSet")
+            .any(|name| name == "CatalogOnly")
     );
 }
 
@@ -3915,20 +4011,26 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             }
         }
     );
+    add_primitive!(
+        &mut graph,
+        "unannotated-catalog-operation" = |a: i64| -> i64 { a }
+    );
     let catalog = graph.type_info().builtin_catalog().unwrap();
     assert_eq!(CALLS.load(Ordering::SeqCst), 0);
     assert!(
         catalog
             .undescribed_primitives
             .iter()
-            .any(|name| name == "ordering-min")
+            .any(|name| name == "unannotated-catalog-operation")
     );
     assert!(
         catalog
-            .undescribed_families
+            .undescribed_primitives
             .iter()
-            .any(|name| name == "MultiSet")
+            .all(|name| name != "ordering-min" && name != "ordering-max")
     );
+    assert!(catalog.undescribed_families.is_empty());
+    assert!(catalog.undescribed_family_primitives.is_empty());
     assert!(catalog.undescribed_sorts.is_empty());
     let keys = catalog
         .definitions
@@ -4055,6 +4157,33 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.map.not_contains",
             "egglog.core.map.of",
             "egglog.core.map.remove",
+            "egglog.core.multiset.clear_index",
+            "egglog.core.multiset.contains",
+            "egglog.core.multiset.contains_swapped",
+            "egglog.core.multiset.count",
+            "egglog.core.multiset.fill_index",
+            "egglog.core.multiset.filter",
+            "egglog.core.multiset.filter_not",
+            "egglog.core.multiset.flat_map",
+            "egglog.core.multiset.insert",
+            "egglog.core.multiset.intersection",
+            "egglog.core.multiset.length",
+            "egglog.core.multiset.map",
+            "egglog.core.multiset.not_contains",
+            "egglog.core.multiset.not_contains_swapped",
+            "egglog.core.multiset.of",
+            "egglog.core.multiset.pick",
+            "egglog.core.multiset.pick_max",
+            "egglog.core.multiset.reduce",
+            "egglog.core.multiset.remove",
+            "egglog.core.multiset.remove_swapped",
+            "egglog.core.multiset.reset_counts",
+            "egglog.core.multiset.single",
+            "egglog.core.multiset.subtract",
+            "egglog.core.multiset.subtract_swapped",
+            "egglog.core.multiset.sum",
+            "egglog.core.multiset.sum_multisets",
+            "egglog.core.multiset.union_values",
             "egglog.core.ne",
             "egglog.core.pair.first",
             "egglog.core.pair.make",
@@ -4079,6 +4208,7 @@ fn export_is_inert_and_reports_unmigrated_registrations() {
             "egglog.core.vec.empty",
             "egglog.core.vec.get",
             "egglog.core.vec.length",
+            "egglog.core.vec.map",
             "egglog.core.vec.not_contains",
             "egglog.core.vec.of",
             "egglog.core.vec.pop",
@@ -4435,7 +4565,7 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
     let before = graph.type_info().builtin_catalog().unwrap();
     assert!(!before.undescribed_families.iter().any(|name| name == "Vec"));
     assert!(
-        before
+        !before
             .undescribed_family_primitives
             .iter()
             .any(|name| name == "Vec::unstable-vec-map")
@@ -4451,6 +4581,7 @@ fn vec_definitions_precede_instances_and_preserve_nominal_overloads() {
         "egglog.core.vec.of",
         "egglog.core.vec.get",
         "egglog.core.vec.range",
+        "egglog.core.vec.map",
     ] {
         assert!(before.definitions.declarations.iter().any(|declaration| matches!(&declaration.kind, Some(proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)));
     }
