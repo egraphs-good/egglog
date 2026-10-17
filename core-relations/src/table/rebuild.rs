@@ -12,7 +12,7 @@ use crate::{
     offsets::Offsets,
     parallel,
     parallel_heuristics::{parallelize_incremental_rebuild, parallelize_rebuild},
-    table_spec::{MutationBuffer, Rebuilder, WrappedTableRef},
+    table_spec::{MutationBuffer, Rebuilder, Table, WrappedTableRef},
 };
 
 use super::SortedWritesTable;
@@ -53,20 +53,23 @@ impl SortedWritesTable {
         let Some(rebuilder) = table.rebuilder(&self.to_rebuild) else {
             return false;
         };
-        // First, decide whether to do an incremental or full rebuild.
-        if let Some(hint_col) = rebuilder.hint_col() {
-            // Incremental rebuilds are possible if we can scan the subset of the columns that are
-            // relevant.
-            let to_scan = self.subset_tracker.recent_updates(table_id, table);
-            if incremental_rebuild(
-                to_scan.size(),
-                self.data.next_row().index(),
-                parallelize_rebuild(to_scan.size()),
-            ) {
-                self.rebuild_incremental(table, &*rebuilder, hint_col, to_scan, next_ts, exec_state)
-            } else {
-                self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state)
-            }
+        let Some(hint_col) = rebuilder.hint_col() else {
+            return self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
+        };
+        // Advance the cursor even for small tables, so crossing the threshold
+        // does not replay dirty IDs already handled by earlier full scans.
+        let to_scan = self.subset_tracker.recent_updates(table_id, table);
+        let rows = self.data.next_row().index();
+        if rows <= 10_000 {
+            return self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
+        }
+        if to_scan.size() == 0 {
+            // No dirty IDs: defer refreshing the index until something can use it.
+            return false;
+        }
+        let stale = self.rebuild_index.stale_rows(self.version());
+        if incremental_rebuild(to_scan.size(), stale, rows, &mut self.full_scan_credit) {
+            self.rebuild_incremental(table, &*rebuilder, hint_col, to_scan, next_ts, exec_state)
         } else {
             self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state)
         }
@@ -321,11 +324,27 @@ fn subset_partition<'a>(subset: SubsetRef<'a>, start: usize, end: usize) -> Subs
     }
 }
 
-fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> bool {
-    if parallel {
-        table_size > 10_000 && uf_size * 8192 <= table_size
+/// Cost of refreshing one stale index row, relative to scanning one row.
+const INDEX_REFRESH_COST: usize = 16;
+/// Cost of looking up and visiting one dirty ID, relative to scanning one row.
+const DIRTY_ID_COST: usize = 8;
+
+/// Whether to rebuild incrementally by refreshing `stale` unindexed rows and
+/// visiting `dirty` IDs, rather than scanning all `rows`. `credit` accumulates
+/// the full-scan work spent on sparse updates while the index is too stale to
+/// pay for itself, so repeated sparse updates eventually warm the index.
+fn incremental_rebuild(dirty: usize, stale: usize, rows: usize, credit: &mut usize) -> bool {
+    let lookup_cost = dirty.saturating_mul(DIRTY_ID_COST);
+    if lookup_cost > rows {
+        return false;
+    }
+    let refresh_cost = stale.saturating_mul(INDEX_REFRESH_COST);
+    if refresh_cost.saturating_add(lookup_cost) <= rows || *credit >= refresh_cost {
+        *credit = 0;
+        true
     } else {
-        table_size > 10000 && uf_size * 8 <= table_size
+        *credit = credit.saturating_add(rows);
+        false
     }
 }
 
