@@ -332,6 +332,63 @@ fn rust_read_constructor_enodes(bencher: divan::Bencher, case: ReadScanBenchCase
         });
 }
 
+#[divan::bench(args = [8, 128, 512], sample_count = 20, sample_size = 1)]
+fn rust_tree_extraction_chain(bencher: divan::Bencher, depth: usize) {
+    use egglog::extract::{DEFAULT_COST_MODEL, TreeExtractor};
+    use std::fmt::Write;
+
+    bencher
+        .with_inputs(|| {
+            let mut program = String::from("(sort S0)\n(constructor Seed (i64) S0)\n");
+            for i in 1..=depth {
+                writeln!(
+                    program,
+                    "(sort S{i})\n(constructor Step{i} (S{}) S{i})",
+                    i - 1
+                )
+                .unwrap();
+            }
+            for lane in 0..2 {
+                writeln!(program, "(let $n{lane}_0 (Seed {lane}))").unwrap();
+                for i in 1..=depth {
+                    writeln!(program, "(let $n{lane}_{i} (Step{i} $n{lane}_{}))", i - 1).unwrap();
+                }
+            }
+            let mut egraph = egglog::EGraph::new(1);
+            egraph.parse_and_run_program(None, &program).unwrap();
+            // The deepest sort as the only root makes reachability list each step before
+            // the step it reads, so a sweep in that order settles one step per pass.
+            let rootsorts = vec![egraph.get_arcsort_by(|sort| sort.name() == format!("S{depth}"))];
+            let roots = [
+                format!("$n0_{depth}"),
+                format!("$n0_{}", depth / 2),
+                "$n0_0".to_owned(),
+                format!("$n1_{depth}"),
+            ]
+            .map(|name| {
+                let expr = egraph.parser.get_expr_from_string(None, &name).unwrap();
+                egraph.eval_expr(&expr).unwrap()
+            });
+            (egraph, rootsorts, roots)
+        })
+        .bench_local_refs(|(egraph, rootsorts, roots)| {
+            // Include preparation, reconstruction and extractor destruction in every sample.
+            let extractor = TreeExtractor::compute_costs_from_rootsorts(
+                Some(rootsorts.clone()),
+                egraph,
+                DEFAULT_COST_MODEL,
+            );
+            let mut termdag = egglog::TermDag::default();
+            let extracted = roots.each_ref().map(|(sort, value)| {
+                extractor
+                    .extract_best_with_sort(&mut termdag, *value, sort.clone())
+                    .unwrap()
+            });
+            // Divan consumes the output and drops returned terms outside the timed body.
+            (termdag, extracted)
+        });
+}
+
 fn main() {
     divan::main();
 }
