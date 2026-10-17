@@ -11,6 +11,10 @@ pub mod extract;
 pub mod prelude;
 mod proofs;
 
+#[cfg(feature = "comparison")]
+mod comparison;
+#[cfg(feature = "comparison")]
+pub use comparison::ComparisonExportError;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
