@@ -54,7 +54,10 @@ pub fn sort_merge_custom(mut pairs: Vec<(Value, RowId)>, bounds: &[usize]) -> Ve
     if bounds.len() <= 2 {
         pairs
     } else {
-        merge_sorted_blocks_dedup(pairs, bounds)
+        let mut pooled: crate::pool::Pooled<Vec<(Value, RowId)>> =
+            crate::pool::with_pool_set(|ps| ps.get());
+        pooled.extend_from_slice(&pairs);
+        merge_sorted_blocks_dedup(pooled, bounds).to_vec()
     }
 }
 
