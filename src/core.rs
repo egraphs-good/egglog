@@ -42,92 +42,14 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub struct SpecializedPrimitive {
-    prim_with_id: PrimitiveWithId,
+    /// Exact registration selected before nominal sorts are erased. Cloning
+    /// retains its native implementation and per-context runtime identity.
+    pub prim_with_id: PrimitiveWithId,
     input: Vec<ArcSort>,
     output: ArcSort,
 }
 
 impl SpecializedPrimitive {
-    /// Exports this exact resolved registration, not another overload sharing
-    /// its source alias. The destination receives canonical signature records
-    /// with its own arena indices; implementations and validators stay native.
-    pub fn export_builtin(
-        &self,
-        destination: &mut crate::proto::Program,
-    ) -> Result<String, String> {
-        let (key, definition) = self
-            .prim_with_id
-            .primitive
-            .builtin_definition()
-            .ok_or_else(|| format!("primitive {} has no catalog definition yet", self.name()))?;
-        crate::builtin::import_rooted_definition(key, definition, destination)
-    }
-
-    /// Composes a canonical call from valid, already-lowered child closures.
-    /// Checks direct refs and their closed structural annotations against this
-    /// specialization, using its originating coherent graph. This does not
-    /// validate entire child closures or recover erased nominal alias identity.
-    /// On error the caller must discard the incomplete source phase.
-    pub fn export_builtin_call(
-        &self,
-        graph: &EGraph,
-        args: &[u32],
-        span: Option<proto::Span>,
-        destination: &mut proto::Program,
-    ) -> Result<proto::Call, String> {
-        match self.export_builtin_node(graph, args, span, destination)? {
-            proto::node::Kind::Call(call) => Ok(call),
-            _ => Err("resolved primitive produces a structured value, not a table call".into()),
-        }
-    }
-
-    /// Projects an exact specialization before nominal input/output sorts are
-    /// erased. Structured values (notably partial calls) retain the same native
-    /// target selection as compilation; no primitive body is evaluated.
-    pub fn export_builtin_node(
-        &self,
-        graph: &EGraph,
-        args: &[u32],
-        span: Option<proto::Span>,
-        destination: &mut proto::Program,
-    ) -> Result<proto::node::Kind, String> {
-        if args.len() != self.input.len() {
-            return Err("resolved builtin call arity mismatch".into());
-        }
-        let mut normalized = vec![];
-        for (arg, expected) in args.iter().zip(&self.input) {
-            let node = destination
-                .nodes
-                .get(*arg as usize)
-                .ok_or("builtin argument out of bounds")?;
-            let actual = builtin::import_sort(&destination.sorts, node.sort_id, &mut normalized)?;
-            if actual != graph.export_sort(expected, &mut normalized)? {
-                return Err("builtin argument annotation differs from resolved sort".into());
-            }
-        }
-        let output = graph.export_sort(&self.output, &mut destination.sorts)?;
-        if let Some(call) = self.prim_with_id.primitive.lower_builtin_call(
-            &graph.type_info,
-            (&self.input, &self.output),
-            args,
-            output,
-            span,
-            destination,
-        )? {
-            return Ok(call);
-        }
-        // Preserve the exact registration before enriching authoritative family
-        // presentation; a stale registration must not silently export by key.
-        let func = self.export_builtin(destination)?;
-        graph
-            .type_info
-            .export_builtin_definition(&func, destination)?;
-        Ok(proto::node::Kind::Call(proto::Call {
-            func,
-            args: args.to_vec(),
-        }))
-    }
-
     /// Get the name of this primitive
     pub fn name(&self) -> &str {
         self.prim_with_id.primitive.name()

@@ -71,16 +71,12 @@ impl Parse for AddPrimitiveWithValidator {
 ///   `T` must be `Clone` and `'static`.
 ///
 /// - Catalog: `"alias" [id = "provider.definition"] = ...` retains the
-///   signature as protobuf and derives native constraints from that definition.
+///   native signature and derives type constraints from that description.
 ///   This form supports closed scalar types (with optional uniform varargs),
 ///   or fixed homogeneous `#` inputs with a closed scalar result.
 ///   `[instance = binding]` instead uses a presort-owned generic definition.
 ///   Its annotations describe runtime representations only: explicit sort
 ///   expressions are rejected, and casts/arity are checked against the record.
-///   `[id = "provider.definition", context = callback]` supplies a closed
-///   default-expression context before registration. The callback takes
-///   `(&TypeInfo, &str, &mut proto::Program)` and returns `Result<(), String>`.
-///   It is mutually exclusive with the signature-only `bindings` callback.
 ///   `[catalog = false]` instead marks a native compiler helper that has no
 ///   independent portable callable; it does not create a definition or change
 ///   the helper's runtime typing.
@@ -101,8 +97,6 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         name,
         builtin_id,
         builtin_instance,
-        builtin_bindings,
-        builtin_context,
         catalog_required,
         context,
         is_varargs,
@@ -175,30 +169,9 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             };
             quote!(::egglog::builtin::closed_signature(#key, #name, #fixed, #tail, (#output).clone() as ArcSort))
         };
-        field_defs.push(quote!(__definition: Arc<::egglog::proto::Program>));
-        let bindings = builtin_bindings.map(|bindings| quote! {
-            let mut supplied = definition.clone();
-            let declaration = supplied.declarations.iter_mut().find(|declaration| {
-                matches!(&declaration.kind, Some(::egglog::proto::declaration::Kind::HostPrimitive(primitive)) if primitive.name == #key)
-            }).expect("missing generated builtin root");
-            let ::egglog::proto::declaration::Kind::HostPrimitive(primitive) = declaration.kind.as_ref().unwrap() else { unreachable!() };
-            let ::egglog::proto::host_primitive::Typing::Signature(signature) = primitive.typing.as_ref().unwrap() else { unreachable!() };
-            declaration.bindings = Some((#bindings)(signature));
-            ::egglog::builtin::definitions::reconcile_declarations(&supplied, &mut definition).expect("invalid builtin presentation");
-        });
-        let context = builtin_context.map(|context| {
-            quote! {
-                definition = eg.type_info().prepare_builtin_context(
-                    #key, #name, definition, #context,
-                ).expect("invalid builtin default context");
-            }
-        });
+        field_defs.push(quote!(__definition: Arc<::egglog::builtin::BuiltinDescription>));
         field_uses.push(quote!(__definition: {
-            #[allow(unused_mut)]
-            let mut definition = #definition.expect("invalid builtin macro signature");
-            #bindings
-            #context
-            Arc::new(definition)
+            Arc::new(#definition.expect("invalid builtin macro signature"))
         }));
     }
     let check_instance = if let Some(instance) = &builtin_instance {
@@ -278,10 +251,10 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             quote!(#new #len #args #ret .into_box())
         }
     };
-    let builtin_definition = builtin_id.as_ref().map(|key| {
+    let builtin_definition = builtin_id.as_ref().map(|_| {
         quote! {
-            fn builtin_definition(&self) -> Option<(&str, &::egglog::proto::Program)> {
-                Some((#key, &self.__definition))
+            fn builtin_description(&self) -> Option<&::egglog::builtin::BuiltinDescription> {
+                Some(&self.__definition)
             }
         }
     });
@@ -423,8 +396,6 @@ struct AddPrimitive {
     name: LitStr,
     builtin_id: Option<LitStr>,
     builtin_instance: Option<Expr>,
-    builtin_bindings: Option<Expr>,
-    builtin_context: Option<Expr>,
     catalog_required: bool,
     context: Context,
     args: Vec<Arg>,
@@ -441,8 +412,6 @@ impl Parse for AddPrimitive {
         let name = input.parse()?;
         let mut builtin_id = None;
         let mut builtin_instance = None;
-        let mut builtin_bindings = None;
-        let mut builtin_context = None;
         let mut catalog_required = true;
         if input.peek(syn::token::Bracket) {
             let options;
@@ -462,20 +431,7 @@ impl Parse for AddPrimitive {
                 ));
             }
             if !options.is_empty() {
-                options.parse::<Token![,]>()?;
-                let option: Ident = options.parse()?;
-                if builtin_id.is_none() || (option != "bindings" && option != "context") {
-                    return Err(options.error("bindings or context require a definition id"));
-                }
-                options.parse::<Token![=]>()?;
-                if option == "bindings" {
-                    builtin_bindings = Some(options.parse()?);
-                } else {
-                    builtin_context = Some(options.parse()?);
-                }
-                if !options.is_empty() {
-                    return Err(options.error("unexpected builtin option"));
-                }
+                return Err(options.error("unexpected builtin option"));
             }
         }
         input.parse::<Token![=]>()?;
@@ -493,8 +449,6 @@ impl Parse for AddPrimitive {
             name,
             builtin_id,
             builtin_instance,
-            builtin_bindings,
-            builtin_context,
             catalog_required,
             context,
             args,
@@ -788,11 +742,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_context_option_is_mutually_exclusive_with_bindings_and_instances() {
-        assert!(syn::parse_str::<AddPrimitive>(
-            r#"eg, "root"[id = "test.root", context = callback] = |value: i64| -> i64 { value }"#,
-        ).is_ok());
+    fn language_metadata_options_are_not_native_primitive_options() {
+        assert!(
+            syn::parse_str::<AddPrimitive>(
+                r#"eg, "root"[id = "test.root"] = |value: i64| -> i64 { value }"#,
+            )
+            .is_ok()
+        );
         for invalid in [
+            r#"eg, "root"[id = "test.root", context = callback] = |value: i64| -> i64 { value }"#,
+            r#"eg, "root"[id = "test.root", bindings = callback] = |value: i64| -> i64 { value }"#,
             r#"eg, "root"[id = "test.root", bindings = first, context = second] = |value: i64| -> i64 { value }"#,
             r#"eg, "root"[id = "test.root", context = first, bindings = second] = |value: i64| -> i64 { value }"#,
             r#"eg, "root"[instance = binding, context = callback] = |value: i64| -> i64 { value }"#,

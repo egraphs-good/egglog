@@ -158,8 +158,8 @@ pub trait Sort: Any + Send + Sync + Debug {
 pub trait Presort {
     fn presort_name() -> &'static str;
     fn reserved_primitives() -> Vec<&'static str>;
-    /// Whether this text factory denotes a HostSortFamily, rather than an
-    /// intrinsic structural sort such as FuncSort.
+    /// Whether this text factory denotes a named native family, rather than
+    /// an intrinsic structural sort such as a function.
     fn requires_catalog_family() -> bool {
         true
     }
@@ -169,9 +169,12 @@ pub trait Presort {
     fn requires_catalog_primitive(_name: &str) -> bool {
         true
     }
-    /// Canonical generic definitions, available before any instance exists.
-    /// Each fragment owns one callable and its referenced family declarations.
-    fn builtin_definitions() -> Vec<proto::Program> {
+    /// Native family shape, available before any nominal instance exists.
+    fn family_description() -> Option<builtin::FamilyDescription> {
+        None
+    }
+    /// Canonical generic schemes, available before any instance exists.
+    fn builtin_definitions() -> Vec<builtin::BuiltinDescription> {
         vec![]
     }
     /// Runtime container representation, when independent of type arguments.

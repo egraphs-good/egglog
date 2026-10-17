@@ -75,148 +75,55 @@ impl Presort for PairSort {
         Some(TypeId::of::<<Self as ContainerSort>::Container>())
     }
 
-    fn builtin_definitions() -> Vec<proto::Program> {
-        use proto as pb;
+    fn family_description() -> Option<builtin::FamilyDescription> {
+        Some(builtin::FamilyDescription {
+            name: "Pair".into(),
+            arity: 2,
+        })
+    }
+
+    fn builtin_definitions() -> Vec<builtin::BuiltinDescription> {
+        use builtin::{
+            Argument, BuiltinDescription, BuiltinTyping, Signature, SortPattern, TypeParameter,
+        };
+        let patterns = [
+            SortPattern::Param(0),
+            SortPattern::Param(1),
+            SortPattern::Family {
+                name: "Pair".into(),
+                args: vec![SortPattern::Param(0), SortPattern::Param(1)],
+            },
+        ];
         [
             ("make", "pair", vec![("first", 0), ("second", 1)], 2),
             ("first", "pair-first", vec![("pair", 2)], 0),
             ("second", "pair-second", vec![("pair", 2)], 1),
         ]
         .into_iter()
-        .map(|(key, alias, inputs, output)| pb::Program {
-            ir_version: 1,
-            sorts: vec![
-                pb::Sort {
-                    kind: Some(pb::sort::Kind::Var(0)),
-                    ..Default::default()
-                },
-                pb::Sort {
-                    kind: Some(pb::sort::Kind::Var(1)),
-                    ..Default::default()
-                },
-                pb::Sort {
-                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                        name: "Pair".into(),
-                        args: vec![0, 1],
-                    })),
-                    ..Default::default()
-                },
-            ],
-            declarations: vec![
-                pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                        name: "Pair".into(),
-                        arity: 2,
-                        bindings: Some(pb::SortBindings {
-                            python: Some(pb::TypeBinding {
-                                path: vec!["egglog".into(), "builtins".into(), "Pair".into()],
-                                type_params: vec!["L".into(), "R".into()],
-                            }),
-                            rust: Some(pb::TypeBinding {
-                                path: vec![
-                                    "egglog_experimental".into(),
-                                    "typed".into(),
-                                    "builtins".into(),
-                                    "Pair".into(),
-                                ],
-                                type_params: vec!["L".into(), "R".into()],
-                            }),
-                            ..Default::default()
-                        }),
-                    })),
-                    ..Default::default()
-                },
-                pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
-                        name: format!("egglog.core.pair.{key}"),
-                        typing: Some(pb::host_primitive::Typing::Signature(
-                            pb::GenericSignature {
-                                type_params: vec!["A".into(), "B".into()],
-                                inputs: inputs
-                                    .into_iter()
-                                    .map(|(name, sort)| pb::Arg {
-                                        name: name.into(),
-                                        sort,
-                                    })
-                                    .collect(),
-                                output: Some(output),
-                                varargs: vec![],
-                                ..Default::default()
-                            },
-                        )),
-                    })),
-                    bindings: Some(pb::CallableBindings {
-                        python: Some(pb::PythonBindings {
-                            views: vec![pb::PythonCallable {
-                                kind: if key == "make" {
-                                    pb::PythonCallKind::Initializer
-                                } else {
-                                    pb::PythonCallKind::Property
-                                }
-                                .into(),
-                                path: match key {
-                                    "make" => vec![],
-                                    "first" => vec!["left".into()],
-                                    _ => vec!["right".into()],
-                                },
-                                owner: Some(pb::BindingOwner {
-                                    kind: Some(pb::binding_owner::Kind::Sort(2)),
-                                }),
-                                receiver: (key != "make").then_some(0),
-                                params: if key == "make" {
-                                    ["left", "right"]
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(|(i, name)| pb::PythonParameter {
-                                            core_input: Some(i as u32),
-                                            name: name.into(),
-                                            default_expr: None,
-                                        })
-                                        .collect()
-                                } else {
-                                    vec![]
-                                },
-                                mutates: None,
-                                tail_repetitions: None,
-                            }],
-                        }),
-                        rust: Some(pb::RustBindings {
-                            views: vec![pb::RustCallable {
-                                path: vec![if key == "make" { "new" } else { key }.into()],
-                                owner: Some(pb::BindingOwner {
-                                    kind: Some(pb::binding_owner::Kind::Sort(2)),
-                                }),
-                                receiver: (key != "make").then_some(pb::RustReceiver {
-                                    core_input: Some(0),
-                                    borrowed: true,
-                                }),
-                                params: if key == "make" {
-                                    ["left", "right"]
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(|(i, name)| pb::RustParameter {
-                                            core_input: Some(i as u32),
-                                            name: name.into(),
-                                            borrowed: false,
-                                        })
-                                        .collect()
-                                } else {
-                                    vec![]
-                                },
-                                ..Default::default()
-                            }],
-                        }),
-                        egglog: Some(pb::EgglogBindings {
-                            views: vec![pb::EgglogCallable {
-                                symbol: alias.into(),
-                                datatype_member: false,
-                            }],
-                        }),
-                    }),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
+        .map(|(key, alias, inputs, output)| BuiltinDescription {
+            key: format!("egglog.core.pair.{key}"),
+            aliases: vec![alias.into()],
+            typing: BuiltinTyping::Signature(Signature {
+                params: vec![
+                    TypeParameter {
+                        name: "A".into(),
+                        equality: false,
+                    },
+                    TypeParameter {
+                        name: "B".into(),
+                        equality: false,
+                    },
+                ],
+                fixed: inputs
+                    .into_iter()
+                    .map(|(name, sort)| Argument {
+                        name: name.into(),
+                        sort: patterns[sort].clone(),
+                    })
+                    .collect(),
+                tail: vec![],
+                output: patterns[output].clone(),
+            }),
         })
         .collect()
     }

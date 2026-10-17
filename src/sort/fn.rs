@@ -101,69 +101,15 @@ impl FunctionSort {
 }
 
 impl Presort for FunctionSort {
-    fn builtin_definitions() -> Vec<proto::Program> {
-        vec![proto::Program {
-            ir_version: 1,
-            declarations: vec![proto::Declaration {
-                kind: Some(proto::declaration::Kind::HostPrimitive(
-                    proto::HostPrimitive {
-                        name: "egglog.core.fn.apply".into(),
-                        typing: Some(proto::host_primitive::Typing::Application(
-                            proto::FunctionApplication {},
-                        )),
-                    },
-                )),
-                bindings: Some(proto::CallableBindings {
-                    rust: Some(proto::RustBindings {
-                        views: vec![proto::RustCallable {
-                            path: vec!["call".into()],
-                            owner: Some(proto::BindingOwner {
-                                kind: Some(proto::binding_owner::Kind::Function(
-                                    proto::FunctionTypeOwner {},
-                                )),
-                            }),
-                            receiver: Some(proto::RustReceiver {
-                                core_input: Some(0),
-                                borrowed: true,
-                            }),
-                            params: vec![proto::RustParameter {
-                                core_input: Some(1),
-                                name: "args".into(),
-                                borrowed: false,
-                            }],
-                            ..Default::default()
-                        }],
-                    }),
-                    python: Some(proto::PythonBindings {
-                        views: vec![proto::PythonCallable {
-                            kind: proto::PythonCallKind::Method.into(),
-                            path: vec!["__call__".into()],
-                            owner: Some(proto::BindingOwner {
-                                kind: Some(proto::binding_owner::Kind::Function(
-                                    proto::FunctionTypeOwner {},
-                                )),
-                            }),
-                            receiver: Some(0),
-                            params: vec![proto::PythonParameter {
-                                core_input: Some(1),
-                                name: "args".into(),
-                                default_expr: None,
-                            }],
-                            ..Default::default()
-                        }],
-                    }),
-                    egglog: Some(proto::EgglogBindings {
-                        views: vec![proto::EgglogCallable {
-                            symbol: "unstable-app".into(),
-                            datatype_member: false,
-                        }],
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }]
+    fn builtin_definitions() -> Vec<builtin::BuiltinDescription> {
+        vec![
+            builtin::BuiltinDescription {
+                key: "egglog.core.fn.apply".into(),
+                aliases: vec!["unstable-app".into()],
+                typing: builtin::BuiltinTyping::FunctionApplication,
+            },
+            FUNCTION_CONSTRUCTOR_DESCRIPTION.clone(),
+        ]
     }
 
     fn presort_name() -> &'static str {
@@ -171,11 +117,7 @@ impl Presort for FunctionSort {
     }
 
     fn requires_catalog_family() -> bool {
-        false // The portable sort is FuncSort, not a named family.
-    }
-
-    fn requires_catalog_primitive(name: &str) -> bool {
-        name != "unstable-fn" // Construction lowers to PartialCall.
+        false // Function sorts have structural inputs and output.
     }
 
     fn reserved_primitives() -> Vec<&'static str> {
@@ -297,10 +239,15 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        let constructor = eg
+            .type_info
+            .instantiate_builtin_open("egglog.core.fn.partial")
+            .expect("registered function constructor description");
         eg.add_pure_primitive(
             Ctor {
                 name: "unstable-fn".into(),
                 function: self.clone(),
+                instance: constructor,
             },
             None,
         );
@@ -526,11 +473,19 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
     }
 }
 
+static FUNCTION_CONSTRUCTOR_DESCRIPTION: std::sync::LazyLock<builtin::BuiltinDescription> =
+    std::sync::LazyLock::new(|| builtin::BuiltinDescription {
+        key: "egglog.core.fn.partial".into(),
+        aliases: vec!["unstable-fn".into()],
+        typing: builtin::BuiltinTyping::FunctionConstructor,
+    });
+
 // (unstable-fn "name" [<arg1>, <arg2>, ...])
 #[derive(Clone)]
 struct Ctor {
     name: String,
     function: Arc<FunctionSort>,
+    instance: builtin::BuiltinInstance,
 }
 
 // `Ctor` (`unstable-fn "name" [...]`) builds a `FunctionContainer` and
@@ -543,8 +498,8 @@ impl Primitive for Ctor {
         &self.name
     }
 
-    fn requires_catalog_definition(&self) -> bool {
-        false // lower_builtin_call exports the structural PartialCall.
+    fn builtin_instance(&self) -> Option<&builtin::BuiltinInstance> {
+        Some(&self.instance)
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -553,53 +508,6 @@ impl Primitive for Ctor {
             function: self.function.clone(),
             span: span.clone(),
         })
-    }
-
-    fn lower_builtin_call(
-        &self,
-        types: &TypeInfo,
-        (inputs, native_output): (&[ArcSort], &ArcSort),
-        args: &[u32],
-        _output: u32,
-        _span: Option<proto::Span>,
-        destination: &mut proto::Program,
-    ) -> Result<Option<proto::node::Kind>, String> {
-        if native_output.name() != self.function.name()
-            || args.is_empty()
-            || inputs.len() != args.len()
-        {
-            return Err("function constructor specialization mismatch".into());
-        }
-        let Some(proto::node::Kind::PrimitiveValue(proto::PrimitiveValue {
-            value: Some(proto::primitive_value::Value::String(name)),
-        })) = destination
-            .nodes
-            .get(args[0] as usize)
-            .and_then(|n| n.kind.as_ref())
-        else {
-            return Err("function constructor target must be a literal string".into());
-        };
-        let name = name.clone();
-        let target_inputs = inputs[1..]
-            .iter()
-            .chain(self.function.inputs())
-            .cloned()
-            .collect::<Vec<_>>();
-        let func = types.export_function_target(
-            &name,
-            &target_inputs,
-            &self.function.output(),
-            None,
-            destination,
-        )?;
-        Ok(Some(proto::node::Kind::PrimitiveValue(
-            proto::PrimitiveValue {
-                value: Some(proto::primitive_value::Value::PartialCall(proto::Call {
-                    func,
-                    args: args[1..].to_vec(),
-                })),
-            },
-        )))
     }
 }
 

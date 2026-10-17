@@ -159,13 +159,13 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {
-    pub(crate) primitive: Arc<dyn Primitive>,
-    pub(crate) validator: Option<PrimitiveValidator>,
+    pub primitive: Arc<dyn Primitive>,
+    pub validator: Option<PrimitiveValidator>,
     /// Runtime entrypoints for the contexts this primitive is valid in.
     /// The primitive definition is stored once, while each context keeps
     /// its own backend id so higher-order dispatch can still recover the
     /// application context at runtime.
-    pub(crate) context_ids: EnumMap<Context, Option<ExternalFunctionId>>,
+    pub context_ids: EnumMap<Context, Option<ExternalFunctionId>>,
 }
 
 impl PrimitiveWithId {
@@ -176,8 +176,8 @@ impl PrimitiveWithId {
         // named functions and export. The pure matcher never calls accept or
         // the implementation's constraint object, so open domains retain their
         // original predicate without an instance-constraint recursion.
-        if let Some(definition) = self.primitive.builtin_definition()
-            && typeinfo.check_native_signature(definition, tys).is_err()
+        if let Some(description) = self.primitive.builtin_description()
+            && typeinfo.check_native_signature(description, tys).is_err()
         {
             return false;
         }
@@ -223,8 +223,8 @@ pub struct TypeInfo {
     source_sort_aliases: HashMap<String, ArcSort>,
     pub(crate) primitives: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_primitives: HashMap<String, Vec<PrimitiveWithId>>,
-    pub(crate) builtin_definitions: HashMap<String, Arc<proto::Program>>,
-    pub(crate) builtin_families: proto::Program,
+    pub(crate) builtin_definitions: HashMap<String, Arc<builtin::BuiltinDescription>>,
+    pub(crate) builtin_families: HashMap<String, Arc<builtin::FamilyDescription>>,
     pub(crate) builtin_owners: HashMap<String, &'static str>,
     pub(crate) builtin_family_gaps: Vec<String>,
     pub(crate) builtin_sorts: HashMap<String, (&'static str, Vec<ArcSort>)>,
@@ -236,6 +236,8 @@ pub struct TypeInfo {
     pub(crate) non_unionable_sorts: HashSet<String>,
     /// Function declarations hidden from user-facing table listings.
     pub(crate) hidden_functions: HashSet<String>,
+    /// Extension-owned registration metadata follows type-environment snapshots.
+    extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -427,14 +429,9 @@ impl EGraph {
     {
         let primitive: Arc<dyn Primitive> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
-        // Valid legacy one-root registrations retain their deferred catalog
-        // collision behavior. Helper-bearing or malformed rooted evidence must
-        // be rejected before backend IDs or native lookup entries are published.
-        if let Some((key, definition)) = primitive.builtin_definition()
-            && crate::builtin::definition_key(definition).ok() != Some(key)
-            && let Err(error) = self
-                .type_info
-                .check_builtin_registration_context(key, &name, definition)
+        // Invalid schemes cannot publish native lookup entries or backend IDs.
+        if let Some(description) = primitive.builtin_description()
+            && let Err(error) = description.validate()
         {
             self.type_info.builtin_errors.push(error);
             return;
@@ -457,10 +454,8 @@ impl EGraph {
                 "native alias {name} collides with a builtin definition key"
             ));
         }
-        if let Some((root_key, definition)) = registered.primitive.builtin_definition() {
-            // The non-legacy branch was validated, including its explicit root,
-            // before publication above. Do not re-infer its root from ordering.
-            match root_key {
+        if let Some(description) = registered.primitive.builtin_description() {
+            match description.key.as_str() {
                 key if key != name
                     && !self.type_info.primitives.contains_key(key)
                     && !self.type_info.func_types.contains_key(key)
@@ -473,15 +468,15 @@ impl EGraph {
                         .insert(key.into(), vec![registered.clone()]);
                     self.type_info
                         .builtin_definitions
-                        .insert(key.into(), Arc::new(definition.clone()));
+                        .insert(key.into(), Arc::new(description.clone()));
                 }
                 key if registered
                     .primitive
                     .builtin_instance()
                     .is_some_and(|instance| {
-                        instance.root_key == key
+                        instance.description.key == key
                             && self.type_info.builtin_definitions.get(key).is_some_and(
-                                |definition| Arc::ptr_eq(definition, &instance.definition),
+                                |description| Arc::ptr_eq(description, &instance.description),
                             )
                             && self
                                 .type_info
@@ -799,6 +794,31 @@ impl EGraph {
 }
 
 impl TypeInfo {
+    /// Return extension-owned state from this type-environment snapshot.
+    /// Cloning the environment clones its state; graph scopes restore it along
+    /// with native registrations.
+    pub fn extension_state<T>(&self) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        let value = self.extension_state.get(&TypeId::of::<T>())?;
+        (value.as_ref() as &dyn Any).downcast_ref()
+    }
+
+    /// Return mutable extension-owned state, inserting its default when absent.
+    pub fn extension_state_or_default<T>(&mut self) -> &mut T
+    where
+        T: Default + Clone + Send + Sync + 'static,
+    {
+        let value = self
+            .extension_state
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()));
+        (value.as_mut() as &mut dyn Any)
+            .downcast_mut()
+            .expect("extension state entry must have the requested type")
+    }
+
     /// Adds a sort constructor to the typechecker's known set of types.
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
@@ -811,22 +831,17 @@ impl TypeInfo {
                     requires_catalog_family: S::requires_catalog_family(),
                 });
                 self.reserved_primitives.extend(S::reserved_primitives());
+                if let Some(family) = S::family_description()
+                    && let Err(error) = self.register_builtin_family(family)
+                {
+                    self.builtin_errors.push(error);
+                }
                 for definition in S::builtin_definitions() {
-                    for declaration in &definition.declarations {
-                        if let Some(proto::declaration::Kind::HostSortFamily(family)) =
-                            &declaration.kind
-                            && let Err(error) = self.register_builtin_family(family.clone())
-                        {
-                            self.builtin_errors.push(error);
-                        }
+                    if let Err(error) = definition.validate() {
+                        self.builtin_errors.push(error);
+                        continue;
                     }
-                    let key = match crate::builtin::definition_key(&definition) {
-                        Ok(key) => key.to_owned(),
-                        Err(error) => {
-                            self.builtin_errors.push(error);
-                            continue;
-                        }
-                    };
+                    let key = definition.key.clone();
                     if self.builtin_definitions.contains_key(&key)
                         || self.primitives.contains_key(&key)
                         || self.func_types.contains_key(&key)
@@ -845,12 +860,10 @@ impl TypeInfo {
                             .iter()
                             .filter(|(_, owner)| **owner == name)
                             .any(|(key, _)| {
-                                self.builtin_definitions[key].declarations.iter().any(|d| {
-                                    d.bindings
-                                        .as_ref()
-                                        .and_then(|b| b.egglog.as_ref())
-                                        .is_some_and(|b| b.views.iter().any(|v| v.symbol == alias))
-                                })
+                                self.builtin_definitions[key]
+                                    .aliases
+                                    .iter()
+                                    .any(|known| known == alias)
                             })
                     {
                         self.builtin_family_gaps.push(format!("{name}::{alias}"));

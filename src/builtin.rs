@@ -1,146 +1,226 @@
-//! Engine-owned protobuf builtin definitions and derived native constraints.
+//! Native builtin schemes and exact implementation provenance.
 //!
-//! This migration covers scalar signatures, Pair and selected Vec/Map operations, not a
-//! complete generic catalog. Opaque registrations and family gaps remain visible in
-//! the inventory. Export never calls an implementation or a proof validator.
+//! The registered descriptions drive native typing. Serialization, authored
+//! bodies and language presentation belong to consumers of this registry.
 
-use crate::{constraint::TypeConstraint, proto as pb, typechecking::PrimitiveWithId, *};
+use crate::{constraint::TypeConstraint, typechecking::PrimitiveWithId, *};
 
-pub mod definitions;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SortPattern {
+    Param(usize),
+    Eq(String),
+    Family {
+        name: String,
+        args: Vec<SortPattern>,
+    },
+    Function {
+        inputs: Vec<SortPattern>,
+        output: Box<SortPattern>,
+    },
+}
 
-/// Migrated definitions plus explicit remaining registration gaps. This is not
-/// a complete engine snapshot and must not be used as a successful Freeze.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypeParameter {
+    pub name: String,
+    pub equality: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Argument {
+    pub name: String,
+    pub sort: SortPattern,
+}
+
+/// Fixed inputs followed by zero or more complete repetitions of `tail`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Signature {
+    pub params: Vec<TypeParameter>,
+    pub fixed: Vec<Argument>,
+    pub tail: Vec<Argument>,
+    pub output: SortPattern,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BuiltinTyping {
+    Signature(Signature),
+    FunctionApplication,
+    /// Literal target name and captures producing a native function value.
+    /// Target-specific acceptance remains the implementation's native predicate.
+    FunctionConstructor,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BuiltinDescription {
+    pub key: String,
+    pub aliases: Vec<String>,
+    pub typing: BuiltinTyping,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FamilyDescription {
+    pub name: String,
+    pub arity: usize,
+}
+
+/// A partial native inventory: missing descriptions remain explicit gaps.
 pub struct BuiltinCatalog {
-    /// Canonical host declarations and portable authored computations, with
-    /// remapped, shared sort indices. Source facades and native-only helpers do
-    /// not acquire duplicate semantic declarations.
-    pub definitions: pb::Program,
-    /// Semantic registrations lacking a portable definition; aliases can repeat.
+    pub descriptions: Vec<Arc<BuiltinDescription>>,
+    pub families: Vec<FamilyDescription>,
     pub undescribed_primitives: Vec<String>,
-    /// Presort factories whose generic definitions have not migrated yet.
     pub undescribed_families: Vec<String>,
-    /// Reserved family operations without definitions, including before any
-    /// concrete family instance has been registered.
     pub undescribed_family_primitives: Vec<String>,
-    /// Installed native non-equality sorts not represented by a family entry.
-    /// Concrete container aliases remain here until structural mapping exists.
     pub undescribed_sorts: Vec<String>,
 }
 
-/// An owned definition plus derived native bindings. These bindings preserve
-/// nominal source sorts; they contain no independently authored type scheme.
+/// Registry-owned description bound to exact native implementation sorts.
+/// Cloning retains ownership identity and each nominal occurrence.
 #[derive(Clone)]
 pub struct BuiltinInstance {
-    pub(crate) definition: Arc<pb::Program>,
-    pub(crate) root_key: String,
-    pub(crate) dispatch_name: String,
+    pub description: Arc<BuiltinDescription>,
+    pub dispatch_name: String,
     binding: InstanceBinding,
 }
 
 #[derive(Clone)]
 enum InstanceBinding {
     Owner(Vec<NativeSortBinding>),
-    // Roots are signature occurrences, never descriptor-arena slots: equal
-    // logical patterns can have different actual nominal input/result sorts.
     Exact {
         sorts: Vec<ArcSort>,
         fixed: usize,
         tail: usize,
     },
     Application(Arc<FunctionSort>),
-    // The implementation retains its original, possibly growing native domain.
     Open,
 }
 
 #[derive(Clone)]
 enum NativeSortBinding {
     Exact(ArcSort),
-    // The pattern stays in definition.sorts. This is only its representation ABI.
-    Foreign(std::any::TypeId),
+    Family {
+        name: String,
+        args: Vec<NativeSortBinding>,
+        carrier: std::any::TypeId,
+    },
+}
+
+/// Exact table identity or registrations selected independently per context.
+/// Registrations retain their original implementation, validator and IDs.
+pub enum NativeFunctionTarget {
+    Function(String),
+    Primitive(Vec<PrimitiveWithId>),
+}
+
+impl BuiltinDescription {
+    /// Validate the binder and structural shape before native publication.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.key.is_empty()
+            || self.aliases.is_empty()
+            || self
+                .aliases
+                .iter()
+                .any(|alias| alias.is_empty() || alias == &self.key)
+            || self.aliases.iter().collect::<HashSet<_>>().len() != self.aliases.len()
+        {
+            return Err("a builtin needs a nonempty key and distinct nonempty aliases".into());
+        }
+        fn visit(pattern: &SortPattern, params: usize, depth: usize) -> Result<(), String> {
+            if depth >= 256 {
+                return Err("too-deep builtin sort pattern".into());
+            }
+            match pattern {
+                SortPattern::Param(index) if *index >= params => {
+                    Err("unbound builtin type parameter".into())
+                }
+                SortPattern::Param(_) => Ok(()),
+                SortPattern::Eq(name) if !name.is_empty() => Ok(()),
+                SortPattern::Family { name, args } if !name.is_empty() => {
+                    for arg in args {
+                        visit(arg, params, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                SortPattern::Function { inputs, output } => {
+                    for input in inputs {
+                        visit(input, params, depth + 1)?;
+                    }
+                    visit(output, params, depth + 1)
+                }
+                _ => Err("empty builtin sort name".into()),
+            }
+        }
+        if let BuiltinTyping::Signature(signature) = &self.typing {
+            for pattern in signature
+                .fixed
+                .iter()
+                .chain(&signature.tail)
+                .map(|arg| &arg.sort)
+                .chain([&signature.output])
+            {
+                visit(pattern, signature.params.len(), 0)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl BuiltinInstance {
-    /// Checks the implementation's representation ABI against its descriptor.
-    /// Raw Values use None; typed casts must agree in both type and storage kind.
-    /// Inputs describe each fixed position followed by each tail-pattern position;
-    /// variadic implementations must supply converters for the complete pattern.
+    /// Check typed conversions, including storage kind. Input converters cover
+    /// each fixed slot followed by each repeated-tail slot.
     pub fn check_abi(
         &self,
         inputs: &[Option<(std::any::TypeId, bool)>],
         output: Option<(std::any::TypeId, bool)>,
         varargs: bool,
     ) -> Result<(), String> {
-        let (_, declaration) = definition_root(&self.definition, &self.root_key)?;
-        let exact = match &self.binding {
+        let bindings = match &self.binding {
             InstanceBinding::Open => {
                 return Err("open native domain has no exact implementation ABI".into());
             }
             InstanceBinding::Exact { sorts, fixed, tail } => {
                 if varargs == (*tail == 0) || inputs.len() != *fixed + *tail {
+                    return Err("builtin implementation arity differs from native signature".into());
+                }
+                sorts
+                    .iter()
+                    .cloned()
+                    .map(NativeSortBinding::Exact)
+                    .collect::<Vec<_>>()
+            }
+            InstanceBinding::Application(function) => {
+                if varargs {
                     return Err(
-                        "builtin implementation arity differs from canonical signature".into(),
+                        "builtin implementation arity differs from native application".into(),
                     );
                 }
-                Some(sorts.clone())
-            }
-            InstanceBinding::Application(function) => Some(
                 std::iter::once(function.clone() as ArcSort)
                     .chain(function.inputs().iter().cloned())
                     .chain([function.output()])
-                    .collect::<Vec<_>>(),
-            ),
-            InstanceBinding::Owner(_) => None,
-        };
-        if let Some(sorts) = exact {
-            if (matches!(self.binding, InstanceBinding::Application(_)) && varargs)
-                || inputs.len() + 1 != sorts.len()
-            {
-                return Err(
-                    "builtin implementation arity differs from canonical application".into(),
-                );
+                    .map(NativeSortBinding::Exact)
+                    .collect()
             }
-            for (sort, cast) in sorts.iter().zip(inputs.iter().copied().chain([output])) {
-                if let Some((ty, container)) = cast
-                    && (sort.value_type() != Some(ty) || sort.is_container_sort() != container)
+            InstanceBinding::Owner(sorts) => {
+                let BuiltinTyping::Signature(signature) = &self.description.typing else {
+                    unreachable!()
+                };
+                if varargs == signature.tail.is_empty()
+                    || inputs.len() != signature.fixed.len() + signature.tail.len()
                 {
-                    return Err(format!(
-                        "builtin implementation conversion disagrees with {}",
-                        sort.name()
-                    ));
+                    return Err("builtin implementation arity differs from native signature".into());
                 }
+                sorts.clone()
             }
-            return Ok(());
-        }
-        let Some(pb::host_primitive::Typing::Signature(signature)) = &declaration.typing else {
-            unreachable!()
         };
-        if varargs == signature.varargs.is_empty()
-            || inputs.len() != signature.inputs.len() + signature.varargs.len()
-        {
-            return Err("builtin implementation arity differs from canonical signature".into());
+        if inputs.len() + 1 != bindings.len() {
+            return Err("builtin implementation arity differs from native signature".into());
         }
-        let indices = signature
-            .inputs
-            .iter()
-            .map(|a| a.sort)
-            .chain(signature.varargs.iter().map(|a| a.sort))
-            .chain(signature.output);
-        let InstanceBinding::Owner(sorts) = &self.binding else {
-            unreachable!()
-        };
-        for (index, cast) in indices.zip(inputs.iter().copied().chain([output])) {
+        for (binding, cast) in bindings.iter().zip(inputs.iter().copied().chain([output])) {
             if let Some((ty, container)) = cast {
-                let (expected, is_container, name) = match &sorts[index as usize] {
+                let (expected, is_container, name) = match binding {
                     NativeSortBinding::Exact(sort) => {
                         (sort.value_type(), sort.is_container_sort(), sort.name())
                     }
-                    NativeSortBinding::Foreign(carrier) => {
-                        let Some(pb::sort::Kind::Family(family)) =
-                            &self.definition.sorts[index as usize].kind
-                        else {
-                            unreachable!()
-                        };
-                        (Some(*carrier), true, family.name.as_str())
+                    NativeSortBinding::Family { name, carrier, .. } => {
+                        (Some(*carrier), true, name.as_str())
                     }
                 };
                 if expected != Some(ty) || is_container != container {
@@ -153,154 +233,36 @@ impl BuiltinInstance {
         Ok(())
     }
 
-    /// Derives fixed/tail native assignments from the canonical pattern arena.
+    /// Derive the fixed/tail assignments of this bound implementation.
     pub fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         if let InstanceBinding::Application(function) = &self.binding {
             let sorts = std::iter::once(function.clone() as ArcSort)
                 .chain(function.inputs().iter().cloned())
                 .chain([function.output()])
                 .collect();
-            return constraint::SimpleTypeConstraint::new("unstable-app", sorts, span.clone())
-                .into_box();
+            return SimpleTypeConstraint::new("unstable-app", sorts, span.clone()).into_box();
         }
         assert!(
             !matches!(self.binding, InstanceBinding::Open),
             "open builtin implementations must retain their native type constraints"
         );
-        let (declaration, p) =
-            definition_root(&self.definition, &self.root_key).expect("invalid owned builtin root");
-        let Some(pb::host_primitive::Typing::Signature(signature)) = &p.typing else {
+        let BuiltinTyping::Signature(signature) = &self.description.typing else {
             unreachable!()
         };
-        let (fixed, tail, output) = match &self.binding {
-            InstanceBinding::Exact { sorts, fixed, tail } => (
-                (0..*fixed as u32).collect(),
-                (*fixed as u32..(*fixed + *tail) as u32).collect(),
-                (sorts.len() - 1) as u32,
-            ),
-            InstanceBinding::Owner(_) => (
-                signature.inputs.iter().map(|a| a.sort).collect(),
-                signature.varargs.iter().map(|a| a.sort).collect(),
-                signature.output.unwrap(),
-            ),
-            _ => unreachable!(),
-        };
+        let fixed = signature.fixed.len();
+        let tail = signature.tail.len();
         Box::new(InstanceConstraint {
             instance: self.clone(),
-            fixed,
-            tail,
-            output,
-            round_tail_up: false,
-            name: declaration
-                .bindings
-                .as_ref()
-                .and_then(|b| b.egglog.as_ref())
-                .and_then(|b| b.views.first())
-                .map_or(&p.name, |v| &v.symbol)
-                .clone(),
+            fixed: (0..fixed).collect(),
+            tail: (fixed..fixed + tail).collect(),
+            output: fixed + tail,
+            name: self.description.aliases[0].clone(),
             span: span.clone(),
         })
     }
 
-    /// Derive the legacy flat facade from one fixed Vec-of-Pair argument.
-    /// The original definition/dispatch identity is never changed or exported
-    /// as an alternating-tail callable.
-    pub(crate) fn vec_pair_facade_constraints(
-        &self,
-        name: &str,
-        span: &Span,
-    ) -> Box<dyn TypeConstraint> {
-        let [key, value, _, _, output] =
-            self.vec_pair_facade_pattern().expect("fixed Map signature");
-        Box::new(InstanceConstraint {
-            instance: self.clone(),
-            fixed: vec![],
-            tail: vec![key, value],
-            output,
-            name: name.into(),
-            span: span.clone(),
-            round_tail_up: true,
-        })
-    }
-
-    /// Validate the complete canonical recipe before deriving either native
-    /// flat constraints or source-call packing. Indices stay in the descriptor.
-    pub(crate) fn vec_pair_facade_pattern(&self) -> Result<[u32; 5], String> {
-        let (_, primitive) = definition_root(&self.definition, &self.root_key)?;
-        let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
-            return Err("expected fixed Map signature".into());
-        };
-        let [input] = signature.inputs.as_slice() else {
-            return Err("expected one Vec argument".into());
-        };
-        if signature.type_params.len() != 2 || !signature.varargs.is_empty() {
-            return Err("expected two Map type parameters and no tail".into());
-        }
-        let Some(pb::sort::Kind::Family(vector)) = &self.definition.sorts[input.sort as usize].kind
-        else {
-            return Err("expected Vec".into());
-        };
-        if vector.name != "Vec" {
-            return Err("expected Vec".into());
-        }
-        let [element] = vector.args.as_slice() else {
-            return Err("expected one Vec type argument".into());
-        };
-        let Some(pb::sort::Kind::Family(pair)) = &self.definition.sorts[*element as usize].kind
-        else {
-            return Err("expected Pair".into());
-        };
-        let output = signature.output.ok_or("missing Map output")?;
-        let Some(pb::sort::Kind::Family(map)) = &self.definition.sorts[output as usize].kind else {
-            return Err("expected Map result".into());
-        };
-        if pair.name != "Pair"
-            || pair.args.len() != 2
-            || map.name != "Map"
-            || map.args != pair.args
-            || pair.args.iter().enumerate().any(|(i, arg)| {
-                self.definition.sorts[*arg as usize].kind != Some(pb::sort::Kind::Var(i as u32))
-            })
-        {
-            return Err("expected Vec<Pair<K,V>> -> Map<K,V>".into());
-        }
-        Ok([pair.args[0], pair.args[1], *element, input.sort, output])
-    }
-
-    /// Match nested provenance against the canonical pattern while retaining
-    /// exact nominal bindings for the owner and its type parameters.
-    fn matches_sort(&self, index: u32, native: &ArcSort, types: &TypeInfo) -> bool {
-        let InstanceBinding::Owner(sorts) = &self.binding else {
-            return false;
-        };
-        match &sorts[index as usize] {
-            NativeSortBinding::Exact(sort) => sort.name() == native.name(),
-            NativeSortBinding::Foreign(carrier) => {
-                let Some(pb::sort::Kind::Family(pattern)) =
-                    &self.definition.sorts[index as usize].kind
-                else {
-                    unreachable!()
-                };
-                native.is_container_sort()
-                    && native.value_type() == Some(*carrier)
-                    && types
-                        .builtin_sorts
-                        .get(native.name())
-                        .is_some_and(|(family, args)| {
-                            *family == pattern.name
-                                && args.len() == pattern.args.len()
-                                && pattern
-                                    .args
-                                    .iter()
-                                    .zip(args)
-                                    .all(|(index, arg)| self.matches_sort(*index, arg, types))
-                        })
-            }
-        }
-    }
-
-    /// Only open implementations of this very registry-owned descriptor may
-    /// share a private dispatch group. Exact instances remain unique.
+    /// Only open implementations of this registry-owned description can share
+    /// one private dispatch group. Exact instances remain distinct.
     pub(crate) fn can_share_dispatch(&self, existing: &[PrimitiveWithId]) -> bool {
         matches!(self.binding, InstanceBinding::Open)
             && existing.iter().all(|registered| {
@@ -309,8 +271,7 @@ impl BuiltinInstance {
                     .builtin_instance()
                     .is_some_and(|other| {
                         matches!(other.binding, InstanceBinding::Open)
-                            && self.root_key == other.root_key
-                            && Arc::ptr_eq(&self.definition, &other.definition)
+                            && Arc::ptr_eq(&self.description, &other.description)
                     })
             })
     }
@@ -318,33 +279,28 @@ impl BuiltinInstance {
 
 struct InstanceConstraint {
     instance: BuiltinInstance,
-    fixed: Vec<u32>,
-    tail: Vec<u32>,
-    output: u32,
-    // Flat compatibility constructors historically report the next full group.
-    round_tail_up: bool,
+    fixed: Vec<usize>,
+    tail: Vec<usize>,
+    output: usize,
     name: String,
     span: Span,
 }
 
-/// Expand only complete tail groups, retaining the legacy flat-facade rounding
-/// rule. Native arguments include the result; the caller reports any mismatch.
 fn expand_signature<T: Clone>(
     fixed: &[T],
     tail: &[T],
     output: &T,
     argument_count: usize,
-    round_tail_up: bool,
 ) -> Vec<T> {
     let mut sorts = fixed.to_vec();
     if !tail.is_empty() {
         let inputs = argument_count.saturating_sub(fixed.len() + 1);
-        let groups = if round_tail_up {
-            inputs.div_ceil(tail.len())
-        } else {
-            inputs / tail.len()
-        };
-        sorts.extend(tail.iter().cloned().cycle().take(groups * tail.len()));
+        sorts.extend(
+            tail.iter()
+                .cloned()
+                .cycle()
+                .take((inputs / tail.len()) * tail.len()),
+        );
     }
     sorts.push(output.clone());
     sorts
@@ -356,13 +312,7 @@ impl TypeConstraint for InstanceConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn constraint::Constraint<AtomTerm, ArcSort>>> {
-        let sorts = expand_signature(
-            &self.fixed,
-            &self.tail,
-            &self.output,
-            arguments.len(),
-            self.round_tail_up,
-        );
+        let sorts = expand_signature(&self.fixed, &self.tail, &self.output, arguments.len());
         if arguments.len() != sorts.len() {
             return vec![constraint::impossible(
                 constraint::ImpossibleConstraint::ArityMismatch {
@@ -375,22 +325,52 @@ impl TypeConstraint for InstanceConstraint {
                 },
             )];
         }
+        fn matches(
+            binding: &NativeSortBinding,
+            native: &ArcSort,
+            types: &TypeInfo,
+            depth: usize,
+        ) -> bool {
+            if depth >= 256 {
+                return false;
+            }
+            match binding {
+                NativeSortBinding::Exact(sort) => sort.name() == native.name(),
+                NativeSortBinding::Family {
+                    name,
+                    args,
+                    carrier,
+                } => {
+                    native.is_container_sort()
+                        && native.value_type() == Some(*carrier)
+                        && types.builtin_sorts.get(native.name()).is_some_and(
+                            |(family, parameters)| {
+                                *family == name
+                                    && args.len() == parameters.len()
+                                    && args.iter().zip(parameters).all(|(binding, native)| {
+                                        matches(binding, native, types, depth + 1)
+                                    })
+                            },
+                        )
+                }
+            }
+        }
         arguments
             .iter()
             .zip(sorts)
             .map(|(argument, index)| match &self.instance.binding {
                 InstanceBinding::Exact { sorts, .. } => {
-                    constraint::assign(argument.clone(), sorts[index as usize].clone())
+                    constraint::assign(argument.clone(), sorts[index].clone())
                 }
-                InstanceBinding::Owner(sorts) => match &sorts[index as usize] {
+                InstanceBinding::Owner(sorts) => match &sorts[index] {
                     NativeSortBinding::Exact(sort) => {
                         constraint::assign(argument.clone(), sort.clone())
                     }
-                    NativeSortBinding::Foreign(_) => constraint::xor(
+                    binding @ NativeSortBinding::Family { .. } => constraint::xor(
                         typeinfo
                             .sorts
                             .values()
-                            .filter(|sort| self.instance.matches_sort(index, sort, typeinfo))
+                            .filter(|sort| matches(binding, sort, typeinfo, 0))
                             .map(|sort| constraint::assign(argument.clone(), sort.clone()))
                             .collect(),
                     ),
@@ -401,481 +381,77 @@ impl TypeConstraint for InstanceConstraint {
     }
 }
 
-/// Imports a pattern recursively, remapping child indices and rejecting cycles.
-/// Open variables are retained; binder/closure validation is a separate use check.
-pub fn import_sort(
-    source: &[pb::Sort],
-    index: u32,
-    destination: &mut Vec<pb::Sort>,
-) -> Result<u32, String> {
-    fn visit(
-        source: &[pb::Sort],
-        index: u32,
-        destination: &mut Vec<pb::Sort>,
-        active: &mut HashSet<u32>,
-        cache: &mut HashMap<u32, u32>,
-    ) -> Result<u32, String> {
-        if let Some(index) = cache.get(&index) {
-            return Ok(*index);
-        }
-        if active.len() >= 256 || !active.insert(index) {
-            return Err("cyclic or too-deep sort pattern".into());
-        }
-        let mut sort = source
-            .get(index as usize)
-            .ok_or("sort index out of bounds")?
-            .clone();
-        match sort.kind.as_mut().ok_or("missing sort kind")? {
-            pb::sort::Kind::Family(family) => {
-                if family.name.is_empty() {
-                    return Err("empty host family name".into());
-                }
-                for child in &mut family.args {
-                    *child = visit(source, *child, destination, active, cache)?;
-                }
-            }
-            pb::sort::Kind::Func(function) => {
-                for child in &mut function.params {
-                    *child = visit(source, *child, destination, active, cache)?;
-                }
-                function.result = visit(source, function.result, destination, active, cache)?;
-            }
-            pb::sort::Kind::Eq(name) if !name.is_empty() => (),
-            pb::sort::Kind::Var(_) => (),
-            _ => return Err("unsupported builtin sort pattern".into()),
-        }
-        active.remove(&index);
-        if let Some(existing) = destination
-            .iter()
-            .position(|existing| existing.kind == sort.kind)
-        {
-            for alias in sort.egglog_aliases {
-                if !destination[existing].egglog_aliases.contains(&alias) {
-                    destination[existing].egglog_aliases.push(alias);
-                }
-            }
-            cache.insert(index, existing as u32);
-            return Ok(existing as u32);
-        }
-        let imported = u32::try_from(destination.len()).map_err(|_| "too many sorts")?;
-        destination.push(sort);
-        cache.insert(index, imported);
-        Ok(imported)
-    }
-    visit(
-        source,
-        index,
-        destination,
-        &mut HashSet::default(),
-        &mut HashMap::default(),
-    )
-}
-
-pub(crate) fn normalized_signature(
-    program: &pb::Program,
-    primitive: &pb::HostPrimitive,
-    sorts: &mut Vec<pb::Sort>,
-) -> Result<pb::host_primitive::Typing, String> {
-    if primitive.name.is_empty() {
-        return Err("builtin definition key must not be empty".into());
-    }
-    let signature = match &primitive.typing {
-        Some(pb::host_primitive::Typing::Signature(signature)) => signature,
-        Some(typing @ pb::host_primitive::Typing::Application(_)) => return Ok(typing.clone()),
-        None => return Err("missing builtin typing form".into()),
-    };
-    let mut signature = signature.clone();
-    if signature
-        .equality_type_params
-        .windows(2)
-        .any(|w| w[0] >= w[1])
-        || signature
-            .equality_type_params
-            .iter()
-            .any(|i| *i as usize >= signature.type_params.len())
-    {
-        return Err("invalid equality type parameter indices".into());
-    }
-    for label in &mut signature.type_params {
-        label.clear();
-    }
-    let output = signature
-        .output
-        .as_mut()
-        .ok_or("missing builtin result sort")?;
-    *output = import_sort(&program.sorts, *output, sorts)?;
-    for arg in signature
-        .inputs
-        .iter_mut()
-        .chain(signature.varargs.iter_mut())
-    {
-        arg.name.clear();
-        arg.sort = import_sort(&program.sorts, arg.sort, sorts)?;
-    }
-    let mut pending: Vec<_> = signature
-        .inputs
-        .iter()
-        .map(|a| a.sort)
-        .chain(signature.varargs.iter().map(|a| a.sort))
-        .chain(signature.output)
-        .collect();
-    let mut seen = HashSet::default();
-    while let Some(index) = pending.pop() {
-        if !seen.insert(index) {
-            continue;
-        }
-        match sorts[index as usize].kind.as_ref().unwrap() {
-            pb::sort::Kind::Var(index) if (*index as usize) >= signature.type_params.len() => {
-                return Err("unbound builtin type parameter".into());
-            }
-            pb::sort::Kind::Family(family) => pending.extend(&family.args),
-            pb::sort::Kind::Func(function) => {
-                pending.extend(&function.params);
-                pending.push(function.result);
-            }
-            _ => (),
-        }
-    }
-    Ok(pb::host_primitive::Typing::Signature(signature))
-}
-
-/// Builds a closed signature from the macro's existing type annotations. The
-/// returned protobuf is the signature; native constraints are derived from it.
-/// Symbolic family signatures will use the same arenas and GenericSignature,
-/// but cannot be inferred from an already instantiated opaque container sort.
+/// Derive a closed scalar description from the macro's native type annotations.
 pub fn closed_signature(
     key: &str,
     alias: &str,
     inputs: &[(&str, ArcSort)],
     varargs: &[(&str, ArcSort)],
     output: ArcSort,
-) -> Result<pb::Program, String> {
-    if key.is_empty() || alias.is_empty() || key == alias {
-        return Err("a builtin needs distinct nonempty definition key and source alias".into());
-    }
-    let mut program = pb::Program {
-        ir_version: 1,
-        ..Default::default()
-    };
-    let mut indices = vec![];
-    for sort in inputs
+) -> Result<BuiltinDescription, String> {
+    let mut arguments = vec![];
+    for (name, sort) in inputs
         .iter()
         .chain(varargs)
-        .map(|(_, sort)| sort)
-        .chain(std::iter::once(&output))
+        .map(|(name, sort)| (*name, sort))
+        .chain([("", &output)])
     {
         if sort.is_eq_sort() || sort.is_container_sort() || sort.value_type().is_none() {
             return Err(format!(
-                "{} requires an explicit symbolic sort definition",
+                "{} requires an explicit symbolic sort description",
                 sort.name()
             ));
         }
-        let kind = pb::sort::Kind::Family(pb::HostSort {
-            name: sort.name().into(),
-            args: vec![],
+        arguments.push(Argument {
+            name: name.into(),
+            sort: SortPattern::Family {
+                name: sort.name().into(),
+                args: vec![],
+            },
         });
-        let index = match program
-            .sorts
-            .iter()
-            .position(|sort| sort.kind.as_ref() == Some(&kind))
-        {
-            Some(index) => index,
-            None => {
-                program.sorts.push(pb::Sort {
-                    kind: Some(kind),
-                    ..Default::default()
-                });
-                program.declarations.push(pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                        name: sort.name().into(),
-                        arity: 0,
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                });
-                program.sorts.len() - 1
-            }
-        };
-        indices.push(u32::try_from(index).map_err(|_| "too many signature sorts")?);
     }
-    program.declarations.push(pb::Declaration {
-        kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
-            name: key.into(),
-            typing: Some(pb::host_primitive::Typing::Signature(
-                pb::GenericSignature {
-                    inputs: inputs
-                        .iter()
-                        .zip(&indices)
-                        .map(|((name, _), sort)| pb::Arg {
-                            name: (*name).into(),
-                            sort: *sort,
-                        })
-                        .collect(),
-                    varargs: varargs
-                        .iter()
-                        .zip(&indices[inputs.len()..])
-                        .map(|((name, _), sort)| pb::Arg {
-                            name: (*name).into(),
-                            sort: *sort,
-                        })
-                        .collect(),
-                    output: indices.last().copied(),
-                    ..Default::default()
-                },
-            )),
-        })),
-        bindings: Some(pb::CallableBindings {
-            egglog: Some(pb::EgglogBindings {
-                views: vec![pb::EgglogCallable {
-                    symbol: alias.into(),
-                    datatype_member: false,
-                }],
-            }),
-            ..Default::default()
+    let output = arguments.pop().unwrap().sort;
+    let tail = arguments.split_off(inputs.len());
+    let description = BuiltinDescription {
+        key: key.into(),
+        aliases: vec![alias.into()],
+        typing: BuiltinTyping::Signature(Signature {
+            params: vec![],
+            fixed: arguments,
+            tail,
+            output,
         }),
-        ..Default::default()
-    });
-    Ok(program)
+    };
+    description.validate()?;
+    Ok(description)
 }
 
-/// Derive one shared sort parameter from fixed homogeneous `#` macro inputs.
-/// The closed result retains the scalar representation checks and provenance.
+/// Derive the shared binder of fixed homogeneous `#` macro inputs.
 pub fn homogeneous_signature(
     key: &str,
     alias: &str,
     inputs: &[&str],
     output: ArcSort,
-) -> Result<pb::Program, String> {
+) -> Result<BuiltinDescription, String> {
     if inputs.is_empty() {
         return Err("a homogeneous signature needs at least one input".into());
     }
-    let mut program = closed_signature(key, alias, &[], &[], output)?;
-    let variable = program.sorts.len() as u32;
-    program.sorts.push(pb::Sort {
-        kind: Some(pb::sort::Kind::Var(0)),
-        ..Default::default()
+    let mut description = closed_signature(key, alias, &[], &[], output)?;
+    let BuiltinTyping::Signature(signature) = &mut description.typing else {
+        unreachable!()
+    };
+    signature.params.push(TypeParameter {
+        name: "T".into(),
+        equality: false,
     });
-    let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
-        &mut program.declarations.iter_mut().find(|declaration| {
-            matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
-        }).unwrap().kind
-    else {
-        unreachable!()
-    };
-    let Some(pb::host_primitive::Typing::Signature(signature)) = &mut primitive.typing else {
-        unreachable!()
-    };
-    signature.type_params.push("T".into());
-    signature.inputs = inputs
+    signature.fixed = inputs
         .iter()
-        .map(|name| pb::Arg {
+        .map(|name| Argument {
             name: (*name).into(),
-            sort: variable,
+            sort: SortPattern::Param(0),
         })
         .collect();
-    Ok(program)
-}
-
-/// Validates and normalizes the currently supported closed signature into native
-/// sort names: fixed inputs, tail pattern, then result. This does not execute
-/// or inspect a body.
-pub fn signature_sorts(
-    program: &pb::Program,
-    primitive: &pb::HostPrimitive,
-) -> Result<Vec<String>, String> {
-    let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
-        return Err("function-application builtin typing is not implemented yet".into());
-    };
-    if primitive.name.is_empty() || !signature.type_params.is_empty() {
-        return Err("builtin typing currently requires a named closed signature".into());
-    }
-    signature.inputs.iter().chain(&signature.varargs).map(|arg| arg.sort).chain(std::iter::once(signature.output.ok_or("missing builtin result sort")?)).map(|index| {
-        let sort = program.sorts.get(index as usize).ok_or("builtin signature sort index out of bounds")?;
-        match &sort.kind {
-            Some(pb::sort::Kind::Family(family)) if family.args.is_empty() && !family.name.is_empty() => Ok(family.name.clone()),
-            _ => Err("builtin signature requires a symbolic-family compiler beyond this scalar slice".into()),
-        }
-    }).collect()
-}
-
-/// Selects a root by canonical identity, never by declaration or view order.
-/// Even a matching first entry cannot conceal a duplicate root declaration.
-fn definition_root<'a>(
-    program: &'a pb::Program,
-    key: &str,
-) -> Result<(&'a pb::Declaration, &'a pb::HostPrimitive), String> {
-    if key.is_empty() {
-        return Err("empty builtin root identity".into());
-    }
-    let mut roots = program
-        .declarations
-        .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key => {
-                Some((declaration, primitive))
-            }
-            _ => None,
-        });
-    let root = roots.next().ok_or("missing builtin root definition")?;
-    if roots.next().is_some() {
-        return Err("duplicate builtin root definition".into());
-    }
-    Ok(root)
-}
-
-pub(crate) fn definition_key(program: &pb::Program) -> Result<&str, String> {
-    if program.ir_version != 1
-        || !program.commands.is_empty()
-        || !program.rules.is_empty()
-        || !program.rulesets.is_empty()
-    {
-        return Err("builtin definition must contain only declaration templates".into());
-    }
-    let mut validated = vec![];
-    for index in 0..program.sorts.len() {
-        import_sort(&program.sorts, index as u32, &mut validated)?;
-    }
-    let mut key = None;
-    for declaration in &program.declarations {
-        match &declaration.kind {
-            Some(pb::declaration::Kind::HostPrimitive(primitive)) if key.is_none() => {
-                normalized_signature(program, primitive, &mut vec![])?;
-                key = Some(primitive.name.as_str());
-            }
-            Some(pb::declaration::Kind::HostSortFamily(family)) if !family.name.is_empty() => {}
-            _ => {
-                return Err(
-                    "expected exactly one builtin definition and family descriptors".into(),
-                );
-            }
-        }
-    }
-    definitions::reconcile_declarations(program, &mut pb::Program::default())?;
-    key.ok_or_else(|| "missing builtin definition".into())
-}
-
-/// Imports one registration's canonical protobuf into another arena, preserving
-/// identity and rejecting conflicting declarations. No implementations are run
-/// or installed. Returned keys name definitions, never native overload aliases.
-pub fn import_definition(
-    definition: &pb::Program,
-    destination: &mut pb::Program,
-) -> Result<String, String> {
-    let key = definition_key(definition)?.to_owned();
-    definitions::reconcile_declarations(definition, destination)?;
-    Ok(key)
-}
-
-/// Imports an explicitly rooted, already registered default context. Helpers
-/// are declarations only; this never installs or invokes native implementations.
-/// The legacy single-definition import above deliberately remains strict.
-pub fn import_rooted_definition(
-    key: &str,
-    definition: &pb::Program,
-    destination: &mut pb::Program,
-) -> Result<String, String> {
-    let (_, primitive) = definition_root(definition, key)?;
-    normalized_signature(definition, primitive, &mut vec![])?;
-    definitions::check_builtin_context(definition, key, |_| Ok(definition.clone()))?;
-    definitions::reconcile_declarations(definition, destination)?;
-    Ok(key.into())
-}
-
-/// Build closed scalar member/operator views from the canonical signature.
-/// Specialized tail slots have ordinary required parameters in these views.
-pub fn scalar_member_bindings(
-    signature: &pb::GenericSignature,
-    python: &str,
-    rust: &str,
-    params: &[&str],
-    rust_trait: Option<&str>,
-    tail_repetitions: Option<u32>,
-) -> pb::CallableBindings {
-    assert!(signature.type_params.is_empty());
-    let count = match tail_repetitions {
-        Some(repetitions) => {
-            assert!(!signature.varargs.is_empty());
-            signature
-                .inputs
-                .len()
-                .checked_add(
-                    signature
-                        .varargs
-                        .len()
-                        .checked_mul(repetitions as usize)
-                        .unwrap(),
-                )
-                .unwrap()
-        }
-        None => {
-            assert!(signature.varargs.is_empty());
-            signature.inputs.len()
-        }
-    };
-    assert_eq!(count, params.len() + 1);
-    let inputs = signature
-        .inputs
-        .iter()
-        .chain(signature.varargs.iter().cycle())
-        .take(count)
-        .collect::<Vec<_>>();
-    let owner = Some(pb::BindingOwner {
-        kind: Some(pb::binding_owner::Kind::Sort(inputs[0].sort)),
-    });
-    pb::CallableBindings {
-        python: Some(pb::PythonBindings {
-            views: vec![pb::PythonCallable {
-                kind: pb::PythonCallKind::Method.into(),
-                path: vec![python.into()],
-                owner,
-                receiver: Some(0),
-                params: params
-                    .iter()
-                    .enumerate()
-                    .map(|(index, name)| pb::PythonParameter {
-                        core_input: Some(index as u32 + 1),
-                        name: (*name).into(),
-                        default_expr: None,
-                    })
-                    .collect(),
-                tail_repetitions,
-                ..Default::default()
-            }],
-        }),
-        rust: Some(pb::RustBindings {
-            views: vec![pb::RustCallable {
-                path: vec![rust.into()],
-                owner,
-                receiver: Some(pb::RustReceiver {
-                    core_input: Some(0),
-                    borrowed: false,
-                }),
-                params: params
-                    .iter()
-                    .enumerate()
-                    .map(|(index, name)| pb::RustParameter {
-                        core_input: Some(index as u32 + 1),
-                        name: if rust_trait.is_some() { "rhs" } else { name }.to_string(),
-                        borrowed: false,
-                    })
-                    .collect(),
-                trait_impl: rust_trait.map(|name| pb::RustTrait {
-                    path: vec!["core".into(), "ops".into(), name.into()],
-                    args: inputs[1..]
-                        .iter()
-                        .map(|arg| pb::RustType {
-                            sort: Some(arg.sort),
-                            borrowed: false,
-                        })
-                        .collect(),
-                    output_associated_type: Some("Output".into()),
-                }),
-                tail_repetitions,
-                ..Default::default()
-            }],
-        }),
-        ..Default::default()
-    }
+    Ok(description)
 }
 
 struct SignatureConstraint {
@@ -917,386 +493,120 @@ impl TypeConstraint for SignatureConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn constraint::Constraint<AtomTerm, ArcSort>>> {
-        let sorts = expand_signature(
-            &self.fixed,
-            &self.tail,
-            &self.output,
-            arguments.len(),
-            false,
-        )
-        .iter()
-        .map(|name| {
-            typeinfo
-                .get_sort_by_name(name)
-                .unwrap_or_else(|| panic!("registered builtin sort {name} is absent"))
-                .clone()
-        })
-        .collect();
+        let sorts = expand_signature(&self.fixed, &self.tail, &self.output, arguments.len())
+            .iter()
+            .map(|name| {
+                typeinfo
+                    .get_sort_by_name(name)
+                    .unwrap_or_else(|| panic!("registered builtin sort {name} is absent"))
+                    .clone()
+            })
+            .collect();
         SimpleTypeConstraint::new(&self.name, sorts, self.span.clone()).get(arguments, typeinfo)
     }
 }
 
-/// Compiles a trusted registration's canonical signature into native inference
-/// constraints. Untrusted submitted descriptors are compatibility assertions;
-/// they never replace this registered signature or its implementation.
-pub fn type_constraints(definition: &pb::Program, span: &Span) -> Box<dyn TypeConstraint> {
-    let key = definition_key(definition).expect("invalid native builtin definition");
-    rooted_type_constraints(key, definition, span)
-}
-
-/// Compiles only the explicitly named registration root, not its default helpers.
+/// Compile the existing closed-scalar and homogeneous inference paths. General
+/// schemes use bound instances or their retained native inference predicates.
 pub fn rooted_type_constraints(
     key: &str,
-    definition: &pb::Program,
+    description: &BuiltinDescription,
     span: &Span,
 ) -> Box<dyn TypeConstraint> {
-    let (declaration, primitive) =
-        definition_root(definition, key).expect("invalid native builtin root");
-    let diagnostic_name = declaration
-        .bindings
-        .as_ref()
-        .and_then(|bindings| bindings.egglog.as_ref())
-        .and_then(|bindings| bindings.views.first())
-        .map_or(key, |view| view.symbol.as_str());
-    let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
-        unreachable!()
+    description
+        .validate()
+        .expect("invalid native builtin description");
+    assert_eq!(key, description.key, "builtin root identity mismatch");
+    let BuiltinTyping::Signature(signature) = &description.typing else {
+        panic!("native special form requires its own constraints")
     };
-    if !signature.type_params.is_empty() {
+    let diagnostic_name = &description.aliases[0];
+    if !signature.params.is_empty() {
         assert_eq!(
-            signature.type_params.len(),
+            signature.params.len(),
             1,
-            "unsupported generic signature"
+            "unsupported generic inference signature"
         );
         assert!(
-            !signature.inputs.is_empty() && signature.varargs.is_empty(),
-            "generic constraints require fixed nonempty inputs"
+            !signature.fixed.is_empty()
+                && signature.tail.is_empty()
+                && signature
+                    .fixed
+                    .iter()
+                    .all(|arg| arg.sort == SortPattern::Param(0)),
+            "generic inference requires homogeneous fixed inputs"
         );
-        assert!(signature.inputs.iter().all(|arg| definition.sorts[arg.sort as usize].kind == Some(pb::sort::Kind::Var(0))), "generic constraints require homogeneous inputs");
-        let Some(pb::sort::Kind::Family(output)) =
-            &definition.sorts[signature.output.unwrap() as usize].kind
-        else {
-            panic!("generic constraints require a closed scalar result");
+        assert!(
+            !signature.params[0].equality,
+            "equality bounds require a bound native instance"
+        );
+        let SortPattern::Family { name, args } = &signature.output else {
+            panic!("generic inference requires a closed scalar result")
         };
         assert!(
-            output.args.is_empty(),
-            "generic constraints require a closed scalar result"
+            args.is_empty(),
+            "generic inference requires a closed scalar result"
         );
         return Box::new(HomogeneousConstraint {
-            input_count: signature.inputs.len(),
-            output: output.name.clone(),
-            name: diagnostic_name.into(),
+            input_count: signature.fixed.len(),
+            output: name.clone(),
+            name: diagnostic_name.clone(),
             span: span.clone(),
         });
     }
-    let mut fixed = signature_sorts(definition, primitive).unwrap();
-    let output = fixed.pop().unwrap();
-    let tail = fixed.split_off(signature.inputs.len());
+    let mut sorts = signature
+        .fixed
+        .iter()
+        .chain(&signature.tail)
+        .map(|arg| &arg.sort)
+        .chain([&signature.output])
+        .map(|pattern| {
+            let SortPattern::Family { name, args } = pattern else {
+                panic!("closed inference requires scalar sorts")
+            };
+            assert!(args.is_empty(), "closed inference requires scalar sorts");
+            name.clone()
+        })
+        .collect::<Vec<_>>();
+    let output = sorts.pop().unwrap();
+    let tail = sorts.split_off(signature.fixed.len());
     Box::new(SignatureConstraint {
-        fixed,
+        fixed: sorts,
         tail,
         output,
-        name: diagnostic_name.into(),
+        name: diagnostic_name.clone(),
         span: span.clone(),
     })
 }
 
 impl TypeInfo {
-    /// Builds a full default context before native publication. The callback
-    /// receives read-only registration evidence and cannot alter the generated
-    /// root's native signature, even by changing its referenced sort records.
-    /// Unlike legacy `[id]` registration, this path rejects collisions eagerly.
-    pub fn prepare_builtin_context(
-        &self,
-        key: &str,
-        alias: &str,
-        generated: pb::Program,
-        supply: impl FnOnce(&TypeInfo, &str, &mut pb::Program) -> Result<(), String>,
-    ) -> Result<pb::Program, String> {
-        if definition_key(&generated)? != key {
-            return Err("generated builtin root identity mismatch".into());
+    pub fn register_builtin_family(&mut self, family: FamilyDescription) -> Result<(), String> {
+        if family.name.is_empty() {
+            return Err("empty builtin family name".into());
         }
-        let mut family_keys = HashSet::default();
-        for declaration in &generated.declarations {
-            if let Some(pb::declaration::Kind::HostSortFamily(family)) = &declaration.kind
-                && !family_keys.insert(family.name.as_str())
-            {
-                return Err(format!(
-                    "duplicate generated builtin family {}",
-                    family.name
-                ));
-            }
-        }
-        let mut sorts = vec![];
-        let (_, primitive) = definition_root(&generated, key)?;
-        let signature = normalized_signature(&generated, primitive, &mut sorts)?;
-        // Generated family records are structural placeholders, not permission
-        // for the new root to author family presentation. Supply only the
-        // already registered records needed by this generated sort arena first.
-        let families = pb::Program {
-            ir_version: 1,
-            files: self.builtin_families.files.clone(),
-            declarations: self.builtin_families.declarations.iter().filter(|declaration| {
-                matches!(&declaration.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if generated.sorts.iter().any(|sort| matches!(&sort.kind, Some(pb::sort::Kind::Family(sort)) if sort.name == family.name)))
-            }).cloned().collect(),
-            ..Default::default()
-        };
-        let mut supplied = pb::Program::default();
-        definitions::reconcile_declarations(&families, &mut supplied)?;
-        definitions::reconcile_declarations(&generated, &mut supplied)?;
-        supply(self, key, &mut supplied)?;
-        if supplied.ir_version != 1
-            || !supplied.commands.is_empty()
-            || !supplied.rules.is_empty()
-            || !supplied.rulesets.is_empty()
-        {
-            return Err("invalid builtin context header".into());
-        }
-        let (_, primitive) = definition_root(&supplied, key)?;
-        if normalized_signature(&supplied, primitive, &mut sorts)? != signature {
-            return Err("builtin context changed the generated native signature".into());
-        }
-        // Validate the raw supply before reconciliation can coalesce duplicate
-        // helper identities or discard malformed/unreachable arena evidence.
-        self.check_builtin_registration_context(key, alias, &supplied)?;
-        // The callback may relocate the draft and choose declaration order.
-        // Original language supplies remain assertions, not overwrite targets.
-        definitions::reconcile_declarations(&generated, &mut supplied)?;
-        let mut context = pb::Program::default();
-        definitions::reconcile_declarations(&supplied, &mut context)?;
-        self.check_builtin_registration_context(key, alias, &context)?;
-        Ok(context)
-    }
-
-    /// Validates helper authority and name availability without mutating any
-    /// runtime map, allocating context IDs, or invoking native code/providers.
-    pub(crate) fn check_builtin_registration_context(
-        &self,
-        key: &str,
-        alias: &str,
-        context: &pb::Program,
-    ) -> Result<(), String> {
-        if !self.builtin_errors.is_empty() {
-            return Err(self.builtin_errors.join("; "));
-        }
-        if key == alias
-            || alias.is_empty()
-            || self.is_primitive(key)
-            || self.get_func_type(key).is_some()
-            || self.is_primitive(alias)
-            || self.get_func_type(alias).is_some()
-        {
-            return Err(format!(
-                "builtin context registration collision: {key}/{alias}"
-            ));
-        }
-        let (_, primitive) = definition_root(context, key)?;
-        normalized_signature(context, primitive, &mut vec![])?;
-        definitions::check_builtin_context_families(context, &self.builtin_families)?;
-        for declaration in &context.declarations {
-            if let Some(pb::declaration::Kind::HostSortFamily(family)) = &declaration.kind
-                && (!context.sorts.iter().any(|sort| {
-                    matches!(&sort.kind, Some(pb::sort::Kind::Family(sort)) if sort.name == family.name)
-                }) || !self.builtin_families.declarations.iter().any(|known| {
-                    matches!(&known.kind, Some(pb::declaration::Kind::HostSortFamily(known)) if known.name == family.name && known.arity == family.arity)
-                }))
-            {
-                return Err(format!("unregistered or unused builtin context family {}", family.name));
-            }
-        }
-        for sort in &context.sorts {
-            if let Some(pb::sort::Kind::Family(sort)) = &sort.kind
-                && !self.builtin_families.declarations.iter().any(|known| {
-                    matches!(&known.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.name == sort.name && family.arity as usize == sort.args.len())
-                })
-            {
-                return Err(format!("unregistered builtin context family sort {}", sort.name));
-            }
-        }
-        definitions::check_builtin_context(context, key, |helper| {
-            let definition = self
-                .builtin_definitions
-                .get(helper)
-                .ok_or_else(|| format!("unregistered builtin context helper {helper}"))?;
-            let implementations = self
-                .builtin_primitives
-                .get(helper)
-                .filter(|implementations| !implementations.is_empty())
-                .ok_or_else(|| {
-                    format!("builtin context helper {helper} has no registered implementation")
-                })?;
-            for implementation in implementations {
-                let (root, registered) = implementation
-                    .primitive
-                    .builtin_definition()
-                    .ok_or("registered helper has no rooted definition")?;
-                if root != helper
-                    || registered != definition.as_ref()
-                    || !implementation
-                        .context_ids
-                        .iter()
-                        .any(|(_, id)| id.is_some())
-                    || implementation
-                        .primitive
-                        .builtin_instance()
-                        .is_some_and(|instance| {
-                            instance.root_key != helper
-                                || !Arc::ptr_eq(definition, &instance.definition)
-                        })
-                {
-                    return Err(format!(
-                        "builtin context helper {helper} lacks native ownership"
-                    ));
-                }
-            }
-            Ok(definition.as_ref().clone())
-        })
-    }
-
-    /// Export a named function target from its complete exact native signature.
-    /// Source projection supplies specialized capture sorts before erasure;
-    /// result encoding additionally checks the retained runtime primitive IDs.
-    /// Neither path invokes the target or recovers a signature from syntax.
-    pub fn export_function_target(
-        &self,
-        name: &str,
-        inputs: &[ArcSort],
-        output: &ArcSort,
-        resolved: Option<&ResolvedFunctionId>,
-        destination: &mut pb::Program,
-    ) -> Result<String, String> {
-        if let Some(function) = self.get_func_type(name) {
-            if !function
-                .input
-                .iter()
-                .chain([&function.output])
-                .map(|s| s.name())
-                .eq(inputs.iter().chain([output]).map(|s| s.name()))
-            {
-                return Err("function target signature mismatch".into());
-            }
-            if matches!(resolved, Some(ResolvedFunctionId::Primitive { .. })) {
-                return Err("function target runtime kind mismatch".into());
-            }
-            return Ok(name.into());
-        }
-        let signature = inputs.iter().chain([output]).cloned().collect::<Vec<_>>();
-        let candidates = self
-            .get_prims(name)
-            .ok_or("unknown function target")?
-            .iter()
-            .filter(|primitive| primitive.accept(&signature, self))
-            .collect::<Vec<_>>();
-        let mut target = None;
-        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
-            let mut available = candidates
-                .iter()
-                .filter(|p| p.context_ids[context].is_some());
-            let Some(primitive) = available.next() else {
-                if let Some(ResolvedFunctionId::Primitive { context_ids }) = resolved
-                    && context_ids[context].is_some()
-                {
-                    return Err("function target runtime context mismatch".into());
-                }
-                continue;
-            };
-            if available.next().is_some() {
-                return Err(format!("ambiguous function target {name} in {context:?}"));
-            }
-            if let Some(resolved) = resolved {
-                let ResolvedFunctionId::Primitive { context_ids } = resolved else {
-                    return Err("function target runtime kind mismatch".into());
-                };
-                if context_ids[context] != primitive.context_ids[context] {
-                    return Err("function target runtime identity mismatch".into());
-                }
-            }
-            let key =
-                if let Some(key) = primitive.primitive.export_program_definition(destination)? {
-                    key
-                } else {
-                    let (key, definition) =
-                        primitive.primitive.builtin_definition().ok_or_else(|| {
-                            format!("function target {name} has no catalog definition yet")
-                        })?;
-                    let key = import_rooted_definition(key, definition, destination)?;
-                    self.export_builtin_definition(&key, destination)?;
-                    key
-                };
-            if target.as_ref().is_some_and(|old| old != &key) {
-                return Err("function target contexts have different canonical identities".into());
-            }
-            target = Some(key);
-        }
-        target.ok_or_else(|| format!("unresolved function target {name}"))
-    }
-
-    /// Installs a family's generated declaration at its native registration site.
-    /// Later fragments may assert the same arity without repeating its views.
-    pub fn register_builtin_family(&mut self, family: pb::HostSortFamily) -> Result<(), String> {
-        // Presorts and concrete sorts have distinct native namespaces. A
-        // same-named equality sort must not mask an available family factory.
         if !self.mksorts.contains_key(&family.name) {
-            if let Some(sort) = self.sorts.get(&family.name) {
-                if sort.is_eq_sort() || sort.is_container_sort() || family.arity != 0 {
-                    return Err(
-                        "builtin family disagrees with native sort kind or nullary arity".into(),
-                    );
-                }
-            } else {
-                return Err("builtin family has no native registration".into());
+            let sort = self
+                .sorts
+                .get(&family.name)
+                .ok_or("builtin family has no native registration")?;
+            if sort.is_eq_sort() || sort.is_container_sort() || family.arity != 0 {
+                return Err(
+                    "builtin family disagrees with native sort kind or nullary arity".into(),
+                );
             }
         }
-        definitions::reconcile_declarations(
-            &pb::Program {
-                ir_version: 1,
-                declarations: vec![pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostSortFamily(family)),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            &mut self.builtin_families,
-        )?;
+        if let Some(existing) = self.builtin_families.get(&family.name) {
+            if existing.as_ref() != &family {
+                return Err(format!("conflicting builtin family {}", family.name));
+            }
+        } else {
+            self.builtin_families
+                .insert(family.name.clone(), Arc::new(family));
+        }
         Ok(())
     }
 
-    /// Exports the exact definition and the authoritative family presentation
-    /// supplies needed by its sort arena. No source overload search is involved.
-    pub fn export_builtin_definition(
-        &self,
-        key: &str,
-        destination: &mut pb::Program,
-    ) -> Result<(), String> {
-        let definition = self
-            .builtin_definitions
-            .get(key)
-            .ok_or("unknown builtin definition")?;
-        let mut staged = destination.clone();
-        let families = pb::Program {
-            ir_version: 1,
-            declarations: self
-                .builtin_families
-                .declarations
-                .iter()
-                .filter(|d| {
-                    let Some(pb::declaration::Kind::HostSortFamily(f)) = &d.kind else {
-                        return false;
-                    };
-                    definition.sorts.iter().any(
-                        |s| matches!(&s.kind, Some(pb::sort::Kind::Family(s)) if s.name == f.name),
-                    )
-                })
-                .cloned()
-                .collect(),
-            ..Default::default()
-        };
-        definitions::reconcile_declarations(&families, &mut staged)?;
-        import_rooted_definition(key, definition, &mut staged)?;
-        *destination = staged;
-        Ok(())
-    }
-
-    /// Registers the structural provenance of one native nominal family instance.
+    /// Register structural provenance without erasing exact nominal parameters.
     pub fn register_builtin_sort(
         &mut self,
         family: &'static str,
@@ -1304,15 +614,10 @@ impl TypeInfo {
         parameters: Vec<ArcSort>,
     ) -> Result<(), String> {
         let expected = self
-            .builtin_definitions
-            .values()
-            .flat_map(|p| &p.declarations)
-            .find_map(|d| match &d.kind {
-                Some(pb::declaration::Kind::HostSortFamily(f)) if f.name == family => Some(f.arity),
-                _ => None,
-            })
+            .builtin_families
+            .get(family)
             .ok_or_else(|| format!("undescribed family {family}"))?;
-        if expected as usize != parameters.len() || self.builtin_sorts.contains_key(sort.name()) {
+        if expected.arity != parameters.len() || self.builtin_sorts.contains_key(sort.name()) {
             return Err(format!(
                 "invalid or duplicate family instance {}",
                 sort.name()
@@ -1333,142 +638,92 @@ impl TypeInfo {
             .insert(sort.name().into(), (family, parameters));
         Ok(())
     }
-}
 
-impl EGraph {
-    /// Recover a function value's canonical target from its retained runtime
-    /// identity and per-value capture sorts, not from its extracted text or the
-    /// function sort's aggregate history of captures.
-    pub fn export_function_value_target(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<String, String> {
-        let function = sort
-            .clone()
-            .as_arc_any()
-            .downcast::<FunctionSort>()
-            .map_err(|_| "expected native function sort")?;
-        let value = self
-            .value_to_container::<FunctionContainer>(value)
-            .ok_or("missing native function value")?;
-        let inputs = value
-            .1
-            .iter()
-            .map(|(sort, _)| sort)
-            .chain(function.inputs())
-            .cloned()
-            .collect::<Vec<_>>();
-        let types = self
-            .proof_state
-            .original_typechecking
-            .as_ref()
-            .map_or(&self.type_info, |original| &original.type_info);
-        types.export_function_target(
-            &value.2,
-            &inputs,
-            &function.output(),
-            Some(&value.0),
-            &mut pb::Program::default(),
-        )
-    }
-
-    /// Select an annotated builtin call in the captured authoring environment.
-    ///
-    /// `native_sort_names` lists the argument sorts followed by the result sort.
-    /// Names are bound to this compiler's registered sorts before the existing
-    /// canonical definition checks and exact-instance selection. This also works
-    /// after nonexecuting resolution, when the physical graph has not installed
-    /// the declarations or has proof-instrumented signatures. No body or validator
-    /// is invoked, and no mutable type environment escapes.
-    pub fn resolve_builtin_call(
-        &self,
-        program: &pb::Program,
-        name: &str,
-        arguments: &[u32],
-        output: u32,
-        native_sort_names: &[&str],
-    ) -> Result<String, String> {
-        let types = self
-            .proof_state
-            .original_typechecking
-            .as_ref()
-            .map_or(&self.type_info, |original| &original.type_info);
-        let sorts = native_sort_names
-            .iter()
-            .map(|name| {
-                types
-                    .get_sort_by_name(name)
-                    .cloned()
-                    .ok_or_else(|| format!("unknown authoring sort {name}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        types.resolve_builtin(program, name, arguments, output, &sorts)
-    }
-
-    /// Exports structural sorts from registered family provenance, never from a
-    /// native alias spelling or Rust value TypeId. Equality sorts stay nominal.
-    pub fn export_sort(
-        &self,
-        sort: &ArcSort,
-        destination: &mut Vec<pb::Sort>,
-    ) -> Result<u32, String> {
-        let kind = if sort.is_eq_sort() {
-            pb::sort::Kind::Eq(sort.name().into())
-        } else if let Ok(function) = sort.clone().as_arc_any().downcast::<FunctionSort>() {
-            pb::sort::Kind::Func(pb::FuncSort {
-                params: function
-                    .inputs()
-                    .iter()
-                    .map(|sort| self.export_sort(sort, destination))
-                    .collect::<Result<_, _>>()?,
-                result: self.export_sort(&function.output(), destination)?,
-            })
-        } else if let Some((family, parameters)) = self.type_info.builtin_sorts.get(sort.name()) {
-            pb::sort::Kind::Family(pb::HostSort {
-                name: (*family).into(),
-                args: parameters
-                    .iter()
-                    .map(|parameter| self.export_sort(parameter, destination))
-                    .collect::<Result<_, _>>()?,
-            })
-        } else if !sort.is_container_sort() && sort.value_type().is_some() {
-            pb::sort::Kind::Family(pb::HostSort {
-                name: sort.name().into(),
-                args: vec![],
-            })
-        } else {
-            return Err(format!(
-                "sort {} lacks structural catalog provenance",
-                sort.name()
-            ));
-        };
-        if let Some(index) = destination
-            .iter()
-            .position(|sort| sort.kind.as_ref() == Some(&kind))
-        {
-            return Ok(index as u32);
+    /// Access a description only from a coherent registered catalog.
+    pub fn builtin_description(&self, key: &str) -> Result<&BuiltinDescription, String> {
+        if !self.builtin_errors.is_empty() {
+            return Err(self.builtin_errors.join("; "));
         }
-        let index = u32::try_from(destination.len()).map_err(|_| "too many sorts")?;
-        destination.push(pb::Sort {
-            kind: Some(kind),
-            ..Default::default()
-        });
-        Ok(index)
+        self.builtin_definitions
+            .get(key)
+            .map(Arc::as_ref)
+            .ok_or_else(|| format!("unknown builtin description {key}"))
     }
-}
 
-impl TypeInfo {
-    /// Match the one canonical scheme against complete, already resolved native
-    /// input/result sorts. This is pure evidence checking, never native dispatch.
-    pub(crate) fn check_native_signature(
+    /// Retain the exact native family owner across graph clones and scopes.
+    pub fn registered_builtin_family(&self, name: &str) -> Result<Arc<FamilyDescription>, String> {
+        if !self.builtin_errors.is_empty() {
+            return Err(self.builtin_errors.join("; "));
+        }
+        self.builtin_families
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("unknown builtin family {name}"))
+    }
+
+    /// Recover structural patterns from native provenance, never alias spelling.
+    pub fn native_sort_pattern(&self, native: &ArcSort) -> Result<SortPattern, String> {
+        fn visit(
+            types: &TypeInfo,
+            native: &ArcSort,
+            active: &mut HashSet<String>,
+        ) -> Result<SortPattern, String> {
+            if active.len() >= 256 || !active.insert(native.name().into()) {
+                return Err("cyclic or too-deep native sort provenance".into());
+            }
+            let registered = types
+                .get_sort_by_name(native.name())
+                .ok_or("unregistered native sort")?;
+            if registered.is_eq_sort() != native.is_eq_sort()
+                || registered.is_container_sort() != native.is_container_sort()
+                || registered.value_type() != native.value_type()
+            {
+                return Err("native sort disagrees with its registered representation".into());
+            }
+            let pattern = if native.is_eq_sort() {
+                SortPattern::Eq(native.name().into())
+            } else if let Ok(function) = native.clone().as_arc_any().downcast::<FunctionSort>() {
+                SortPattern::Function {
+                    inputs: function
+                        .inputs()
+                        .iter()
+                        .map(|sort| visit(types, sort, active))
+                        .collect::<Result<_, _>>()?,
+                    output: Box::new(visit(types, &function.output(), active)?),
+                }
+            } else if let Some((family, parameters)) = types.builtin_sorts.get(native.name()) {
+                SortPattern::Family {
+                    name: (*family).into(),
+                    args: parameters
+                        .iter()
+                        .map(|sort| visit(types, sort, active))
+                        .collect::<Result<_, _>>()?,
+                }
+            } else if !native.is_container_sort() && native.value_type().is_some() {
+                SortPattern::Family {
+                    name: native.name().into(),
+                    args: vec![],
+                }
+            } else {
+                return Err(format!(
+                    "sort {} lacks structural catalog provenance",
+                    native.name()
+                ));
+            };
+            active.remove(native.name());
+            Ok(pattern)
+        }
+        visit(self, native, &mut HashSet::default())
+    }
+
+    /// Match complete native occurrences without invoking implementation code or
+    /// inference predicates. Structural equality does not replace nominal roots.
+    pub fn check_native_signature(
         &self,
-        (key, definition): (&str, &pb::Program),
+        description: &BuiltinDescription,
         native: &[ArcSort],
     ) -> Result<(), String> {
-        // A logical binder can occur at differently named native container or
-        // function roots. Compare their registered structure without replacing
-        // either actual occurrence with the first binder's nominal root.
+        description.validate()?;
         fn validate_native_sort(native: &ArcSort, types: &TypeInfo) -> Result<(), String> {
             let registered = types
                 .get_sort_by_name(native.name())
@@ -1494,8 +749,8 @@ impl TypeInfo {
             }
             Ok(())
         }
-        // None marks an active pair; completed comparisons retain their height
-        // so reusing a shared sub-DAG cannot bypass the existing depth bound.
+        // None marks an active pair. Completed heights keep shared sub-DAGs
+        // from bypassing the depth bound on subsequent comparisons.
         fn same_sort(
             left: &ArcSort,
             right: &ArcSort,
@@ -1564,9 +819,8 @@ impl TypeInfo {
             height
         }
         fn unify(
-            index: u32,
+            pattern: &SortPattern,
             native: &ArcSort,
-            patterns: &[pb::Sort],
             types: &TypeInfo,
             substitution: &mut [Option<ArcSort>],
             compared: &mut HashMap<(String, String), Option<usize>>,
@@ -1576,14 +830,10 @@ impl TypeInfo {
                 return Err("cyclic or too-deep native signature".into());
             }
             validate_native_sort(native, types)?;
-            match patterns
-                .get(index as usize)
-                .and_then(|sort| sort.kind.as_ref())
-                .ok_or("missing native signature pattern")?
-            {
-                pb::sort::Kind::Var(variable) => {
+            match pattern {
+                SortPattern::Param(variable) => {
                     let slot = substitution
-                        .get_mut(*variable as usize)
+                        .get_mut(*variable)
                         .ok_or("unbound signature parameter")?;
                     if slot
                         .as_ref()
@@ -1593,56 +843,39 @@ impl TypeInfo {
                     }
                     *slot = Some(native.clone());
                 }
-                pb::sort::Kind::Eq(name) if native.is_eq_sort() && native.name() == name => (),
-                pb::sort::Kind::Family(family)
-                    if family.args.is_empty()
+                SortPattern::Eq(name) if native.is_eq_sort() && native.name() == name => (),
+                SortPattern::Family { name, args }
+                    if args.is_empty()
                         && !native.is_eq_sort()
                         && !native.is_container_sort()
-                        && native.name() == family.name => {}
-                pb::sort::Kind::Family(pattern) => {
+                        && native.name() == name => {}
+                SortPattern::Family { name, args } => {
                     let (family, parameters) = types
                         .builtin_sorts
                         .get(native.name())
                         .ok_or("native signature lacks family provenance")?;
-                    if *family != pattern.name || parameters.len() != pattern.args.len() {
+                    if *family != name || parameters.len() != args.len() {
                         return Err("builtin argument/result sort mismatch".into());
                     }
-                    for (pattern, actual) in pattern.args.iter().zip(parameters) {
-                        unify(
-                            *pattern,
-                            actual,
-                            patterns,
-                            types,
-                            substitution,
-                            compared,
-                            depth + 1,
-                        )?;
+                    for (pattern, actual) in args.iter().zip(parameters) {
+                        unify(pattern, actual, types, substitution, compared, depth + 1)?;
                     }
                 }
-                pb::sort::Kind::Func(pattern) => {
+                SortPattern::Function { inputs, output } => {
                     let function = native
                         .clone()
                         .as_arc_any()
                         .downcast::<FunctionSort>()
                         .map_err(|_| "native signature requires a function sort")?;
-                    if pattern.params.len() != function.inputs().len() {
+                    if inputs.len() != function.inputs().len() {
                         return Err("builtin function arity mismatch".into());
                     }
-                    for (pattern, actual) in pattern.params.iter().zip(function.inputs()) {
-                        unify(
-                            *pattern,
-                            actual,
-                            patterns,
-                            types,
-                            substitution,
-                            compared,
-                            depth + 1,
-                        )?;
+                    for (pattern, actual) in inputs.iter().zip(function.inputs()) {
+                        unify(pattern, actual, types, substitution, compared, depth + 1)?;
                     }
                     unify(
-                        pattern.result,
+                        output,
                         &function.output(),
-                        patterns,
                         types,
                         substitution,
                         compared,
@@ -1653,64 +886,57 @@ impl TypeInfo {
             }
             Ok(())
         }
-        let (_, primitive) = definition_root(definition, key)?;
         for root in native {
             validate_native_sort(root, self)?;
         }
-        let mut patterns = vec![];
         let mut compared = HashMap::default();
-        match normalized_signature(definition, primitive, &mut patterns)? {
-            pb::host_primitive::Typing::Signature(signature) => {
+        match &description.typing {
+            BuiltinTyping::Signature(signature) => {
                 let inputs = native
                     .len()
                     .checked_sub(1)
                     .ok_or("missing builtin result")?;
-                if inputs < signature.inputs.len()
-                    || if signature.varargs.is_empty() {
-                        inputs != signature.inputs.len()
+                if inputs < signature.fixed.len()
+                    || if signature.tail.is_empty() {
+                        inputs != signature.fixed.len()
                     } else {
-                        !(inputs - signature.inputs.len()).is_multiple_of(signature.varargs.len())
+                        !(inputs - signature.fixed.len()).is_multiple_of(signature.tail.len())
                     }
                 {
                     return Err("builtin arity mismatch".into());
                 }
-                let indices = signature
-                    .inputs
+                let patterns = signature
+                    .fixed
                     .iter()
-                    .map(|argument| argument.sort)
+                    .map(|arg| &arg.sort)
                     .chain(
                         signature
-                            .varargs
+                            .tail
                             .iter()
                             .cycle()
-                            .take(inputs - signature.inputs.len())
-                            .map(|argument| argument.sort),
+                            .take(inputs - signature.fixed.len())
+                            .map(|arg| &arg.sort),
                     )
-                    .chain(signature.output);
-                let mut substitution = vec![None; signature.type_params.len()];
-                for (index, actual) in indices.zip(native) {
-                    unify(
-                        index,
-                        actual,
-                        &patterns,
-                        self,
-                        &mut substitution,
-                        &mut compared,
-                        0,
-                    )?;
+                    .chain([&signature.output]);
+                let mut substitution = vec![None; signature.params.len()];
+                for (pattern, actual) in patterns.zip(native) {
+                    unify(pattern, actual, self, &mut substitution, &mut compared, 0)?;
                 }
                 if substitution.iter().any(Option::is_none) {
                     return Err("undetermined builtin type parameter".into());
                 }
                 if signature
-                    .equality_type_params
+                    .params
                     .iter()
-                    .any(|i| !substitution[*i as usize].as_ref().unwrap().is_eq_sort())
+                    .zip(&substitution)
+                    .any(|(parameter, sort)| {
+                        parameter.equality && !sort.as_ref().unwrap().is_eq_sort()
+                    })
                 {
                     return Err("builtin type parameter requires an equality sort".into());
                 }
             }
-            pb::host_primitive::Typing::Application(_) => {
+            BuiltinTyping::FunctionApplication => {
                 let function = native
                     .first()
                     .ok_or("function application requires a function value")?
@@ -1734,12 +960,27 @@ impl TypeInfo {
                     return Err("function application argument/result sort mismatch".into());
                 }
             }
+            BuiltinTyping::FunctionConstructor => {
+                if native.len() < 2
+                    || native[0].name() != "String"
+                    || !native
+                        .last()
+                        .unwrap()
+                        .clone()
+                        .as_arc_any()
+                        .is::<FunctionSort>()
+                {
+                    return Err(
+                        "function construction requires a String target and native function result"
+                            .into(),
+                    );
+                }
+            }
         }
         Ok(())
     }
 
-    /// Bind an owned descriptor to all actual fixed/tail/result occurrences of
-    /// one native implementation, preserving each nominal root independently.
+    /// Preserve every nominal root in one implementation's complete scheme.
     pub fn instantiate_builtin_signature(
         &self,
         key: &str,
@@ -1747,19 +988,18 @@ impl TypeInfo {
         tail: &[ArcSort],
         output: &ArcSort,
     ) -> Result<BuiltinInstance, String> {
-        let definition = self
+        let description = self
             .builtin_definitions
             .get(key)
-            .ok_or("unknown builtin definition")?
+            .ok_or("unknown builtin description")?
             .clone();
         if !self.builtin_owners.contains_key(key) {
-            return Err("builtin definition is not registry-owned".into());
+            return Err("builtin description is not registry-owned".into());
         }
-        let (_, primitive) = definition_root(&definition, key)?;
-        let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
-            return Err("complete signature binding requires a signature descriptor".into());
+        let BuiltinTyping::Signature(signature) = &description.typing else {
+            return Err("complete signature binding requires a signature description".into());
         };
-        if inputs.len() != signature.inputs.len() || tail.len() != signature.varargs.len() {
+        if inputs.len() != signature.fixed.len() || tail.len() != signature.tail.len() {
             return Err("builtin implementation fixed/tail arity mismatch".into());
         }
         let sorts = inputs
@@ -1768,7 +1008,7 @@ impl TypeInfo {
             .chain([output])
             .cloned()
             .collect::<Vec<_>>();
-        self.check_native_signature((key, &definition), &sorts)?;
+        self.check_native_signature(&description, &sorts)?;
         let mut dispatch_name = format!(
             "__egglog_signature_{}_{}_{}_{}",
             key.len(),
@@ -1780,8 +1020,7 @@ impl TypeInfo {
             dispatch_name.push_str(&format!("_{}_{}", sort.name().len(), sort.name()));
         }
         Ok(BuiltinInstance {
-            definition,
-            root_key: key.into(),
+            description,
             dispatch_name,
             binding: InstanceBinding::Exact {
                 sorts,
@@ -1791,54 +1030,44 @@ impl TypeInfo {
         })
     }
 
-    /// Attach the existing native predicate to an owned generic descriptor.
-    /// Each complete acceptance is checked against that descriptor; no backend
-    /// implementation is copied or registered by constructing this instance.
+    /// Retain the existing open native predicate under its registered scheme.
     pub fn instantiate_builtin_open(&self, key: &str) -> Result<BuiltinInstance, String> {
-        let definition = self
+        let description = self
             .builtin_definitions
             .get(key)
-            .ok_or("unknown builtin definition")?
+            .ok_or("unknown builtin description")?
             .clone();
         if !self.builtin_owners.contains_key(key) {
-            return Err("builtin definition is not registry-owned".into());
+            return Err("builtin description is not registry-owned".into());
         }
         Ok(BuiltinInstance {
-            definition,
-            root_key: key.into(),
+            description,
             dispatch_name: format!("__egglog_open_{}_{}", key.len(), key),
             binding: InstanceBinding::Open,
         })
     }
 
-    /// Binds a registered family definition to this exact nominal instance.
-    /// Only registry-owned records can create an instance identity.
     pub fn instantiate_builtin(
         &self,
         key: &str,
         native: &ArcSort,
     ) -> Result<BuiltinInstance, String> {
-        let definition = self
+        let description = self
             .builtin_definitions
             .get(key)
-            .ok_or("unknown builtin definition")?
+            .ok_or("unknown builtin description")?
             .clone();
-        let (_, primitive) = definition_root(&definition, key)?;
-        if matches!(
-            primitive.typing,
-            Some(pb::host_primitive::Typing::Application(_))
-        ) {
+        if matches!(description.typing, BuiltinTyping::FunctionApplication) {
             let function = native
                 .clone()
                 .as_arc_any()
                 .downcast::<FunctionSort>()
                 .map_err(|_| "application instance requires a native function sort")?;
             if self.builtin_owners.get(key).copied() != Some("UnstableFn") {
-                return Err("application definition belongs to another provider".into());
+                return Err("application description belongs to another provider".into());
             }
             return Ok(BuiltinInstance {
-                definition,
-                root_key: key.into(),
+                description,
                 dispatch_name: format!("__egglog_instance_{}_{}_{}", key.len(), key, native.name()),
                 binding: InstanceBinding::Application(function),
             });
@@ -1848,285 +1077,309 @@ impl TypeInfo {
             .get(native.name())
             .ok_or("unregistered family instance")?;
         if self.builtin_owners.get(key) != Some(family) {
-            return Err("builtin definition belongs to another family".into());
+            return Err("builtin description belongs to another family".into());
         }
-        if let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing
-            && signature.equality_type_params.iter().any(|i| {
-                parameters
-                    .get(*i as usize)
-                    .is_none_or(|sort| !sort.is_eq_sort())
+        let BuiltinTyping::Signature(signature) = &description.typing else {
+            return Err("native special form requires an open instance".into());
+        };
+        if signature
+            .params
+            .iter()
+            .enumerate()
+            .any(|(index, parameter)| {
+                parameter.equality && parameters.get(index).is_none_or(|sort| !sort.is_eq_sort())
             })
         {
             return Err("builtin type parameter requires an equality sort".into());
         }
-        let mut resolved = vec![None; definition.sorts.len()];
         fn resolve(
-            index: usize,
-            program: &pb::Program,
+            pattern: &SortPattern,
             types: &TypeInfo,
             family: &str,
             parameters: &[ArcSort],
             native: &ArcSort,
-            resolved: &mut [Option<NativeSortBinding>],
+            depth: usize,
         ) -> Result<NativeSortBinding, String> {
-            if let Some(sort) = &resolved[index] {
-                return Ok(sort.clone());
+            if depth >= 256 {
+                return Err("too-deep native signature pattern".into());
             }
-            let sort = match program.sorts[index]
-                .kind
-                .as_ref()
-                .ok_or("missing sort pattern")?
-            {
-                pb::sort::Kind::Var(i) => NativeSortBinding::Exact(
+            match pattern {
+                SortPattern::Param(index) => Ok(NativeSortBinding::Exact(
                     parameters
-                        .get(*i as usize)
+                        .get(*index)
                         .ok_or("unbound type parameter")?
                         .clone(),
-                ),
-                pb::sort::Kind::Family(f) if f.args.is_empty() => NativeSortBinding::Exact(
-                    types
-                        .get_sort_by_name(&f.name)
-                        .ok_or("unknown scalar signature sort")?
-                        .clone(),
-                ),
-                pb::sort::Kind::Family(f) if f.name == family => {
-                    let args = f
-                        .args
+                )),
+                SortPattern::Eq(name) => {
+                    let sort = types
+                        .get_sort_by_name(name)
+                        .filter(|sort| sort.is_eq_sort())
+                        .ok_or("unknown equality signature sort")?;
+                    Ok(NativeSortBinding::Exact(sort.clone()))
+                }
+                SortPattern::Family { name, args } if args.is_empty() => {
+                    let sort = types
+                        .get_sort_by_name(name)
+                        .filter(|sort| !sort.is_eq_sort() && !sort.is_container_sort())
+                        .ok_or("unknown scalar signature sort")?;
+                    Ok(NativeSortBinding::Exact(sort.clone()))
+                }
+                SortPattern::Family { name, args } => {
+                    let args = args
                         .iter()
-                        .map(|i| {
-                            resolve(
-                                *i as usize,
-                                program,
-                                types,
-                                family,
-                                parameters,
-                                native,
-                                resolved,
-                            )
+                        .map(|pattern| {
+                            resolve(pattern, types, family, parameters, native, depth + 1)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    if args.len() != parameters.len() || !args.iter().zip(parameters).all(|(arg, parameter)| {
-                        matches!(arg, NativeSortBinding::Exact(sort) if sort.name() == parameter.name())
-                    })
-                    {
-                        return Err("signature family application differs from its instance".into());
+                    if name == family {
+                        if args.len() != parameters.len() || !args.iter().zip(parameters).all(|(arg, parameter)| matches!(arg, NativeSortBinding::Exact(sort) if sort.name() == parameter.name())) {
+                            return Err("signature family application differs from its instance".into());
+                        }
+                        Ok(NativeSortBinding::Exact(native.clone()))
+                    } else {
+                        let carrier = types
+                            .mksorts
+                            .get(name)
+                            .and_then(|provider| provider.container_type)
+                            .ok_or_else(|| {
+                                format!(
+                                    "foreign family {name} has no native container representation"
+                                )
+                            })?;
+                        Ok(NativeSortBinding::Family {
+                            name: name.clone(),
+                            args,
+                            carrier,
+                        })
                     }
-                    NativeSortBinding::Exact(native.clone())
                 }
-                pb::sort::Kind::Family(f) => NativeSortBinding::Foreign(
-                    types
-                        .mksorts
-                        .get(&f.name)
-                        .and_then(|provider| provider.container_type)
-                        .ok_or_else(|| {
-                            format!(
-                                "foreign family {} has no native container representation",
-                                f.name
-                            )
-                        })?,
-                ),
-                _ => return Err("unsupported native signature pattern".into()),
-            };
-            resolved[index] = Some(sort.clone());
-            Ok(sort)
+                SortPattern::Function { .. } => {
+                    Err("function patterns require complete native occurrence binding".into())
+                }
+            }
         }
-        for index in 0..resolved.len() {
-            resolve(
-                index,
-                &definition,
-                self,
-                family,
-                parameters,
-                native,
-                &mut resolved,
-            )?;
-        }
+        let sorts = signature
+            .fixed
+            .iter()
+            .chain(&signature.tail)
+            .map(|arg| &arg.sort)
+            .chain([&signature.output])
+            .map(|pattern| resolve(pattern, self, family, parameters, native, 0))
+            .collect::<Result<_, _>>()?;
         Ok(BuiltinInstance {
-            definition,
-            root_key: key.into(),
+            description,
             dispatch_name: format!("__egglog_instance_{}_{}_{}", key.len(), key, native.name()),
-            binding: InstanceBinding::Owner(resolved.into_iter().map(Option::unwrap).collect()),
+            binding: InstanceBinding::Owner(sorts),
         })
     }
 
-    /// Checks a closed wire call against one definition and selects its native
-    /// instance without source-alias overload search. Returned compiler keys
-    /// reference the same implementation/context IDs, not another declaration.
+    /// Return an existing exact registration, including its runtime contexts.
     pub fn resolve_builtin(
         &self,
-        program: &pb::Program,
-        name: &str,
-        arguments: &[u32],
-        output: u32,
-        native_sorts: &[ArcSort],
-    ) -> Result<String, String> {
-        if !self.builtin_errors.is_empty() {
-            return Err(self.builtin_errors.join("; "));
-        }
-        let definition = self
-            .builtin_definitions
-            .get(name)
-            .ok_or_else(|| format!("unknown builtin definition {name}"))?;
-        let mut arena = vec![];
-        let actuals: Vec<_> = arguments
-            .iter()
-            .copied()
-            .chain([output])
-            .map(|i| import_sort(&program.sorts, i, &mut arena))
-            .collect::<Result<_, _>>()?;
-        if arena
-            .iter()
-            .any(|sort| matches!(sort.kind, Some(pb::sort::Kind::Var(_))))
-        {
-            return Err("wire call sorts must be closed".into());
-        }
-        fn matches_native(
-            index: u32,
-            native: &ArcSort,
-            arena: &[pb::Sort],
-            types: &TypeInfo,
-        ) -> bool {
-            match arena[index as usize].kind.as_ref().unwrap() {
-                pb::sort::Kind::Eq(name) => native.is_eq_sort() && native.name() == name,
-                pb::sort::Kind::Family(family) if family.args.is_empty() => {
-                    !native.is_eq_sort()
-                        && !native.is_container_sort()
-                        && native.name() == family.name
-                }
-                pb::sort::Kind::Family(family) => {
-                    types
-                        .builtin_sorts
-                        .get(native.name())
-                        .is_some_and(|(name, parameters)| {
-                            *name == family.name
-                                && family.args.len() == parameters.len()
-                                && family.args.iter().zip(parameters).all(|(index, native)| {
-                                    matches_native(*index, native, arena, types)
-                                })
-                        })
-                }
-                pb::sort::Kind::Func(function) => native
-                    .clone()
-                    .as_arc_any()
-                    .downcast::<FunctionSort>()
-                    .is_ok_and(|sort| {
-                        function.params.len() == sort.inputs().len()
-                            && function
-                                .params
-                                .iter()
-                                .zip(sort.inputs())
-                                .all(|(index, sort)| matches_native(*index, sort, arena, types))
-                            && matches_native(function.result, &sort.output(), arena, types)
-                    }),
-                _ => false,
-            }
-        }
-        if actuals.len() != native_sorts.len()
-            || !actuals
-                .iter()
-                .zip(native_sorts)
-                .all(|(index, native)| matches_native(*index, native, &arena, self))
-        {
-            return Err("native instance binding disagrees with wire sort".into());
-        }
-        self.check_native_signature((name, definition), native_sorts)?;
-        let candidates: Vec<_> = self
+        key: &str,
+        native: &[ArcSort],
+    ) -> Result<PrimitiveWithId, String> {
+        let description = self.builtin_description(key)?;
+        self.check_native_signature(description, native)?;
+        let candidates = self
             .builtin_primitives
-            .get(name)
+            .get(key)
             .into_iter()
             .flatten()
-            .filter(|p| p.accept(native_sorts, self))
-            .collect();
+            .filter(|primitive| primitive.accept(native, self))
+            .collect::<Vec<_>>();
         if candidates.len() != 1 {
             return Err(format!(
-                "builtin {name} has {} matching native instances",
+                "builtin {key} has {} matching native instances",
                 candidates.len()
             ));
         }
-        Ok(candidates[0]
-            .primitive
-            .builtin_instance()
-            .map_or_else(|| name.into(), |instance| instance.dispatch_name.clone()))
+        Ok(candidates[0].clone())
     }
 
-    /// Exports the migrated registration definitions and inventories all remaining
-    /// opaque primitive registrations and generic family factories.
+    /// Assert compatibility without replacing native authority. Binder and
+    /// argument labels describe the signature, rather than its type identity.
+    pub fn check_builtin_signature(&self, supplied: &BuiltinDescription) -> Result<(), String> {
+        supplied.validate()?;
+        let expected = self.builtin_description(&supplied.key)?;
+        let mut actual = supplied.typing.clone();
+        let mut wanted = expected.typing.clone();
+        for typing in [&mut actual, &mut wanted] {
+            if let BuiltinTyping::Signature(signature) = typing {
+                for param in &mut signature.params {
+                    param.name.clear();
+                }
+                for arg in signature.fixed.iter_mut().chain(&mut signature.tail) {
+                    arg.name.clear();
+                }
+            }
+        }
+        if actual != wanted {
+            return Err(format!("conflicting builtin signature {}", supplied.key));
+        }
+        Ok(())
+    }
+
     pub fn builtin_catalog(&self) -> Result<BuiltinCatalog, String> {
         if !self.builtin_errors.is_empty() {
             return Err(self.builtin_errors.join("; "));
         }
         let mut catalog = BuiltinCatalog {
-            definitions: pb::Program {
-                ir_version: 1,
-                ..Default::default()
-            },
-            undescribed_primitives: vec![],
+            descriptions: self.builtin_definitions.values().cloned().collect(),
+            families: self
+                .builtin_families
+                .values()
+                .map(|family| family.as_ref().clone())
+                .collect(),
+            undescribed_primitives: self
+                .primitives
+                .values()
+                .flatten()
+                .filter(|registered| {
+                    registered.primitive.builtin_description().is_none()
+                        && registered.primitive.requires_catalog_definition()
+                })
+                .map(|registered| registered.primitive.name().to_owned())
+                .collect(),
             undescribed_families: self
                 .mksorts
                 .iter()
-                .filter(|(family, provider)| {
-                    provider.requires_catalog_family && !self.builtin_families.declarations.iter().any(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(f)) if &f.name == *family))
+                .filter(|(name, provider)| {
+                    provider.requires_catalog_family && !self.builtin_families.contains_key(*name)
                 })
-                .map(|(family, _)| family.clone())
+                .map(|(name, _)| name.clone())
                 .collect(),
             undescribed_family_primitives: self.builtin_family_gaps.clone(),
-            undescribed_sorts: vec![],
+            undescribed_sorts: self
+                .sorts
+                .values()
+                .filter(|sort| {
+                    !sort.is_eq_sort()
+                        && !(*sort).clone().as_arc_any().is::<FunctionSort>()
+                        && !self.builtin_sorts.contains_key(sort.name())
+                        && !self.builtin_families.contains_key(sort.name())
+                })
+                .map(|sort| sort.name().to_owned())
+                .collect(),
         };
+        catalog
+            .descriptions
+            .sort_by(|left, right| left.key.cmp(&right.key));
+        catalog
+            .families
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        catalog.undescribed_primitives.sort();
         catalog.undescribed_families.sort();
         catalog.undescribed_family_primitives.sort();
-        let mut families = self.builtin_families.clone();
-        families.ir_version = 1;
-        definitions::reconcile_declarations(&families, &mut catalog.definitions)?;
-        let mut keys = self.builtin_definitions.keys().collect::<Vec<_>>();
-        keys.sort();
-        for key in keys {
-            self.export_builtin_definition(key, &mut catalog.definitions)?;
-        }
-        let mut primitives = self.primitives.values().flatten().collect::<Vec<_>>();
-        primitives.sort_by_key(|primitive| primitive.primitive.name());
-        for primitive in primitives {
-            let primitive = &primitive.primitive;
-            if primitive.builtin_definition().is_none()
-                && primitive
-                    .export_program_definition(&mut catalog.definitions)?
-                    .is_none()
-                && primitive.requires_catalog_definition()
-            {
-                catalog
-                    .undescribed_primitives
-                    .push(primitive.name().to_owned());
-            }
-        }
-        catalog.undescribed_primitives.sort();
-        catalog.undescribed_sorts = self.sorts.values().filter(|sort| {
-            !sort.is_eq_sort() && !(*sort).clone().as_arc_any().is::<FunctionSort>() && !self.builtin_sorts.contains_key(sort.name()) && !catalog.definitions.declarations.iter().any(|declaration| matches!(&declaration.kind, Some(pb::declaration::Kind::HostSortFamily(family)) if family.name == sort.name()))
-        }).map(|sort| sort.name().to_owned()).collect();
         catalog.undescribed_sorts.sort();
         Ok(catalog)
     }
 
-    /// Checks the provider's exact key and signature, not presentation metadata.
-    /// Reconcile bindings against the full canonical declaration context first:
-    /// a default may refer to another builtin or a previously installed table.
-    pub fn check_builtin_signature(
+    /// Resolve the same per-context native candidates used by function values.
+    /// Optional runtime identity rejects stale or differently selected targets.
+    pub fn resolve_function_target(
         &self,
-        program: &pb::Program,
-        primitive: &pb::HostPrimitive,
-    ) -> Result<(), String> {
-        if !self.builtin_errors.is_empty() {
-            return Err(self.builtin_errors.join("; "));
+        name: &str,
+        inputs: &[ArcSort],
+        output: &ArcSort,
+        resolved: Option<&ResolvedFunctionId>,
+    ) -> Result<NativeFunctionTarget, String> {
+        if let Some(function) = self.get_func_type(name) {
+            if !function
+                .input
+                .iter()
+                .chain([&function.output])
+                .map(|sort| sort.name())
+                .eq(inputs.iter().chain([output]).map(|sort| sort.name()))
+            {
+                return Err("function target signature mismatch".into());
+            }
+            if matches!(resolved, Some(ResolvedFunctionId::Primitive { .. })) {
+                return Err("function target runtime kind mismatch".into());
+            }
+            return Ok(NativeFunctionTarget::Function(name.into()));
         }
-        let definition = self
-            .builtin_definitions
-            .get(&primitive.name)
-            .ok_or_else(|| format!("unknown builtin definition {}", primitive.name))?;
-        let (_, expected) = definition_root(definition, &primitive.name)?;
-        let mut sorts = vec![];
-        if normalized_signature(program, primitive, &mut sorts)?
-            != normalized_signature(definition, expected, &mut sorts)?
-        {
-            return Err(format!("conflicting builtin signature {}", primitive.name));
+        let signature = inputs.iter().chain([output]).cloned().collect::<Vec<_>>();
+        let candidates = self
+            .get_prims(name)
+            .ok_or("unknown function target")?
+            .iter()
+            .filter(|primitive| primitive.accept(&signature, self))
+            .collect::<Vec<_>>();
+        let mut selected: Vec<PrimitiveWithId> = vec![];
+        for context in [Context::Pure, Context::Read, Context::Write, Context::Full] {
+            let mut available = candidates
+                .iter()
+                .filter(|primitive| primitive.context_ids[context].is_some());
+            let Some(primitive) = available.next() else {
+                if let Some(ResolvedFunctionId::Primitive { context_ids }) = resolved
+                    && context_ids[context].is_some()
+                {
+                    return Err("function target runtime context mismatch".into());
+                }
+                continue;
+            };
+            if available.next().is_some() {
+                return Err(format!("ambiguous function target {name} in {context:?}"));
+            }
+            if let Some(resolved) = resolved {
+                let ResolvedFunctionId::Primitive { context_ids } = resolved else {
+                    return Err("function target runtime kind mismatch".into());
+                };
+                if context_ids[context] != primitive.context_ids[context] {
+                    return Err("function target runtime identity mismatch".into());
+                }
+            }
+            if !selected
+                .iter()
+                .any(|old| old.context_ids == primitive.context_ids)
+            {
+                selected.push((*primitive).clone());
+            }
         }
-        Ok(())
+        if selected.is_empty() {
+            return Err(format!("unresolved function target {name}"));
+        }
+        Ok(NativeFunctionTarget::Primitive(selected))
+    }
+}
+
+impl EGraph {
+    /// Select source sort information captured before proof instrumentation.
+    pub fn authoring_type_info(&self) -> &TypeInfo {
+        self.proof_state
+            .original_typechecking
+            .as_ref()
+            .map_or(&self.type_info, |original| &original.type_info)
+    }
+
+    /// Resolve a function value from its retained runtime IDs and per-value
+    /// capture sorts, without extracting text or invoking the target.
+    pub fn resolve_function_value_target(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<NativeFunctionTarget, String> {
+        let function = sort
+            .clone()
+            .as_arc_any()
+            .downcast::<FunctionSort>()
+            .map_err(|_| "expected native function sort")?;
+        let value = self
+            .value_to_container::<FunctionContainer>(value)
+            .ok_or("missing native function value")?;
+        let inputs = value
+            .1
+            .iter()
+            .map(|(sort, _)| sort)
+            .chain(function.inputs())
+            .cloned()
+            .collect::<Vec<_>>();
+        self.authoring_type_info().resolve_function_target(
+            &value.2,
+            &inputs,
+            &function.output(),
+            Some(&value.0),
+        )
     }
 }

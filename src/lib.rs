@@ -43,7 +43,6 @@ use egglog_ast::util::ListDisplay;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-pub use egglog_proto as proto;
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
@@ -76,6 +75,7 @@ pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
+pub use typechecking::PrimitiveWithId;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
 use util::*;
@@ -289,21 +289,18 @@ impl ScopedActionBuilder<'_> {
 /// `name` and `get_type_constraints` aren't capability-dependent, so
 /// the four kind-specific traits ([`PurePrim`], [`WritePrim`],
 /// [`ReadPrim`], [`FullPrim`]) share this supertrait.
-pub trait Primitive: Send + Sync + 'static {
+pub trait Primitive: Send + Sync + Any {
     /// Returns the name of this primitive.
     fn name(&self) -> &str;
 
     /// Constructs a type constraint for this primitive.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
 
-    /// The canonical protobuf definition, when this registration has migrated
-    /// to catalog-driven typing. Missing definitions remain explicit inventory
-    /// gaps; they are not inferred from opaque native constraints.
-    /// The explicit root is independent of declaration ordering in its closed
-    /// default-expression context. Helpers remain evidence, not registrations.
-    fn builtin_definition(&self) -> Option<(&str, &proto::Program)> {
+    /// The authoritative native scheme, when this registration has one.
+    /// Missing descriptions remain explicit inventory gaps.
+    fn builtin_description(&self) -> Option<&builtin::BuiltinDescription> {
         self.builtin_instance()
-            .map(|instance| (instance.root_key.as_str(), instance.definition.as_ref()))
+            .map(|instance| instance.description.as_ref())
     }
 
     /// Checked instantiation of a presort-owned definition, when applicable.
@@ -311,42 +308,10 @@ pub trait Primitive: Send + Sync + 'static {
         None
     }
 
-    /// Whether this native registration denotes an independent portable
-    /// callable. Source facades with an inert canonical lowering and internal
-    /// compiler helpers may opt out; ordinary providers must retain the default
-    /// so a missing definition remains an explicit export gap.
+    /// Whether this registration requires an independent native description.
+    /// Internal compiler helpers may opt out; ordinary providers retain gaps.
     fn requires_catalog_definition(&self) -> bool {
         true
-    }
-
-    /// Imports a genuine program-defined computation and its portable code.
-    /// This is separate from the host catalog: it must not execute the body,
-    /// a validator, or any provider. Exact native selection is checked by the
-    /// caller before this projection. `None` leaves the destination unchanged.
-    fn export_program_definition(
-        &self,
-        _destination: &mut proto::Program,
-    ) -> Result<Option<String>, String> {
-        Ok(None)
-    }
-
-    /// Lowers a resolved source-only facade using already-lowered argument refs.
-    /// `native_sorts` retains the exact resolved inputs/output before structural
-    /// protobuf sort projection can erase nominal overload distinctions.
-    /// Implementations may import definitions and append helper nodes, but must
-    /// not execute native bodies, validators, queries, or sort providers. `None`
-    /// must leave the destination unchanged. On error the caller discards the
-    /// incomplete source phase; this interface does not promise rollback.
-    fn lower_builtin_call(
-        &self,
-        _types: &TypeInfo,
-        _native_sorts: (&[ArcSort], &ArcSort),
-        _args: &[u32],
-        _output: u32,
-        _span: Option<proto::Span>,
-        _destination: &mut proto::Program,
-    ) -> Result<Option<proto::node::Kind>, String> {
-        Ok(None)
     }
 }
 
@@ -544,7 +509,7 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
-trait ExtensionStateValue: Any + dyn_clone::DynClone + Send + Sync {}
+pub(crate) trait ExtensionStateValue: Any + dyn_clone::DynClone + Send + Sync {}
 
 impl<T> ExtensionStateValue for T where T: Any + Clone + Send + Sync {}
 
@@ -708,24 +673,7 @@ impl Default for EGraph {
         };
         add_primitive_with_validator!(
             &mut eg,
-            "!=" [id = "egglog.core.ne", bindings = |signature: &proto::GenericSignature| proto::CallableBindings {
-                rust: Some(proto::RustBindings {
-                    views: vec![proto::RustCallable {
-                        path: ["egglog_experimental", "typed", "builtins", "ne"]
-                            .map(str::to_owned)
-                            .into(),
-                        params: signature.inputs.iter().enumerate().map(|(index, input)| {
-                            proto::RustParameter {
-                                name: input.name.clone(),
-                                core_input: Some(index as u32),
-                                borrowed: false,
-                            }
-                        }).collect(),
-                        ..Default::default()
-                    }],
-                }),
-                ..Default::default()
-            }] = |a: #, b: #| -?> () {
+            "!=" [id = "egglog.core.ne"] = |a: #, b: #| -?> () {
                 (a != b).then_some(())
             },
             neq_validator

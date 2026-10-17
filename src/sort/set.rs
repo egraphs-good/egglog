@@ -65,216 +65,86 @@ impl Presort for SetSort {
         Some(TypeId::of::<<Self as ContainerSort>::Container>())
     }
 
-    fn builtin_definitions() -> Vec<proto::Program> {
-        use proto as pb;
+    fn family_description() -> Option<builtin::FamilyDescription> {
+        Some(builtin::FamilyDescription {
+            name: "Set".into(),
+            arity: 1,
+        })
+    }
+
+    fn builtin_definitions() -> Vec<builtin::BuiltinDescription> {
+        use builtin::{
+            Argument, BuiltinDescription, BuiltinTyping, Signature, SortPattern, TypeParameter,
+        };
+        let patterns = [
+            SortPattern::Param(0),
+            SortPattern::Family {
+                name: "Set".into(),
+                args: vec![SortPattern::Param(0)],
+            },
+            SortPattern::Family {
+                name: "i64".into(),
+                args: vec![],
+            },
+            SortPattern::Family {
+                name: "Unit".into(),
+                args: vec![],
+            },
+        ];
         [
-            ("empty", "set-empty", &[][..], 1, "empty"),
-            ("of", "set-of", &[][..], 1, ""),
-            ("get", "set-get", &[("set", 1), ("index", 2)][..], 0, "get"),
-            (
-                "insert",
-                "set-insert",
-                &[("set", 1), ("value", 0)][..],
-                1,
-                "insert",
-            ),
-            (
-                "remove",
-                "set-remove",
-                &[("set", 1), ("value", 0)][..],
-                1,
-                "remove",
-            ),
-            ("length", "set-length", &[("set", 1)][..], 2, "length"),
+            ("empty", "set-empty", vec![], 1),
+            ("of", "set-of", vec![], 1),
+            ("get", "set-get", vec![("set", 1), ("index", 2)], 0),
+            ("insert", "set-insert", vec![("set", 1), ("value", 0)], 1),
+            ("remove", "set-remove", vec![("set", 1), ("value", 0)], 1),
+            ("length", "set-length", vec![("set", 1)], 2),
             (
                 "contains",
                 "set-contains",
-                &[("set", 1), ("value", 0)][..],
+                vec![("set", 1), ("value", 0)],
                 3,
-                "contains",
             ),
             (
                 "not_contains",
                 "set-not-contains",
-                &[("set", 1), ("value", 0)][..],
+                vec![("set", 1), ("value", 0)],
                 3,
-                "not_contains",
             ),
-            (
-                "union",
-                "set-union",
-                &[("set", 1), ("other", 1)][..],
-                1,
-                "__or__",
-            ),
-            (
-                "diff",
-                "set-diff",
-                &[("set", 1), ("other", 1)][..],
-                1,
-                "__sub__",
-            ),
+            ("union", "set-union", vec![("set", 1), ("other", 1)], 1),
+            ("diff", "set-diff", vec![("set", 1), ("other", 1)], 1),
             (
                 "intersect",
                 "set-intersect",
-                &[("set", 1), ("other", 1)][..],
+                vec![("set", 1), ("other", 1)],
                 1,
-                "__and__",
             ),
         ]
         .into_iter()
-        .map(|(key, alias, inputs, output, python_name)| {
-            let receiver = !matches!(key, "empty" | "of");
-            let params: Vec<_> = inputs
-                .iter()
-                .enumerate()
-                .skip(usize::from(receiver))
-                .map(|(index, (name, _))| (index as u32, *name))
-                .chain((key == "of").then_some((0, "args")))
-                .collect();
-            pb::Program {
-                ir_version: 1,
-                sorts: vec![
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Var(0)),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "Set".into(),
-                            args: vec![0],
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "i64".into(),
-                            args: vec![],
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "Unit".into(),
-                            args: vec![],
-                        })),
-                        ..Default::default()
-                    },
-                ],
-                declarations: [("Set", 1), ("i64", 0), ("Unit", 0)]
+        .map(|(key, alias, inputs, output)| BuiltinDescription {
+            key: format!("egglog.core.set.{key}"),
+            aliases: vec![alias.into()],
+            typing: BuiltinTyping::Signature(Signature {
+                params: vec![TypeParameter {
+                    name: "T".into(),
+                    equality: false,
+                }],
+                fixed: inputs
                     .into_iter()
-                    .map(|(name, arity)| pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                            name: name.into(),
-                            arity,
-                            bindings: (name == "Set").then(|| pb::SortBindings {
-                                python: Some(pb::TypeBinding {
-                                    path: vec!["egglog".into(), "builtins".into(), name.into()],
-                                    type_params: vec!["T".into()],
-                                }),
-                                rust: Some(pb::TypeBinding {
-                                    path: vec![
-                                        "egglog_experimental".into(),
-                                        "typed".into(),
-                                        "builtins".into(),
-                                        name.into(),
-                                    ],
-                                    type_params: vec!["T".into()],
-                                }),
-                                ..Default::default()
-                            }),
-                        })),
-                        ..Default::default()
+                    .map(|(name, sort)| Argument {
+                        name: name.into(),
+                        sort: patterns[sort].clone(),
                     })
-                    .chain([pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
-                            name: format!("egglog.core.set.{key}"),
-                            typing: Some(pb::host_primitive::Typing::Signature(
-                                pb::GenericSignature {
-                                    type_params: vec!["T".into()],
-                                    equality_type_params: vec![],
-                                    inputs: inputs
-                                        .iter()
-                                        .map(|(name, sort)| pb::Arg {
-                                            name: (*name).into(),
-                                            sort: *sort,
-                                        })
-                                        .collect(),
-                                    output: Some(output),
-                                    varargs: if key == "of" {
-                                        vec![pb::Arg {
-                                            name: "values".into(),
-                                            sort: 0,
-                                        }]
-                                    } else {
-                                        vec![]
-                                    },
-                                },
-                            )),
-                        })),
-                        bindings: Some(pb::CallableBindings {
-                            // Python's existing Set surface has no indexed get.
-                            python: (key != "get").then(|| pb::PythonBindings {
-                                views: vec![pb::PythonCallable {
-                                    kind: match key {
-                                        "of" => pb::PythonCallKind::Initializer,
-                                        "empty" => pb::PythonCallKind::ClassMethod,
-                                        _ => pb::PythonCallKind::Method,
-                                    }
-                                    .into(),
-                                    path: if key == "of" {
-                                        vec![]
-                                    } else {
-                                        vec![python_name.into()]
-                                    },
-                                    owner: Some(pb::BindingOwner {
-                                        kind: Some(pb::binding_owner::Kind::Sort(1)),
-                                    }),
-                                    receiver: receiver.then_some(0),
-                                    params: params
-                                        .iter()
-                                        .map(|(slot, name)| pb::PythonParameter {
-                                            core_input: Some(*slot),
-                                            name: (*name).into(),
-                                            default_expr: None,
-                                        })
-                                        .collect(),
-                                    ..Default::default()
-                                }],
-                            }),
-                            rust: Some(pb::RustBindings {
-                                views: vec![pb::RustCallable {
-                                    path: vec![key.into()],
-                                    owner: Some(pb::BindingOwner {
-                                        kind: Some(pb::binding_owner::Kind::Sort(1)),
-                                    }),
-                                    receiver: receiver.then_some(pb::RustReceiver {
-                                        core_input: Some(0),
-                                        borrowed: true,
-                                    }),
-                                    params: params
-                                        .iter()
-                                        .map(|(slot, name)| pb::RustParameter {
-                                            core_input: Some(*slot),
-                                            name: (*name).into(),
-                                            borrowed: false,
-                                        })
-                                        .collect(),
-                                    ..Default::default()
-                                }],
-                            }),
-                            egglog: Some(pb::EgglogBindings {
-                                views: vec![pb::EgglogCallable {
-                                    symbol: alias.into(),
-                                    datatype_member: false,
-                                }],
-                            }),
-                        }),
-                        ..Default::default()
-                    }])
                     .collect(),
-                ..Default::default()
-            }
+                tail: if key == "of" {
+                    vec![Argument {
+                        name: "values".into(),
+                        sort: patterns[0].clone(),
+                    }]
+                } else {
+                    vec![]
+                },
+                output: patterns[output].clone(),
+            }),
         })
         .collect()
     }

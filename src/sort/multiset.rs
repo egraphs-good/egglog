@@ -61,8 +61,38 @@ impl Presort for MultiSetSort {
         Some(TypeId::of::<<Self as ContainerSort>::Container>())
     }
 
-    fn builtin_definitions() -> Vec<proto::Program> {
-        use proto as pb;
+    fn family_description() -> Option<builtin::FamilyDescription> {
+        Some(builtin::FamilyDescription {
+            name: "MultiSet".into(),
+            arity: 1,
+        })
+    }
+
+    fn builtin_definitions() -> Vec<builtin::BuiltinDescription> {
+        use builtin::{
+            Argument, BuiltinDescription, BuiltinTyping, Signature, SortPattern, TypeParameter,
+        };
+        let element = SortPattern::Param(0);
+        let multiset = SortPattern::Family {
+            name: "MultiSet".into(),
+            args: vec![element.clone()],
+        };
+        let patterns = [
+            element,
+            multiset.clone(),
+            SortPattern::Family {
+                name: "i64".into(),
+                args: vec![],
+            },
+            SortPattern::Family {
+                name: "Unit".into(),
+                args: vec![],
+            },
+            SortPattern::Family {
+                name: "MultiSet".into(),
+                args: vec![multiset],
+            },
+        ];
         let mut definitions: Vec<_> = [
             ("of", vec![], vec![("args", 0)], 1),
             ("single", vec![("x", 0), ("i", 2)], vec![], 1),
@@ -96,250 +126,51 @@ impl Presort for MultiSetSort {
             ("union_values", vec![("multiset", 1)], vec![], 0),
         ]
         .into_iter()
-        .map(|(key, inputs, varargs, output)| {
-            let free = key.ends_with("_swapped");
-            let receiver = !free && !matches!(key, "of" | "single" | "sum_multisets");
-            let owner = (!free).then_some(pb::BindingOwner {
-                kind: Some(pb::binding_owner::Kind::Sort(1)),
-            });
-            let parameters = inputs
-                .iter()
-                .chain(&varargs)
-                .enumerate()
-                .skip(usize::from(receiver));
-            pb::Program {
-                ir_version: 1,
-                sorts: [
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Var(0)),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "MultiSet".into(),
-                            args: vec![0],
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "i64".into(),
-                            args: vec![],
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "Unit".into(),
-                            args: vec![],
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Sort {
-                        kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                            name: "MultiSet".into(),
-                            args: vec![1],
-                        })),
-                        ..Default::default()
-                    },
-                ]
-                .into_iter()
-                .take(if key == "sum_multisets" { 5 } else { 4 })
-                .collect(),
-                declarations: vec![
-                    pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                            name: "MultiSet".into(),
-                            arity: 1,
-                            bindings: Some(pb::SortBindings {
-                                python: Some(pb::TypeBinding {
-                                    path: vec![
-                                        "egglog".into(),
-                                        "builtins".into(),
-                                        "MultiSet".into(),
-                                    ],
-                                    type_params: vec!["T".into()],
-                                }),
-                                rust: Some(pb::TypeBinding {
-                                    path: vec![
-                                        "egglog_experimental".into(),
-                                        "typed".into(),
-                                        "builtins".into(),
-                                        "MultiSet".into(),
-                                    ],
-                                    type_params: vec!["T".into()],
-                                }),
-                                ..Default::default()
-                            }),
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                            name: "i64".into(),
-                            arity: 0,
-                            ..Default::default()
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                            name: "Unit".into(),
-                            arity: 0,
-                            ..Default::default()
-                        })),
-                        ..Default::default()
-                    },
-                    pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
-                            name: format!("egglog.core.multiset.{key}"),
-                            typing: Some(pb::host_primitive::Typing::Signature(
-                                pb::GenericSignature {
-                                    type_params: vec!["T".into()],
-                                    inputs: inputs
-                                        .iter()
-                                        .map(|(name, sort)| pb::Arg {
-                                            name: (*name).into(),
-                                            sort: *sort,
-                                        })
-                                        .collect(),
-                                    varargs: varargs
-                                        .iter()
-                                        .map(|(name, sort)| pb::Arg {
-                                            name: (*name).into(),
-                                            sort: *sort,
-                                        })
-                                        .collect(),
-                                    output: Some(output),
-                                    equality_type_params: if key == "union_values" {
-                                        vec![0]
-                                    } else {
-                                        vec![]
-                                    },
-                                },
-                            )),
-                        })),
-                        bindings: Some(pb::CallableBindings {
-                            python: Some(pb::PythonBindings {
-                                views: vec![pb::PythonCallable {
-                                    kind: if free {
-                                        pb::PythonCallKind::Function
-                                    } else {
-                                        match key {
-                                            "of" => pb::PythonCallKind::Initializer,
-                                            "single" | "sum_multisets" => {
-                                                pb::PythonCallKind::ClassMethod
-                                            }
-                                            _ => pb::PythonCallKind::Method,
-                                        }
-                                    }
-                                    .into(),
-                                    path: if free {
-                                        vec![
-                                            "egglog".into(),
-                                            "builtins".into(),
-                                            format!("multiset_{key}"),
-                                        ]
-                                    } else {
-                                        match key {
-                                            "of" => vec![],
-                                            "subtract" => vec!["__sub__".into()],
-                                            "intersection" => vec!["__and__".into()],
-                                            "sum" => vec!["__add__".into()],
-                                            _ => vec![key.into()],
-                                        }
-                                    },
-                                    owner,
-                                    receiver: receiver.then_some(0),
-                                    params: parameters
-                                        .clone()
-                                        .map(|(i, (name, _))| pb::PythonParameter {
-                                            core_input: Some(i as u32),
-                                            name: (*name).into(),
-                                            default_expr: None,
-                                        })
-                                        .collect(),
-                                    ..Default::default()
-                                }],
-                            }),
-                            rust: Some(pb::RustBindings {
-                                views: vec![pb::RustCallable {
-                                    path: if free {
-                                        vec![
-                                            "egglog_experimental".into(),
-                                            "typed".into(),
-                                            "builtins".into(),
-                                            format!("multiset_{key}"),
-                                        ]
-                                    } else {
-                                        vec![if key == "of" { "new" } else { key }.into()]
-                                    },
-                                    owner,
-                                    receiver: receiver.then_some(pb::RustReceiver {
-                                        core_input: Some(0),
-                                        borrowed: true,
-                                    }),
-                                    params: parameters
-                                        .map(|(i, (name, _))| pb::RustParameter {
-                                            core_input: Some(i as u32),
-                                            name: (*name).into(),
-                                            borrowed: false,
-                                        })
-                                        .collect(),
-                                    ..Default::default()
-                                }],
-                            }),
-                            egglog: Some(pb::EgglogBindings {
-                                views: vec![pb::EgglogCallable {
-                                    symbol: format!("multiset-{}", key.replace('_', "-")),
-                                    datatype_member: false,
-                                }],
-                            }),
-                        }),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }
+        .map(|(key, inputs, tail, output)| BuiltinDescription {
+            key: format!("egglog.core.multiset.{key}"),
+            aliases: vec![format!("multiset-{}", key.replace('_', "-"))],
+            typing: BuiltinTyping::Signature(Signature {
+                params: vec![TypeParameter {
+                    name: "T".into(),
+                    equality: key == "union_values",
+                }],
+                fixed: inputs
+                    .into_iter()
+                    .map(|(name, sort)| Argument {
+                        name: name.into(),
+                        sort: patterns[sort].clone(),
+                    })
+                    .collect(),
+                tail: tail
+                    .into_iter()
+                    .map(|(name, sort)| Argument {
+                        name: name.into(),
+                        sort: patterns[sort].clone(),
+                    })
+                    .collect(),
+                output: patterns[output].clone(),
+            }),
         })
         .collect();
-
-        // Reuse the same owned family declarations; only these seven callable
-        // records add structural function patterns to the ordinary catalog.
-        let families = definitions[0]
-            .declarations
-            .iter()
-            .filter(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostSortFamily(_))))
-            .cloned()
-            .collect::<Vec<_>>();
         definitions.extend(
             [
-                ("map", vec![("f", 4), ("xs", 1)], 3, vec![0], 2, Some(1)),
-                ("filter", vec![("f", 4), ("xs", 1)], 1, vec![0], 2, Some(1)),
-                (
-                    "filter_not",
-                    vec![("f", 4), ("xs", 1)],
-                    1,
-                    vec![0],
-                    2,
-                    Some(1),
-                ),
+                ("map", vec![("f", 4), ("xs", 1)], 3, vec![0], 2),
+                ("filter", vec![("f", 4), ("xs", 1)], 1, vec![0], 2),
+                ("filter_not", vec![("f", 4), ("xs", 1)], 1, vec![0], 2),
                 (
                     "reduce",
                     vec![("f", 4), ("initial", 0), ("xs", 1)],
                     0,
                     vec![0, 0],
                     0,
-                    None,
                 ),
-                ("flat_map", vec![("f", 4), ("xs", 1)], 1, vec![0], 1, None),
+                ("flat_map", vec![("f", 4), ("xs", 1)], 1, vec![0], 1),
                 (
                     "fill_index",
                     vec![("multiset", 1), ("f", 4)],
                     2,
                     vec![1, 0],
                     3,
-                    Some(0),
                 ),
                 (
                     "clear_index",
@@ -347,152 +178,72 @@ impl Presort for MultiSetSort {
                     2,
                     vec![1, 0],
                     3,
-                    Some(0),
                 ),
             ]
             .into_iter()
-            .map(|(key, inputs, output, params, result, receiver)| {
+            .map(|(key, inputs, output, params, result)| {
                 let map = key == "map";
-                let free = receiver.is_none();
-                let owner = (!free).then_some(pb::BindingOwner {
-                    kind: Some(pb::binding_owner::Kind::Sort(1)),
+                let mut patterns = vec![
+                    SortPattern::Param(0),
+                    SortPattern::Family {
+                        name: "MultiSet".into(),
+                        args: vec![SortPattern::Param(0)],
+                    },
+                    if map {
+                        SortPattern::Param(1)
+                    } else {
+                        SortPattern::Family {
+                            name: "Unit".into(),
+                            args: vec![],
+                        }
+                    },
+                    if map {
+                        SortPattern::Family {
+                            name: "MultiSet".into(),
+                            args: vec![SortPattern::Param(1)],
+                        }
+                    } else {
+                        SortPattern::Family {
+                            name: "i64".into(),
+                            args: vec![],
+                        }
+                    },
+                ];
+                patterns.push(SortPattern::Function {
+                    inputs: params.into_iter().map(|i| patterns[i].clone()).collect(),
+                    output: Box::new(patterns[result].clone()),
                 });
-                let name = if key == "reduce" {
-                    "multiset_fold".to_owned()
-                } else if free {
-                    format!("multiset_{key}")
-                } else {
-                    key.to_owned()
-                };
-                let parameters = inputs
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| receiver != Some(*i as u32));
-                let mut declarations = families.clone();
-                declarations.push(pb::Declaration {
-                    kind: Some(pb::declaration::Kind::HostPrimitive(pb::HostPrimitive {
-                        name: format!("egglog.core.multiset.{key}"),
-                        typing: Some(pb::host_primitive::Typing::Signature(
-                            pb::GenericSignature {
-                                type_params: if map {
-                                    vec!["T".into(), "V".into()]
-                                } else {
-                                    vec!["T".into()]
+                BuiltinDescription {
+                    key: format!("egglog.core.multiset.{key}"),
+                    aliases: vec![format!("unstable-multiset-{}", key.replace('_', "-"))],
+                    typing: BuiltinTyping::Signature(Signature {
+                        params: if map {
+                            vec![
+                                TypeParameter {
+                                    name: "T".into(),
+                                    equality: false,
                                 },
-                                inputs: inputs
-                                    .iter()
-                                    .map(|(name, sort)| pb::Arg {
-                                        name: (*name).into(),
-                                        sort: *sort,
-                                    })
-                                    .collect(),
-                                output: Some(output),
-                                ..Default::default()
-                            },
-                        )),
-                    })),
-                    bindings: Some(pb::CallableBindings {
-                        python: Some(pb::PythonBindings {
-                            views: vec![pb::PythonCallable {
-                                kind: if free {
-                                    pb::PythonCallKind::Function
-                                } else {
-                                    pb::PythonCallKind::Method
-                                }
-                                .into(),
-                                path: if free {
-                                    vec!["egglog".into(), "builtins".into(), name.clone()]
-                                } else {
-                                    vec![name.clone()]
+                                TypeParameter {
+                                    name: "V".into(),
+                                    equality: false,
                                 },
-                                owner,
-                                receiver,
-                                params: parameters
-                                    .clone()
-                                    .map(|(i, (name, _))| pb::PythonParameter {
-                                        core_input: Some(i as u32),
-                                        name: (*name).into(),
-                                        default_expr: None,
-                                    })
-                                    .collect(),
-                                ..Default::default()
-                            }],
-                        }),
-                        rust: Some(pb::RustBindings {
-                            views: vec![pb::RustCallable {
-                                path: if free {
-                                    vec![
-                                        "egglog_experimental".into(),
-                                        "typed".into(),
-                                        "builtins".into(),
-                                        name,
-                                    ]
-                                } else {
-                                    vec![name]
-                                },
-                                owner,
-                                receiver: receiver.map(|i| pb::RustReceiver {
-                                    core_input: Some(i),
-                                    borrowed: true,
-                                }),
-                                params: parameters
-                                    .map(|(i, (name, _))| pb::RustParameter {
-                                        core_input: Some(i as u32),
-                                        name: (*name).into(),
-                                        borrowed: false,
-                                    })
-                                    .collect(),
-                                ..Default::default()
-                            }],
-                        }),
-                        egglog: Some(pb::EgglogBindings {
-                            views: vec![pb::EgglogCallable {
-                                symbol: format!("unstable-multiset-{}", key.replace('_', "-")),
-                                datatype_member: false,
-                            }],
-                        }),
+                            ]
+                        } else {
+                            vec![TypeParameter {
+                                name: "T".into(),
+                                equality: false,
+                            }]
+                        },
+                        fixed: inputs
+                            .into_iter()
+                            .map(|(name, sort)| Argument {
+                                name: name.into(),
+                                sort: patterns[sort].clone(),
+                            })
+                            .collect(),
+                        tail: vec![],
+                        output: patterns[output].clone(),
                     }),
-                    ..Default::default()
-                });
-                pb::Program {
-                    ir_version: 1,
-                    sorts: vec![
-                        pb::Sort {
-                            kind: Some(pb::sort::Kind::Var(0)),
-                            ..Default::default()
-                        },
-                        pb::Sort {
-                            kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                                name: "MultiSet".into(),
-                                args: vec![0],
-                            })),
-                            ..Default::default()
-                        },
-                        pb::Sort {
-                            kind: Some(if map {
-                                pb::sort::Kind::Var(1)
-                            } else {
-                                pb::sort::Kind::Family(pb::HostSort {
-                                    name: "Unit".into(),
-                                    args: vec![],
-                                })
-                            }),
-                            ..Default::default()
-                        },
-                        pb::Sort {
-                            kind: Some(pb::sort::Kind::Family(pb::HostSort {
-                                name: if map { "MultiSet" } else { "i64" }.into(),
-                                args: if map { vec![2] } else { vec![] },
-                            })),
-                            ..Default::default()
-                        },
-                        pb::Sort {
-                            kind: Some(pb::sort::Kind::Func(pb::FuncSort { params, result })),
-                            ..Default::default()
-                        },
-                    ],
-                    declarations,
-                    ..Default::default()
                 }
             }),
         );
