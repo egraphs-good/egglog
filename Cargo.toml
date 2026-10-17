@@ -168,6 +168,10 @@ testing_logger = "0.1"
 insta = "1.40"
 serial_test = "3"
 
+[profile.dev]
+# Keep file/line backtraces with smaller dev and test build artifacts.
+debug = "line-tables-only"
+
 [profile.release]
 incremental = true
 
