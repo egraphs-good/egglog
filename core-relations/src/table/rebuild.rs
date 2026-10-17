@@ -60,7 +60,7 @@ impl SortedWritesTable {
         // does not replay dirty IDs already handled by earlier full scans.
         let to_scan = self.subset_tracker.recent_updates(table_id, table);
         let rows = self.data.next_row().index();
-        if rows <= 10_000 {
+        if rows <= MIN_INCREMENTAL_REBUILD_ROWS {
             return self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
         }
         if to_scan.size() == 0 {
@@ -305,6 +305,8 @@ impl SortedWritesTable {
     }
 }
 
+/// Tables up to this size are always rebuilt with a full scan.
+const MIN_INCREMENTAL_REBUILD_ROWS: usize = 100;
 const MIN_REBUILD_PARTITION_ROWS: usize = 256;
 const MIN_COARSE_REBUILD_THREADS: usize = 4;
 
