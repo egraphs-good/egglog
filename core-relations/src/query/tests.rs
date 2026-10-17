@@ -2,20 +2,14 @@ use super::*;
 use crate::{
     offsets::{Offsets, RowId},
     table::SortedWritesTable,
-    table_shortcuts::v,
+    table_shortcuts::{TimestampedTable, v},
 };
 use egglog_reports::ReportLevel;
 use std::iter;
 
 fn add_table(db: &mut Database, modulo: usize) -> TableId {
     let table = db.add_table(
-        SortedWritesTable::new(
-            1,
-            3,
-            Some(ColumnId::new(2)),
-            vec![],
-            Box::new(|_, _, _, _| false),
-        ),
+        SortedWritesTable::new(1, 3, ColumnId::new(2), vec![], Box::new(|_, _, _, _| false)),
         iter::empty(),
         iter::empty(),
     );
@@ -187,11 +181,9 @@ fn header_cache_still_rejects_slow_constraints_on_empty_tables() {
 
 fn output_table(db: &mut Database, arity: usize) -> TableId {
     db.add_table(
-        SortedWritesTable::new(
+        TimestampedTable::new(
             arity,
             arity,
-            None,
-            vec![],
             Box::new(|_, old, new, _| {
                 assert_eq!(old, new);
                 false
