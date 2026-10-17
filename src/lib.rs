@@ -118,6 +118,15 @@ pub enum NativeLoopStop {
     Unchanged,
 }
 
+/// Whether a bounded native Repeat may finish before its count is reached.
+/// This policy applies only to requested schedule locations; compiler-generated
+/// maintenance loops retain the native early-stop behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepeatContinuation {
+    CanStop,
+    ExactCount,
+}
+
 /// Synchronous observations from the existing native interpreter.
 ///
 /// Observers can aggregate leaf reports without retaining an event history. A
@@ -784,6 +793,7 @@ impl ScheduleProvenance {
 
 struct ScheduleObservation<'a> {
     provenance: Option<&'a ScheduleProvenance>,
+    repeat_policy: &'a dyn Fn(ScheduleLocation<'_>) -> RepeatContinuation,
     // Uninstrumented requested schedules need no correspondence table.
     identity: bool,
     path: Vec<usize>,
@@ -1306,6 +1316,7 @@ impl EGraph {
             ProcessingMode::Resolve,
             &mut |_, _, _| {},
             &mut |_, _| {},
+            &|_, _| RepeatContinuation::CanStop,
         )?;
 
         self.proof_check_program = resolved.desugared_before_proofs;
@@ -1399,6 +1410,11 @@ impl EGraph {
                     _ => None,
                 };
                 let source_loop = observation.site().is_some_and(|(_, internal)| !internal);
+                let exact_count = limit.is_some()
+                    && observation.site().is_some_and(|(site, internal)| {
+                        !internal
+                            && (observation.repeat_policy)(site) == RepeatContinuation::ExactCount
+                    });
                 let mut completed = 0;
                 let mut stop = NativeLoopStop::CountReached;
                 let result = (|| {
@@ -1431,7 +1447,7 @@ impl EGraph {
                             );
                         }
                         report.union(rec);
-                        if limit.is_some() && can_stop {
+                        if limit.is_some() && can_stop && !exact_count {
                             stop = NativeLoopStop::CanStop;
                             break;
                         }
@@ -2195,6 +2211,7 @@ impl EGraph {
         command: ResolvedNCommand,
         origin: ExecutionOrigin,
         provenance: Option<&ScheduleProvenance>,
+        repeat_policy: &dyn Fn(ScheduleLocation<'_>) -> RepeatContinuation,
         observer: &mut dyn FnMut(ExecutionEvent<'_>),
     ) -> Result<Vec<CommandOutput>, Error> {
         match command {
@@ -2257,6 +2274,7 @@ impl EGraph {
                     origin,
                     &mut ScheduleObservation {
                         provenance,
+                        repeat_policy,
                         identity: provenance.is_none() && origin == ExecutionOrigin::Requested,
                         path: vec![],
                         iterations: vec![],
@@ -2384,7 +2402,7 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
-                let result = self.run_command(*c, origin, provenance, observer);
+                let result = self.run_command(*c, origin, provenance, repeat_policy, observer);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {e}");
                 } else {
@@ -2808,7 +2826,13 @@ impl EGraph {
             | ResolvedNCommand::NormRule { .. }
             | ResolvedNCommand::Push(_)
             | ResolvedNCommand::Pop(..)) => {
-                self.run_command(command, origin, None, &mut |_| {})?;
+                self.run_command(
+                    command,
+                    origin,
+                    None,
+                    &|_| RepeatContinuation::CanStop,
+                    &mut |_| {},
+                )?;
             }
             ResolvedNCommand::CoreAction(action) => {
                 self.eval_actions(&ResolvedActions::singleton(action), false)?;
@@ -2879,6 +2903,7 @@ impl EGraph {
         mode: ProcessingMode,
         outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
         observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
+        repeat_policy: &dyn Fn(usize, ScheduleLocation<'_>) -> RepeatContinuation,
     ) -> Result<ResolvedNCommands, Error> {
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
@@ -2912,6 +2937,7 @@ impl EGraph {
                         mode,
                         &mut |_, origin, output| outputs(cause, origin, output),
                         &mut |_, event| observer(cause, event),
+                        &|_, site| repeat_policy(cause, site),
                     )?;
                     desugared.extend(resolved.desugared);
                     desugared_before_proofs.extend(resolved.desugared_before_proofs);
@@ -2947,9 +2973,13 @@ impl EGraph {
                             )
                         {
                             let result = self
-                                .run_command(processed, origin, schedule.as_ref(), &mut |event| {
-                                    observer(cause, event)
-                                })
+                                .run_command(
+                                    processed,
+                                    origin,
+                                    schedule.as_ref(),
+                                    &|site| repeat_policy(cause, site),
+                                    &mut |event| observer(cause, event),
+                                )
                                 .inspect_err(|error| {
                                     observer(
                                         cause,
@@ -3015,6 +3045,7 @@ impl EGraph {
             ProcessingMode::Execute,
             &mut |_, _, output| outputs.push(output),
             &mut |_, _| {},
+            &|_, _| RepeatContinuation::CanStop,
         )?;
         Ok(())
     }
@@ -3034,7 +3065,33 @@ impl EGraph {
         outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
         observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
     ) -> Result<(), Error> {
-        self.process_program_internal(program, ProcessingMode::Execute, outputs, observer)?;
+        self.run_program_observed_with_repeat_policy(program, outputs, observer, &|_, _| {
+            RepeatContinuation::CanStop
+        })
+    }
+
+    /// Run with a call-local continuation policy for bounded requested loops.
+    ///
+    /// The callback receives the submitted command index and its original
+    /// schedule location, before proof instrumentation. It is queried once on
+    /// entry to each requested Repeat. Internal/helper loops never consult it.
+    /// Exact counts do not change failure, output, reporting or maintenance
+    /// boundaries. Native callers keep early stopping through
+    /// [`Self::run_program_observed`]. No policy is retained in the e-graph.
+    pub fn run_program_observed_with_repeat_policy(
+        &mut self,
+        program: Vec<Command>,
+        outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
+        observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
+        repeat_policy: &dyn Fn(usize, ScheduleLocation<'_>) -> RepeatContinuation,
+    ) -> Result<(), Error> {
+        self.process_program_internal(
+            program,
+            ProcessingMode::Execute,
+            outputs,
+            observer,
+            repeat_policy,
+        )?;
         Ok(())
     }
 
@@ -3057,6 +3114,7 @@ impl EGraph {
             ProcessingMode::Compile,
             &mut |_, _, _| {},
             &mut |_, _| {},
+            &|_, _| RepeatContinuation::CanStop,
         )?;
         Ok(compiler)
     }
@@ -3085,6 +3143,7 @@ impl EGraph {
             ProcessingMode::Resolve,
             &mut |_, _, _| {},
             &mut |_, _| {},
+            &|_, _| RepeatContinuation::CanStop,
         )?;
         Ok(res
             .desugared
@@ -3335,6 +3394,7 @@ impl EGraph {
             ResolvedNCommand::UserDefined(span!(), name.to_string(), args.to_vec()),
             ExecutionOrigin::Requested,
             None,
+            &|_| RepeatContinuation::CanStop,
             &mut |_| {},
         )
     }
@@ -3947,6 +4007,105 @@ mod tests {
     use crate::*;
 
     use crate::PureState;
+
+    #[test]
+    fn repeat_continuation_is_selected_by_original_requested_loop_path() {
+        for mode in 0..4 {
+            let mut baseline = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            baseline
+                .parse_and_run_program(None, "(ruleset empty)")
+                .unwrap();
+            let leaf = Schedule::Run(
+                span!(),
+                RunConfig {
+                    ruleset: "empty".into(),
+                    until: None,
+                },
+            );
+            let schedule = Schedule::Repeat(
+                span!(),
+                3,
+                Box::new(Schedule::Sequence(
+                    span!(),
+                    vec![leaf.clone(), Schedule::Repeat(span!(), 4, Box::new(leaf))],
+                )),
+            );
+            for selection in 0..3 {
+                let mut graph = baseline.clone();
+                let mut invocations = HashMap::<Vec<usize>, usize>::default();
+                let mut loops = Vec::new();
+                let mut outputs = Vec::new();
+                let mut observe = |_: usize, event: ExecutionEvent<'_>| match event {
+                    ExecutionEvent::RunStarted {
+                        origin: ExecutionOrigin::Requested,
+                        schedule: Some(site),
+                    } => *invocations.entry(site.path.to_vec()).or_default() += 1,
+                    ExecutionEvent::LoopFinished {
+                        origin: ExecutionOrigin::Requested,
+                        schedule: Some(site),
+                        completed,
+                        stop,
+                        ..
+                    } => loops.push((site.path.to_vec(), completed, stop)),
+                    _ => (),
+                };
+                let mut output = |_: usize, origin, value| {
+                    if origin == ExecutionOrigin::Requested {
+                        outputs.push(value);
+                    }
+                };
+                let commands = vec![Command::RunSchedule(schedule.clone())];
+                if selection == 0 {
+                    graph
+                        .run_program_observed(commands, &mut output, &mut observe)
+                        .unwrap();
+                } else {
+                    graph
+                        .run_program_observed_with_repeat_policy(
+                            commands,
+                            &mut output,
+                            &mut observe,
+                            &|cause, site| {
+                                assert_eq!(cause, 0);
+                                assert!(site.path.is_empty() || site.path == [0, 1]);
+                                if selection == 2 || site.path.is_empty() {
+                                    RepeatContinuation::ExactCount
+                                } else {
+                                    RepeatContinuation::CanStop
+                                }
+                            },
+                        )
+                        .unwrap();
+                }
+                let outer = if selection == 0 { 1 } else { 3 };
+                let inner = if selection == 2 { 4 } else { 1 };
+                assert_eq!(invocations[&vec![0, 0]], outer, "mode {mode}");
+                assert_eq!(invocations[&vec![0, 1, 0]], outer * inner, "mode {mode}");
+                assert_eq!(loops.len(), outer + 1, "no maintenance loop attribution");
+                assert_eq!(
+                    loops.last().unwrap(),
+                    &(
+                        vec![],
+                        outer,
+                        Some(if selection == 0 {
+                            NativeLoopStop::CanStop
+                        } else {
+                            NativeLoopStop::CountReached
+                        })
+                    )
+                );
+                assert!(matches!(
+                    outputs.as_slice(),
+                    [CommandOutput::RunSchedule(_)]
+                ));
+            }
+        }
+    }
 
     #[test]
     fn scoped_actions_compile_inert_prefix_and_canonical_inputs() {
