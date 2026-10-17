@@ -43,7 +43,8 @@ than equality of finite ground-term languages. This is not graph isomorphism.
 
 `database_equal` additionally compares function declarations and all rows,
 including constructor rows and subsumption flags. Its full-database refinement
-includes ordinary function calls in class observations. This preserves
+includes ordinary function calls in class observations; constructor-only inputs
+without subsumption can reuse the term partition. This preserves
 structure carried only by function tables, even when values have no constructor
 terms. Values in the rows are compared using this full-database partition.
 Non-constructor functions never become term operators or enter finite term
@@ -79,7 +80,7 @@ improvements preserve exact signature equality.
 
 Class IDs are arbitrary strings scoped to one file. The numeric `version` field
 is a `FormatVersion` identifying the wire format, not an e-class identifier.
-Setup resolves class names to distinct typed class and partition IDs.
+Setup resolves class names to distinct typed class, symbol, and partition IDs.
 `literal` is an opaque, stable encoding qualified by its sort. `subsumed` defaults to false. Declarations
 are explicit even for empty tables. Unknown fields, unsupported versions,
 dangling IDs, wrong sorts/arity, duplicate literal identities, and conflicting
