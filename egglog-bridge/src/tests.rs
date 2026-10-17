@@ -1971,8 +1971,14 @@ fn action_panic_rebuilds_before_returning() {
 fn panic_functions_trigger_early_stop() {
     let db = core_relations::Database::default();
 
-    let channel: crate::SideChannel<String> = Default::default();
-    let panic_fn = super::Panic("panic".to_string(), channel.clone());
+    let channel: crate::SideChannel<super::PanicError> = Default::default();
+    let panic_fn = super::Panic(
+        super::PanicError {
+            message: "panic".into(),
+            source: None,
+        },
+        channel.clone(),
+    );
     let stopped = db.with_execution_state(None, |state| {
         assert!(!state.should_stop());
         let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
@@ -1980,9 +1986,16 @@ fn panic_functions_trigger_early_stop() {
         state.should_stop()
     });
     assert!(stopped);
-    assert_eq!(channel.lock().unwrap().as_deref(), Some("panic"));
+    assert_eq!(
+        channel
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|panic| panic.message.as_str()),
+        Some("panic")
+    );
 
-    let channel: crate::SideChannel<String> = Default::default();
+    let channel: crate::SideChannel<super::PanicError> = Default::default();
     let lazy = Lazy::new(|| "lazy panic".to_string());
     let panic_fn = super::LazyPanic(Arc::new(lazy), channel.clone());
     let stopped = db.with_execution_state(None, |state| {
@@ -1992,7 +2005,97 @@ fn panic_functions_trigger_early_stop() {
         state.should_stop()
     });
     assert!(stopped);
-    assert_eq!(channel.lock().unwrap().as_deref(), Some("lazy panic"));
+    assert_eq!(
+        channel
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|panic| panic.message.as_str()),
+        Some("lazy panic")
+    );
+}
+
+#[test]
+fn panic_source_survives_equal_messages_and_recovery_failure() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("origin {0}")]
+    struct Origin(usize);
+    for recovery_fails in [false, true] {
+        for site in 0..2 {
+            let mut graph = EGraph::new(1);
+            let int = graph.base_values_mut().register_type::<i64>();
+            let one = graph.base_values_mut().get(1i64);
+            let two = graph.base_values_mut().get(2i64);
+            let table = graph.add_table(FunctionConfig {
+                schema: vec![ColumnTy::Id, ColumnTy::Base(int)],
+                eq_sorts: vec![Some("Term".into()), None],
+                default: DefaultVal::Fail,
+                merge: MergeFn::AssertEq,
+                name: "conflict".into(),
+                can_subsume: false,
+            });
+            let a = graph.fresh_id();
+            let b = graph.fresh_id();
+            graph.add_values([
+                (table, vec![a, one]),
+                (table, vec![b, if recovery_fails { two } else { one }]),
+            ]);
+            let mut rules = vec![];
+            for origin in 0..2 {
+                let mut rule = graph.new_rule("same message", false);
+                rule.union(
+                    QueryEntry::Const {
+                        val: a,
+                        ty: ColumnTy::Id,
+                    },
+                    QueryEntry::Const {
+                        val: b,
+                        ty: ColumnTy::Id,
+                    },
+                );
+                rule.panic_with_source("boom".into(), Origin(origin));
+                rules.push(rule.build());
+            }
+            let error = graph.run_rules(&[rules[site]], None).unwrap_err();
+            let origin = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<Origin>())
+                .unwrap();
+            assert_eq!(origin.0, site);
+            if recovery_fails {
+                assert!(error.to_string().starts_with(
+                    "Panic: boom; rebuilding after the failed rule action also failed: "
+                ));
+            } else {
+                assert_eq!(error.to_string(), "Panic: boom");
+                assert_eq!(graph.table_size(table), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn scoped_panic_source_callbacks_are_released() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("scoped origin")]
+    struct Origin(Arc<AtomicUsize>);
+    impl Drop for Origin {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for execute in [false, true] {
+        let mut graph = EGraph::new(1);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let result = graph.run_scoped_rule("temporary", execute, None, |mut rule| {
+            rule.panic_with_source("stop".into(), Origin(dropped.clone()));
+            Ok(rule.build())
+        });
+        assert_eq!(result.is_err(), execute);
+        assert_eq!(dropped.load(Ordering::SeqCst), usize::from(!execute));
+        drop(result);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
 }
 
 const _: () = {

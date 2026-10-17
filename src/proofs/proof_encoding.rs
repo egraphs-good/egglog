@@ -1449,7 +1449,37 @@ impl<'a> ProofInstrumentor<'a> {
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),
         );
-        self.parse_program(&instrumented)
+        let mut commands = self.parse_program(&instrumented);
+        let panic_spans: Vec<_> = rule
+            .head
+            .0
+            .iter()
+            .filter_map(|action| match action {
+                ResolvedAction::Panic(span, _) => Some(span),
+                _ => None,
+            })
+            .collect();
+        let [Command::Rule { rule: instrumented }] = commands.as_mut_slice() else {
+            panic!("rule instrumentation must produce one rule");
+        };
+        assert_eq!(
+            instrumented
+                .head
+                .0
+                .iter()
+                .filter(|action| matches!(action, Action::Panic(..)))
+                .count(),
+            panic_spans.len(),
+            "rule instrumentation must preserve ordered panic occurrences"
+        );
+        instrumented.span = rule.span.clone();
+        let mut panic_spans = panic_spans.into_iter();
+        for action in &mut instrumented.head.0 {
+            if let Action::Panic(span, _) = action {
+                *span = panic_spans.next().unwrap().clone();
+            }
+        }
+        commands
     }
 
     /// Any schedule should be sound as long as we saturate.
@@ -1661,6 +1691,14 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
+            }
+            // Panic has no term/proof work. Preserve its source AST rather than
+            // reparsing diagnostic text and replacing the authored span.
+            ResolvedNCommand::CoreAction(ResolvedAction::Panic(span, message)) => {
+                res.push(Command::Action(Action::Panic(
+                    span.clone(),
+                    message.clone(),
+                )));
             }
             ResolvedNCommand::CoreAction(action) => {
                 let instrumented = self

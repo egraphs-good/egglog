@@ -125,7 +125,7 @@ pub struct EGraph {
     timestamp_counter: CounterId,
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
-    panic_message: SideChannel<String>,
+    panic_message: SideChannel<PanicError>,
     /// This is a cache of all the different panic messages that we may use while executing rules
     /// against the EGraph. Oftentimes, these messages are generated dynamically: keeping this map
     /// around allows us to cache external function ids with repeat panic messages and they can
@@ -223,11 +223,14 @@ impl EGraph {
         // state wrappers' `panic()` method has an id to call. This
         // also seeds `panic_funcs` so a later `new_panic` with the
         // same message reuses the id.
-        let panic_message: SideChannel<String> = Default::default();
+        let panic_message: SideChannel<PanicError> = Default::default();
         let mut panic_funcs: HashMap<String, ExternalFunctionId> = Default::default();
         let default_panic_msg = "primitive panicked".to_string();
         let default_panic_id = db.add_external_function(Box::new(Panic(
-            default_panic_msg.clone(),
+            PanicError {
+                message: default_panic_msg.clone(),
+                source: None,
+            },
             panic_message.clone(),
         )));
         panic_funcs.insert(default_panic_msg, default_panic_id);
@@ -745,7 +748,7 @@ impl EGraph {
                 context,
             )?;
             if let Some(message) = self.panic_message.lock().unwrap().take() {
-                return Err(PanicError(message).into());
+                return Err(message.into());
             }
             self.inc_ts();
             Ok(IterationReport {
@@ -775,7 +778,7 @@ impl EGraph {
             let timer = Instant::now();
             self.rebuild()?;
             if let Some(message) = self.panic_message.lock().unwrap().take() {
-                return Err(PanicError(message).into());
+                return Err(message.into());
             }
             Ok(timer.elapsed())
         })
@@ -799,7 +802,7 @@ impl EGraph {
         )?;
         let panic_message = self.panic_message.lock().unwrap().take();
         if let Some(message) = panic_message {
-            let action_error = PanicError(message);
+            let action_error = message;
 
             // Some actions may already have changed the database. Canonicalize
             // those effects before surfacing the catchable egglog error.
@@ -808,14 +811,16 @@ impl EGraph {
             let recovery_error = match (rebuild_error, rebuild_panic) {
                 (None, None) => return Err(action_error.into()),
                 (Some(error), None) => error.to_string(),
-                (None, Some(message)) => PanicError(message).to_string(),
+                (None, Some(message)) => message.to_string(),
                 (Some(error), Some(message)) => {
-                    format!("{error}; {}", PanicError(message))
+                    format!("{error}; {message}")
                 }
             };
-            return Err(anyhow::anyhow!(
-                "{action_error}; rebuilding after the failed rule action also failed: {recovery_error}"
-            ));
+            return Err(PanicRecoveryError {
+                action_error,
+                recovery_error,
+            }
+            .into());
         }
 
         let mut iteration_report = IterationReport {
@@ -837,7 +842,7 @@ impl EGraph {
         iteration_report.rebuild_time = rebuild_timer.elapsed();
 
         if let Some(message) = self.panic_message.lock().unwrap().take() {
-            return Err(PanicError(message).into());
+            return Err(message.into());
         }
 
         Ok(iteration_report)
@@ -1821,7 +1826,7 @@ pub type SideChannel<T> = Arc<Mutex<Option<T>>>;
 /// The downside of this, and why we do not use it everywhere, is that there's no natural "key"
 /// that we can use to cache duplicate panic messages. We would need a more complex API to support
 /// both and fully replace our use of `Panic`.
-struct LazyPanic<F>(Arc<Lazy<String, F>>, SideChannel<String>);
+struct LazyPanic<F>(Arc<Lazy<String, F>>, SideChannel<PanicError>);
 
 impl<F: FnOnce() -> String + Send> ExternalFunction for LazyPanic<F> {
     fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
@@ -1829,7 +1834,10 @@ impl<F: FnOnce() -> String + Send> ExternalFunction for LazyPanic<F> {
         state.trigger_early_stop();
         let mut guard = self.1.lock().unwrap();
         if guard.is_none() {
-            *guard = Some(Lazy::force(&self.0).clone());
+            *guard = Some(PanicError {
+                message: Lazy::force(&self.0).clone(),
+                source: None,
+            });
         }
         None
     }
@@ -1846,7 +1854,7 @@ impl<F> Clone for LazyPanic<F> {
 // TODO: once we have parallelism wired in, we'll want to replace this with a
 // more efficient solution (e.g. one based on crossbeam or arcswap).
 #[derive(Clone)]
-struct Panic(String, SideChannel<String>);
+struct Panic(PanicError, SideChannel<PanicError>);
 
 impl EGraph {
     /// Create a new `ExternalFunction` that panics with the given message.
@@ -1855,7 +1863,13 @@ impl EGraph {
             .panic_funcs
             .entry(message.to_string())
             .or_insert_with(|| {
-                let panic = Panic(message, self.panic_message.clone());
+                let panic = Panic(
+                    PanicError {
+                        message,
+                        source: None,
+                    },
+                    self.panic_message.clone(),
+                );
                 self.db.add_external_function(Box::new(panic))
             })
     }
@@ -1993,9 +2007,31 @@ impl SchemaMath {
     }
 }
 
+#[derive(Clone, Debug)]
+struct PanicError {
+    message: String,
+    source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+}
+
+impl std::fmt::Display for PanicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Panic: {}", self.message)
+    }
+}
+
+impl std::error::Error for PanicError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_deref().map(|source| source as _)
+    }
+}
+
 #[derive(Error, Debug)]
-#[error("Panic: {0}")]
-struct PanicError(String);
+#[error("{action_error}; rebuilding after the failed rule action also failed: {recovery_error}")]
+struct PanicRecoveryError {
+    #[source]
+    action_error: PanicError,
+    recovery_error: String,
+}
 
 /// Basic ad-hoc polymorphism around `resize_with` in order to get [`SchemaMath::write_table_row`]
 /// to work with both `Vec` and `SmallVec`.

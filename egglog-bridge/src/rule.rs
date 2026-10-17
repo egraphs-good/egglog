@@ -821,6 +821,34 @@ impl RuleBuilder<'_> {
         } else {
             self.egraph.new_panic(message)
         };
+        self.panic_external(panic);
+    }
+
+    /// Panic with the same diagnostic message while retaining a structured
+    /// native source cause. Origins are not cached by message: equal messages
+    /// from different actions must retain their distinct causes. Temporary
+    /// action rules own and release this callback with their other handles.
+    pub fn panic_with_source(
+        &mut self,
+        message: String,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) {
+        let panic = self.egraph.db.add_external_function(Box::new(crate::Panic(
+            crate::PanicError {
+                message,
+                source: Some(Arc::new(source)),
+            },
+            self.egraph.panic_message.clone(),
+        )));
+        if let Some(scoped) = &mut self.scoped {
+            scoped.functions.push(panic);
+        }
+        self.panic_external(panic);
+    }
+
+    // Build the terminal external-call instruction and its native variable
+    // mapping once for cached-message and source-bearing panic callbacks.
+    fn panic_external(&mut self, panic: ExternalFunctionId) {
         let ret_ty = ColumnTy::Id;
         let res = self.new_var(ret_ty);
         self.query.add_rule.push(Box::new(move |inner, rb| {

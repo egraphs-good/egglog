@@ -1596,7 +1596,7 @@ impl EGraph {
         let iteration_report = self
             .backend
             .run_rules(&rule_ids, Some(&self.type_info))
-            .map_err(|e| Error::BackendError(e.to_string()))?;
+            .map_err(|error| Error::from_backend(error.as_ref()))?;
 
         Ok(RunReport::singleton(ruleset, iteration_report))
     }
@@ -1631,6 +1631,7 @@ impl EGraph {
             rb.set_no_decomp(no_decomp);
             let mut translator =
                 BackendRule::new(rb, &self.functions, &self.type_info, requires_read_context);
+            translator.rule = Some(rule.name.clone());
             translator.query(query, rule.include_subsumed)?;
             translator.actions(actions)?;
             translator.build()
@@ -1735,7 +1736,7 @@ impl EGraph {
                     compile(&mut builder)?;
                     Ok(builder.translator.build())
                 })
-                .map_err(|error| Error::BackendError(error.to_string()))
+                .map_err(|error| Error::from_backend(error.as_ref()))
         })();
         let mut captured = std::mem::take(&mut *captured.lock().unwrap());
         for (_, value) in &mut captured {
@@ -1773,7 +1774,7 @@ impl EGraph {
 
         match result {
             Ok(_) => Ok(()),
-            Err(e) => Err(Error::BackendError(e.to_string())),
+            Err(e) => Err(Error::from_backend(e.as_ref())),
         }
     }
 
@@ -2185,7 +2186,7 @@ impl EGraph {
         self.backend.free_external_func(ext_id);
         let run_result = run_result
             .map(|report| RunReport::singleton(&fresh_ruleset, report))
-            .map_err(|e| Error::BackendError(e.to_string()));
+            .map_err(|error| Error::from_backend(error.as_ref()));
         observer(ExecutionEvent::RunFinished {
             origin: ExecutionOrigin::Internal,
             schedule: None,
@@ -3691,6 +3692,8 @@ struct BackendRule<'a> {
     /// gains reads, action gains reads on top of writes). True for `:naive` /
     /// `:unsafe-seminaive` rules and a non-seminaive EGraph.
     requires_read_context: bool,
+    // Exact native identity for compiled rules; temporary helpers have none.
+    rule: Option<String>,
 }
 
 impl<'a> BackendRule<'a> {
@@ -3705,6 +3708,7 @@ impl<'a> BackendRule<'a> {
             functions,
             type_info,
             requires_read_context,
+            rule: None,
             entries: Default::default(),
         }
     }
@@ -3899,7 +3903,13 @@ impl<'a> BackendRule<'a> {
                     let y = self.entry(y);
                     self.rb.union(x, y)
                 }
-                core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
+                core::GenericCoreAction::Panic(span, message) => self.rb.panic_with_source(
+                    message.clone(),
+                    PanicOrigin {
+                        span: span.clone(),
+                        rule: self.rule.clone(),
+                    },
+                ),
             }
         }
         Ok(())
@@ -3931,6 +3941,13 @@ fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
 }
 
 #[derive(Debug, Error)]
+#[error("authored panic source")]
+struct PanicOrigin {
+    span: Span,
+    rule: Option<String>,
+}
+
+#[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     ParseError(#[from] ParseError),
@@ -3952,6 +3969,16 @@ pub enum Error {
     CombinedRulesetError(String, Span),
     #[error("{0}")]
     BackendError(String),
+    /// An authored panic, with its original diagnostic and source metadata.
+    #[error("{message}")]
+    Panic {
+        /// Existing native diagnostic, including any recovery failure.
+        message: String,
+        /// Exact authored action location, never generated helper text.
+        span: Span,
+        /// Exact compiled native rule identity, absent for direct actions.
+        rule: Option<String>,
+    },
     #[error("{0}\nTried to pop too much")]
     Pop(Span),
     #[error("{0}\nCommand should have failed.")]
@@ -4001,12 +4028,105 @@ pub enum Error {
     },
 }
 
+impl Error {
+    fn from_backend(error: &(dyn std::error::Error + 'static)) -> Self {
+        if let Some(origin) = std::iter::successors(Some(error), |cause| cause.source())
+            .find_map(|cause| cause.downcast_ref::<PanicOrigin>())
+        {
+            Self::Panic {
+                message: error.to_string(),
+                span: origin.span.clone(),
+                rule: origin.rule.clone(),
+            }
+        } else {
+            Self::BackendError(error.to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::constraint::SimpleTypeConstraint;
     use crate::*;
 
     use crate::PureState;
+
+    #[test]
+    fn authored_panic_preserves_exact_span_and_rule_in_every_mode() {
+        let text = "; λ🌿 byte offsets\n(relation Trigger ()) (Trigger)\n(rule ((Trigger)) ((panic \"stop π\") (panic \"unreachable π\")) :name \"exact rule\")\n(run 1)";
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            let error = graph
+                .parse_and_run_program(Some("panic-origin.egg".into()), text)
+                .unwrap_err();
+            let Error::Panic {
+                message,
+                span,
+                rule,
+            } = error
+            else {
+                panic!("typed authored panic: {error}")
+            };
+            assert_eq!(message, "Panic: stop π");
+            assert_eq!(rule.as_deref(), Some("exact rule"));
+            let Span::Egglog(span) = span else {
+                panic!("authored span")
+            };
+            assert_eq!(span.file.name.as_deref(), Some("panic-origin.egg"));
+            assert_eq!(span.file.contents, text);
+            assert_eq!(span.i, text.find("(panic \"stop π\")").unwrap());
+            assert_eq!(&text[span.i..span.j], "(panic \"stop π\")");
+            let Ruleset::Rules(rules, _) = graph.rulesets.get("").unwrap() else {
+                panic!("plain ruleset")
+            };
+            let spans: Vec<_> = rules["exact rule"]
+                .core
+                .head
+                .0
+                .iter()
+                .filter_map(|action| match action {
+                    core::GenericCoreAction::Panic(Span::Egglog(span), _) => Some((span.i, span.j)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                spans,
+                [
+                    (
+                        text.find("(panic \"stop π\")").unwrap(),
+                        text.find("(panic \"stop π\")").unwrap() + "(panic \"stop π\")".len()
+                    ),
+                    (
+                        text.find("(panic \"unreachable π\")").unwrap(),
+                        text.find("(panic \"unreachable π\")").unwrap()
+                            + "(panic \"unreachable π\")".len()
+                    ),
+                ]
+            );
+            let direct = "; λ🌿\n(panic \"direct π\")";
+            let error = graph
+                .parse_and_run_program(Some("direct-origin.egg".into()), direct)
+                .unwrap_err();
+            let Error::Panic {
+                message,
+                span: Span::Egglog(span),
+                rule,
+            } = error
+            else {
+                panic!("typed direct panic: {error}")
+            };
+            assert_eq!(message, "Panic: direct π");
+            assert!(rule.is_none());
+            assert_eq!(&span.file.contents[span.i..span.j], "(panic \"direct π\")");
+            assert_eq!(span.i, direct.find("(panic \"direct π\")").unwrap());
+            assert_eq!(span.file.name.as_deref(), Some("direct-origin.egg"));
+        }
+    }
 
     #[test]
     fn repeat_continuation_is_selected_by_original_requested_loop_path() {
