@@ -1,4 +1,4 @@
-use proc_macro::{Span, TokenStream};
+use proc_macro::{Span, TokenStream, TokenTree};
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
@@ -85,6 +85,28 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parse_macro_input!(input), None)
 }
 
+// Forwarding through macro_rules preserves the body's syntax contexts, but the
+// proc macro's call site may belong to a wrapper. Bind the receiver using the
+// actual body token instead of respanning the body or its context initializer.
+fn body_receiver_span(tokens: TokenStream) -> Option<Span> {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    tokens
+        .iter()
+        .enumerate()
+        .find_map(|(index, token)| match token {
+            TokenTree::Ident(ident) if ident.to_string() == "self" => {
+                let module_path = matches!(
+                    tokens.get(index + 1..index + 3),
+                    Some([TokenTree::Punct(first), TokenTree::Punct(second)])
+                        if first.as_char() == ':' && second.as_char() == ':'
+                );
+                (!module_path).then(|| ident.span())
+            }
+            TokenTree::Group(group) => body_receiver_span(group.stream()),
+            _ => None,
+        })
+}
+
 fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> TokenStream {
     // If you're trying to read this code, you should read the big
     // `quote!` block at the bottom of this function first. Trying
@@ -105,6 +127,12 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         ret,
         body,
     } = parsed;
+    let receiver = Ident::new(
+        "self",
+        body_receiver_span(quote!(#body).into())
+            .unwrap_or_else(Span::call_site)
+            .into(),
+    );
 
     // Create a new field name for the `Prim` struct to hold the return sort.
     // (We reuse the closure argument names for the argument sorts.)
@@ -375,7 +403,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
 
         impl PurePrim for Prim {
             fn apply<'a, 'db>(
-                &self,
+                &#receiver,
                 #[allow(unused_mut)] mut state: PureState<'a, 'db>,
                 args: &[Value],
             ) -> Option<Value> {
