@@ -643,7 +643,8 @@ impl IndexBase for ColumnIndex {
         // order. `bounds[b]..bounds[b + 1]` delimits column `b`'s block; the number of columns
         // is tiny, so it stays inline.
         let rows = subset.size();
-        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(rows * cols.len());
+        let mut pairs: Pooled<Vec<(Value, RowId)>> = with_pool_set(|ps| ps.get());
+        pairs.reserve(rows * cols.len());
         let mut bounds: SmallVec<[usize; 8]> = SmallVec::new();
         bounds.push(0);
         for &col in cols {
@@ -653,8 +654,8 @@ impl IndexBase for ColumnIndex {
 
         // Value-only sort each block. Since each block arrives RowId-ascending and the sort is
         // stable, the block ends up ordered by (Value, RowId) without any RowId pass.
-        let mut scratch: Vec<(Value, RowId)> =
-            vec![(Value::new_const(0), RowId::new_const(0)); rows];
+        let mut scratch: Pooled<Vec<(Value, RowId)>> = with_pool_set(|ps| ps.get());
+        scratch.resize(rows, (Value::new_const(0), RowId::new_const(0)));
         for b in 0..cols.len() {
             radix_sort_slice_by_value(&mut pairs[bounds[b]..bounds[b + 1]], &mut scratch);
         }
@@ -850,14 +851,15 @@ fn merge2_into(a: &[(Value, RowId)], b: &[(Value, RowId)], out: &mut Vec<(Value,
 /// reused as the other buffer) rather than a fresh `Vec` per merge. Because merging two
 /// de-duplicated sorted runs leaves any shared pair adjacent, dedup composes across rounds.
 fn merge_sorted_blocks_dedup(
-    mut src: Vec<(Value, RowId)>,
+    mut src: Pooled<Vec<(Value, RowId)>>,
     bounds: &[usize],
-) -> Vec<(Value, RowId)> {
+) -> Pooled<Vec<(Value, RowId)>> {
     let n = src.len();
     debug_assert!(bounds.len() >= 2);
 
     // `src` holds the current rounds's runs, delimited by `cur`; `dst` receives the merged runs.
-    let mut dst: Vec<(Value, RowId)> = Vec::with_capacity(n);
+    let mut dst: Pooled<Vec<(Value, RowId)>> = with_pool_set(|ps| ps.get());
+    dst.reserve(n);
     let mut cur: SmallVec<[usize; 8]> = bounds.iter().copied().collect();
 
     // Each round more than halves the run count (`cur.len() - 1`); stop at a single run.
