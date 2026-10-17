@@ -275,8 +275,8 @@ pub struct SortedWritesTable {
     rebuild_index: Index<ColumnIndex>,
     // Used to manage incremental rebuilds.
     subset_tracker: SubsetTracker,
-    // Recent sparse full scans available to amortize index construction.
-    rebuild_scan_credit: f64,
+    // Full-scan work spent on sparse updates while `rebuild_index` was stale.
+    full_scan_credit: usize,
 }
 
 impl Clone for SortedWritesTable {
@@ -294,7 +294,7 @@ impl Clone for SortedWritesTable {
             to_rebuild: self.to_rebuild.clone(),
             rebuild_index: Index::new(self.to_rebuild.clone(), ColumnIndex::new()),
             subset_tracker: Default::default(),
-            rebuild_scan_credit: 0.0,
+            full_scan_credit: 0,
         }
     }
 }
@@ -392,7 +392,7 @@ impl Table for SortedWritesTable {
     }
     fn clear(&mut self) {
         self.pending_state.clear();
-        self.rebuild_scan_credit = 0.0;
+        self.full_scan_credit = 0;
         if self.data.data.len() == 0 {
             return;
         }
@@ -721,7 +721,7 @@ impl SortedWritesTable {
             to_rebuild,
             rebuild_index,
             subset_tracker: Default::default(),
-            rebuild_scan_credit: 0.0,
+            full_scan_credit: 0,
         }
     }
 
