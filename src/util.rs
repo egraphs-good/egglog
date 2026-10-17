@@ -55,8 +55,8 @@ impl FreshGen<str, String> for SymbolGen {
         *entry = count
             .checked_add(1)
             .expect("fresh symbol counter exhausted");
-        // Removing the prefix and final `_<count>` recovers the hint,
-        // so distinct hints cannot collide; checked counters never repeat.
+        // After the fixed prefix, the last `_` separates the hint from its counter.
+        // Different hints cannot collide; each hint's checked counter prevents repeats.
         let mut buffer = itoa::Buffer::new();
         let digits = buffer.format(count);
         let mut name =
