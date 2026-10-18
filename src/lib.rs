@@ -726,6 +726,8 @@ struct OriginatedCommand<C> {
     command: C,
     origin: ExecutionOrigin,
     schedule: Option<ScheduleProvenance>,
+    // Only the compiler's common command postlude, never inline Run rebuilding.
+    command_tail: bool,
 }
 
 /// Flat correspondence only: no executable schedule or retained event history.
@@ -794,10 +796,28 @@ impl ScheduleProvenance {
 struct ScheduleObservation<'a> {
     provenance: Option<&'a ScheduleProvenance>,
     repeat_policy: &'a dyn Fn(ScheduleLocation<'_>) -> RepeatContinuation,
+    scheduler_selector: &'a dyn Fn(ScheduleLocation<'_>) -> Option<scheduler::SchedulerId>,
     // Uninstrumented requested schedules need no correspondence table.
     identity: bool,
     path: Vec<usize>,
     iterations: Vec<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct CommandPolicies<'a> {
+    repeat: &'a dyn Fn(ScheduleLocation<'_>) -> RepeatContinuation,
+    scheduler: &'a dyn Fn(ScheduleLocation<'_>) -> Option<scheduler::SchedulerId>,
+    accumulate_schedule: bool,
+}
+
+impl Default for CommandPolicies<'_> {
+    fn default() -> Self {
+        Self {
+            repeat: &|_| RepeatContinuation::CanStop,
+            scheduler: &|_| None,
+            accumulate_schedule: true,
+        }
+    }
 }
 
 impl ScheduleObservation<'_> {
@@ -829,8 +849,24 @@ struct ResolvedNCommands {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProcessingMode {
     Execute,
+    ExecuteEmbedded,
     Resolve,
     Compile,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandPurpose {
+    Authored,
+    Condition,
+}
+
+fn expect_failure<T>(span: Span, result: Result<T, Error>) -> Result<(), Error> {
+    if let Err(error) = result {
+        log::info!("Command failed as expected: {error}");
+        Ok(())
+    } else {
+        Err(Error::ExpectFail(span))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -1317,6 +1353,7 @@ impl EGraph {
             &mut |_, _, _| {},
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
+            &|_, _| None,
         )?;
 
         self.proof_check_program = resolved.desugared_before_proofs;
@@ -1396,7 +1433,16 @@ impl EGraph {
                     origin,
                     schedule: observation.site().map(|(site, _)| site),
                 });
-                let result = self.run_rules(span, config, observer);
+                let result = self.run_rules(span, config, observer, &|| {
+                    if origin != ExecutionOrigin::Requested {
+                        return None;
+                    }
+                    observation.site().and_then(|(site, internal)| {
+                        (!internal)
+                            .then(|| (observation.scheduler_selector)(site))
+                            .flatten()
+                    })
+                });
                 observer(ExecutionEvent::RunFinished {
                     origin,
                     schedule: observation.site().map(|(site, _)| site),
@@ -1491,6 +1537,7 @@ impl EGraph {
         span: &Span,
         config: &ResolvedRunConfig,
         observer: &mut dyn FnMut(ExecutionEvent<'_>),
+        scheduler_selector: &dyn Fn() -> Option<scheduler::SchedulerId>,
     ) -> Result<RunReport, Error> {
         log::debug!("Running ruleset: {}", config.ruleset);
         let mut report: RunReport = Default::default();
@@ -1511,7 +1558,11 @@ impl EGraph {
             return Ok(report);
         }
 
-        let subreport = self.step_rules(ruleset)?;
+        let subreport = if let Some(scheduler) = scheduler_selector() {
+            self.step_rules_with_scheduler(scheduler, ruleset)?
+        } else {
+            self.step_rules(ruleset)?
+        };
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
@@ -1884,7 +1935,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved = self.resolve_command(command)?;
+        let resolved = self.resolve_command(command, CommandPurpose::Authored)?;
         if self.are_proofs_enabled() {
             self.proof_check_program
                 .extend(resolved.desugared_before_proofs);
@@ -2212,7 +2263,7 @@ impl EGraph {
         command: ResolvedNCommand,
         origin: ExecutionOrigin,
         provenance: Option<&ScheduleProvenance>,
-        repeat_policy: &dyn Fn(ScheduleLocation<'_>) -> RepeatContinuation,
+        policies: CommandPolicies<'_>,
         observer: &mut dyn FnMut(ExecutionEvent<'_>),
     ) -> Result<Vec<CommandOutput>, Error> {
         match command {
@@ -2275,7 +2326,8 @@ impl EGraph {
                     origin,
                     &mut ScheduleObservation {
                         provenance,
-                        repeat_policy,
+                        repeat_policy: policies.repeat,
+                        scheduler_selector: policies.scheduler,
                         identity: provenance.is_none() && origin == ExecutionOrigin::Requested,
                         path: vec![],
                         iterations: vec![],
@@ -2284,7 +2336,9 @@ impl EGraph {
                 )?;
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
-                self.overall_run_report.union(report.clone());
+                if policies.accumulate_schedule {
+                    self.overall_run_report.union(report.clone());
+                }
                 return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
@@ -2403,12 +2457,8 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, c) => {
-                let result = self.run_command(*c, origin, provenance, repeat_policy, observer);
-                if let Err(e) = result {
-                    log::info!("Command failed as expected: {e}");
-                } else {
-                    return Err(Error::ExpectFail(span));
-                }
+                let result = self.run_command(*c, origin, provenance, policies, observer);
+                expect_failure(span, result)?;
             }
             ResolvedNCommand::Input { span, name, file } => {
                 self.input_file(&name, file, span)?;
@@ -2620,7 +2670,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let typechecked: Vec<_> = self
-            .desugar_and_typecheck_command(command)?
+            .desugar_and_typecheck_command(command, CommandPurpose::Authored)?
             .into_iter()
             .map(|(command, _)| command)
             .collect();
@@ -2640,8 +2690,13 @@ impl EGraph {
     fn desugar_and_typecheck_command(
         &mut self,
         command: Command,
+        purpose: CommandPurpose,
     ) -> Result<Vec<(ResolvedNCommand, ExecutionOrigin)>, Error> {
-        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let desugared = desugar_command(
+            command,
+            &mut self.parser,
+            self.proof_state.proof_testing && purpose == CommandPurpose::Authored,
+        )?;
         let typechecking = self.proof_state.original_typechecking.as_deref_mut();
         Ok(match typechecking {
             Some(original) => original.typecheck_program(&desugared)?,
@@ -2660,7 +2715,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         Ok(self
-            .resolve_command_before_proofs_with_origins(command)?
+            .resolve_command_before_proofs_with_origins(command, CommandPurpose::Authored)?
             .into_iter()
             .map(|(command, _)| command)
             .collect())
@@ -2669,8 +2724,9 @@ impl EGraph {
     fn resolve_command_before_proofs_with_origins(
         &mut self,
         command: Command,
+        purpose: CommandPurpose,
     ) -> Result<Vec<(ResolvedNCommand, ExecutionOrigin)>, Error> {
-        let typechecked = self.desugar_and_typecheck_command(command)?;
+        let typechecked = self.desugar_and_typecheck_command(command, purpose)?;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_ref() {
             for (command, _) in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
@@ -2712,8 +2768,13 @@ impl EGraph {
     /// Desugars, typechecks, and removes globals from a single [`Command`].
     /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
     /// When will_run is true, adds to `desugared_commands_run_so_far`, which is used for proof checking.
-    fn resolve_command(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
-        let resolved_before_proofs = self.resolve_command_before_proofs_with_origins(command)?;
+    fn resolve_command(
+        &mut self,
+        command: Command,
+        purpose: CommandPurpose,
+    ) -> Result<ResolvedNCommands, Error> {
+        let resolved_before_proofs =
+            self.resolve_command_before_proofs_with_origins(command, purpose)?;
 
         // Add term encoding when it is enabled
         if self.proof_state.original_typechecking.is_none() {
@@ -2724,6 +2785,7 @@ impl EGraph {
                         command,
                         origin,
                         schedule: None,
+                        command_tail: false,
                     })
                     .collect(),
                 desugared_before_proofs: vec![],
@@ -2747,61 +2809,8 @@ impl EGraph {
 
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
-            let mut new_typechecked = vec![];
-            for OriginatedCommand {
-                command: new_cmd,
-                origin,
-                schedule,
-            } in term_encoding_added
-            {
-                let mut desugared =
-                    desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
-                for (cmd, child_origin) in &mut desugared {
-                    if origin == ExecutionOrigin::Internal {
-                        *child_origin = ExecutionOrigin::Internal;
-                    }
-                    log::trace!("Desugared term encoding: {}", cmd.to_command());
-                }
-
-                // Now typecheck using self, adding term type information.
-                let desugared_typechecked = self.typecheck_program(&desugared)?;
-                // remove globals again, but this time allow primitive globals
-                let desugared_typechecked =
-                    desugared_typechecked
-                        .into_iter()
-                        .flat_map(|(command, origin)| {
-                            remove_globals::remove_globals(
-                                vec![command],
-                                &mut self.parser.symbol_gen,
-                            )
-                            .into_iter()
-                            .map(move |command| (command, origin))
-                        });
-
-                let mut schedule = schedule;
-                let desugared_typechecked: Vec<_> = desugared_typechecked.collect();
-                let last = desugared_typechecked.len().checked_sub(1);
-                for (i, (command, origin)) in desugared_typechecked.into_iter().enumerate() {
-                    let mapping = if Some(i) == last {
-                        schedule.take()
-                    } else {
-                        None
-                    };
-                    if let Some(mapping) = &mapping {
-                        mapping.validate(&command)?;
-                    }
-                    new_typechecked.push(OriginatedCommand {
-                        command,
-                        origin,
-                        schedule: mapping,
-                    });
-                }
-                if schedule.is_some() {
-                    return Err(Error::BackendError(
-                        "schedule provenance lost during desugaring".into(),
-                    ));
-                }
-            }
+            let new_typechecked =
+                self.resolve_instrumented_commands(term_encoding_added, purpose)?;
             Ok(ResolvedNCommands {
                 desugared: new_typechecked,
                 desugared_before_proofs: resolved_before_proofs
@@ -2810,6 +2819,73 @@ impl EGraph {
                     .collect(),
             })
         }
+    }
+
+    // Finish the existing physical compiler pipeline for instrumentation-owned
+    // commands, preserving structural tail tags through desugaring.
+    fn resolve_instrumented_commands(
+        &mut self,
+        commands: Vec<OriginatedCommand<Command>>,
+        purpose: CommandPurpose,
+    ) -> Result<Vec<OriginatedCommand<ResolvedNCommand>>, Error> {
+        let mut new_typechecked = vec![];
+        for OriginatedCommand {
+            command: new_cmd,
+            origin,
+            schedule,
+            command_tail,
+        } in commands
+        {
+            let mut desugared = desugar_command(
+                new_cmd,
+                &mut self.parser,
+                self.proof_state.proof_testing && purpose == CommandPurpose::Authored,
+            )?;
+            for (cmd, child_origin) in &mut desugared {
+                if origin == ExecutionOrigin::Internal {
+                    *child_origin = ExecutionOrigin::Internal;
+                }
+                log::trace!("Desugared term encoding: {}", cmd.to_command());
+            }
+
+            // Now typecheck using self, adding term type information.
+            let desugared_typechecked = self.typecheck_program(&desugared)?;
+            // remove globals again, but this time allow primitive globals
+            let desugared_typechecked =
+                desugared_typechecked
+                    .into_iter()
+                    .flat_map(|(command, origin)| {
+                        remove_globals::remove_globals(vec![command], &mut self.parser.symbol_gen)
+                            .into_iter()
+                            .map(move |command| (command, origin))
+                    });
+
+            let mut schedule = schedule;
+            let desugared_typechecked: Vec<_> = desugared_typechecked.collect();
+            let last = desugared_typechecked.len().checked_sub(1);
+            for (i, (command, origin)) in desugared_typechecked.into_iter().enumerate() {
+                let mapping = if Some(i) == last {
+                    schedule.take()
+                } else {
+                    None
+                };
+                if let Some(mapping) = &mapping {
+                    mapping.validate(&command)?;
+                }
+                new_typechecked.push(OriginatedCommand {
+                    command,
+                    origin,
+                    schedule: mapping,
+                    command_tail,
+                });
+            }
+            if schedule.is_some() {
+                return Err(Error::BackendError(
+                    "schedule provenance lost during desugaring".into(),
+                ));
+            }
+        }
+        Ok(new_typechecked)
     }
 
     /// Compile a resolved command without running actions, queries or schedules.
@@ -2831,7 +2907,7 @@ impl EGraph {
                     command,
                     origin,
                     None,
-                    &|_| RepeatContinuation::CanStop,
+                    CommandPolicies::default(),
                     &mut |_| {},
                 )?;
             }
@@ -2897,6 +2973,34 @@ impl EGraph {
         Ok(())
     }
 
+    // Shared execution, completion and failure boundary for compiled commands.
+    fn execute_originated(
+        &mut self,
+        command: &OriginatedCommand<ResolvedNCommand>,
+        policies: CommandPolicies<'_>,
+        observer: &mut dyn FnMut(ExecutionEvent<'_>),
+    ) -> Result<Vec<CommandOutput>, Error> {
+        let result = self.run_command(
+            command.command.clone(),
+            command.origin,
+            command.schedule.as_ref(),
+            policies,
+            observer,
+        );
+        match &result {
+            Ok(_) => observer(ExecutionEvent::CommandCompleted {
+                origin: command.origin,
+                command: &command.command,
+            }),
+            Err(error) => observer(ExecutionEvent::CommandFailed {
+                origin: command.origin,
+                command: &command.command,
+                error,
+            }),
+        }
+        result
+    }
+
     /// Process a program through the shared native compiler/interpreter.
     fn process_program_internal(
         &mut self,
@@ -2905,7 +3009,13 @@ impl EGraph {
         outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
         observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
         repeat_policy: &dyn Fn(usize, ScheduleLocation<'_>) -> RepeatContinuation,
+        scheduler_selector: &dyn Fn(usize, ScheduleLocation<'_>) -> Option<scheduler::SchedulerId>,
     ) -> Result<ResolvedNCommands, Error> {
+        let executing = matches!(
+            mode,
+            ProcessingMode::Execute | ProcessingMode::ExecuteEmbedded
+        );
+        let embedded = mode == ProcessingMode::ExecuteEmbedded;
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
 
@@ -2939,67 +3049,46 @@ impl EGraph {
                         &mut |_, origin, output| outputs(cause, origin, output),
                         &mut |_, event| observer(cause, event),
                         &|_, site| repeat_policy(cause, site),
+                        &|_, site| scheduler_selector(cause, site),
                     )?;
                     desugared.extend(resolved.desugared);
                     desugared_before_proofs.extend(resolved.desugared_before_proofs);
                 } else {
-                    let resolved = self.resolve_command(command)?;
-                    if mode == ProcessingMode::Execute && self.are_proofs_enabled() {
+                    let resolved = self.resolve_command(command, CommandPurpose::Authored)?;
+                    if executing && self.are_proofs_enabled() {
                         self.proof_check_program
                             .extend(resolved.desugared_before_proofs.clone());
                     }
 
                     desugared_before_proofs.extend(resolved.desugared_before_proofs);
-                    let start = desugared.len();
                     desugared.extend(resolved.desugared.clone());
-
-                    for (
-                        index,
-                        OriginatedCommand {
-                            command: processed,
-                            origin,
-                            schedule,
-                        },
-                    ) in resolved.desugared.into_iter().enumerate()
-                    {
+                    for processed in &resolved.desugared {
                         if mode == ProcessingMode::Compile {
-                            self.compile_command(processed, origin)?;
+                            self.compile_command(processed.command.clone(), processed.origin)?;
+                            continue;
+                        }
+                        if embedded && processed.command_tail {
                             continue;
                         }
                         // even in desugar mode we still run push and pop
-                        if mode == ProcessingMode::Execute
+                        if executing
                             || matches!(
-                                processed,
+                                processed.command,
                                 ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
                             )
                         {
-                            let result = self
-                                .run_command(
-                                    processed,
-                                    origin,
-                                    schedule.as_ref(),
-                                    &|site| repeat_policy(cause, site),
-                                    &mut |event| observer(cause, event),
-                                )
-                                .inspect_err(|error| {
-                                    observer(
-                                        cause,
-                                        ExecutionEvent::CommandFailed {
-                                            origin,
-                                            command: &desugared[start + index].command,
-                                            error,
-                                        },
-                                    );
-                                })?;
-                            observer(
-                                cause,
-                                ExecutionEvent::CommandCompleted {
-                                    origin,
-                                    command: &desugared[start + index].command,
+                            let result = self.execute_originated(
+                                processed,
+                                CommandPolicies {
+                                    repeat: &|site| repeat_policy(cause, site),
+                                    scheduler: &|site| scheduler_selector(cause, site),
+                                    accumulate_schedule: !embedded
+                                        || processed.origin != ExecutionOrigin::Requested,
                                 },
-                            );
+                                &mut |event| observer(cause, event),
+                            )?;
                             for output in result {
-                                outputs(cause, origin, output);
+                                outputs(cause, processed.origin, output);
                             }
                         }
                     }
@@ -3047,6 +3136,7 @@ impl EGraph {
             &mut |_, _, output| outputs.push(output),
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
+            &|_, _| None,
         )?;
         Ok(())
     }
@@ -3092,7 +3182,158 @@ impl EGraph {
             outputs,
             observer,
             repeat_policy,
+            &|_, _| None,
         )?;
+        Ok(())
+    }
+
+    /// Run with call-local requested-loop and requested-Run policies.
+    ///
+    /// The scheduler selector receives original submitted-command/schedule
+    /// coordinates, and is called immediately before an actual requested rule
+    /// step (after any native until pre-check). Returning an existing scheduler
+    /// id chooses `step_rules_with_scheduler`; `None` keeps ordinary stepping.
+    /// Compiler/proof-maintenance runs never consult it. Policies are not stored;
+    /// native observation, output, proof and recovery boundaries are unchanged.
+    pub fn run_program_observed_with_policies(
+        &mut self,
+        program: Vec<Command>,
+        outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
+        observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
+        repeat_policy: &dyn Fn(usize, ScheduleLocation<'_>) -> RepeatContinuation,
+        scheduler_selector: &dyn Fn(usize, ScheduleLocation<'_>) -> Option<scheduler::SchedulerId>,
+    ) -> Result<(), Error> {
+        self.process_program_internal(
+            program,
+            ProcessingMode::Execute,
+            outputs,
+            observer,
+            repeat_policy,
+            scheduler_selector,
+        )?;
+        Ok(())
+    }
+
+    /// Execute actual native commands inside a caller-owned schedule anchor.
+    ///
+    /// Uses the ordinary compiler, proof history, interpreter and observations.
+    /// Only structurally tagged common postludes of requested commands are
+    /// omitted: inline schedule rebuilding and prerequisite helper work remain.
+    /// The caller must surround the whole schedule with [`Self::with_schedule_envelope`].
+    pub fn run_program_embedded_observed(
+        &mut self,
+        program: Vec<Command>,
+        outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
+        observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
+        scheduler_selector: &dyn Fn(usize, ScheduleLocation<'_>) -> Option<scheduler::SchedulerId>,
+    ) -> Result<(), Error> {
+        self.process_program_internal(
+            program,
+            ProcessingMode::ExecuteEmbedded,
+            outputs,
+            observer,
+            &|_, _| RepeatContinuation::CanStop,
+            scheduler_selector,
+        )?;
+        Ok(())
+    }
+
+    /// Surround one opaque schedule callback with native command maintenance.
+    ///
+    /// Setup and the common postlude use the same builders and executor as
+    /// ordinary native commands. No synthetic schedule or proof AST is recorded;
+    /// embedded commands record their own actual pre-proof history. `fail_spans`
+    /// lists native Fail wrappers outermost first. Only the callback result is
+    /// caught, never setup/postlude errors or Rust panics. Completion is called
+    /// before the postlude; `None` denotes a caught/suppressed anchor.
+    pub fn with_schedule_envelope<C>(
+        &mut self,
+        fail_spans: &[Span],
+        context: &mut C,
+        anchor: impl FnOnce(&mut Self, &mut C) -> Result<RunReport, Error>,
+        completed: impl FnOnce(&mut C, Option<&RunReport>),
+        mut observer: impl FnMut(&mut C, ExecutionEvent<'_>),
+    ) -> Result<(), Error> {
+        let (before, after) = if self.proof_state.original_typechecking.is_some() {
+            let (before, after) = ProofInstrumentor::schedule_envelope(self);
+            (
+                self.resolve_instrumented_commands(before, CommandPurpose::Authored)?,
+                self.resolve_instrumented_commands(after, CommandPurpose::Authored)?,
+            )
+        } else {
+            (vec![], vec![])
+        };
+        for command in &before {
+            self.execute_originated(command, CommandPolicies::default(), &mut |event| {
+                observer(context, event)
+            })?;
+        }
+        let result = anchor(self, context);
+        // Native RunSchedule publishes its aggregate only when the complete
+        // anchor succeeds, before Fail may turn that success into ExpectFail.
+        if let Ok(report) = &result {
+            self.overall_run_report.union(report.clone());
+        }
+        let mut result = result.map(Some);
+        for span in fail_spans.iter().rev() {
+            result = expect_failure(span.clone(), result).map(|()| None);
+        }
+        if fail_spans.is_empty() {
+            let result = result?;
+            completed(context, result.as_ref());
+        } else {
+            // Suppression/caught inner locators end at the wrapped anchor,
+            // including an ExpectFail raised by one of the wrappers.
+            completed(context, None);
+            result?;
+        }
+        for command in &after {
+            self.execute_originated(command, CommandPolicies::default(), &mut |event| {
+                observer(context, event)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Validate an ordinary internal condition without executing it.
+    ///
+    /// Unlike an authored Check in proof-testing mode, a condition never expands
+    /// into Prove/ProveExists. Planning and actual witness failure remain at the
+    /// execution boundary, just as for an ordinary Check.
+    pub fn validate_condition(&self, span: Span, facts: Vec<Fact>) -> Result<(), Error> {
+        let mut compiler = self.clone();
+        let resolved =
+            compiler.resolve_command(Command::Check(span, facts), CommandPurpose::Condition)?;
+        for command in resolved.desugared {
+            compiler.compile_command(command.command, command.origin)?;
+        }
+        Ok(())
+    }
+
+    /// Execute a non-output-bearing ordinary condition within a schedule.
+    ///
+    /// The existing typechecker, proof fact instrumentation and `check_facts`
+    /// interpreter are used, including actual internal query observations and
+    /// cleanup. Only `Error::CheckError` means that the query did not match;
+    /// callers must propagate all other errors. No proof-testing proof request
+    /// or common command postlude is introduced for this internal pre-check.
+    pub fn check_condition_observed(
+        &mut self,
+        span: Span,
+        facts: Vec<Fact>,
+        observer: &mut dyn FnMut(ExecutionEvent<'_>),
+    ) -> Result<(), Error> {
+        let resolved =
+            self.resolve_command(Command::Check(span, facts), CommandPurpose::Condition)?;
+        if self.are_proofs_enabled() {
+            self.proof_check_program
+                .extend(resolved.desugared_before_proofs);
+        }
+        for command in &resolved.desugared {
+            if !command.command_tail {
+                self.execute_originated(command, CommandPolicies::default(), observer)?;
+            }
+        }
         Ok(())
     }
 
@@ -3116,6 +3357,7 @@ impl EGraph {
             &mut |_, _, _| {},
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
+            &|_, _| None,
         )?;
         Ok(compiler)
     }
@@ -3145,6 +3387,7 @@ impl EGraph {
             &mut |_, _, _| {},
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
+            &|_, _| None,
         )?;
         Ok(res
             .desugared
@@ -3395,7 +3638,7 @@ impl EGraph {
             ResolvedNCommand::UserDefined(span!(), name.to_string(), args.to_vec()),
             ExecutionOrigin::Requested,
             None,
-            &|_| RepeatContinuation::CanStop,
+            CommandPolicies::default(),
             &mut |_| {},
         )
     }
@@ -4125,6 +4368,247 @@ mod tests {
             assert_eq!(&span.file.contents[span.i..span.j], "(panic \"direct π\")");
             assert_eq!(span.i, direct.find("(panic \"direct π\")").unwrap());
             assert_eq!(span.file.name.as_deref(), Some("direct-origin.egg"));
+        }
+    }
+
+    #[test]
+    fn callback_schedule_envelope_matches_native_zero_one_many_and_fail_boundaries() {
+        for mode in 0..4 {
+            let mut baseline = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            baseline
+                .parse_and_run_program(None, "(datatype T (A)) (ruleset empty)")
+                .unwrap();
+            for count in [0, 1, 3] {
+                for wrappers in 0..3 {
+                    let leaf = Schedule::Run(
+                        span!(),
+                        RunConfig {
+                            ruleset: "empty".into(),
+                            until: None,
+                        },
+                    );
+                    let mut command = Command::RunSchedule(Schedule::Repeat(
+                        span!(),
+                        count,
+                        Box::new(leaf.clone()),
+                    ));
+                    let spans = vec![span!(); wrappers];
+                    for span in &spans {
+                        command = Command::Fail(span.clone(), Box::new(command));
+                    }
+                    let mut native = baseline.clone();
+                    let mut native_events = vec![];
+                    let mut native_outputs = 0;
+                    let native_result = native.run_program_observed_with_repeat_policy(
+                        vec![command],
+                        &mut |_, origin, output| {
+                            if origin == ExecutionOrigin::Requested
+                                && matches!(output, CommandOutput::RunSchedule(_))
+                            {
+                                native_outputs += 1;
+                            }
+                        },
+                        &mut |_, event| {
+                            if let ExecutionEvent::RunStarted { origin, schedule } = event {
+                                native_events.push((origin, schedule.is_some()));
+                            }
+                        },
+                        &|_, _| RepeatContinuation::ExactCount,
+                    );
+                    let mut graph = baseline.clone();
+                    let mut actual = (vec![], 0usize);
+                    let callback_result = graph.with_schedule_envelope(
+                        &spans,
+                        &mut actual,
+                        |graph, (events, _)| {
+                            let mut total = RunReport::default();
+                            for _ in 0..count {
+                                let mut report = None;
+                                graph.run_program_embedded_observed(
+                                    vec![Command::RunSchedule(leaf.clone())],
+                                    &mut |_, origin, output| {
+                                        if origin == ExecutionOrigin::Requested
+                                            && let CommandOutput::RunSchedule(next) = output
+                                        {
+                                            report = Some(next);
+                                        }
+                                    },
+                                    &mut |_, event| {
+                                        if let ExecutionEvent::RunStarted { origin, schedule } =
+                                            event
+                                        {
+                                            events.push((origin, schedule.is_some()));
+                                        }
+                                    },
+                                    &|_, _| None,
+                                )?;
+                                total.union(report.expect("actual completed leaf"));
+                            }
+                            Ok(total)
+                        },
+                        |(_, outputs), report| {
+                            *outputs += usize::from(report.is_some());
+                        },
+                        |(events, _), event| {
+                            if let ExecutionEvent::RunStarted { origin, schedule } = event {
+                                events.push((origin, schedule.is_some()));
+                            }
+                        },
+                    );
+                    assert_eq!(
+                        callback_result.is_ok(),
+                        native_result.is_ok(),
+                        "mode {mode}, count {count}, Fail {wrappers}"
+                    );
+                    assert_eq!(
+                        actual.0, native_events,
+                        "same real inline and outer helpers: mode {mode}, count {count}, Fail {wrappers}"
+                    );
+                    assert_eq!(actual.1, native_outputs, "same anchor suppression");
+                    assert_eq!(
+                        graph.get_overall_run_report().iterations.len(),
+                        native.get_overall_run_report().iterations.len(),
+                        "successful anchor statistics precede Fail: mode {mode}, count {count}, Fail {wrappers}"
+                    );
+                    assert_eq!(
+                        graph.get_overall_run_report().num_matches_per_rule,
+                        native.get_overall_run_report().num_matches_per_rule
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_condition_keeps_check_error_in_every_mode() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(None, "(relation R (i64)) (R 1)")
+                .unwrap();
+            for (text, matched) in [("(check (R 1) (= 1 1))", true), ("(check (R 2))", false)] {
+                let [Command::Check(span, facts)]: [Command; 1] =
+                    graph.parse_program(None, text).unwrap().try_into().unwrap()
+                else {
+                    unreachable!()
+                };
+                graph
+                    .validate_condition(span.clone(), facts.clone())
+                    .unwrap();
+                let mut runs = 0;
+                let result = graph.check_condition_observed(span, facts, &mut |event| {
+                    if let ExecutionEvent::RunStarted { origin, schedule } = event {
+                        assert_eq!(origin, ExecutionOrigin::Internal);
+                        assert!(schedule.is_none());
+                        runs += 1;
+                    }
+                });
+                if matched {
+                    assert!(result.is_ok(), "mode {mode}: {result:?}");
+                } else {
+                    assert!(
+                        matches!(result, Err(Error::CheckError(..))),
+                        "mode {mode}: {result:?}"
+                    );
+                }
+                assert_eq!(runs, 1, "ordinary query, not proof-testing expansion");
+            }
+            if mode == 3 {
+                let commands = graph.parse_program(None, "(check (R 1))").unwrap();
+                let mut outputs = vec![];
+                let mut helper_runs = 0;
+                graph
+                    .run_program_observed(
+                        commands,
+                        &mut |_, origin, output| {
+                            if origin == ExecutionOrigin::Requested {
+                                outputs.push(output);
+                            } else if matches!(output, CommandOutput::RunSchedule(_)) {
+                                helper_runs += 1;
+                            }
+                        },
+                        &mut |_, _| {},
+                    )
+                    .unwrap();
+                assert!(
+                    matches!(outputs.as_slice(), [CommandOutput::ProveExists { .. }]),
+                    "authored proof-testing Check remains a real proof request: {outputs:?}"
+                );
+                assert!(helper_runs > 0, "native proof helpers remain observable");
+            }
+        }
+    }
+
+    #[test]
+    fn requested_run_scheduler_selection_excludes_until_and_maintenance() {
+        #[derive(Clone)]
+        struct Delay;
+        impl scheduler::Scheduler for Delay {
+            fn filter_matches(
+                &mut self,
+                _: &scheduler::SchedulerContext<'_>,
+                _: &str,
+                _: &str,
+                _: &mut scheduler::Matches,
+            ) -> bool {
+                true
+            }
+        }
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph.parse_and_run_program(None, "(relation R (i64)) (relation S (i64)) (ruleset copy) (rule ((R x)) ((S x)) :ruleset copy) (R 1)").unwrap();
+            let scheduler = graph.add_scheduler(Box::new(Delay));
+            let commands = graph
+                .parser
+                .get_program_from_string(None, "(run copy 1) (run copy 1 :until (R 1))")
+                .unwrap();
+            let selections = std::cell::RefCell::new(Vec::new());
+            let mut requested = 0;
+            graph
+                .run_program_observed_with_policies(
+                    commands,
+                    &mut |_, _, _| (),
+                    &mut |_, event| {
+                        if matches!(
+                            event,
+                            ExecutionEvent::RunStarted {
+                                origin: ExecutionOrigin::Requested,
+                                ..
+                            }
+                        ) {
+                            requested += 1;
+                        }
+                    },
+                    &|_, _| RepeatContinuation::CanStop,
+                    &|cause, site| {
+                        selections.borrow_mut().push((cause, site.path.to_vec()));
+                        Some(scheduler)
+                    },
+                )
+                .unwrap();
+            assert_eq!(*selections.borrow(), [(0, vec![0])], "mode {mode}");
+            assert_eq!(
+                requested, 2,
+                "until retains its native observation boundary"
+            );
+            graph
+                .parse_and_run_program(None, "(fail (check (S 1))) (run copy 1) (check (S 1))")
+                .unwrap();
         }
     }
 

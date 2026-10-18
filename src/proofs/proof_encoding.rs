@@ -1782,10 +1782,7 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    pub(crate) fn add_term_encoding_helper(
-        &mut self,
-        program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
-    ) -> Vec<OriginatedCommand<Command>> {
+    fn command_header(&mut self) -> Vec<OriginatedCommand<Command>> {
         let mut res = vec![];
 
         if !self.egraph.proof_state.term_header_added {
@@ -1796,6 +1793,7 @@ impl<'a> ProofInstrumentor<'a> {
                         command,
                         origin,
                         schedule: None,
+                        command_tail: false,
                     }),
             );
             if self.egraph.proof_state.proofs_enabled {
@@ -1807,11 +1805,44 @@ impl<'a> ProofInstrumentor<'a> {
                             command,
                             origin: ExecutionOrigin::Internal,
                             schedule: None,
+                            command_tail: false,
                         }),
                 );
             }
             self.egraph.proof_state.term_header_added = true;
         }
+        res
+    }
+
+    fn command_tail(&mut self, owner: ExecutionOrigin) -> OriginatedCommand<Command> {
+        OriginatedCommand {
+            command: Command::RunSchedule(self.rebuild()),
+            origin: ExecutionOrigin::Internal,
+            schedule: None,
+            command_tail: owner == ExecutionOrigin::Requested,
+        }
+    }
+
+    // An opaque callback supplies the schedule anchor. The same native header
+    // and tail builders surround it; there is no fabricated executable AST.
+    pub(crate) fn schedule_envelope(
+        egraph: &'a mut EGraph,
+    ) -> (
+        Vec<OriginatedCommand<Command>>,
+        Vec<OriginatedCommand<Command>>,
+    ) {
+        let mut instrumentor = Self { egraph };
+        (
+            instrumentor.command_header(),
+            vec![instrumentor.command_tail(ExecutionOrigin::Requested)],
+        )
+    }
+
+    pub(crate) fn add_term_encoding_helper(
+        &mut self,
+        program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
+    ) -> Vec<OriginatedCommand<Command>> {
+        let mut res = self.command_header();
 
         for (command, origin) in program {
             let mut encoded = vec![];
@@ -1824,6 +1855,7 @@ impl<'a> ProofInstrumentor<'a> {
                 command,
                 origin: ExecutionOrigin::Internal,
                 schedule: None,
+                command_tail: false,
             }));
             res.extend(anchor.map(|command| OriginatedCommand {
                 command,
@@ -1832,6 +1864,7 @@ impl<'a> ProofInstrumentor<'a> {
                 // there is no submitted schedule for them to address. This
                 // does not strip a requested Run selecting an internal ruleset.
                 schedule: schedule.filter(|_| origin == ExecutionOrigin::Requested),
+                command_tail: false,
             }));
 
             // run rebuilding after every command except a few
@@ -1840,11 +1873,7 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
-                res.push(OriginatedCommand {
-                    command: Command::RunSchedule(self.rebuild()),
-                    origin: ExecutionOrigin::Internal,
-                    schedule: None,
-                });
+                res.push(self.command_tail(origin));
             }
         }
 
