@@ -2578,91 +2578,17 @@ impl EGraph {
         })?;
         let func = self.functions.get_mut(func_name).unwrap();
 
-        let mut filename = self.fact_directory.clone().unwrap_or_default();
-        filename.push(file.as_str());
-
-        // check that the function uses supported types
-
-        for t in &func.func_type.input {
-            match t.name() {
-                "i64" | "f64" | "String" => {}
-                s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
-            }
-        }
-
-        if function_type.subtype != FunctionSubtype::Constructor {
-            match func.func_type.output.name() {
-                "i64" | "String" | "Unit" => {}
-                s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
-            }
-        }
-
-        log::info!("Opening file '{filename:?}'...");
-        let mut f =
-            File::open(&filename).map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-        let mut contents = String::new();
-        f.read_to_string(&mut contents)
-            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-
-        // Can also do a row-major Vec<Value>
-        let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
-
-        let mut row_schema = func.func_type.input.clone();
-        if function_type.subtype == FunctionSubtype::Custom {
-            row_schema.push(func.func_type.output.clone());
-        }
-
-        log::debug!("{row_schema:?}");
+        let parsed_contents =
+            parse_input_file(&func.func_type, &file, self.fact_directory.as_deref(), span)?
+                .into_iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|literal| literal_to_value(&self.backend, literal))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
 
         let unit_val = self.backend.base_values().get(());
-
-        for line in contents.lines() {
-            let mut it = line.split('\t').map(|s| s.trim());
-
-            let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
-
-            for sort in row_schema.iter() {
-                if let Some(raw) = it.next() {
-                    let val = match sort.name() {
-                        "i64" => {
-                            if let Ok(i) = raw.parse::<i64>() {
-                                self.backend.base_values().get(i)
-                            } else {
-                                return Err(Error::InputFileFormatError(file));
-                            }
-                        }
-                        "f64" => {
-                            if let Ok(f) = raw.parse::<f64>() {
-                                self.backend
-                                    .base_values()
-                                    .get::<F>(core_relations::Boxed::new(f.into()))
-                            } else {
-                                return Err(Error::InputFileFormatError(file));
-                            }
-                        }
-                        "String" => self.backend.base_values().get::<S>(raw.to_string().into()),
-                        "Unit" => unit_val,
-                        _ => panic!("Unreachable"),
-                    };
-                    row.push(val);
-                } else {
-                    break;
-                }
-            }
-
-            if row.is_empty() {
-                continue;
-            }
-
-            if row.len() != row_schema.len() || it.next().is_some() {
-                return Err(Error::InputFileFormatError(file));
-            }
-
-            parsed_contents.push(row);
-        }
-
-        log::debug!("Successfully loaded file.");
-
         let num_facts = parsed_contents.len();
 
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
@@ -4213,6 +4139,103 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     }
 }
 
+/// Decode a native Input file into ordered literal rows without inserting them.
+///
+/// The resolved signature can come from a type-only authoring environment; no
+/// backend table is required. Custom functions include their output column,
+/// while constructors contain only keys. This uses Input's supported-sort and
+/// tab-separated cell rules, validating every row before returning any of them.
+/// Relative paths are resolved against `fact_directory`, as for native Input.
+pub fn parse_input_file(
+    function_type: &FuncType,
+    file: &str,
+    fact_directory: Option<&std::path::Path>,
+    span: Span,
+) -> Result<Vec<Vec<Literal>>, Error> {
+    let mut filename = fact_directory
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    filename.push(file);
+
+    // check that the function uses supported types
+
+    for t in &function_type.input {
+        match t.name() {
+            "i64" | "f64" | "String" => {}
+            s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
+        }
+    }
+
+    if function_type.subtype != FunctionSubtype::Constructor {
+        match function_type.output.name() {
+            "i64" | "String" | "Unit" => {}
+            s => return Err(Error::UnsupportedInputType(s.to_string(), span.clone())),
+        }
+    }
+
+    log::info!("Opening file '{filename:?}'...");
+    let mut f =
+        File::open(&filename).map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+    let mut contents = String::new();
+    f.read_to_string(&mut contents)
+        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+
+    let mut parsed_contents: Vec<Vec<Literal>> = Vec::with_capacity(contents.lines().count());
+
+    let mut row_schema = function_type.input.clone();
+    if function_type.subtype == FunctionSubtype::Custom {
+        row_schema.push(function_type.output.clone());
+    }
+
+    log::debug!("{row_schema:?}");
+
+    for line in contents.lines() {
+        let mut it = line.split('\t').map(|s| s.trim());
+
+        let mut row: Vec<Literal> = Vec::with_capacity(row_schema.len());
+
+        for sort in row_schema.iter() {
+            if let Some(raw) = it.next() {
+                let val = match sort.name() {
+                    "i64" => {
+                        if let Ok(i) = raw.parse::<i64>() {
+                            Literal::Int(i)
+                        } else {
+                            return Err(Error::InputFileFormatError(file.to_string()));
+                        }
+                    }
+                    "f64" => {
+                        if let Ok(f) = raw.parse::<f64>() {
+                            Literal::Float(f.into())
+                        } else {
+                            return Err(Error::InputFileFormatError(file.to_string()));
+                        }
+                    }
+                    "String" => Literal::String(raw.to_string()),
+                    "Unit" => Literal::Unit,
+                    _ => panic!("Unreachable"),
+                };
+                row.push(val);
+            } else {
+                break;
+            }
+        }
+
+        if row.is_empty() {
+            continue;
+        }
+
+        if row.len() != row_schema.len() || it.next().is_some() {
+            return Err(Error::InputFileFormatError(file.to_string()));
+        }
+
+        parsed_contents.push(row);
+    }
+
+    log::debug!("Successfully loaded file.");
+    Ok(parsed_contents)
+}
+
 fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
         Literal::Int(x) => egraph.base_values().get::<i64>(*x),
@@ -4333,6 +4356,68 @@ mod tests {
     use crate::*;
 
     use crate::PureState;
+
+    #[test]
+    fn input_file_parser_uses_type_environment_without_tables() {
+        let mut graph = EGraph::default();
+        let command = graph
+            .parse_program(None, "(function parsed () String :no-merge)")
+            .unwrap()
+            .pop()
+            .unwrap();
+        graph.resolve_command_preserving_globals(command).unwrap();
+        assert!(graph.get_function("parsed").is_none());
+        let function_type = graph.type_info().get_func_type("parsed").unwrap();
+        let rows = parse_input_file(
+            function_type,
+            "string_quotes.csv",
+            Some(std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests"
+            ))),
+            Span::Panic,
+        )
+        .unwrap();
+        assert_eq!(rows, [vec![Literal::String("abc".to_string())]]);
+        assert!(graph.get_function("parsed").is_none());
+    }
+
+    #[test]
+    fn input_file_parser_preserves_schema_io_and_format_error_order() {
+        let mut graph = EGraph::default();
+        for command in graph
+            .parse_program(
+                None,
+                "(function unsupported (bool) String :no-merge) (function parsed () i64 :no-merge)",
+            )
+            .unwrap()
+        {
+            graph.resolve_command_preserving_globals(command).unwrap();
+        }
+        let directory = Some(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests"
+        )));
+        let unsupported = graph.type_info().get_func_type("unsupported").unwrap();
+        assert!(matches!(
+            parse_input_file(unsupported, "string_quotes.csv/missing", directory, Span::Panic),
+            Err(Error::UnsupportedInputType(name, _)) if name == "bool"
+        ));
+        let supported = graph.type_info().get_func_type("parsed").unwrap();
+        assert!(matches!(
+            parse_input_file(
+                supported,
+                "string_quotes.csv/missing",
+                directory,
+                Span::Panic
+            ),
+            Err(Error::IoError(_, _, _))
+        ));
+        assert!(matches!(
+            parse_input_file(supported, "string_quotes.csv", directory, Span::Panic),
+            Err(Error::InputFileFormatError(file)) if file == "string_quotes.csv"
+        ));
+    }
 
     #[test]
     fn authored_panic_preserves_exact_span_and_rule_in_every_mode() {
