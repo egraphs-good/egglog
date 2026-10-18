@@ -176,6 +176,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
+        Command::ActionScope(span, actions) => vec![NCommand::ActionScope(span, actions)],
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }

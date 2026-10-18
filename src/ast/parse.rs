@@ -862,6 +862,32 @@ impl Parser {
                 [file] => vec![Command::Include(span, file.expect_string("file name")?)],
                 _ => return error!(span, "usage: (include <file name>)"),
             },
+            "action-scope" => match tail {
+                [body] => {
+                    let members = body.expect_list("scoped actions")?;
+                    let mut actions = vec![];
+                    for (position, member) in members.iter().enumerate() {
+                        if position + 1 == members.len()
+                            && !matches!(member, Sexp::List(items, _) if matches!(items.first(), Some(Sexp::Atom(..))))
+                        {
+                            actions.push(Action::Expr(member.span(), self.parse_expr(member)?));
+                        } else {
+                            actions.extend(self.parse_action(member)?);
+                        }
+                    }
+                    if !matches!(actions.split_last(), Some((terminal, prefix))
+                        if !matches!(terminal, Action::Let(..))
+                            && prefix.iter().all(|action| matches!(action, Action::Let(..))))
+                    {
+                        return error!(
+                            span,
+                            "action-scope requires local lets followed by one non-let action"
+                        );
+                    }
+                    vec![Command::ActionScope(span, GenericActions(actions))]
+                }
+                _ => return error!(span, "usage: (action-scope (<let>* <action>))"),
+            },
             "fail" => match tail {
                 [subcommand] => {
                     let mut cs = self.parse_command(subcommand)?;

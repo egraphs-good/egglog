@@ -66,6 +66,13 @@ impl Names {
                 Ok(())
             }
             ResolvedNCommand::CoreAction(action) => self.check_shadowing_action(action),
+            ResolvedNCommand::ActionScope(_, actions) => {
+                let mut inner = self.clone();
+                for action in actions.iter() {
+                    inner.check_shadowing_action(action)?;
+                }
+                Ok(())
+            }
             ResolvedNCommand::Check(_span, query) => {
                 let mut inner = self.clone();
                 inner.check_shadowing_query(query)

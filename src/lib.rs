@@ -1877,24 +1877,31 @@ impl EGraph {
         );
         let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
-        let mut translator = BackendRule::new(
-            self.backend.new_rule("eval_actions", false),
-            &self.functions,
-            &self.type_info,
-            true, // global action: Read/Full contexts (may read the DB)
-        );
-        translator.actions(&actions)?;
-        let id = translator.build();
-        let (result, changed) = if execute {
-            self.backend.observe_actions(|backend| {
-                backend.run_rules(&[id], Some(&self.type_info)).map(|_| ())
+        let functions = &self.functions;
+        let type_info = &self.type_info;
+        let mut compiled = false;
+        let (result, changed) = self.backend.observe_actions(|backend| {
+            backend.run_scoped_rule("eval_actions", execute, Some(type_info), |rule| {
+                // Global actions use Read/Full contexts (may read the DB).
+                let mut translator = BackendRule::new(rule, functions, type_info, true);
+                translator.actions(&actions)?;
+                let id = translator.build();
+                compiled = true;
+                Ok(id)
             })
-        } else {
-            (Ok(()), false)
-        };
-        self.backend.free_rule(id);
-        let result = result.map_err(|error| Error::from_backend(error.as_ref()));
-        if execute {
+        });
+        let result = result.map_err(|error| {
+            if compiled {
+                Error::from_backend(error.as_ref())
+            } else {
+                // Translation errors used to return directly before running
+                // the backend. RAII must not erase their variant or span.
+                error
+                    .downcast::<Error>()
+                    .unwrap_or_else(|error| Error::from_backend(error.as_ref()))
+            }
+        });
+        if execute && compiled {
             observer(ExecutionEvent::ActionsFinished {
                 origin,
                 changed,
@@ -2460,6 +2467,15 @@ impl EGraph {
                 self.check_facts(&span, &facts, observer)?;
                 log::info!("Checked fact {facts:?}.");
             }
+            ResolvedNCommand::ActionScope(span, actions) => {
+                if self.proof_state.original_typechecking.is_some() {
+                    return Err(Error::UnsupportedProofCommand {
+                        command: ResolvedNCommand::ActionScope(span, actions).to_string(),
+                        reason: ProofEncodingUnsupportedReason::ActionScopeCommand,
+                    });
+                }
+                self.eval_actions(&actions, true, origin, observer)?;
+            }
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
@@ -2939,6 +2955,15 @@ impl EGraph {
                     CommandPolicies::default(),
                     &mut |_| {},
                 )?;
+            }
+            ResolvedNCommand::ActionScope(span, actions) => {
+                if self.proof_state.original_typechecking.is_some() {
+                    return Err(Error::UnsupportedProofCommand {
+                        command: ResolvedNCommand::ActionScope(span, actions).to_string(),
+                        reason: ProofEncodingUnsupportedReason::ActionScopeCommand,
+                    });
+                }
+                self.eval_actions(&actions, false, origin, &mut |_| {})?;
             }
             ResolvedNCommand::CoreAction(action) => {
                 self.eval_actions(
@@ -5382,6 +5407,622 @@ mod tests {
             assert!(changes.iter().any(|(changed, _)| *changed));
             assert!(changes.iter().any(|(changed, failed)| !changed && *failed));
             graph.parse_and_run_program(None, "(check (N 4))").unwrap();
+        }
+    }
+
+    #[test]
+    fn action_scope_preserves_failed_set_prefix_after_key_union() {
+        let mut seed = EGraph::default();
+        seed.parse_and_run_program(None, "(datatype A (N i64) (Wrap A)) (function f (A) A :no-merge) (N 0) (N 1) (set (f (N 1)) (N 2))").unwrap();
+        let mut key_before = None;
+        seed.backend
+            .for_each(seed.functions["f"].backend_id, |row| {
+                key_before = Some(row.vals[0])
+            });
+        seed.parse_and_run_program(None, "(union (N 0) (N 1))")
+            .unwrap();
+        let mut key_after = None;
+        seed.backend
+            .for_each(seed.functions["f"].backend_id, |row| {
+                key_after = Some(row.vals[0])
+            });
+        assert_ne!(
+            key_before, key_after,
+            "the pre-existing row key really rebuilt"
+        );
+        assert_eq!(
+            key_after,
+            Some(
+                seed.backend
+                    .get_canon_repr(key_before.unwrap(), ColumnTy::Id)
+            )
+        );
+        let snapshot = |graph: &EGraph| {
+            let mut rows = HashSet::default();
+            for name in ["N", "Wrap", "f"] {
+                graph
+                    .backend
+                    .for_each(graph.functions[name].backend_id, |row| {
+                        rows.insert((name, row.vals.to_vec(), row.subsumed));
+                    });
+            }
+            let classes = graph
+                .materialized_eq_classes()
+                .into_iter()
+                .map(|(sort, value)| {
+                    (
+                        sort,
+                        value,
+                        graph.backend.get_canon_repr(value, ColumnTy::Id),
+                    )
+                })
+                .collect::<HashSet<_>>();
+            (rows, classes)
+        };
+        for caught in [false, true] {
+            let mut outcomes = vec![];
+            for source in [
+                "(set (f (N 1)) (Wrap (N 3)))",
+                "(action-scope ((let key (N 1)) (let child (N 3)) (let value (Wrap child)) (set (f key) value)))",
+            ] {
+                let mut graph = seed.clone();
+                let before = snapshot(&graph);
+                let source = if caught {
+                    format!("(fail {source})")
+                } else {
+                    source.into()
+                };
+                let commands = graph.parse_program(None, &source).unwrap();
+                let mut events = vec![];
+                let mut completed = vec![];
+                let mut failed = vec![];
+                let mut outputs = vec![];
+                let result = graph.run_program_observed(
+                    commands,
+                    &mut |_, _, output| outputs.push(output),
+                    &mut |_, event| match event {
+                        ExecutionEvent::ActionsFinished {
+                            origin,
+                            changed,
+                            result,
+                        } => {
+                            events.push((origin, changed, result.err().map(ToString::to_string)));
+                        }
+                        ExecutionEvent::CommandCompleted { origin, .. } => completed.push(origin),
+                        ExecutionEvent::CommandFailed { origin, .. } => failed.push(origin),
+                        _ => (),
+                    },
+                );
+                assert_eq!(result.is_ok(), caught);
+                assert!(outputs.is_empty());
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].0, ExecutionOrigin::Requested);
+                assert!(
+                    events[0].1,
+                    "constructor prefix committed before the merge error"
+                );
+                assert!(events[0].2.is_some());
+                assert_eq!(
+                    completed,
+                    if caught {
+                        vec![ExecutionOrigin::Requested]
+                    } else {
+                        vec![]
+                    }
+                );
+                assert_eq!(
+                    failed,
+                    if caught {
+                        vec![]
+                    } else {
+                        vec![ExecutionOrigin::Requested]
+                    }
+                );
+                assert_ne!(snapshot(&graph), before);
+                graph
+                    .parse_and_run_program(
+                        None,
+                        "(check (Wrap (N 3))) (check (= (f (N 1)) (N 2))) (check (= (N 0) (N 1)))",
+                    )
+                    .unwrap();
+                graph
+                    .parse_and_run_program(
+                        None,
+                        "(set (f (N 4)) (N 5)) (check (= (f (N 4)) (N 5)))",
+                    )
+                    .unwrap();
+                outcomes.push((
+                    snapshot(&graph),
+                    events,
+                    result.err().map(|error| error.to_string()),
+                ));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "caught={caught}");
+        }
+    }
+
+    #[test]
+    fn action_scope_panic_keeps_span_and_real_prefix_progress_through_fail() {
+        let mut seed = EGraph::default();
+        seed.parse_and_run_program(None, "(datatype A (N i64))")
+            .unwrap();
+        let command = seed
+            .parse_program(
+                None,
+                "(action-scope ((let local (N 7)) (panic \"terminal\")))",
+            )
+            .unwrap()
+            .remove(0);
+        let Command::ActionScope(_, actions) = &command else {
+            unreachable!()
+        };
+        let Action::Panic(expected_span, _) = actions.0.last().unwrap() else {
+            unreachable!()
+        };
+        for wrappers in 0..3 {
+            let mut graph = seed.clone();
+            let mut command = command.clone();
+            for _ in 0..wrappers {
+                command = Command::Fail(span!(), Box::new(command));
+            }
+            for duplicate in [false, true] {
+                let mut changes = vec![];
+                let mut completed = 0;
+                let mut failed = 0;
+                let result = graph.run_program_observed(vec![command.clone()], &mut |_, _, _| panic!("scope output"), &mut |_, event| match event {
+                    ExecutionEvent::ActionsFinished { origin, changed, result } => {
+                        assert_eq!(origin, ExecutionOrigin::Requested);
+                        assert!(matches!(result, Err(Error::Panic { span, .. }) if span == expected_span));
+                        changes.push(changed);
+                    }
+                    ExecutionEvent::CommandCompleted { .. } => completed += 1,
+                    ExecutionEvent::CommandFailed { .. } => failed += 1,
+                    _ => (),
+                });
+                assert_eq!(result.is_ok(), wrappers == 1);
+                assert_eq!(changes, [!duplicate]);
+                assert_eq!(completed, usize::from(wrappers == 1));
+                assert_eq!(failed, usize::from(wrappers != 1));
+                graph.parse_and_run_program(None, "(check (N 7))").unwrap();
+                assert_eq!(graph.get_function_names(), seed.get_function_names());
+            }
+        }
+    }
+
+    #[test]
+    fn action_scope_parser_visitors_and_shape() {
+        let mut parser = Parser::default();
+        for source in [
+            "(action-scope ((let x (N 1)) (set (f) x)))",
+            "(action-scope ((let x (N 1)) x))",
+            "(action-scope ((let x (panic \"call, not action\")) x))",
+            "(action-scope (1))",
+            "(action-scope (()))",
+            "(fail (fail (action-scope ((panic \"stop\")))))",
+        ] {
+            let parsed = parser.get_program_from_string(None, source).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].to_string(), source);
+            let reparsed = parser
+                .get_program_from_string(None, &parsed[0].to_string())
+                .unwrap();
+            assert_eq!(reparsed[0].to_string(), source);
+        }
+        for source in [
+            "(action-scope ())",
+            "(action-scope ((let x 1)))",
+            "(action-scope ((set (f) 1) (set (f) 2)))",
+            "(action-scope ((panic \"early\") (N 1)))",
+        ] {
+            assert!(
+                parser.get_program_from_string(None, source).is_err(),
+                "{source}"
+            );
+        }
+        parser.add_action_macro(Arc::new(SimpleMacro::new("finish", |_, span, _| {
+            Ok(vec![
+                Action::Let(
+                    span.clone(),
+                    "made".into(),
+                    Expr::Lit(span.clone(), Literal::Int(1)),
+                ),
+                Action::Expr(span.clone(), Expr::Var(span, "made".into())),
+            ])
+        })));
+        let expanded = parser
+            .get_program_from_string(None, "(action-scope ((finish)))")
+            .unwrap()
+            .remove(0);
+        assert_eq!(expanded.to_string(), "(action-scope ((let made 1) made))");
+        parser.add_action_macro(Arc::new(SimpleMacro::new("two-finals", |_, span, _| {
+            Ok(vec![
+                Action::Expr(span.clone(), Expr::Lit(span.clone(), Literal::Int(1))),
+                Action::Expr(span.clone(), Expr::Lit(span, Literal::Int(2))),
+            ])
+        })));
+        assert!(
+            parser
+                .get_program_from_string(None, "(action-scope ((two-finals)))")
+                .is_err()
+        );
+        let mapped = expanded
+            .map_symbols(&mut |head| head, &mut |leaf| format!("local_{leaf}"))
+            .visit_exprs(&mut |expr| match expr {
+                Expr::Lit(span, Literal::Int(1)) => Expr::Lit(span, Literal::Int(2)),
+                other => other,
+            })
+            .map_string_symbols(&mut |_| panic!("no string-valued command symbols"));
+        let mut visited = 0;
+        let mapped = mapped.visit_actions(&mut |action| {
+            visited += 1;
+            action
+        });
+        assert_eq!(visited, 2);
+        assert_eq!(
+            mapped.to_string(),
+            "(action-scope ((let local_made 2) local_made))"
+        );
+        let remapped = parser
+            .get_program_from_string(None, "(action-scope ((let x (N 1)) (set (f) x)))")
+            .unwrap()
+            .remove(0)
+            .map_symbols(&mut |head| format!("call_{head}"), &mut |leaf| {
+                format!("var_{leaf}")
+            });
+        assert_eq!(
+            remapped.to_string(),
+            "(action-scope ((let var_x (call_N 1)) (set (call_f) var_x)))"
+        );
+        let mut graph = EGraph::default();
+        for actions in [
+            vec![],
+            vec![
+                Action::Expr(span!(), Expr::Lit(span!(), Literal::Int(1))),
+                Action::Panic(span!(), "second".into()),
+            ],
+            vec![Action::Let(
+                span!(),
+                "x".into(),
+                Expr::Lit(span!(), Literal::Int(1)),
+            )],
+        ] {
+            assert!(matches!(
+                graph.validate_program(vec![Command::ActionScope(span!(), Actions::new(actions))]),
+                Err(Error::TypeError(TypeError::InvalidActionScope(_)))
+            ));
+        }
+        let resolved = graph
+            .resolve_command_preserving_globals(mapped)
+            .unwrap()
+            .remove(0);
+        let resolved = resolved.visit_queries(&mut |_| panic!("scope contains no query"));
+        assert_eq!(
+            resolved.to_command().to_string(),
+            "(action-scope ((let local_made 2) local_made))"
+        );
+    }
+
+    #[test]
+    fn action_scope_locals_do_not_escape_or_shadow_globals() {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(datatype A (N i64)) (function f () A :no-merge) (let $global (N 9))",
+            )
+            .unwrap();
+        let functions = graph.get_function_names();
+        let globals = graph
+            .type_info
+            .global_sorts
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        graph
+            .parse_and_run_program(
+                None,
+                "(action-scope ((let x (N 1)) (set (f) x))) (action-scope ((let x (N 2)) x))",
+            )
+            .unwrap();
+        assert_eq!(graph.get_function_names(), functions);
+        assert_eq!(
+            graph
+                .type_info
+                .global_sorts
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            globals
+        );
+        for source in [
+            "(set (f) x)",
+            "(action-scope ((let global (N 3)) global))",
+            "(action-scope ((let x y) (let y (N 3)) x))",
+            "(action-scope ((let x (N 3)) (let x (N 4)) x))",
+        ] {
+            let before = graph.num_tuples();
+            assert!(
+                graph.parse_and_run_program(None, source).is_err(),
+                "{source}"
+            );
+            assert_eq!(graph.num_tuples(), before);
+        }
+        // Match ordinary local naming: default mode accepts the prefixed
+        // spelling with a warning, but it never becomes a global binding.
+        graph
+            .parse_and_run_program(None, "(action-scope ((let $local (N 3)) $local))")
+            .unwrap();
+        assert!(!graph.type_info.is_global("$local"));
+        assert!(
+            graph
+                .parse_and_run_program(None, "(set (f) $local)")
+                .is_err()
+        );
+        let mut strict = graph.clone();
+        strict.set_strict_mode(true);
+        assert!(
+            matches!(strict.parse_and_run_program(None, "(action-scope ((let $other (N 4)) $other))"), Err(Error::TypeError(TypeError::NonGlobalPrefixed { name, .. })) if name == "$other")
+        );
+        let mut clone = graph.clone();
+        clone
+            .parse_and_run_program(None, "(action-scope ((let x (N 5)) x))")
+            .unwrap();
+        graph
+            .parse_and_run_program(None, "(push) (action-scope ((let x (N 4)) x)) (pop)")
+            .unwrap();
+        assert!(graph.parse_and_run_program(None, "(check (N 5))").is_err());
+        assert!(graph.parse_and_run_program(None, "(check (N 4))").is_err());
+        graph
+            .parse_and_run_program(None, "(check (= (f) (N 1)))")
+            .unwrap();
+    }
+
+    #[test]
+    fn action_scope_whole_sequence_infers_exact_contextual_heads() {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(sort VI (Vec i64)) (sort VS (Vec String)) (function sink () VI :no-merge)",
+            )
+            .unwrap();
+        let commands = graph
+            .parse_program(
+                None,
+                "(action-scope ((let xs (vec-empty)) (set (sink) xs)))",
+            )
+            .unwrap();
+        let resolved = graph
+            .resolve_command_preserving_globals(commands[0].clone())
+            .unwrap()
+            .remove(0);
+        let ResolvedNCommand::ActionScope(_, actions) = &resolved else {
+            panic!("scope lost during resolution")
+        };
+        let ResolvedAction::Let(
+            _,
+            variable,
+            ResolvedExpr::Call(_, ResolvedCall::Primitive(primitive), _),
+        ) = &actions.0[0]
+        else {
+            panic!("selected primitive lost")
+        };
+        assert_eq!(variable.sort.name(), "VI");
+        assert_eq!(primitive.output().name(), "VI");
+        let ResolvedAction::Set(_, ResolvedCall::Func(function), _, _) = &actions.0[1] else {
+            panic!("selected function lost")
+        };
+        assert_eq!(function.name, "sink");
+        assert_eq!(function.output.name(), "VI");
+        graph
+            .eval_actions(actions, false, ExecutionOrigin::Internal, &mut |_| {
+                panic!("compile-only action event")
+            })
+            .unwrap();
+        graph
+            .compile_command(resolved, ExecutionOrigin::Internal)
+            .unwrap();
+        assert_eq!(graph.num_tuples(), 0);
+        graph.run_program(commands).unwrap();
+        graph
+            .parse_and_run_program(None, "(check (= (vec-length (sink)) 0))")
+            .unwrap();
+    }
+
+    #[test]
+    fn action_scope_full_context_is_inert_until_one_ordered_execution() {
+        #[derive(Clone)]
+        struct Mark(Arc<std::sync::Mutex<Vec<i64>>>);
+        impl Primitive for Mark {
+            fn name(&self) -> &str {
+                "scope-mark"
+            }
+            fn get_type_constraints(
+                &self,
+                span: &Span,
+            ) -> Box<dyn crate::constraint::TypeConstraint> {
+                SimpleTypeConstraint::new(
+                    self.name(),
+                    vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+                    span.clone(),
+                )
+                .into_box()
+            }
+        }
+        impl FullPrim for Mark {
+            fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(state.base_values().unwrap::<i64>(args[0]));
+                Some(args[0])
+            }
+        }
+        let calls = Arc::new(std::sync::Mutex::new(vec![]));
+        let mut graph = EGraph::default();
+        graph.add_full_primitive(Mark(calls.clone()), None);
+        graph
+            .parse_and_run_program(None, "(function out (i64) i64 :no-merge)")
+            .unwrap();
+        let before_report = serde_json::to_value(&graph.overall_run_report).unwrap();
+        let commands = graph.parse_program(None, "(action-scope ((let key (scope-mark 1)) (let value (scope-mark 2)) (set (out key) value)))").unwrap();
+        let compiler = graph.validate_program(commands.clone()).unwrap();
+        assert!(calls.lock().unwrap().is_empty());
+        assert_eq!(compiler.num_tuples(), 0);
+        assert_eq!(graph.num_tuples(), 0);
+        for expected in [true, false] {
+            let mut events = vec![];
+            graph
+                .run_program_observed(
+                    commands.clone(),
+                    &mut |_, _, _| panic!("action output"),
+                    &mut |_, event| {
+                        if let ExecutionEvent::ActionsFinished {
+                            origin,
+                            changed,
+                            result,
+                        } = event
+                        {
+                            assert!(result.is_ok());
+                            events.push((origin, changed));
+                        }
+                    },
+                )
+                .unwrap();
+            assert_eq!(events, [(ExecutionOrigin::Requested, expected)]);
+        }
+        assert_eq!(*calls.lock().unwrap(), [1, 2, 1, 2]);
+        assert_eq!(
+            serde_json::to_value(&graph.overall_run_report).unwrap(),
+            before_report
+        );
+        graph
+            .parse_and_run_program(None, "(check (= (out 1) 2))")
+            .unwrap();
+    }
+
+    #[test]
+    fn action_scope_compile_errors_keep_variants_and_emit_no_action_event() {
+        use egglog_numeric_id::NumericId;
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(datatype A (N i64)) (function f (i64) i64 :merge old)",
+            )
+            .unwrap();
+        let control = graph.backend.new_rule("control", false).build();
+        for source in [
+            "(subsume (f 0))",
+            "(action-scope ((let unused (N 7)) (let key 0) (subsume (f key))))",
+        ] {
+            let commands = graph.parse_program(None, source).unwrap();
+            assert!(
+                matches!(graph.validate_program(commands.clone()), Err(Error::SubsumeMergeError(name, _)) if name == "f")
+            );
+            let error = graph
+                .run_program_observed(
+                    commands.clone(),
+                    &mut |_, _, _| panic!("compile output"),
+                    &mut |_, event| {
+                        assert!(!matches!(event, ExecutionEvent::ActionsFinished { .. }));
+                    },
+                )
+                .unwrap_err();
+            assert!(matches!(error, Error::SubsumeMergeError(name, _) if name == "f"));
+            assert_eq!(graph.num_tuples(), 0);
+            assert!(graph.materialized_eq_classes().is_empty());
+            // Direct native Fail already catches backend translation errors;
+            // validation/type errors still reject before that runtime wrapper.
+            graph
+                .run_program(vec![Command::Fail(span!(), Box::new(commands[0].clone()))])
+                .unwrap();
+            let next = graph.backend.new_rule("reused", false).build();
+            assert_eq!(next.index(), control.index() + 1);
+            graph.backend.free_rule(next);
+        }
+        graph.backend.free_rule(control);
+        graph
+            .parse_and_run_program(None, "(action-scope ((let node (N 7)) node)) (check (N 7))")
+            .unwrap();
+    }
+
+    #[test]
+    fn action_scope_encoded_guards_precede_visitors_and_execution() {
+        let mut normal = EGraph::default();
+        normal.add_full_primitive(FullOnly, None);
+        let command = normal
+            .parse_program(None, "(action-scope ((let n (full-only)) n))")
+            .unwrap()
+            .remove(0);
+        let resolved = normal
+            .resolve_command_preserving_globals(command)
+            .unwrap()
+            .remove(0);
+        let mut command = resolved.to_command();
+        for _ in 0..3 {
+            assert!(matches!(
+                command_supports_proof_encoding(&command, &normal.type_info),
+                Err(ProofEncodingUnsupportedReason::ActionScopeCommand)
+            ));
+            command = ResolvedCommand::Fail(span!(), Box::new(command));
+        }
+        for mode in 1..4 {
+            let mut graph = match mode {
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            let functions = graph.get_function_names();
+            let mut source = "(action-scope ((let n 1) n))".to_owned();
+            for _ in 0..3 {
+                let commands = graph.parse_program(None, &source).unwrap();
+                assert!(matches!(
+                    graph.validate_program(commands.clone()),
+                    Err(Error::UnsupportedProofCommand {
+                        reason: ProofEncodingUnsupportedReason::ActionScopeCommand,
+                        ..
+                    })
+                ));
+                let error = graph
+                    .run_program_observed(
+                        commands,
+                        &mut |_, _, _| panic!("encoded scope output"),
+                        &mut |_, _| panic!("encoded scope event"),
+                    )
+                    .unwrap_err();
+                assert!(matches!(
+                    error,
+                    Error::UnsupportedProofCommand {
+                        reason: ProofEncodingUnsupportedReason::ActionScopeCommand,
+                        ..
+                    }
+                ));
+                source = format!("(fail {source})");
+            }
+            assert_eq!(graph.get_function_names(), functions);
+            assert_eq!(graph.num_tuples(), 0);
+            assert!(graph.materialized_eq_classes().is_empty());
+            assert!(matches!(
+                graph.compile_command(resolved.clone(), ExecutionOrigin::Requested),
+                Err(Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::ActionScopeCommand,
+                    ..
+                })
+            ));
+            assert!(matches!(
+                graph.run_command(
+                    resolved.clone(),
+                    ExecutionOrigin::Requested,
+                    None,
+                    CommandPolicies::default(),
+                    &mut |_| panic!("defensive scope event")
+                ),
+                Err(Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::ActionScopeCommand,
+                    ..
+                })
+            ));
         }
     }
 

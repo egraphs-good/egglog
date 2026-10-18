@@ -1779,6 +1779,9 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::UserDefined(..) => {
                 panic!("User defined commands unsupported in term encoding");
             }
+            ResolvedNCommand::ActionScope(..) => {
+                unreachable!("action-scope rejected before term encoding");
+            }
         }
     }
 

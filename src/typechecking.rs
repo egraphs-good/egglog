@@ -629,6 +629,23 @@ impl EGraph {
                     unionable: *unionable,
                 }
             }
+            NCommand::ActionScope(span, actions) => {
+                if !matches!(actions.0.split_last(), Some((terminal, prefix))
+                    if !matches!(terminal, Action::Let(..))
+                        && prefix.iter().all(|action| matches!(action, Action::Let(..))))
+                {
+                    return Err(TypeError::InvalidActionScope(span.clone()));
+                }
+                ResolvedNCommand::ActionScope(
+                    span.clone(),
+                    self.type_info.typecheck_standalone_actions(
+                        symbol_gen,
+                        actions,
+                        &Default::default(),
+                        Context::Full,
+                    )?,
+                )
+            }
             NCommand::CoreAction(action @ Action::Let(span, var, _)) => {
                 let action = self.type_info.typecheck_standalone_action(
                     symbol_gen,
@@ -757,6 +774,14 @@ impl EGraph {
         };
         if let ResolvedNCommand::NormRule { rule } = &command {
             self.warn_for_prefixed_non_globals_in_rule(rule)?;
+        } else if let ResolvedNCommand::ActionScope(_, actions) = &command {
+            let mut result = Ok(());
+            actions.visit_vars(&mut |span, var| {
+                if result.is_ok() {
+                    result = self.warn_for_prefixed_non_globals_in_var(span, var);
+                }
+            });
+            result?;
         }
         Ok(command)
     }
@@ -1456,6 +1481,8 @@ pub enum TypeError {
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(String, Span),
+    #[error("{0}\naction-scope requires local lets followed by one non-let action")]
+    InvalidActionScope(Span),
     #[error("{1}\nThe output type of constructor function {0} must be sort")]
     ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
