@@ -103,6 +103,18 @@ impl<TI: IndexBase> Index<TI> {
         table.version() != self.updated_to
     }
 
+    /// Physical rows that [`Index::refresh`] would scan for a table at `current`.
+    pub(crate) fn stale_rows(&self, current: TableVersion) -> usize {
+        if current.major == self.updated_to.major {
+            current
+                .minor
+                .index()
+                .saturating_sub(self.updated_to.minor.index())
+        } else {
+            current.minor.index()
+        }
+    }
+
     pub(crate) fn refresh(&mut self, table: WrappedTableRef) {
         let cur_version = table.version();
         if cur_version == self.updated_to {
