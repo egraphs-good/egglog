@@ -845,7 +845,7 @@ mod tests {
     use super::*;
     use crate::{
         numeric_id::NumericId,
-        table_shortcuts::fill_table,
+        table_shortcuts::fill_timestamped_table,
         table_spec::{Constraint, Table, WrappedTableRef},
     };
 
@@ -971,10 +971,9 @@ mod tests {
     fn packed_trie_builds_from_prefiltered_subset_with_reusable_scratch() {
         // 65 selected rows exercises the radix path. The parity constraint
         // also makes the input subset sparse, while its RowIds remain sorted.
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..130).map(|row| vec![value(row), value((row * 37) % 11), value(row % 2)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let filtered = table.refine_one(
@@ -1165,10 +1164,9 @@ mod tests {
 
     #[test]
     fn packed_cursor_child_index_reuses_cached_node() {
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..8).map(|row_id| vec![value(row_id), value(row_id % 3), value(7 - row_id)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let arena = SharedArena::new();
@@ -1196,10 +1194,9 @@ mod tests {
 
     #[test]
     fn packed_dynamic_children_keep_two_successor_families_distinct() {
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..12).map(|row_id| vec![value(row_id), value(row_id % 2), value((row_id * 5) % 3)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let arena = SharedArena::new();
@@ -1257,10 +1254,9 @@ mod tests {
 
     #[test]
     fn packed_dynamic_same_family_converges_under_race() {
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..256).map(|row_id| vec![value(row_id), value((row_id * 17) % 31)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let arena = SharedArena::new();
@@ -1310,10 +1306,9 @@ mod tests {
 
     #[test]
     fn packed_cursor_child_index_uses_prefiltered_subset() {
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..8).map(|row_id| vec![value(row_id), value(row_id % 3), value(7 - row_id)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let filtered = table.refine_one(
@@ -1348,10 +1343,9 @@ mod tests {
 
     #[test]
     fn packed_cursor_child_index_is_published_once_under_race() {
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..96).map(|row_id| vec![value(row_id), value((row_id * 17) % 13), value(row_id % 5)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let arena = SharedArena::new();
@@ -1394,10 +1388,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "packed trie child cache shape mismatch")]
     fn packed_cursor_rejects_cached_child_with_another_shape() {
-        let table = fill_table(
+        let table = fill_timestamped_table(
             (0..4).map(|row_id| vec![value(row_id), value(row_id % 2), value(row_id + 10)]),
             1,
-            None,
             |_, new| Some(new.to_vec()),
         );
         let arena = SharedArena::new();

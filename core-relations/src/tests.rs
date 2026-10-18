@@ -9,7 +9,7 @@ use egglog_reports::ReportLevel;
 use crate::numeric_id::NumericId;
 
 use crate::{
-    PlanStrategy, Subset,
+    PlanStrategy,
     action::WriteVal,
     common::Value,
     free_join::{
@@ -19,7 +19,7 @@ use crate::{
     make_external_func,
     query::RuleSetBuilder,
     table::SortedWritesTable,
-    table_shortcuts::v,
+    table_shortcuts::{TimestampedTable, v},
     table_spec::{ColumnId, Constraint},
     uf::DisplacedTable,
 };
@@ -43,11 +43,9 @@ fn run_serial_and_parallel(f: impl Fn() + Send + Sync) {
 
 fn add_set_table(db: &mut Database, arity: usize) -> TableId {
     db.add_table(
-        SortedWritesTable::new(
+        TimestampedTable::new(
             arity,
             arity,
-            None,
-            vec![],
             Box::new(|_, old, new, _| {
                 assert_eq!(old, new, "set-table keys contain the complete row");
                 false
@@ -276,11 +274,9 @@ fn line_graph_1_gj() {
 
 fn line_graph_1_test(strat: PlanStrategy) {
     let mut db = Database::default();
-    let edge_impl = SortedWritesTable::new(
+    let edge_impl = TimestampedTable::new(
         2,
         2,
-        None,
-        vec![],
         Box::new(move |_, a, b, _| {
             if a != b {
                 panic!("merge not supported")
@@ -338,11 +334,9 @@ fn line_graph_1_test(strat: PlanStrategy) {
 fn prepared_plan_indexes_refresh_across_runs_and_clear() {
     let mut db = Database::default();
     let make_table = |arity| {
-        SortedWritesTable::new(
+        TimestampedTable::new(
             arity,
             arity,
-            None,
-            vec![],
             Box::new(|_, old, new, _| {
                 assert_eq!(old, new, "test tables have unique keys");
                 false
@@ -512,11 +506,9 @@ fn prepared_plan_indexes_preserve_uncacheable_columns() {
     let mut db = Database::default();
     let displaced = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
     let make_table = || {
-        SortedWritesTable::new(
+        TimestampedTable::new(
             1,
             1,
-            None,
-            vec![],
             Box::new(|_, old, new, _| {
                 assert_eq!(old, new);
                 false
@@ -805,11 +797,9 @@ fn inline_multi_column_exact_probe_matches_oracle_inner() {
     let x_gate = add_set_table(&mut db, 1);
     let driver = add_set_table(&mut db, 3);
     let facts = db.add_table(
-        SortedWritesTable::new(
+        TimestampedTable::new(
             2,
             4,
-            None,
-            vec![],
             Box::new(|_, old, new, out| {
                 if old == new {
                     false
@@ -1099,11 +1089,9 @@ fn shared_root_indexes_are_single_flight_and_execution_scoped() {
 fn shared_root_indexes_are_single_flight_and_execution_scoped_inner() {
     let mut db = Database::default();
     let facts = db.add_table(
-        SortedWritesTable::new(
+        TimestampedTable::new(
             1,
             2,
-            None,
-            vec![],
             Box::new(|_, old, new, out| {
                 if old == new {
                     false
@@ -1287,11 +1275,9 @@ fn packed_root_scan_omits_stale_rows_without_a_slow_constraint() {
 fn packed_root_scan_omits_stale_rows_without_a_slow_constraint_inner() {
     let mut db = Database::default();
     let facts = db.add_table(
-        SortedWritesTable::new(
+        TimestampedTable::new(
             1,
             2,
-            None,
-            vec![],
             Box::new(|_, old, new, out| {
                 if old == new {
                     false
@@ -1360,11 +1346,9 @@ fn small_live_residuals_stay_inline_and_filter_stale_rows() {
 fn small_live_residuals_stay_inline_and_filter_stale_rows_inner() {
     let mut db = Database::default();
     let facts = db.add_table(
-        SortedWritesTable::new(
+        TimestampedTable::new(
             2,
             3,
-            None,
-            vec![],
             Box::new(|_, old, new, out| {
                 if old == new {
                     false
@@ -1717,11 +1701,9 @@ fn gj_top_index_shards_preserve_count_and_materialization_inner() {
     pool.install(|| {
         let mut db = Database::default();
         let make_table = || {
-            SortedWritesTable::new(
+            TimestampedTable::new(
                 2,
                 2,
-                None,
-                vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new, "test tables have unique keys");
                     false
@@ -1731,11 +1713,9 @@ fn gj_top_index_shards_preserve_count_and_materialization_inner() {
         let left = db.add_table(make_table(), iter::empty(), iter::empty());
         let right = db.add_table(make_table(), iter::empty(), iter::empty());
         let output = db.add_table(
-            SortedWritesTable::new(
+            TimestampedTable::new(
                 2,
                 2,
-                None,
-                vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new, "materialized pairs are unique");
                     false
@@ -1835,7 +1815,7 @@ fn gj_filtered_top_index_range_fixture(num_threads: usize) -> (usize, Vec<Vec<Va
             SortedWritesTable::new(
                 3,
                 3,
-                Some(ColumnId::new(2)),
+                ColumnId::new(2),
                 vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new, "left rows are unique");
@@ -1969,7 +1949,7 @@ fn fused_cover_partition_fixture(
             SortedWritesTable::new(
                 3,
                 3,
-                Some(ColumnId::new(2)),
+                ColumnId::new(2),
                 vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new, "facts are unique");
@@ -2056,7 +2036,7 @@ fn fused_cover_partition_fixture(
                 .find(|header| header.atom == facts_atom)
                 .unwrap();
             assert_eq!(cover_header.subset.size(), expected);
-            let Subset::Dense(range) = &cover_header.subset else {
+            let crate::SubsetRef::Dense(range) = cover_header.subset.as_ref() else {
                 panic!("sorted timestamp filter must produce a dense suffix")
             };
             assert!(
@@ -2091,11 +2071,9 @@ fn gj_small_top_fallback_uses_local_queue() {
     pool.install(|| {
         let mut db = Database::default();
         let make_table = || {
-            SortedWritesTable::new(
+            TimestampedTable::new(
                 3,
                 3,
-                None,
-                vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new, "test tables have unique keys");
                     false
@@ -2168,11 +2146,9 @@ fn gj_decomposed_small_top_materialization_uses_local_queue() {
     pool.install(|| {
         let mut db = Database::default();
         let make_table = |arity| {
-            SortedWritesTable::new(
+            TimestampedTable::new(
                 arity,
                 arity,
-                None,
-                vec![],
                 Box::new(|_, old, new, _| {
                     assert_eq!(old, new, "test tables have unique keys");
                     false
@@ -2313,11 +2289,9 @@ fn line_graph_2_gj() {
 
 fn line_graph_2_test(strat: PlanStrategy) {
     let mut db = Database::default();
-    let edge_impl = SortedWritesTable::new(
+    let edge_impl = TimestampedTable::new(
         2,
         2,
-        None,
-        vec![],
         Box::new(move |_, a, b, _| {
             if a != b {
                 panic!("merge not supported")
@@ -2385,11 +2359,9 @@ fn line_graph_2_test(strat: PlanStrategy) {
 fn intersection_test(strat: PlanStrategy) {
     let mut db = Database::default();
     let rst = (0..3).map(|_| {
-        SortedWritesTable::new(
+        TimestampedTable::new(
             2,
             2,
-            None,
-            vec![],
             Box::new(move |_, a, b, _| {
                 if a != b {
                     panic!("merge not supported")
@@ -2399,11 +2371,9 @@ fn intersection_test(strat: PlanStrategy) {
             }),
         )
     });
-    let u = SortedWritesTable::new(
+    let u = TimestampedTable::new(
         1,
         1,
-        None,
-        vec![],
         Box::new(move |_, a, b, _| {
             if a != b {
                 panic!("merge not supported")
@@ -3057,7 +3027,7 @@ fn basic_math_egraph() -> MathEgraph {
     let num_impl = SortedWritesTable::new(
         1,
         3,
-        Some(ColumnId::new(2)),
+        ColumnId::new(2),
         vec![],
         Box::new(move |state, a, b, res| {
             if a[1] != b[1] {
@@ -3076,7 +3046,7 @@ fn basic_math_egraph() -> MathEgraph {
     let add_impl = SortedWritesTable::new(
         2,
         4,
-        Some(ColumnId::new(3)),
+        ColumnId::new(3),
         vec![],
         Box::new(move |state, a, b, res| {
             // Capture a backtrace as a string
@@ -3120,11 +3090,9 @@ fn lookup_with_fallback_partial_success_inner() {
     let [f, g, h] = (0..3)
         .map(|_| {
             db.add_table(
-                SortedWritesTable::new(
+                TimestampedTable::new(
                     1,
                     2,
-                    None,
-                    vec![],
                     Box::new(move |_, a, b, _| {
                         if a[0] != b[0] {
                             panic!("merge not supported")
@@ -3223,11 +3191,9 @@ fn call_external_with_fallback_inner() {
     let [f, h] = (0..2)
         .map(|_| {
             db.add_table(
-                SortedWritesTable::new(
+                TimestampedTable::new(
                     1,
                     2,
-                    None,
-                    vec![],
                     Box::new(move |_, a, b, _| {
                         if a[0] != b[0] {
                             panic!("merge not supported")
@@ -3298,25 +3264,25 @@ fn early_stop() {
 }
 
 fn early_stop_inner() {
+    const ROWS: usize = 500_000;
+    const STOP_AFTER: usize = 1000;
     let mut db = Database::default();
 
-    // Create a table with 1M rows.
     let data_table = db.add_table(
-        SortedWritesTable::new(1, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        TimestampedTable::new(1, 2, Box::new(|_, _, _, _| false)),
         iter::empty(),
         iter::empty(),
     );
 
     {
-        // Populate with 0.5M rows.
         let mut buf = db.new_buffer(data_table);
-        for i in 0..500_000 {
+        for i in 0..ROWS {
             buf.stage_insert(&[Value::from_usize(i), Value::from_usize(i)]);
         }
     }
     db.merge_all();
 
-    // External function that triggers early stop after 1000 calls.
+    // External function that triggers early stop after STOP_AFTER calls.
     let call_count = Arc::new(Mutex::new(0usize));
     let call_count_clone = call_count.clone();
     let stop_trigger =
@@ -3324,7 +3290,7 @@ fn early_stop_inner() {
             let mut count = call_count_clone.lock().unwrap();
             *count += 1;
 
-            if *count >= 1000 {
+            if *count >= STOP_AFTER {
                 exec_state.trigger_early_stop();
             }
 
@@ -3349,30 +3315,31 @@ fn early_stop_inner() {
 
     let matches = report.num_matches("early_stop_test");
 
-    // NB: 100K is very loose: this test doesn't appear to flake even with 10K as the upper limit.
-    // This is mostly just there to avoid truly unlikely race conditions where there are a huge
-    // number of matches in flight at once.
+    let final_count = *call_count.lock().unwrap();
+    assert_eq!(matches, final_count);
     assert!(
-        matches < 100_000,
-        "Expected much fewer than 10k matches due to early stopping, got {}, (call_count={})",
-        matches,
-        call_count.lock().unwrap(),
-    );
-    assert!(
-        matches >= 1000,
-        "Expected at least 1000 matches before stopping, got {} (call_count={})",
-        matches,
-        call_count.lock().unwrap(),
+        final_count >= STOP_AFTER,
+        "External function called {final_count} times, should be at least {STOP_AFTER}"
     );
 
-    let final_count = *call_count.lock().unwrap();
+    // Cancellation stops query enumeration, but pending action batches still
+    // finish. This single-table scan runs coarse partitions with one local
+    // action buffer per worker, so allow one full batch per worker after the
+    // stop request. Keep the tighter serial bound: it has no sibling workers
+    // accumulating batches concurrently.
+    let workers = crate::parallel::current_num_threads();
+    let max_calls = if workers == 1 {
+        10_000
+    } else {
+        STOP_AFTER + workers * crate::parallel_heuristics::action_batch_size()
+    };
     assert!(
-        final_count >= 1000,
-        "External function called {final_count} times, should be at least 1000"
+        final_count <= max_calls,
+        "External function called {final_count} times, exceeding the {max_calls} bound for {workers} workers"
     );
     assert!(
-        final_count < 100_000,
-        "External function called {final_count} times, should be much less than 10k"
+        final_count < ROWS,
+        "Early stop must prevent processing the entire table"
     );
 }
 

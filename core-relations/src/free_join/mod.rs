@@ -36,7 +36,7 @@ use crate::{
 
 use self::packed_cache::{AccessFamilies, FamilyId, SuccessorSig, canonical_constraints};
 use self::packed_trie::ChildShape;
-use self::plan::Plan;
+use self::plan::{Plan, SharedHeaderSubset};
 use crate::action::{ExecutionState, ExternalContext};
 use crate::common::HashMap;
 
@@ -82,8 +82,9 @@ define_id!(pub(crate) ActionId, u32, "an identifier picking out the RHS of a rul
 #[derive(Debug)]
 pub(crate) struct ProcessedConstraints {
     /// The subset of the table matching the fast constraints. If there are no
-    /// fast constraints then this is the full table.
-    pub(crate) subset: Subset,
+    /// fast constraints then this is the full table. The result is immutable
+    /// after processing and shared with atom clones and plan headers.
+    pub(crate) subset: SharedHeaderSubset,
     /// The constraints that can be evaluated quickly (O(log(n)) or O(1)).
     pub(crate) fast: Pooled<Vec<Constraint>>,
     /// The constraints that require an O(n) scan to evaluate.
@@ -108,7 +109,7 @@ impl ProcessedConstraints {
 
     pub(crate) fn dummy() -> ProcessedConstraints {
         ProcessedConstraints {
-            subset: Subset::empty(),
+            subset: Subset::empty().into(),
             fast: Pooled::new(Vec::new()),
             slow: Pooled::new(Vec::new()),
         }
@@ -974,7 +975,11 @@ impl Database {
             // Remove this constraint from the slow list.
             false
         });
-        ProcessedConstraints { subset, fast, slow }
+        ProcessedConstraints {
+            subset: subset.into(),
+            fast,
+            slow,
+        }
     }
 
     /// Get direct mutable access to the table.
