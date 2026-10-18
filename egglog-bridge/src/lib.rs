@@ -193,6 +193,10 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
+    /// Storage for a compiler-created binding, not an authored global or its view.
+    /// Only this table's own commits are excluded from observed Action progress;
+    /// its RHS, merge callbacks and all other tables still count normally.
+    pub compiler_binding: bool,
 }
 
 impl EGraph {
@@ -209,6 +213,7 @@ impl EGraph {
                 let uf_table = db.add_table_named(
                     DisplacedTable::default(),
                     "$uf".into(),
+                    false,
                     iter::empty(),
                     iter::empty(),
                 );
@@ -384,9 +389,7 @@ impl EGraph {
     /// Introduce a bare equality class, with no constructor or carrier row.
     /// The caller supplies its resolved native equality-sort name.
     pub fn fresh_eq_class(&mut self, sort: Arc<str>) -> Value {
-        let value = self.fresh_id();
-        self.with_execution_state(None, |state| state.materialize_eq_value(sort, value));
-        value
+        self.with_execution_state(None, |state| state.fresh_eq_class(self.id_counter, sort))
     }
 
     /// Read canonical typed membership at a quiescent boundary. Does not rebuild,
@@ -612,6 +615,7 @@ impl EGraph {
             merge,
             name,
             can_subsume,
+            compiler_binding,
         } = config;
         assert!(
             !schema.is_empty(),
@@ -663,6 +667,7 @@ impl EGraph {
         let table_id = self.db.add_table_named(
             table,
             name.clone(),
+            compiler_binding,
             read_deps.iter().copied(),
             write_deps.iter().copied(),
         );
@@ -719,6 +724,17 @@ impl EGraph {
     ) -> Result<IterationReport> {
         let thread_pool = self.thread_pool();
         install_thread_pool(thread_pool, || self.run_rules_inner(rules, context))
+    }
+
+    /// Observe committed effects of an action execution, including its error
+    /// prefix and ordinary recovery. This neither flushes nor evaluates work.
+    /// Nested observations and clones use the same native counter semantics.
+    pub fn observe_actions<R>(&mut self, action: impl FnOnce(&mut Self) -> R) -> (R, bool) {
+        let counter = self.db.track_mutations();
+        let before = self.db.read_counter(counter);
+        let result = action(self);
+        let changed = self.db.read_counter(counter) != before;
+        (result, changed)
     }
 
     /// Run `rules` for one iteration like [`EGraph::run_rules`], but without

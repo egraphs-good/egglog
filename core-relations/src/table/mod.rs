@@ -569,9 +569,14 @@ impl Table for SortedWritesTable {
 
     fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
         let removed = self.do_delete();
-        let added = self.do_insert(exec_state);
+        let mut committed = removed;
+        let added = self.do_insert(exec_state, &mut committed);
         self.maybe_rehash();
-        TableChange { removed, added }
+        TableChange {
+            removed,
+            added,
+            committed,
+        }
     }
 
     fn get_row(&self, key: &[Value]) -> Option<Row> {
@@ -736,7 +741,7 @@ impl SortedWritesTable {
         }
     }
 
-    fn do_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
+    fn do_insert(&mut self, exec_state: &mut ExecutionState, committed: &mut bool) -> bool {
         let total = self.pending_state.total_rows.swap(0, Ordering::Relaxed);
         self.data.data.reserve(total);
         if parallelize_table_op(total) {
@@ -748,16 +753,17 @@ impl SortedWritesTable {
                         current: None,
                         baseline: self.offsets.last().map(|(v, _)| *v),
                     },
+                    committed,
                 )
             } else {
-                self.parallel_insert(exec_state, ())
+                self.parallel_insert(exec_state, (), committed)
             }
         } else {
-            self.serial_insert(exec_state)
+            self.serial_insert(exec_state, committed)
         }
     }
 
-    fn serial_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
+    fn serial_insert(&mut self, exec_state: &mut ExecutionState, committed: &mut bool) -> bool {
         let mut changed = false;
         let n_keys = self.n_keys;
         let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
@@ -782,6 +788,7 @@ impl SortedWritesTable {
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
                             if (self.merge)(exec_state, cur, query, &mut scratch) {
+                                let payload_changed = cur != scratch.as_slice();
                                 let sort_val = query[sort_by.index()];
                                 let new = self.data.add_row(&scratch);
                                 if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
@@ -797,6 +804,7 @@ impl SortedWritesTable {
                                 }
                                 self.data.set_stale(*row);
                                 *row = new;
+                                *committed |= payload_changed;
                                 changed = true;
                             }
                             scratch.clear();
@@ -826,6 +834,7 @@ impl SortedWritesTable {
                                 TableEntry::hashcode,
                             );
                             changed = true;
+                            *committed = true;
                         }
                     }
                 }
@@ -847,9 +856,11 @@ impl SortedWritesTable {
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
                             if (self.merge)(exec_state, cur, query, &mut scratch) {
+                                let payload_changed = cur != scratch.as_slice();
                                 let new = self.data.add_row(&scratch);
                                 self.data.set_stale(*row);
                                 *row = new;
+                                *committed |= payload_changed;
                                 changed = true;
                             }
                             scratch.clear();
@@ -867,6 +878,7 @@ impl SortedWritesTable {
                                 TableEntry::hashcode,
                             );
                             changed = true;
+                            *committed = true;
                         }
                     }
                 }
@@ -879,6 +891,7 @@ impl SortedWritesTable {
         &mut self,
         exec_state: &ExecutionState,
         checker: C,
+        committed: &mut bool,
     ) -> bool {
         const BATCH_SIZE: usize = 1 << 18;
         // Parallel insert uses one giant parallel foreach. We have updates
@@ -901,6 +914,7 @@ impl SortedWritesTable {
             let mut marked_stale = 0usize;
             let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
             let mut changed = false;
+            let mut committed = false;
             // The core flush loop: We call once `staged` reaches `BATCH_SIZE` or
             // when we're done.
             macro_rules! flush_staged_outputs {
@@ -958,11 +972,13 @@ impl SortedWritesTable {
                                     // exclusive access to any row whose hash matches this
                                     // shard.
                                     if (merge)(&mut exec_state, cur, row, &mut scratch) {
+                                        let payload_changed = cur != row;
                                         unsafe {
                                             let _was_stale = read_handle.set_stale_shared(occ.get().row);
                                             debug_assert!(!_was_stale);
                                         }
                                         occ.get_mut().row = cur_row;
+                                        committed |= payload_changed;
                                         changed = true;
                                     } else {
                                         // Mark the new row as stale: we didn't end up needing it.
@@ -980,6 +996,7 @@ impl SortedWritesTable {
                                         hashcode: hc as HashCode,
                                         row: cur_row,
                                     });
+                                    committed = true;
                                 }
                             }
 
@@ -1004,24 +1021,25 @@ impl SortedWritesTable {
                 }
             }
             flush_staged_outputs!();
-            (checker, marked_stale, changed)
+            (checker, marked_stale, changed, committed)
         });
         self.data.data = row_writer.finish();
         // Now we just need to reset our invariants.
 
         // Confirm none of the writes violated sort order and update the
         // `offsets` vector.
-        let checker = C::check_global(pending_adds.iter().map(|(checker, _, _)| checker));
+        let checker = C::check_global(pending_adds.iter().map(|(checker, _, _, _)| checker));
         checker.update_offsets(next_offset, &mut self.offsets);
 
         // Update the staleness counters.
         self.data.stale_rows += pending_adds
             .iter()
-            .map(|(_, stale, _)| *stale)
+            .map(|(_, stale, _, _)| *stale)
             .sum::<usize>();
 
         // Register any changes.
-        pending_adds.iter().any(|(_, _, changed)| *changed)
+        *committed |= pending_adds.iter().any(|(_, _, _, committed)| *committed);
+        pending_adds.iter().any(|(_, _, changed, _)| *changed)
     }
 
     fn binary_search_sort_val(&self, val: Value) -> Result<(RowId, RowId), RowId> {

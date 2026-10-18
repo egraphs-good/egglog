@@ -506,6 +506,7 @@ impl SchedulerRuleInfo {
             merge: MergeFn::AssertEq,
             name: decided_name,
             can_subsume: false,
+            compiler_binding: false,
         });
 
         // Step 1: rebuild the query with the same evaluation mode and planner

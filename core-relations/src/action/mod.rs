@@ -328,6 +328,7 @@ impl PredictedVals {
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
     pub(crate) eq_classes: &'a EqClassInventory,
+    pub(crate) mutation_counter: Option<CounterId>,
     pub(crate) external_context: ExternalContext<'a>,
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
@@ -441,6 +442,17 @@ impl<'a> ExecutionState<'a> {
     /// The current database owns this membership, never the callback closure.
     pub fn materialize_eq_value(&self, sort: Arc<str>, value: Value) {
         self.db.eq_classes.record(sort, value);
+    }
+
+    /// Allocate and record one new typed class at this executed action position.
+    /// Unlike recording a lookup result, this is an actual identity mutation.
+    pub fn fresh_eq_class(&self, counter: CounterId, sort: Arc<str>) -> Value {
+        let value = Value::from_usize(self.inc_counter(counter));
+        self.materialize_eq_value(sort, value);
+        if let Some(counter) = self.db.mutation_counter {
+            self.db.counters.inc(counter);
+        }
+        value
     }
 
     pub(crate) fn new(

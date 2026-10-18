@@ -135,6 +135,14 @@ pub enum RepeatContinuation {
 /// timings to the leaf reports would count that work twice.
 #[derive(Debug)]
 pub enum ExecutionEvent<'a> {
+    /// One actual action block completed or failed after its ordinary recovery.
+    /// `changed` includes committed prefixes on error, not attempted writes.
+    /// This is not a Run and adds no schedule output, rule report or timing.
+    ActionsFinished {
+        origin: ExecutionOrigin,
+        changed: bool,
+        result: Result<(), &'a Error>,
+    },
     /// A command in the resolved execution plan completed before any following
     /// maintenance. Definition installation can succeed before a helper fails.
     CommandCompleted {
@@ -1272,6 +1280,21 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
+            // Encoding creates ordinary let-binding tables for temporary
+            // values. Preserve authored globals and their views using the
+            // original namespace and the view's exact constructor backlink;
+            // neither hidden/internal flags nor generated spellings suffice.
+            compiler_binding: decl.internal_let
+                && self
+                    .proof_state
+                    .original_typechecking
+                    .as_ref()
+                    .is_some_and(|original| {
+                        !original.type_info.is_global(&decl.name)
+                            && !decl.term_constructor.as_ref().is_some_and(|constructor| {
+                                original.type_info.is_global(constructor)
+                            })
+                    }),
         });
 
         let function = Function {
@@ -1745,7 +1768,22 @@ impl EGraph {
         execute: bool,
         compile: impl FnOnce(&mut ScopedActionBuilder<'_>) -> Result<(), Error>,
     ) -> (Result<(), Error>, Vec<(String, Value)>) {
+        self.eval_scoped_actions_observed(inputs, execute, compile, &mut |_| {})
+    }
+
+    /// Execute the same scoped action block, observing real committed progress
+    /// on success or error. Compilation alone emits no execution event. The
+    /// existing callback, capture and recovery lifetimes remain unchanged.
+    pub fn eval_scoped_actions_observed(
+        &mut self,
+        inputs: &[(String, String, Value)],
+        execute: bool,
+        compile: impl FnOnce(&mut ScopedActionBuilder<'_>) -> Result<(), Error>,
+        observer: &mut dyn FnMut(ExecutionEvent<'_>),
+    ) -> (Result<(), Error>, Vec<(String, Value)>) {
         let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut changed = false;
+        let mut compiled = false;
         let result = (|| {
             if self.proof_state.original_typechecking.is_some() {
                 return Err(Error::BackendError(
@@ -1791,8 +1829,8 @@ impl EGraph {
             let functions = &self.functions;
             let type_info = &self.type_info;
             let symbol_gen = &mut self.parser.symbol_gen;
-            self.backend
-                .run_scoped_rule("scoped_actions", execute, Some(type_info), |rule| {
+            let (result, committed) = self.backend.observe_actions(|backend| {
+                backend.run_scoped_rule("scoped_actions", execute, Some(type_info), |rule| {
                     let mut translator = BackendRule::new(rule, functions, type_info, true);
                     translator.entries = entries;
                     let mut builder = ScopedActionBuilder {
@@ -1802,18 +1840,34 @@ impl EGraph {
                         captured: captured.clone(),
                     };
                     compile(&mut builder)?;
+                    compiled = true;
                     Ok(builder.translator.build())
                 })
-                .map_err(|error| Error::from_backend(error.as_ref()))
+            });
+            changed = committed;
+            result.map_err(|error| Error::from_backend(error.as_ref()))
         })();
         let mut captured = std::mem::take(&mut *captured.lock().unwrap());
         for (_, value) in &mut captured {
             *value = self.backend.get_canon_repr(*value, ColumnTy::Id);
         }
+        if execute && compiled {
+            observer(ExecutionEvent::ActionsFinished {
+                origin: ExecutionOrigin::Requested,
+                changed,
+                result: result.as_ref().map(|_| ()),
+            });
+        }
         (result, captured)
     }
 
-    fn eval_actions(&mut self, actions: &ResolvedActions, execute: bool) -> Result<(), Error> {
+    fn eval_actions(
+        &mut self,
+        actions: &ResolvedActions,
+        execute: bool,
+        origin: ExecutionOrigin,
+        observer: &mut dyn FnMut(ExecutionEvent<'_>),
+    ) -> Result<(), Error> {
         let mut binding = IndexSet::default();
         let mut ctx = CoreActionContext::new(
             &self.type_info,
@@ -1831,19 +1885,23 @@ impl EGraph {
         );
         translator.actions(&actions)?;
         let id = translator.build();
-        let result = if execute {
-            self.backend
-                .run_rules(&[id], Some(&self.type_info))
-                .map(|_| ())
+        let (result, changed) = if execute {
+            self.backend.observe_actions(|backend| {
+                backend.run_rules(&[id], Some(&self.type_info)).map(|_| ())
+            })
         } else {
-            Ok(())
+            (Ok(()), false)
         };
         self.backend.free_rule(id);
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Error::from_backend(e.as_ref())),
+        let result = result.map_err(|error| Error::from_backend(error.as_ref()));
+        if execute {
+            observer(ExecutionEvent::ActionsFinished {
+                origin,
+                changed,
+                result: result.as_ref().map(|_| ()),
+            });
         }
+        result
     }
 
     /// Get the list of all functions in the e-graph.
@@ -2407,7 +2465,12 @@ impl EGraph {
                     panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
-                    self.eval_actions(&ResolvedActions::new(vec![action.clone()]), true)?;
+                    self.eval_actions(
+                        &ResolvedActions::new(vec![action.clone()]),
+                        true,
+                        origin,
+                        observer,
+                    )?;
                 }
             },
             ResolvedNCommand::Extract(span, expr, variants) => {
@@ -2878,7 +2941,12 @@ impl EGraph {
                 )?;
             }
             ResolvedNCommand::CoreAction(action) => {
-                self.eval_actions(&ResolvedActions::singleton(action), false)?;
+                self.eval_actions(
+                    &ResolvedActions::singleton(action),
+                    false,
+                    origin,
+                    &mut |_| {},
+                )?;
             }
             ResolvedNCommand::Check(span, facts) if origin == ExecutionOrigin::Internal => {
                 let rule = ResolvedRule {
@@ -4833,6 +4901,487 @@ mod tests {
                     [CommandOutput::RunSchedule(_)]
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn observed_actions_report_committed_changes_not_attempts() {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(datatype A (N i64)) (function f (i64) i64 :merge new)",
+            )
+            .unwrap();
+        let before_report = serde_json::to_value(&graph.overall_run_report).unwrap();
+        for (source, expected) in [
+            ("(set (f 0) 1)", true),
+            ("(set (f 0) 1)", false),
+            ("(set (f 0) 2)", true),
+            ("(delete (f 0))", true),
+            ("(delete (f 0))", false),
+            ("(N 0)", true),
+            ("(N 0)", false),
+            ("(subsume (N 0))", true),
+            ("(subsume (N 0))", false),
+            ("(N 1) (N 2)", true),
+            ("(union (N 1) (N 2))", true),
+            ("(union (N 1) (N 2))", false),
+            ("(set (f 3) 4) (delete (f 3))", true),
+        ] {
+            let commands = graph.parse_program(None, source).unwrap();
+            let mut changes = vec![];
+            graph
+                .run_program_embedded_observed(
+                    commands,
+                    &mut |_, _, _| {},
+                    &mut |_, event| {
+                        if let ExecutionEvent::ActionsFinished {
+                            changed, result, ..
+                        } = event
+                        {
+                            assert!(result.is_ok());
+                            changes.push(changed);
+                        }
+                    },
+                    &|_, _| None,
+                )
+                .unwrap();
+            assert!(!changes.is_empty(), "{source}");
+            assert_eq!(
+                changes.into_iter().any(|changed| changed),
+                expected,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&graph.overall_run_report).unwrap(),
+            before_report
+        );
+    }
+
+    #[test]
+    fn scoped_action_progress_covers_fresh_classes_compile_and_error_prefix() {
+        let mut graph = EGraph::default();
+        graph.parse_and_run_program(None, "(sort A)").unwrap();
+        for execute in [false, true] {
+            let mut changes = vec![];
+            let (result, captures) = graph.eval_scoped_actions_observed(
+                &[],
+                execute,
+                |builder| {
+                    builder.fresh_eq_class("fresh".into(), "A", span!())?;
+                    builder.capture_eq_class("fresh")?;
+                    builder.action(Action::Panic(span!(), "after fresh class".into()))
+                },
+                &mut |event| {
+                    if let ExecutionEvent::ActionsFinished {
+                        changed, result, ..
+                    } = event
+                    {
+                        changes.push((changed, result.is_err()));
+                    }
+                },
+            );
+            if execute {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("after fresh class")
+                );
+                assert_eq!(changes, [(true, true)]);
+                assert_eq!(captures.len(), 1);
+                assert_eq!(graph.materialized_eq_classes().len(), 1);
+            } else {
+                result.unwrap();
+                assert!(changes.is_empty());
+                assert!(captures.is_empty());
+                assert!(graph.materialized_eq_classes().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_action_progress_retains_row_and_union_error_prefixes() {
+        for union in [false, true] {
+            for duplicate in [false, true] {
+                let mut graph = EGraph::default();
+                graph
+                    .parse_and_run_program(
+                        None,
+                        "(datatype A (N i64)) (function f (i64) i64 :merge old) (N 0) (N 1)",
+                    )
+                    .unwrap();
+                let source = if union {
+                    "(union (N 0) (N 1))"
+                } else {
+                    "(set (f 0) 7)"
+                };
+                if duplicate {
+                    graph.parse_and_run_program(None, source).unwrap();
+                }
+                let Command::Action(action) = graph.parse_program(None, source).unwrap().remove(0)
+                else {
+                    unreachable!()
+                };
+                let mut changes = vec![];
+                let (result, captures) = graph.eval_scoped_actions_observed(
+                    &[],
+                    true,
+                    |builder| {
+                        builder.action(action)?;
+                        builder.action(Action::Let(
+                            span!(),
+                            "u".into(),
+                            Expr::Call(
+                                span!(),
+                                "N".into(),
+                                vec![Expr::Lit(span!(), Literal::Int(0))],
+                            ),
+                        ))?;
+                        builder.capture_eq_class("u")?;
+                        builder.action(Action::Panic(span!(), "after same-action prefix".into()))
+                    },
+                    &mut |event| {
+                        if let ExecutionEvent::ActionsFinished {
+                            changed, result, ..
+                        } = event
+                        {
+                            changes.push((changed, result.is_err()));
+                        }
+                    },
+                );
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("after same-action prefix")
+                );
+                assert_eq!(
+                    changes,
+                    [(!duplicate, true)],
+                    "union={union}, duplicate={duplicate}"
+                );
+                let zero = graph.backend.base_values_mut().get(0i64);
+                let expected = graph
+                    .backend
+                    .lookup_id(graph.functions["N"].backend_id, &[zero])
+                    .unwrap();
+                assert_eq!(
+                    captures,
+                    [(
+                        "u".into(),
+                        graph.backend.get_canon_repr(expected, ColumnTy::Id)
+                    )]
+                );
+                graph
+                    .parse_and_run_program(
+                        None,
+                        if union {
+                            "(check (= (N 0) (N 1)))"
+                        } else {
+                            "(check (= (f 0) 7))"
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn observed_actions_union_matches_real_data_and_uf_changes_in_all_modes() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(None, "(datatype A (N i64)) (N 8) (N 9)")
+                .unwrap();
+            // This fixture has no authored globals: every let table is private
+            // compiler storage. Keep all other term/view/proof data, plus real
+            // native UF leaders, in an independent physical-boundary snapshot.
+            let snapshot = |graph: &EGraph| {
+                let mut rows = HashSet::default();
+                for function in graph
+                    .functions
+                    .values()
+                    .filter(|function| !function.is_let_binding())
+                {
+                    graph.backend.for_each(function.backend_id, |row| {
+                        rows.insert((function.name().to_owned(), row.vals.to_vec(), row.subsumed));
+                    });
+                }
+                let leaders = graph
+                    .materialized_eq_classes()
+                    .into_iter()
+                    .map(|(sort, value)| {
+                        (
+                            sort,
+                            value,
+                            graph.backend.get_canon_repr(value, ColumnTy::Id),
+                        )
+                    })
+                    .collect::<HashSet<_>>();
+                (rows, leaders)
+            };
+            for iteration in 0..3 {
+                let before = snapshot(&graph);
+                let mut previous = before.clone();
+                let mut commands = graph.parse_program(None, "(union (N 8) (N 9))").unwrap();
+                assert_eq!(commands.len(), 1);
+                let command = commands.remove(0);
+                assert!(matches!(command, Command::Action(Action::Union(..))));
+                // This built-in action needs no macro expansion. Use the same
+                // resolver, pre-proof history and executor as the interpreter,
+                // but snapshot after each physical command: helpers may commit
+                // rows which trailing maintenance removes before the endpoint.
+                let resolved = graph
+                    .resolve_command(command, CommandPurpose::Authored)
+                    .unwrap();
+                if graph.are_proofs_enabled() {
+                    graph
+                        .proof_check_program
+                        .extend(resolved.desugared_before_proofs.clone());
+                }
+                let mut changed = false;
+                let mut committed = false;
+                let mut requested = vec![];
+                let mut internal_additions = HashSet::default();
+                let mut tail_removals = HashSet::default();
+                for processed in &resolved.desugared {
+                    let mut actions = vec![];
+                    let mut completed = false;
+                    graph
+                        .execute_originated(processed, CommandPolicies::default(), &mut |event| {
+                            match event {
+                                ExecutionEvent::ActionsFinished {
+                                    origin,
+                                    changed: next,
+                                    result,
+                                } => {
+                                    assert!(result.is_ok());
+                                    actions.push((origin, next));
+                                    changed |= next;
+                                }
+                                ExecutionEvent::CommandCompleted { origin, .. } => {
+                                    assert_eq!(origin, processed.origin);
+                                    completed = true;
+                                }
+                                _ => {}
+                            }
+                        })
+                        .unwrap();
+                    assert!(completed);
+                    // There is no mutation between these successful action and
+                    // completion events and execute_originated's return.
+                    let current = snapshot(&graph);
+                    if !actions.is_empty() {
+                        let delta = current != previous;
+                        assert_eq!(
+                            actions,
+                            [(processed.origin, delta)],
+                            "mode {mode}, iteration {iteration}: {}",
+                            processed.command.to_command()
+                        );
+                        committed |= delta;
+                        if processed.origin == ExecutionOrigin::Requested {
+                            requested.extend(actions.iter().map(|(_, next)| *next));
+                        } else {
+                            internal_additions.extend(current.0.difference(&previous.0).cloned());
+                        }
+                    }
+                    if processed.command_tail {
+                        tail_removals.extend(previous.0.difference(&current.0).cloned());
+                    }
+                    if iteration != 0 {
+                        assert_eq!(
+                            current
+                                .1
+                                .iter()
+                                .filter(|(sort, ..)| sort.as_ref() == "A")
+                                .collect::<HashSet<_>>(),
+                            before
+                                .1
+                                .iter()
+                                .filter(|(sort, ..)| sort.as_ref() == "A")
+                                .collect::<HashSet<_>>(),
+                            "duplicate Union preserves actual native A leaders"
+                        );
+                    }
+                    previous = current;
+                }
+                assert_eq!(
+                    changed, committed,
+                    "mode {mode}, union iteration {iteration}"
+                );
+                assert_eq!(requested, [iteration == 0]);
+                if iteration == 0 {
+                    assert!(
+                        changed,
+                        "the first Union changes the native equivalence relation"
+                    );
+                } else if mode == 0 {
+                    assert!(!changed, "ordinary duplicate Union is inert");
+                    assert_eq!(previous, before);
+                } else if mode == 1 {
+                    // Encoded duplicate helpers really commit a raw view and
+                    // reflexive parent edge, despite an equal command endpoint.
+                    let nine = graph.backend.base_values_mut().get(9i64);
+                    let term = graph
+                        .backend
+                        .lookup_id(graph.functions["N"].backend_id, &[nine])
+                        .unwrap();
+                    let view = graph
+                        .functions
+                        .values()
+                        .find(|function| function.term_constructor() == Some("N"))
+                        .unwrap()
+                        .name();
+                    let parent = &graph.proof_state.uf_parent["A"];
+                    for row in internal_additions.iter().filter(|(name, values, _)| {
+                        (name == view && values[0] == nine && values[1] == term)
+                            || (name == parent && values[0] == term && values[1] == term)
+                    }) {
+                        assert!(tail_removals.contains(row));
+                    }
+                    assert!(
+                        internal_additions
+                            .iter()
+                            .any(|(name, values, _)| name == view
+                                && values[0] == nine
+                                && values[1] == term)
+                    );
+                    assert!(
+                        internal_additions
+                            .iter()
+                            .any(|(name, values, _)| name == parent
+                                && values[0] == term
+                                && values[1] == term)
+                    );
+                    assert_eq!(previous, before, "tail maintenance removes transient rows");
+                }
+            }
+            graph
+                .parse_and_run_program(None, "(check (= (N 8) (N 9)))")
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_action_progress_preserves_modes_scopes_and_caught_prefixes() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(None, "(datatype A (N i64))")
+                .unwrap();
+            let mut actions = vec![
+                ("(N 1)", true),
+                ("(N 1)", false),
+                ("(let $saved (N 1))", true),
+                ("(N 1)", false),
+                ("(+ 1 2)", false),
+            ];
+            // Non-Eq globals remain unsupported by term/proof encoding.
+            if mode == 0 {
+                actions.push(("(let $scalar (+ 1 2))", true));
+            }
+            for (source, expected) in actions {
+                let binding_rows: usize = graph
+                    .functions
+                    .values()
+                    .filter(|function| function.is_let_binding())
+                    .map(|function| graph.backend.table_size(function.backend_id))
+                    .sum();
+                let commands = graph.parse_program(None, source).unwrap();
+                let mut changed = false;
+                graph
+                    .run_program_observed(commands, &mut |_, _, _| {}, &mut |_, event| {
+                        if let ExecutionEvent::ActionsFinished { changed: next, .. } = event {
+                            changed |= next;
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(changed, expected, "mode {mode}: {source}");
+                if mode != 0 && !expected {
+                    let after: usize = graph
+                        .functions
+                        .values()
+                        .filter(|function| function.is_let_binding())
+                        .map(|function| graph.backend.table_size(function.backend_id))
+                        .sum();
+                    assert!(
+                        after > binding_rows,
+                        "compiler storage remains materialized"
+                    );
+                }
+            }
+            assert_eq!(
+                graph
+                    .backend
+                    .table_size(graph.functions["$saved"].backend_id),
+                1
+            );
+            if mode != 0 {
+                assert!(graph.functions.values().any(|function| {
+                    function.is_let_binding()
+                        && function.term_constructor() == Some("$saved")
+                        && graph.backend.table_size(function.backend_id) != 0
+                }));
+            }
+            // ProofTesting must actually check an authored global, not merely
+            // construct an encoded graph with the testing flag set.
+            graph
+                .parse_and_run_program(None, "(check (= $saved (N 1)))")
+                .unwrap();
+            if mode == 0 {
+                graph
+                    .parse_and_run_program(None, "(check (= $scalar 3))")
+                    .unwrap();
+            }
+            let rows = graph.num_tuples();
+            let (fresh, changed) = graph
+                .backend
+                .observe_actions(|backend| backend.fresh_eq_class("A".into()));
+            assert!(changed, "mode {mode}: executed allocation has no row");
+            assert_eq!(graph.num_tuples(), rows);
+            let (classes, changed) = graph
+                .backend
+                .observe_actions(|backend| backend.materialized_eq_classes());
+            assert!(classes.contains(&("A".into(), fresh)));
+            assert!(!changed, "mode {mode}: inventory is read-only");
+            let mut clone = graph.clone();
+            clone.parse_and_run_program(None, "(N 2)").unwrap();
+            graph
+                .parse_and_run_program(None, "(push) (N 3) (pop)")
+                .unwrap();
+            assert!(graph.parse_and_run_program(None, "(check (N 2))").is_err());
+            assert!(graph.parse_and_run_program(None, "(check (N 3))").is_err());
+            let commands = graph
+                .parse_program(None, "(N 4) (fail (panic \"caught\"))")
+                .unwrap();
+            let mut changes = vec![];
+            graph
+                .run_program_observed(commands, &mut |_, _, _| {}, &mut |_, event| {
+                    if let ExecutionEvent::ActionsFinished {
+                        changed, result, ..
+                    } = event
+                    {
+                        changes.push((changed, result.is_err()));
+                    }
+                })
+                .unwrap();
+            assert!(changes.iter().any(|(changed, _)| *changed));
+            assert!(changes.iter().any(|(changed, failed)| !changed && *failed));
+            graph.parse_and_run_program(None, "(check (N 4))").unwrap();
         }
     }
 

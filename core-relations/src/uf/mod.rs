@@ -450,6 +450,7 @@ impl Table for DisplacedTable {
         TableChange {
             added: changed,
             removed: changed,
+            committed: changed,
         }
     }
 }

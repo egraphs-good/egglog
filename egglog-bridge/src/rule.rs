@@ -516,9 +516,7 @@ impl RuleBuilder<'_> {
             Box::new(crate::core_relations::make_external_func(
                 move |state, args| {
                     assert!(args.is_empty());
-                    let value = Value::from_usize(state.inc_counter(counter));
-                    state.materialize_eq_value(sort.clone(), value);
-                    Some(value)
+                    Some(state.fresh_eq_class(counter, sort.clone()))
                 },
             )),
             &[],

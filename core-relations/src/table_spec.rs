@@ -102,10 +102,15 @@ impl TableSpec {
 /// A summary of the kinds of changes that a table underwent after a merge operation.
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub struct TableChange {
-    /// Whether or not rows were added to the table.
+    /// The native insertion/change report, which may include rejected parallel
+    /// insertions. Retained independently of exact committed-row observation.
     pub added: bool,
     /// Whether or not rows were removed from the table.
     pub removed: bool,
+    /// Whether a live row was inserted, removed or replaced by a different
+    /// payload. Staging, rejected/identical replacements and compaction do not
+    /// count. Callback effects on other tables are committed by their merges.
+    pub committed: bool,
 }
 
 /// A constraint on the values within a row.

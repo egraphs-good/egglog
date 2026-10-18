@@ -101,6 +101,7 @@ fn scoped_action_fallbacks_release_on_every_exit() {
             merge: MergeFn::AssertEq,
             name: "lookup".into(),
             can_subsume: false,
+            compiler_binding: false,
         });
         if case != 3 {
             graph.add_values([(table, vec![value])]);
@@ -157,6 +158,7 @@ fn typed_class_inventory_staged_new_merge() {
             merge: MergeFn::New,
             name: "f".into(),
             can_subsume: false,
+            compiler_binding: false,
         });
         let table = graph.funcs[f].table;
         let mut expected = std::collections::BTreeSet::new();
@@ -229,6 +231,7 @@ fn typed_class_inventory_selected_results_and_negatives() {
             merge,
             name: "f".into(),
             can_subsume: false,
+            compiler_binding: false,
         });
         let a = graph.fresh_id();
         let b = graph.fresh_id();
@@ -281,6 +284,7 @@ fn typed_class_inventory_stale_buffer_and_id_reuse() {
             merge: MergeFn::New,
             name: "f".into(),
             can_subsume: false,
+            compiler_binding: false,
         });
         let table = graph.funcs[f].table;
         let value = graph.fresh_id();
@@ -319,6 +323,7 @@ fn typed_class_inventory_compiled_prefix_and_constructor_dedup() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let action = crate::TableAction::new(&graph, f);
     let a = graph.with_execution_state(None, |state| {
@@ -367,6 +372,7 @@ fn ac_test(can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let add_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -379,6 +385,7 @@ fn ac_test(can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume,
+        compiler_binding: false,
     });
 
     let add_comm = define_rule! {
@@ -460,6 +467,7 @@ fn ac_fail() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let add_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -472,6 +480,7 @@ fn ac_fail() {
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let add_comm = define_rule! {
@@ -575,6 +584,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "diff".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let integral = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -587,6 +597,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "integral".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let add = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -599,6 +610,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let sub = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -611,6 +623,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "sub".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let mul = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -623,6 +636,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "mul".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let div = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -635,6 +649,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "div".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let pow = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -647,6 +662,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "pow".into(),
         can_subsume,
+        compiler_binding: false,
     });
 
     let ln = egraph.add_table(FunctionConfig {
@@ -656,6 +672,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "ln".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let sqrt = egraph.add_table(FunctionConfig {
         eq_sorts: vec![Some("Term".into()), Some("Term".into())],
@@ -664,6 +681,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "sqrt".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let sin = egraph.add_table(FunctionConfig {
         eq_sorts: vec![Some("Term".into()), Some("Term".into())],
@@ -672,6 +690,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "sin".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let cos = egraph.add_table(FunctionConfig {
         eq_sorts: vec![Some("Term".into()), Some("Term".into())],
@@ -680,6 +699,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "cos".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let rat = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -688,6 +708,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "rat".into(),
         can_subsume,
+        compiler_binding: false,
     });
     let var = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -696,6 +717,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "var".into(),
         can_subsume,
+        compiler_binding: false,
     });
 
     let zero = egraph.base_value_constant(Rational64::new(0, 1));
@@ -856,6 +878,41 @@ impl ContainerValue for VecContainer {
     }
 }
 
+#[test]
+fn observed_actions_count_same_id_container_rebuild_not_inert_replay() {
+    let mut graph = EGraph::new(1);
+    let a = graph.fresh_id();
+    let b = graph.fresh_id();
+    graph
+        .db
+        .new_buffer(graph.uf_table)
+        .stage_insert(&[a, b, Value::new_const(0)]);
+    graph.db.merge_all();
+    let leader = graph.get_canon_in_uf(a);
+    let displaced = if leader == a { b } else { a };
+    let container = graph.get_container_value(VecContainer(vec![displaced]));
+    let (summary, changed) =
+        graph.observe_actions(|graph| graph.db.rebuild_containers(graph.uf_table));
+    assert!(summary.changed());
+    assert!(
+        summary.dirty_ids().contains(&container),
+        "outer identity stays fixed"
+    );
+    assert!(changed, "contents changed without a new row or outer ID");
+    assert_eq!(
+        graph
+            .container_values()
+            .get_val::<VecContainer>(container)
+            .unwrap()
+            .0,
+        vec![leader]
+    );
+    let (summary, changed) =
+        graph.observe_actions(|graph| graph.db.rebuild_containers(graph.uf_table));
+    assert!(!summary.changed());
+    assert!(!changed);
+}
+
 fn register_vec_push(egraph: &mut EGraph) -> ExternalFunctionId {
     egraph.register_container_ty::<VecContainer>();
     let external_func = make_external_func(move |state, vals| -> Option<Value> {
@@ -939,6 +996,7 @@ fn container_test() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let add_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![
@@ -951,6 +1009,7 @@ fn container_test() {
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let vec_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -959,6 +1018,7 @@ fn container_test() {
         merge: MergeFn::UnionId,
         name: "vec".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let int_add =
         egraph.register_external_func(Box::new(make_external_func(|exec_state, args| {
@@ -1131,6 +1191,7 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
         merge: MergeFn::UnionId,
         name: "k".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let w_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![Some("Term".into()), Some("Term".into())],
@@ -1139,6 +1200,7 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
         merge: MergeFn::UnionId,
         name: "w".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let l_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -1147,6 +1209,7 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
         merge: MergeFn::UnionId,
         name: "l".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let b = egraph.fresh_id();
@@ -1239,6 +1302,7 @@ fn rhs_only_rule() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let add_data = {
         let zero = egraph.base_value_constant(0i64);
@@ -1344,6 +1408,7 @@ fn mergefn_arithmetic() {
         ),
         name: "f".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let value_0 = egraph.base_value_constant(0i64);
@@ -1439,6 +1504,7 @@ fn mergefn_nested_function() {
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: true,
+        compiler_binding: false,
     });
 
     // Create a function f whose merge function is (g (g new new) (g old old))
@@ -1456,6 +1522,7 @@ fn mergefn_nested_function() {
         ),
         name: "f".into(),
         can_subsume: true,
+        compiler_binding: false,
     });
 
     let value_1 = egraph.base_value_constant(1i64);
@@ -1563,6 +1630,7 @@ fn constrain_prims_simple() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let g_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -1571,6 +1639,7 @@ fn constrain_prims_simple() {
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let query_prim_invocations = Arc::new(AtomicUsize::new(0));
@@ -1658,6 +1727,7 @@ fn constrain_prims_abstract() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let g_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -1666,6 +1736,7 @@ fn constrain_prims_abstract() {
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let neg = egraph.register_external_func(Box::new(core_relations::make_external_func(
@@ -1757,6 +1828,7 @@ fn basic_subsumption() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: true,
+        compiler_binding: false,
     });
     let g_table = egraph.add_table(FunctionConfig {
         eq_sorts: vec![None, Some("Term".into())],
@@ -1765,6 +1837,7 @@ fn basic_subsumption() {
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let value_1 = egraph.base_value_constant(1i64);
@@ -1838,6 +1911,7 @@ fn lookup_failure_panics() {
         merge: MergeFn::UnionId,
         name: "test".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
 
     let to_entry = |val: u32| QueryEntry::Const {
@@ -1924,6 +1998,7 @@ fn action_panic_rebuilds_before_returning() {
         merge: MergeFn::UnionId,
         name: "facts".into(),
         can_subsume: false,
+        compiler_binding: false,
     });
     let a = egraph.fresh_id();
     let b = egraph.fresh_id();
@@ -2033,6 +2108,7 @@ fn panic_source_survives_equal_messages_and_recovery_failure() {
                 merge: MergeFn::AssertEq,
                 name: "conflict".into(),
                 can_subsume: false,
+                compiler_binding: false,
             });
             let a = graph.fresh_id();
             let b = graph.fresh_id();

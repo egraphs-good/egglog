@@ -152,6 +152,9 @@ impl TableIdentity {
 pub struct TableInfo {
     identity: TableIdentity,
     pub(crate) name: Option<Arc<str>>,
+    // Only storage for compiler-created bindings is excluded from Action
+    // progress. Their callbacks and all other tables retain normal accounting.
+    compiler_binding: bool,
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
     pub(crate) indexes: IndexCatalog<SmallVec<[ColumnId; 4]>, HashIndex>,
@@ -196,6 +199,7 @@ impl Clone for TableInfo {
         TableInfo {
             identity: self.identity,
             name: self.name.clone(),
+            compiler_binding: self.compiler_binding,
             spec: self.spec.clone(),
             table: self.table.dyn_clone(),
             indexes: deep_clone_map(&self.indexes, self.table.as_ref()),
@@ -314,6 +318,8 @@ impl Counters {
 #[derive(Clone, Default)]
 pub struct Database {
     pub(crate) eq_classes: EqClassInventory,
+    // Optional observation only: the legacy merge boolean remains unchanged.
+    mutation_counter: Option<CounterId>,
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
     pub(crate) tables: DenseIdMap<TableId, TableInfo>,
@@ -398,6 +404,11 @@ impl Database {
         let res =
             self.with_execution_state(None, |state| containers.rebuild_all(table_id, table, state));
         self.container_values = containers;
+        if res.changed()
+            && let Some(counter) = self.mutation_counter
+        {
+            self.counters.inc(counter);
+        }
         res
     }
 
@@ -518,6 +529,7 @@ impl Database {
     pub(crate) fn read_only_view_with<'a>(&'a self, context: ExternalContext<'a>) -> DbView<'a> {
         DbView {
             eq_classes: &self.eq_classes,
+            mutation_counter: self.mutation_counter,
             external_context: context,
             table_info: &self.tables,
             counters: &self.counters,
@@ -554,6 +566,22 @@ impl Database {
     /// These counters can be used to generate unique ids as part of an action.
     pub fn add_counter(&mut self) -> CounterId {
         self.counters.0.push(AtomicUsize::new(0))
+    }
+
+    /// Enable committed-mutation observation once for this database.
+    ///
+    /// The returned ordinary counter advances for data row changes, semantic
+    /// rebuilds and explicit fresh equality allocation, not staging, reads or
+    /// compiler-binding storage. Compiler binding callbacks still execute and
+    /// their effects on other tables are counted normally.
+    /// Cloning copies its value independently, like every other native counter.
+    pub fn track_mutations(&mut self) -> CounterId {
+        if let Some(counter) = self.mutation_counter {
+            return counter;
+        }
+        let counter = self.add_counter();
+        self.mutation_counter = Some(counter);
+        counter
     }
 
     /// Increment the given counter and return its previous value.
@@ -628,7 +656,15 @@ impl Database {
                 changed |= if do_parallel {
                     parallel::map_dense_id_map_mut(&mut tables_merging, |_, (info, buffers)| {
                         let mut es = ExecutionState::new(db, mem::take(buffers));
-                        info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                        let info = info.as_mut().unwrap();
+                        let changes = info.table.merge(&mut es);
+                        if changes.committed
+                            && !info.compiler_binding
+                            && let Some(counter) = db.mutation_counter
+                        {
+                            db.counters.inc(counter);
+                        }
+                        changes.added || es.changed
                     })
                     .into_iter()
                     .any(|changed| changed)
@@ -637,7 +673,15 @@ impl Database {
                         .iter_mut()
                         .map(|(_, (info, buffers))| {
                             let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                            let info = info.as_mut().unwrap();
+                            let changes = info.table.merge(&mut es);
+                            if changes.committed
+                                && !info.compiler_binding
+                                && let Some(counter) = db.mutation_counter
+                            {
+                                db.counters.inc(counter);
+                            }
+                            changes.added || es.changed
                         })
                         .max()
                         .unwrap_or(false)
@@ -689,7 +733,14 @@ impl Database {
                 // reset loop, which no longer re-sums every table).
                 self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
                 let mut es = ExecutionState::new(self.read_only_view(), Default::default());
-                changed |= info.table.merge(&mut es).added || es.changed;
+                let changes = info.table.merge(&mut es);
+                if changes.committed
+                    && !info.compiler_binding
+                    && let Some(counter) = self.mutation_counter
+                {
+                    self.counters.inc(counter);
+                }
+                changed |= changes.added || es.changed;
                 self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
                 self.tables.insert(table_id, info);
             }
@@ -712,6 +763,12 @@ impl Database {
             self.read_only_view(),
             Default::default(),
         ));
+        if table_changed.committed
+            && !info.compiler_binding
+            && let Some(counter) = self.mutation_counter
+        {
+            self.counters.inc(counter);
+        }
         self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
         self.tables.insert(table, info);
         table_changed.added
@@ -735,23 +792,28 @@ impl Database {
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
-        self.add_table_impl(table, None, read_deps, write_deps)
+        self.add_table_impl(table, None, false, read_deps, write_deps)
     }
 
+    /// Register a named table with its compiler-derived storage role. The role
+    /// excludes only this table's commits from Action progress, not execution
+    /// or changes the table's callbacks make elsewhere.
     pub fn add_table_named<T: Table + Sized + 'static>(
         &mut self,
         table: T,
         name: Arc<str>,
+        compiler_binding: bool,
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
-        self.add_table_impl(table, Some(name), read_deps, write_deps)
+        self.add_table_impl(table, Some(name), compiler_binding, read_deps, write_deps)
     }
 
     fn add_table_impl<T: Table + Sized + 'static>(
         &mut self,
         table: T,
         name: Option<Arc<str>>,
+        compiler_binding: bool,
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
@@ -760,6 +822,7 @@ impl Database {
         let res = self.tables.push(TableInfo {
             identity: TableIdentity::fresh(),
             name,
+            compiler_binding,
             spec,
             table,
             indexes: IndexCatalog::new(),
@@ -909,6 +972,12 @@ impl Database {
             }
         });
         self.total_size_estimate = self.total_size_estimate.wrapping_sub(prev_len);
+        if prev_len != 0
+            && !info.compiler_binding
+            && let Some(counter) = self.mutation_counter
+        {
+            self.counters.inc(counter);
+        }
     }
 
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {

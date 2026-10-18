@@ -21,6 +21,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "num".into(),
             can_subsume: false,
+            compiler_binding: false,
         });
         let add_table = egraph.add_table(FunctionConfig {
             eq_sorts: vec![
@@ -33,6 +34,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "add".into(),
             can_subsume: false,
+            compiler_binding: false,
         });
 
         let add_comm = define_rule! {
