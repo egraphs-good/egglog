@@ -1969,6 +1969,29 @@ impl EGraph {
         Ok((sort, value))
     }
 
+    /// Evaluate a closed expression with an expected output sort.
+    ///
+    /// The expected sort participates in the ordinary native overload solver,
+    /// including output-only primitives and function-constructor capture types.
+    /// Evaluation uses the same checked-expression lowering as [`Self::eval_expr`].
+    /// Encoded modes require their ordinary command/proof instrumentation instead.
+    pub fn eval_expr_with_output(
+        &mut self,
+        expr: &Expr,
+        output_sort: ArcSort,
+    ) -> Result<(ArcSort, Value), Error> {
+        if self.proof_state.original_typechecking.is_some() {
+            return Err(Error::BackendError(
+                "expected-output expression evaluation requires normal execution mode".into(),
+            ));
+        }
+        let resolved =
+            self.typecheck_expr_with_bindings_and_output(expr, &[], output_sort, Context::Full)?;
+        let sort = resolved.output_type();
+        let value = self.eval_resolved_expr(expr.span(), &resolved)?;
+        Ok((sort, value))
+    }
+
     /// Typecheck an expression under explicit local bindings, an expected
     /// output sort, and a primitive call context.
     ///
