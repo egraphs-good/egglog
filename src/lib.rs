@@ -5317,6 +5317,91 @@ mod tests {
     }
 
     #[test]
+    fn no_decomp_global_policy_preserves_installed_choices_and_execution() {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(relation L (i64 i64)) (relation M (i64 i64)) (relation N (i64 i64))
+                 (relation OutA (i64)) (relation OutB (i64))
+                 (relation OutC (i64)) (relation OutD (i64))
+                 (L 1 2) (L 10 20) (M 2 3) (M 20 30) (N 3 4) (N 30 40)
+                 (ruleset a) (ruleset b) (ruleset c) (ruleset d)
+                 (rule ((L x y) (M y z) (N z w)) ((OutA x)) :ruleset a :name \"a\")",
+            )
+            .unwrap();
+        graph.no_decomp = true;
+        graph
+            .parse_and_run_program(
+                None,
+                "(rule ((L x y) (M y z) (N z w)) ((OutB x)) :ruleset b :name \"b\")",
+            )
+            .unwrap();
+        graph.no_decomp = false;
+        graph
+            .parse_and_run_program(
+                None,
+                "(rule ((L x y) (M y z) (N z w)) ((OutC x)) :ruleset c :name \"c\")
+                 (rule ((L x y) (M y z) (N z w)) ((OutD x)) :ruleset d :name \"d\" :no-decomp)",
+            )
+            .unwrap();
+        let choices = ["a", "b", "c", "d"].map(|name| {
+            let ast::Ruleset::Rules(rules, _) = &graph.rulesets[name] else {
+                panic!("expected an ordinary compiled ruleset");
+            };
+            let compiled = &rules[name];
+            assert_eq!(compiled.no_decomp, matches!(name, "b" | "d"));
+            (compiled.backend_id, compiled.no_decomp)
+        });
+        for (index, (id, _)) in choices.iter().enumerate() {
+            assert!(choices[..index].iter().all(|(previous, _)| previous != id));
+        }
+        // Reports for decomposed plans are not implemented. TimeOnly still
+        // executes the actual chain query; private compiled bits/IDs witness
+        // old-plan retention without a new inspection API or report fallback.
+        graph.set_report_level(ReportLevel::TimeOnly);
+        graph.no_decomp = true;
+        for (index, name) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            let outputs = graph
+                .parse_and_run_program(None, &format!("(run {name} 1)"))
+                .unwrap();
+            let CommandOutput::RunSchedule(report) = outputs.last().unwrap() else {
+                panic!("expected native execution report");
+            };
+            assert_eq!(report.num_matches_per_rule.get(name), Some(&2));
+            let ast::Ruleset::Rules(rules, _) = &graph.rulesets[name] else {
+                panic!("expected retained compiled ruleset");
+            };
+            assert_eq!(
+                (rules[name].backend_id, rules[name].no_decomp),
+                choices[index]
+            );
+        }
+        graph
+            .parse_and_run_program(
+                None,
+                "(check (OutA 1) (OutA 10) (OutB 1) (OutB 10)
+                        (OutC 1) (OutC 10) (OutD 1) (OutD 10))
+                 (fail (check (OutA 100)))",
+            )
+            .unwrap();
+        graph.push();
+        graph.no_decomp = false;
+        graph.pop().unwrap();
+        assert!(graph.no_decomp);
+        let cloned = graph.clone();
+        for (index, name) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            let ast::Ruleset::Rules(rules, _) = &cloned.rulesets[name] else {
+                panic!("expected cloned compiled ruleset");
+            };
+            assert_eq!(
+                (rules[name].backend_id, rules[name].no_decomp),
+                choices[index]
+            );
+        }
+    }
+
+    #[test]
     fn test_extension_state_clones_and_restores_with_egraph() {
         let mut egraph = EGraph::default();
         assert_eq!(egraph.extension_state::<usize>(), None);
