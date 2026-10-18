@@ -858,8 +858,7 @@ fn branches_that_order_a_semijoin_differently_agree_on_a_shared_child() {
     use crate::{
         Database, RuleSetBuilder,
         free_join::plan::{DecomposedPlan, JoinStageBlocks, JoinStages, MatSpec, Plan},
-        table::SortedWritesTable,
-        table_shortcuts::v,
+        table_shortcuts::{TimestampedTable, v},
     };
     use egglog_reports::ReportLevel;
 
@@ -869,7 +868,7 @@ fn branches_that_order_a_semijoin_differently_agree_on_a_shared_child() {
     let mut db = Database::default();
     let [a, b, c, pxy, pz, found] = [(); 6].map(|()| {
         db.add_table(
-            SortedWritesTable::new(2, 2, None, vec![], Box::new(|_, _, _, _| false)),
+            TimestampedTable::new(2, 2, Box::new(|_, _, _, _| false)),
             std::iter::empty(),
             std::iter::empty(),
         )
