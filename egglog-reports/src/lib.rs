@@ -29,6 +29,11 @@ pub struct Scan(pub String, pub Vec<(String, i64)>);
 
 #[derive(Serialize, Clone, Debug)]
 pub enum Stage {
+    Primitive {
+        function: String,
+        args: Vec<String>,
+        output: String,
+    },
     Intersect {
         scans: Vec<SingleScan>,
     },

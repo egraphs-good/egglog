@@ -733,7 +733,8 @@ impl PreparedJoinLayout {
             .map(|stage| match stage {
                 JoinStage::Intersect { scans, .. } => scans.len(),
                 JoinStage::FusedIntersect { to_intersect, .. }
-                | JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len(),
+                | JoinStage::FusedIntersectMat { to_intersect, .. }
+                | JoinStage::Primitive { to_intersect, .. } => to_intersect.len(),
             })
             .sum::<usize>();
         if index_count == 0 {
@@ -777,7 +778,8 @@ impl PreparedJoinLayout {
                     );
                 }
                 JoinStage::FusedIntersect { to_intersect, .. }
-                | JoinStage::FusedIntersectMat { to_intersect, .. } => {
+                | JoinStage::FusedIntersectMat { to_intersect, .. }
+                | JoinStage::Primitive { to_intersect, .. } => {
                     handles.extend(to_intersect.iter().map(|(scan, _)| {
                         make_slot(scan.to_index.atom, scan.to_index.vars.as_slice())
                     }));

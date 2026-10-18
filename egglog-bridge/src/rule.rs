@@ -4,7 +4,7 @@
 //! parameterized by a range of timestamps used as constraints during seminaive
 //! evaluation.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::core_relations;
 use crate::core_relations::{
@@ -97,6 +97,19 @@ impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone + Send + S
 dyn_clone::clone_trait_object!(Brc);
 type BuildRuleCallback = Box<dyn Brc>;
 
+/// Opt-in prototype switch for comparing query-side primitive evaluation with
+/// the original action-side lowering. Moving filters changes action batching,
+/// which can change observable fresh-ID behavior in custom merges. Keep the
+/// default unchanged until that compatibility issue is resolved.
+fn primitive_query_pushdown() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("EGGLOG_PRIMITIVE_QUERY_PUSHDOWN")
+            .map(|value| value == "1")
+            .unwrap_or(false)
+    })
+}
+
 #[derive(Clone)]
 pub(crate) struct Query {
     uf_table: TableId,
@@ -105,6 +118,8 @@ pub(crate) struct Query {
     rule_id: RuleId,
     vars: DenseIdMap<VariableId, VarInfo>,
     atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
+    primitive_atoms: Vec<(ExternalFunctionId, Vec<QueryEntry>)>,
+    primitive_pushdown: bool,
     /// The builders for queries in this module essentially wrap the lower-level
     /// builders from the `core_relations` crate. A single egglog rule can turn
     /// into N core-relations rules. The code is structured by constructing a
@@ -148,6 +163,8 @@ impl EGraph {
                 sole_focus: None,
                 vars: Default::default(),
                 atoms: Default::default(),
+                primitive_atoms: Default::default(),
+                primitive_pushdown: primitive_query_pushdown(),
                 add_rule: Default::default(),
                 plan_strategy: Default::default(),
                 no_decomp: false,
@@ -192,6 +209,19 @@ impl RuleBuilder<'_> {
     /// `:no-decomp` rule option or the egglog `--no-decomp` CLI flag.
     pub fn set_no_decomp(&mut self, no_decomp: bool) {
         self.query.no_decomp = no_decomp;
+    }
+
+    /// Enable query-side primitive evaluation for this rule. Set this before
+    /// adding primitive atoms or any RHS callbacks/actions. Disabling it retains
+    /// the original action-side lowering for comparison with this prototype.
+    ///
+    /// The default is disabled unless `EGGLOG_PRIMITIVE_QUERY_PUSHDOWN=1`.
+    /// That environment variable is read once, when the first rule is created;
+    /// this setter overrides the process default for this rule.
+    pub fn set_primitive_pushdown(&mut self, enabled: bool) {
+        assert!(self.query.primitive_atoms.is_empty());
+        assert!(self.query.add_rule.is_empty());
+        self.query.primitive_pushdown = enabled;
     }
 
     /// Get the canonical value of an id in the union-find. An internal-only
@@ -445,6 +475,15 @@ impl RuleBuilder<'_> {
 
     /// Add the given primitive atom to query. As elsewhere in the crate, the last
     /// argument is the "return value" of the function.
+    ///
+    /// The callback must be safe to execute during a query: it may intern values
+    /// and read the committed database, but must not modify tables. The frontend
+    /// enforces this through its Pure/Read primitive contexts. Calls can run as
+    /// soon as their inputs are bound, before the rest of the query matches.
+    /// For fixed inputs and a committed database, the return value must not
+    /// depend on call count or order. Apart from interning and reporting errors
+    /// or cancellation through the shared query mechanisms, callbacks must not
+    /// have externally observable side effects.
     pub fn query_prim(
         &mut self,
         func: ExternalFunctionId,
@@ -452,6 +491,11 @@ impl RuleBuilder<'_> {
         // NB: not clear if we still need this now that proof checker is in a separate crate.
         _ret_ty: ColumnTy,
     ) -> Result<()> {
+        assert!(!entries.is_empty(), "must specify a return value");
+        if self.query.primitive_pushdown {
+            self.query.primitive_atoms.push((func, entries.to_vec()));
+            return Ok(());
+        }
         let entries = entries.to_vec();
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);
@@ -753,6 +797,11 @@ impl Query {
         let mut atom_mapping = Vec::with_capacity(self.atoms.len());
         for (table, entries, _schema_info) in &self.atoms {
             atom_mapping.push(add_atom(&mut qb, *table, entries, &[], &mut inner)?);
+        }
+        for (function, entries) in &self.primitive_atoms {
+            let terms = inner.convert_all(entries);
+            let (output, inputs) = terms.split_last().expect("primitive output is required");
+            qb.add_primitive(*function, inputs, *output);
         }
         let rule_id = self.run_rules_and_build(qb, inner, desc)?;
         let rs = rsb.build();

@@ -51,10 +51,11 @@ use std::{
 };
 
 use crate::{
-    TableId,
+    ExternalFunctionId, TableId,
+    action::QueryEntry,
     free_join::{ColUniqueness, ColumnCardEst, ProcessedConstraints},
     numeric_id::{DenseIdMap, NumericId},
-    query::{FunDeps, SymbolMap},
+    query::{FunDeps, QueryPrimitive, SymbolMap},
 };
 use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
@@ -171,6 +172,17 @@ impl Clone for JoinHeader {
 
 #[derive(Debug, Clone)]
 pub(crate) enum JoinStage {
+    /// A forward lookup into a query-safe external function. Inputs are scalar
+    /// bindings. Its fresh output, if any, refines every stored occurrence.
+    /// This stage is a barrier for dynamic reordering and scan fusion.
+    Primitive {
+        function: ExternalFunctionId,
+        args: Vec<QueryEntry>,
+        output: QueryEntry,
+        bind_output: bool,
+        // Key columns index the singleton row containing the computed output.
+        to_intersect: Vec<(ScanSpec, ColumnIds)>,
+    },
     /// `Intersect` takes a variable and intersects a set of atoms
     /// on that variable.
     /// This corresponds to the classic generic join algorithm.
@@ -213,7 +225,11 @@ fn fuse_single_scans(stages: &mut Vec<JoinStage>) {
                 continue;
             }
         };
-        let target = (0..i).find(|&j| {
+        let phase_start = stages[..i]
+            .iter()
+            .rposition(|stage| matches!(stage, JoinStage::Primitive { .. }))
+            .map_or(0, |position| position + 1);
+        let target = (phase_start..i).find(|&j| {
             matches!(
                 &stages[j],
                 JoinStage::FusedIntersect { cover, to_intersect, .. }
@@ -365,7 +381,8 @@ impl JoinStages {
                     }
                 }
                 JoinStage::FusedIntersect { to_intersect, .. }
-                | JoinStage::FusedIntersectMat { to_intersect, .. } => {
+                | JoinStage::FusedIntersectMat { to_intersect, .. }
+                | JoinStage::Primitive { to_intersect, .. } => {
                     for (scan, _) in to_intersect {
                         f(scan.to_index.atom, &scan.to_index.vars, &scan.constraints);
                     }
@@ -430,6 +447,22 @@ impl SinglePlan {
         let mut stages = Vec::new();
         for (i, stage) in self.stages.instrs.iter().enumerate() {
             let report_stage = match stage {
+                JoinStage::Primitive {
+                    function,
+                    args,
+                    output,
+                    ..
+                } => {
+                    let entry_name = |entry: &QueryEntry| match entry {
+                        QueryEntry::Var(var) => get_var(*var),
+                        QueryEntry::Const(value) => format!("{value:?}"),
+                    };
+                    ReportStage::Primitive {
+                        function: format!("{function:?}"),
+                        args: args.iter().map(entry_name).collect(),
+                        output: entry_name(output),
+                    }
+                }
                 JoinStage::Intersect { var, scans } => {
                     let var_name = get_var(*var);
                     let report_scans = scans
@@ -1294,7 +1327,19 @@ pub(crate) fn plan_query<'a>(query: Query, col_est: ColumnCardEst<'a>) -> Plan {
         fun_deps: Arc::new(query.fun_deps),
         col_est,
     };
-    tree_decompose_and_plan(ctx, query.plan_strategy, query.action, query.no_decomp)
+    if query.primitives.is_empty() {
+        tree_decompose_and_plan(ctx, query.plan_strategy, query.action, query.no_decomp)
+    } else {
+        // A primitive needs all input bindings in one bag. Keep this prototype
+        // in a single bag until decomposition carries access requirements.
+        let (header, instrs) = plan_primitive_stages(&ctx, query.plan_strategy, query.primitives);
+        Plan::SinglePlan(SinglePlan {
+            atoms: Arc::new(ctx.atoms),
+            header,
+            stages: JoinStages::new(instrs),
+            actions: query.action,
+        })
+    }
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
@@ -1527,6 +1572,190 @@ fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, 
     (header, instrs)
 }
 
+/// Plan forward lookups together with stored relations. The access requirement
+/// is checked against actual bindings, independently of functional-dependency
+/// closure. Connected/selective scans retain priority; input producers break
+/// ties so predicates can prune before unrelated relations expand the match set.
+fn plan_primitive_stages(
+    ctx: &PlanningContext,
+    strat: PlanStrategy,
+    primitives: Vec<QueryPrimitive>,
+) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+    let (header, remaining_constraints) = plan_headers(ctx);
+    let mut stages = Vec::new();
+    let mut state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
+    let mut pending: Vec<_> = primitives.into_iter().map(Some).collect();
+    let primitive_inputs: HashSet<_> = pending
+        .iter()
+        .flatten()
+        .flat_map(|primitive| &primitive.args)
+        .filter_map(|entry| match entry {
+            QueryEntry::Var(var) => Some(*var),
+            QueryEntry::Const(_) => None,
+        })
+        .collect();
+
+    // Preserve generic join's existential projection: one-occurrence variables
+    // unused by either the RHS or a primitive do not need their own scan. At
+    // least one column still touches every otherwise unmentioned atom.
+    let mut planned_vars = Vec::new();
+    let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
+    for (var, info) in ctx.vars.iter() {
+        if !info.occurrences.is_empty()
+            && (info.occurrences.len() > 1 || info.used_in_rhs || primitive_inputs.contains(&var))
+        {
+            planned_vars.push(var);
+            for occurrence in &info.occurrences {
+                atoms_hit.insert(occurrence.atom.index());
+            }
+        }
+    }
+    for (var, info) in ctx.vars.iter() {
+        if let [occurrence] = info.occurrences.as_slice()
+            && !atoms_hit.contains(occurrence.atom.index())
+        {
+            planned_vars.push(var);
+            atoms_hit.insert(occurrence.atom.index());
+        }
+    }
+
+    loop {
+        // Revisit earlier entries after every result: primitive chains need not
+        // be supplied in dependency order, including zero-input primitives.
+        while let Some(index) = pending.iter().position(|entry| {
+            entry.as_ref().is_some_and(|primitive| {
+                primitive.args.iter().all(|arg| match arg {
+                    QueryEntry::Const(_) => true,
+                    QueryEntry::Var(var) => state.is_var_used(*var),
+                })
+            })
+        }) {
+            let primitive = pending[index].take().unwrap();
+            let bind_output =
+                matches!(primitive.output, QueryEntry::Var(var) if !state.is_var_used(var));
+            let mut to_intersect = Vec::new();
+            if let QueryEntry::Var(var) = primitive.output
+                && bind_output
+            {
+                state.mark_var_used(var);
+                for occurrence in &ctx.vars[var].occurrences {
+                    let scan = ScanSpec {
+                        to_index: occurrence.clone(),
+                        constraints: take_atom_constraints_if_new(ctx, &mut state, occurrence.atom),
+                    };
+                    let key = smallvec![ColumnId::new(0); occurrence.vars.len()];
+                    to_intersect.push((scan, key));
+                }
+            }
+            stages.push(JoinStage::Primitive {
+                function: primitive.function,
+                args: primitive.args,
+                output: primitive.output,
+                bind_output,
+                to_intersect,
+            });
+        }
+
+        planned_vars.retain(|var| !state.is_var_used(*var));
+        let next = planned_vars.iter().enumerate().min_by_key(|(_, var)| {
+            // Match runtime DVO's preference for an already refined relation
+            // before eagerly acquiring primitive inputs. Otherwise, for
+            // A(x, y), B(y, z), p(x, z), input-first planning enumerates x and z
+            // independently before the connecting y join can prune them.
+            // Primitive input order is only a tie breaker after connectivity,
+            // estimated size, and join degree.
+            let primitive_rank = pending
+                .iter()
+                .position(|primitive| {
+                    primitive.as_ref().is_some_and(|primitive| {
+                        primitive
+                            .args
+                            .iter()
+                            .any(|arg| matches!(arg, QueryEntry::Var(input) if input == *var))
+                    })
+                })
+                .unwrap_or(usize::MAX);
+            let occurrences = &ctx.vars[**var].occurrences;
+            let refinement = occurrences
+                .iter()
+                .map(|occurrence| {
+                    ctx.atoms[occurrence.atom]
+                        .vars()
+                        .filter(|bound| state.is_var_used(*bound))
+                        .count()
+                })
+                .max()
+                .unwrap_or(0);
+            let size = occurrences
+                .iter()
+                .map(|occurrence| remaining_constraints[occurrence.atom].0)
+                .min()
+                .unwrap_or(usize::MAX);
+            (
+                std::cmp::Reverse(refinement),
+                size,
+                std::cmp::Reverse(occurrences.len()),
+                primitive_rank,
+                var.index(),
+            )
+        });
+        let Some((index, &var)) = next else {
+            assert!(
+                pending.iter().all(Option::is_none),
+                "primitive query has ungrounded inputs: {:?}",
+                pending.iter().flatten().collect::<Vec<_>>()
+            );
+            break;
+        };
+        planned_vars.remove(index);
+
+        match strat {
+            PlanStrategy::Gj => {
+                let occurrences = &ctx.vars[var].occurrences;
+                let info = StageInfo {
+                    cover: occurrences[0].clone(),
+                    vars: smallvec![var],
+                    filters: occurrences[1..]
+                        .iter()
+                        .map(|occurrence| {
+                            (
+                                occurrence.clone(),
+                                smallvec![ColumnId::new(0); occurrence.vars.len()],
+                            )
+                        })
+                        .collect(),
+                };
+                state.mark_var_used(var);
+                stages.push(compile_stage(ctx, &mut state, info));
+            }
+            PlanStrategy::PureSize | PlanStrategy::MinCover => {
+                // Restrict covers to an input producer while a primitive is
+                // waiting. Once chosen, retain free join's full cover/probes.
+                let atom = ctx.vars[var]
+                    .occurrences
+                    .iter()
+                    .map(|occurrence| occurrence.atom)
+                    .min_by_key(|atom| {
+                        let refinement = ctx.atoms[*atom]
+                            .vars()
+                            .filter(|var| state.is_var_used(*var))
+                            .count();
+                        (
+                            std::cmp::Reverse(refinement),
+                            remaining_constraints[*atom].0,
+                        )
+                    })
+                    .unwrap();
+                let info = get_next_freejoin_stage(ctx, &mut state, &mut iter::once(atom))
+                    .expect("the selected cover has an unbound variable");
+                stages.push(compile_stage(ctx, &mut state, info));
+            }
+        }
+    }
+    fuse_single_scans(&mut stages);
+    (header, stages)
+}
+
 /// Plan free join queries using pure size or minimal cover strategy.
 fn plan_free_join(
     ctx: &PlanningContext,
@@ -1687,6 +1916,19 @@ fn plan_gj(
     fuse_single_scans(stages);
 }
 
+fn take_atom_constraints_if_new(
+    ctx: &PlanningContext,
+    state: &mut PlanningState,
+    atom: AtomId,
+) -> Vec<Constraint> {
+    if state.is_atom_constrained(atom) {
+        Default::default()
+    } else {
+        state.mark_atom_constrained(atom);
+        ctx.atoms[atom].constraints.slow.clone()
+    }
+}
+
 /// Compile a stage info into a concrete join stage, updating constraint state.
 fn compile_stage(
     ctx: &PlanningContext,
@@ -1697,19 +1939,6 @@ fn compile_stage(
         filters,
     }: StageInfo,
 ) -> JoinStage {
-    fn take_atom_constraints_if_new(
-        ctx: &PlanningContext,
-        state: &mut PlanningState,
-        atom: AtomId,
-    ) -> Vec<Constraint> {
-        if state.is_atom_constrained(atom) {
-            Default::default()
-        } else {
-            state.mark_atom_constrained(atom);
-            ctx.atoms[atom].constraints.slow.clone()
-        }
-    }
-
     // Only do this if it's a join of more than one relations
     if vars.len() == 1 && !filters.is_empty() {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
@@ -1758,5 +1987,189 @@ fn compile_stage(
         cover: cover_spec,
         bind,
         to_intersect,
+    }
+}
+
+#[cfg(test)]
+mod primitive_tests {
+    use super::*;
+    use crate::{Database, SortedWritesTable, Value, make_external_func};
+    use egglog_reports::ReportLevel;
+
+    fn table(db: &mut Database, arity: usize) -> TableId {
+        db.add_table(
+            SortedWritesTable::new(
+                arity,
+                arity,
+                ColumnId::new(0),
+                vec![],
+                Box::new(|_, old, new, _| {
+                    assert_eq!(old, new);
+                    false
+                }),
+            ),
+            [],
+            [],
+        )
+    }
+
+    #[test]
+    fn primitive_result_drives_repeated_table_columns() {
+        for strategy in [
+            PlanStrategy::Gj,
+            PlanStrategy::PureSize,
+            PlanStrategy::MinCover,
+        ] {
+            let mut db = Database::new();
+            let inputs = table(&mut db, 1);
+            let targets = table(&mut db, 3);
+            let output = table(&mut db, 1);
+            {
+                let mut buffer = db.new_buffer(inputs);
+                buffer.stage_insert(&[Value::new(5)]);
+            }
+            {
+                let mut buffer = db.new_buffer(targets);
+                buffer.stage_insert(&[Value::new(6), Value::new(6), Value::new(20)]);
+                buffer.stage_insert(&[Value::new(6), Value::new(7), Value::new(21)]);
+                buffer.stage_insert(&[Value::new(9), Value::new(9), Value::new(22)]);
+            }
+            db.merge_all();
+            let increment = db.add_external_function(Box::new(make_external_func(|_, args| {
+                Some(Value::from_usize(args[0].index() + 1))
+            })));
+            let mut builder = db.new_rule_set();
+            let mut query = builder.new_rule();
+            query.set_plan_strategy(strategy);
+            // Declare the consumer before the producer to exercise dependency
+            // scheduling independently of variable and atom declaration order.
+            let y = query.new_var();
+            let z = query.new_var();
+            let x = query.new_var();
+            let target_atom = query
+                .add_atom(targets, &[y.into(), y.into(), z.into()], [])
+                .unwrap();
+            query.add_atom(inputs, &[x.into()], []).unwrap();
+            query.add_primitive(increment, &[x.into()], y.into());
+            let mut rule = query.build();
+            rule.insert(output, &[z.into()]).unwrap();
+            rule.build();
+            let rules = builder.build();
+            let (Plan::SinglePlan(plan), _, _) = rules.plans.values().next().unwrap() else {
+                panic!("primitive queries must retain their inputs in one bag");
+            };
+            let lookup = plan
+                .stages
+                .instrs
+                .iter()
+                .find_map(|stage| match stage {
+                    JoinStage::Primitive {
+                        bind_output: true,
+                        to_intersect,
+                        ..
+                    } => Some(to_intersect),
+                    _ => None,
+                })
+                .expect("the primitive must produce its output before scanning the consumer");
+            assert!(lookup.iter().any(|(scan, key)| {
+                scan.to_index.atom == target_atom
+                    && scan.to_index.vars.as_slice() == [ColumnId::new(0), ColumnId::new(1)]
+                    && key.as_slice() == [ColumnId::new(0), ColumnId::new(0)]
+            }));
+            db.run_rule_set(&rules, ReportLevel::WithPlan, None);
+            let table = db.get_table(output);
+            let rows = table.scan(table.all().as_ref());
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows.iter().next().unwrap().1, &[Value::new(20)]);
+        }
+    }
+
+    #[test]
+    fn primitive_inputs_do_not_precede_their_connecting_join() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let mut db = Database::new();
+        let left = table(&mut db, 2);
+        let right = table(&mut db, 2);
+        let output = table(&mut db, 1);
+        for relation in [left, right] {
+            let mut buffer = db.new_buffer(relation);
+            for value in 0..32 {
+                buffer.stage_insert(&[Value::new(value), Value::new(value)]);
+            }
+        }
+        db.merge_all();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let predicate = db.add_external_function(Box::new(make_external_func(move |_, _| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            Some(Value::new(0))
+        })));
+        let mut builder = db.new_rule_set();
+        let mut query = builder.new_rule();
+        let x = query.new_var();
+        let y = query.new_var();
+        let z = query.new_var();
+        query.add_atom(left, &[x.into(), y.into()], []).unwrap();
+        query.add_atom(right, &[y.into(), z.into()], []).unwrap();
+        query.add_primitive(predicate, &[x.into(), z.into()], Value::new(0).into());
+        let mut rule = query.build();
+        rule.insert(output, &[x.into()]).unwrap();
+        rule.build();
+        let rules = builder.build();
+        db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        assert_eq!(db.get_table(output).len(), 32);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            32,
+            "the shared y join must prevent the 32 x 32 primitive input product"
+        );
+    }
+
+    #[test]
+    fn primitive_only_chain_can_be_declared_in_reverse_order() {
+        let mut db = Database::new();
+        let output = table(&mut db, 1);
+        let constant = db.add_external_function(Box::new(make_external_func(|_, args| {
+            assert!(args.is_empty());
+            Some(Value::new(10))
+        })));
+        let sum = db.add_external_function(Box::new(make_external_func(|_, args| {
+            Some(Value::from_usize(
+                args.iter().map(|value| value.index()).sum(),
+            ))
+        })));
+        let mut builder = db.new_rule_set();
+        let mut query = builder.new_rule();
+        let x = query.new_var();
+        let y = query.new_var();
+        query.add_primitive(sum, &[x.into(), x.into(), Value::new(2).into()], y.into());
+        query.add_primitive(constant, &[], x.into());
+        let mut rule = query.build();
+        rule.insert(output, &[y.into()]).unwrap();
+        rule.build();
+        let rules = builder.build();
+        db.run_rule_set(&rules, ReportLevel::WithPlan, None);
+        let table = db.get_table(output);
+        let rows = table.scan(table.all().as_ref());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.iter().next().unwrap().1, &[Value::new(22)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "primitive query has ungrounded inputs")]
+    fn primitive_dependency_cycle_requires_an_enumerable_source() {
+        let mut db = Database::new();
+        let function =
+            db.add_external_function(Box::new(make_external_func(|_, args| Some(args[0]))));
+        let mut builder = db.new_rule_set();
+        let mut query = builder.new_rule();
+        let x = query.new_var();
+        let y = query.new_var();
+        query.add_primitive(function, &[x.into()], y.into());
+        query.add_primitive(function, &[y.into()], x.into());
+        query.build().build();
     }
 }
