@@ -114,6 +114,8 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 #[derive(Clone, Debug)]
 pub struct FuncType {
     pub name: String,
+    /// Reflection provenance, excluded from native callable identity.
+    pub table_name: Option<ast::TableName>,
     pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
@@ -236,6 +238,9 @@ pub struct TypeInfo {
     pub(crate) non_unionable_sorts: HashSet<String>,
     /// Function declarations hidden from user-facing table listings.
     pub(crate) hidden_functions: HashSet<String>,
+    // Published only after backend allocation. Each action retains its table
+    // identity across cloned registries, popped scopes, and reused table ids.
+    pub(crate) table_names: HashMap<String, (ast::TableName, egglog_bridge::TableAction)>,
     /// Extension-owned registration metadata follows type-environment snapshots.
     extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
 }
@@ -969,6 +974,7 @@ impl TypeInfo {
 
         Ok(FuncType {
             name: func.name.clone(),
+            table_name: func.table_name.clone(),
             subtype: func.subtype,
             input,
             output: output.clone(),
@@ -1023,6 +1029,7 @@ impl TypeInfo {
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name.clone(),
+            table_name: fdecl.table_name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
@@ -1433,6 +1440,8 @@ pub enum TypeError {
     ProveExistsRequiresConstructor(String, Span),
     #[error("{1}\nFunction already bound {0}")]
     FunctionAlreadyBound(String, Span),
+    #[error("{1}\nTable selector {0} is already bound")]
+    TableNameAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]
     SortAlreadyBound(String, Span),
     #[error("{1}\nPrimitive {0} already declared.")]

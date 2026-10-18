@@ -59,6 +59,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     );
     ResolvedCall::Func(Arc::new(FuncType {
         name: var.name.clone(),
+        table_name: None,
         subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
@@ -95,12 +96,14 @@ impl GlobalRemover<'_> {
 
                     let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                         name: name.name.clone(),
+                        table_name: None,
                         subtype: FunctionSubtype::Custom,
                         input: vec![],
                         output: ty.clone(),
                     }));
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,
+                        table_name: None,
                         subtype: FunctionSubtype::Custom,
                         schema: Schema {
                             input: vec![],

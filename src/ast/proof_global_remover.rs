@@ -39,6 +39,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     );
     ResolvedCall::Func(Arc::new(FuncType {
         name: var.name.clone(),
+        table_name: None,
         subtype: FunctionSubtype::Constructor,
         input: vec![],
         output: var.sort.clone(),
@@ -77,12 +78,14 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
 
                 let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                     name: name.name.clone(),
+                    table_name: None,
                     subtype: FunctionSubtype::Constructor,
                     input: vec![],
                     output: ty.clone(),
                 }));
                 let func_decl = ResolvedFunctionDecl {
                     name: name.name,
+                    table_name: None,
                     subtype: FunctionSubtype::Constructor,
                     schema: Schema {
                         input: vec![],

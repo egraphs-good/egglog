@@ -774,6 +774,7 @@ pub fn add_function(
     egraph.run_program(vec![Command::Function {
         span: span!(),
         name: name.to_owned(),
+        table_name: None,
         schema,
         merge,
         hidden: false,
@@ -794,6 +795,7 @@ pub fn add_constructor(
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
         name: name.to_owned(),
+        table_name: None,
         schema,
         cost,
         unextractable,
@@ -812,6 +814,7 @@ pub fn add_relation(
     egraph.run_program(vec![Command::Relation {
         span: span!(),
         name: name.to_owned(),
+        table_name: None,
         inputs,
     }])
 }

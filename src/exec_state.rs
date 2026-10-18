@@ -425,6 +425,69 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         self.registry().table_sizes(self.es())
     }
 
+    /// Resolve a reflective selector without exposing a compiler-owned physical
+    /// name. Explicit public aliases take priority over ordinary native names;
+    /// aliases may therefore equal another namespace's physical spelling.
+    fn named_table_size(&self, name: &str) -> Option<usize> {
+        if let Some(types) = self.type_info() {
+            for (table_name, action) in types.table_names.values() {
+                if matches!(table_name, crate::ast::TableName::Public(public) if public == name)
+                    && action.is_live(self.es())
+                {
+                    return Some(action.row_count(self.es()));
+                }
+            }
+            if types.table_names.contains_key(name) {
+                return None;
+            }
+        }
+        lookup_action(self.registry(), self.es(), name)
+            .ok()
+            .map(|action| action.row_count(self.es()))
+    }
+
+    /// Enumerate every live table once using its reflective prefix name. Hidden
+    /// tables remain included; consumers choose their own visibility policy.
+    /// The existing physical enumeration and schema accessors are unchanged.
+    /// Each entry is `(physical_name, prefix_name, row_count)`.
+    fn named_table_sizes<'s>(&'s self) -> Vec<(&'s str, &'s str, usize)>
+    where
+        'db: 's,
+    {
+        let Some(types) = self.type_info() else {
+            return self
+                .registry()
+                .table_sizes(self.es())
+                .into_iter()
+                .map(|(name, size)| (name, name, size))
+                .collect();
+        };
+        let mut sizes: Vec<_> = types
+            .table_names
+            .iter()
+            .filter_map(|(physical, (name, action))| {
+                if !action.is_live(self.es()) {
+                    return None;
+                }
+                let (crate::ast::TableName::Public(name) | crate::ast::TableName::Internal(name)) =
+                    name;
+                Some((
+                    physical.as_str(),
+                    name.as_str(),
+                    action.row_count(self.es()),
+                ))
+            })
+            .collect();
+        sizes.extend(
+            self.registry()
+                .table_sizes(self.es())
+                .into_iter()
+                .filter(|(name, _)| !types.table_names.contains_key(*name))
+                .map(|(name, size)| (name, name, size)),
+        );
+        sizes
+    }
+
     /// Iterate over the registered table names visible to this state.
     fn tables(&self) -> impl Iterator<Item = &str> {
         self.table_sizes().into_iter().map(|(name, _)| name)

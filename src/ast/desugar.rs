@@ -13,6 +13,7 @@ pub(crate) fn desugar_command(
         Command::Function {
             span,
             name,
+            table_name,
             schema,
             merge,
             hidden,
@@ -21,6 +22,7 @@ pub(crate) fn desugar_command(
             unextractable,
         } => {
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
+            fdecl.table_name = table_name;
             fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
@@ -38,6 +40,7 @@ pub(crate) fn desugar_command(
         Command::Constructor {
             span,
             name,
+            table_name,
             schema,
             cost,
             unextractable,
@@ -47,11 +50,25 @@ pub(crate) fn desugar_command(
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
+            fdecl.table_name = table_name;
             fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
-        Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
+        Command::Relation {
+            span,
+            name,
+            inputs,
+            table_name,
+        } => {
+            let mut commands = desugar_relation(parser, span, name, inputs);
+            for command in &mut commands {
+                if let NCommand::Function(function) = command {
+                    function.table_name = table_name.clone();
+                }
+            }
+            commands
+        }
         Command::Datatype {
             span,
             name,

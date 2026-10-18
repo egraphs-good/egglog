@@ -187,6 +187,7 @@ where
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
                     span: f.span.clone(),
                     name: f.name.clone(),
+                    table_name: f.table_name.clone(),
                     schema: f.schema.clone(),
                     cost: f.cost,
                     unextractable: f.unextractable,
@@ -198,6 +199,7 @@ where
                     span: f.span.clone(),
                     schema: f.schema.clone(),
                     name: f.name.clone(),
+                    table_name: f.table_name.clone(),
                     merge: f.merge.clone(),
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
@@ -699,6 +701,7 @@ where
     Constructor {
         span: Span,
         name: String,
+        table_name: Option<TableName>,
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
@@ -723,6 +726,7 @@ where
         span: Span,
         name: String,
         inputs: Vec<String>,
+        table_name: Option<TableName>,
     },
 
     /// The `function` command declare an egglog custom function, which is a database table with a
@@ -767,6 +771,7 @@ where
     Function {
         span: Span,
         name: String,
+        table_name: Option<TableName>,
         schema: Schema,
         merge: Option<GenericExpr<Head, Leaf>>,
         hidden: bool,
@@ -1071,6 +1076,7 @@ where
             GenericCommand::Function {
                 span: _,
                 name,
+                table_name,
                 schema,
                 merge,
                 hidden,
@@ -1079,6 +1085,9 @@ where
                 unextractable,
             } => {
                 write!(f, "(function {name} {schema}")?;
+                if let Some(TableName::Public(name)) = table_name {
+                    write!(f, " :table-name {}", Literal::String(name.clone()))?;
+                }
                 if let Some(merge) = &merge {
                     write!(f, " :merge {merge}")?;
                 } else {
@@ -1101,6 +1110,7 @@ where
             GenericCommand::Constructor {
                 span: _,
                 name,
+                table_name,
                 schema,
                 cost,
                 unextractable,
@@ -1109,6 +1119,9 @@ where
                 term_constructor,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
+                if let Some(TableName::Public(name)) = table_name {
+                    write!(f, " :table-name {}", Literal::String(name.clone()))?;
+                }
                 if let Some(cost) = cost {
                     write!(f, " :cost {cost}")?;
                 }
@@ -1129,9 +1142,14 @@ where
             GenericCommand::Relation {
                 span: _,
                 name,
+                table_name,
                 inputs,
             } => {
-                write!(f, "(relation {name} ({}))", ListDisplay(inputs, " "))
+                write!(f, "(relation {name} ({})", ListDisplay(inputs, " "))?;
+                if let Some(TableName::Public(name)) = table_name {
+                    write!(f, " :table-name {}", Literal::String(name.clone()))?;
+                }
+                write!(f, ")")
             }
             GenericCommand::AddRuleset(_span, name) => {
                 write!(f, "(ruleset {name})")
@@ -1343,8 +1361,18 @@ impl Display for FunctionSubtype {
     }
 }
 
-/// Represents the declaration of a function
-/// directly parsed from source syntax.
+/// Names used only by reflective table selectors and prefix filtering. Physical
+/// function names, signatures, and backend registrations remain unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TableName {
+    /// A logical selector for an existing table, written `:table-name "name"`.
+    Public(String),
+    /// Compiler-owned provenance: contributes to aggregate counts under this
+    /// display name, but does not publish a logical selector.
+    Internal(String),
+}
+
+/// Represents the declaration of a function directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericFunctionDecl<Head, Leaf>
 where
@@ -1352,6 +1380,7 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     pub name: String,
+    pub table_name: Option<TableName>,
     pub subtype: FunctionSubtype,
     /// The schema as written. The resolved signature lives in `TypeInfo`,
     /// keyed by `name`.
@@ -1421,6 +1450,7 @@ impl FunctionDecl {
     ) -> Self {
         Self {
             name,
+            table_name: None,
             subtype: FunctionSubtype::Custom,
             schema,
             merge,
@@ -1444,6 +1474,7 @@ impl FunctionDecl {
     ) -> Self {
         Self {
             name,
+            table_name: None,
             subtype: FunctionSubtype::Constructor,
             schema,
             merge: None,
@@ -1468,6 +1499,7 @@ where
     ) -> GenericFunctionDecl<Head, Leaf> {
         GenericFunctionDecl {
             name: self.name,
+            table_name: self.table_name,
             subtype: self.subtype,
             schema: self.schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
@@ -1774,6 +1806,7 @@ where
             GenericCommand::Constructor {
                 span,
                 name,
+                table_name,
                 schema,
                 cost,
                 unextractable,
@@ -1783,6 +1816,7 @@ where
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
+                table_name,
                 schema: Schema {
                     input: schema.input.into_iter().map(&mut *fun).collect(),
                     output: fun(schema.output),
@@ -1793,14 +1827,21 @@ where
                 let_binding,
                 term_constructor: term_constructor.map(&mut *fun),
             },
-            GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
+            GenericCommand::Relation {
+                span,
+                name,
+                table_name,
+                inputs,
+            } => GenericCommand::Relation {
                 span,
                 name: fun(name),
+                table_name,
                 inputs: inputs.into_iter().map(&mut *fun).collect(),
             },
             GenericCommand::Function {
                 span,
                 name,
+                table_name,
                 schema,
                 merge,
                 hidden,
@@ -1810,6 +1851,7 @@ where
             } => GenericCommand::Function {
                 span,
                 name: fun(name),
+                table_name,
                 schema: Schema {
                     input: schema.input.into_iter().map(&mut *fun).collect(),
                     output: fun(schema.output),
@@ -1895,6 +1937,7 @@ where
             GenericCommand::Function {
                 span,
                 name,
+                table_name,
                 schema,
                 merge,
                 hidden,
@@ -1904,6 +1947,7 @@ where
             } => GenericCommand::Function {
                 span,
                 name,
+                table_name,
                 schema,
                 merge: merge.map(|e| e.visit_exprs(f)),
                 hidden,
@@ -2016,6 +2060,7 @@ where
             GenericCommand::Constructor {
                 span,
                 name,
+                table_name,
                 schema,
                 cost,
                 unextractable,
@@ -2025,6 +2070,7 @@ where
             } => GenericCommand::Constructor {
                 span,
                 name,
+                table_name,
                 schema,
                 cost,
                 unextractable,
@@ -2032,12 +2078,21 @@ where
                 let_binding,
                 term_constructor,
             },
-            GenericCommand::Relation { span, name, inputs } => {
-                GenericCommand::Relation { span, name, inputs }
-            }
+            GenericCommand::Relation {
+                span,
+                name,
+                table_name,
+                inputs,
+            } => GenericCommand::Relation {
+                span,
+                name,
+                table_name,
+                inputs,
+            },
             GenericCommand::Function {
                 span,
                 name,
+                table_name,
                 schema,
                 merge,
                 hidden,
@@ -2047,6 +2102,7 @@ where
             } => GenericCommand::Function {
                 span,
                 name,
+                table_name,
                 schema,
                 merge: merge.map(|expr| expr.map_symbols(head, leaf)),
                 hidden,

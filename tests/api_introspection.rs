@@ -18,6 +18,96 @@ const MATH: &str = "
 (function cost (Math) i64 :no-merge)
 ";
 
+#[test]
+fn reflective_table_names_keep_physical_access_and_registration_identity() -> Result<(), Error> {
+    let mut graph = EGraph::default();
+    graph.parse_and_run_program(
+        None,
+        r#"
+        (sort T)
+        (constructor physical (i64) T :table-name "C")
+        (function storage () i64 :merge old :table-name "value")
+        (relation rows (i64) :table-name "facts")
+        (constructor hidden () T :internal-hidden :table-name "@hidden")
+        (physical 7)
+        (set (storage) 9)
+        (rows 7)
+        (hidden)
+    "#,
+    )?;
+    graph.read(|state| {
+        assert_eq!(state.named_table_size("C"), Some(1));
+        assert_eq!(state.named_table_size("value"), Some(1));
+        assert_eq!(state.named_table_size("facts"), Some(1));
+        assert_eq!(state.named_table_size("physical"), None);
+        assert_eq!(state.named_table_size("absent"), None);
+        assert_eq!(state.table_size("physical"), Some(1));
+        assert_eq!(state.constructor_schema("physical").unwrap().input.len(), 1);
+        assert!(
+            state
+                .table_sizes()
+                .iter()
+                .any(|(name, _)| *name == "physical")
+        );
+        let view = state.named_table_sizes();
+        assert_eq!(view.iter().map(|(_, _, size)| size).sum::<usize>(), 4);
+        assert!(
+            view.iter()
+                .any(|(physical, name, size)| *physical == "hidden"
+                    && *name == "@hidden"
+                    && *size == 1)
+        );
+    });
+    let conflict =
+        graph.parse_and_run_program(None, r#"(constructor conflict () T :table-name "C")"#);
+    assert!(matches!(
+        conflict,
+        Err(Error::TypeError(egglog::TypeError::TableNameAlreadyBound(
+            ..
+        )))
+    ));
+    assert!(graph.get_function("conflict").is_none());
+    graph.push();
+    graph.parse_and_run_program(
+        None,
+        r#"(constructor temporary () T :table-name "old") (temporary)"#,
+    )?;
+    let sibling = graph.clone();
+    graph.pop()?;
+    graph.parse_and_run_program(None, r#"(constructor temporary () T :table-name "new")"#)?;
+    graph.read(|state| {
+        assert_eq!(state.named_table_size("old"), None);
+        assert_eq!(state.named_table_size("new"), Some(0));
+    });
+    sibling.read(|state| {
+        assert_eq!(state.named_table_size("old"), Some(1));
+        assert_eq!(state.named_table_size("new"), None);
+        assert!(
+            state
+                .named_table_sizes()
+                .iter()
+                .any(|(_, name, size)| *name == "old" && *size == 1)
+        );
+    });
+    // A failed declaration never publishes an alias, even if typechecking
+    // retained its signature. A different physical table can use that alias.
+    assert!(
+        graph
+            .parse_and_run_program(
+                None,
+                r#"(function bad () T :merge (absent old) :table-name "retry")"#
+            )
+            .is_err()
+    );
+    graph.read(|state| assert_eq!(state.named_table_size("retry"), None));
+    graph.parse_and_run_program(
+        None,
+        r#"(constructor recovered () T :table-name "retry") (recovered)"#,
+    )?;
+    graph.read(|state| assert_eq!(state.named_table_size("retry"), Some(1)));
+    Ok(())
+}
+
 /// `constructor_enodes_for_eclass` returns exactly the rows a full scan would,
 /// filtered on the eclass column — that equivalence is the invariant the
 /// indexed path has to preserve.

@@ -1187,6 +1187,13 @@ impl EGraph {
     }
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        if let Some(ast::TableName::Public(name)) = &decl.table_name
+            && self.type_info.table_names.values().any(|(other, _)| {
+                matches!(other, ast::TableName::Public(other_name) if other_name == name)
+            })
+        {
+            return Err(TypeError::TableNameAlreadyBound(name.clone(), decl.span.clone()).into());
+        }
         // Typechecking records the signatures it resolves, so reuse that.
         // Desugaring also generates declarations (the functions global bindings
         // lower to, proof tables) without typechecking them; resolving those
@@ -1217,6 +1224,7 @@ impl EGraph {
                 };
                 let func_type = Arc::new(FuncType {
                     name: decl.name.clone(),
+                    table_name: decl.table_name.clone(),
                     subtype: decl.subtype,
                     input: decl
                         .schema
@@ -1278,6 +1286,15 @@ impl EGraph {
                 .insert(function.name().to_owned());
         }
 
+        if let Some(name) = &decl.table_name {
+            self.type_info.table_names.insert(
+                decl.name.clone(),
+                (
+                    name.clone(),
+                    egglog_bridge::TableAction::new(&self.backend, backend_id),
+                ),
+            );
+        }
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
             panic!(

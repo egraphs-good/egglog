@@ -407,12 +407,17 @@ impl Parser {
             "function" => match tail {
                 [name, inputs, output, rest @ ..] => {
                     let mut merge = None;
+                    let mut table_name = None;
                     let mut hidden = false;
                     let mut let_binding = false;
                     let mut term_constructor = None;
                     let mut unextractable = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
+                            (":table-name", [name]) => {
+                                table_name =
+                                    Some(TableName::Public(name.expect_string("table name")?));
+                            }
                             (":no-merge", []) => {
                                 if merge.is_some() {
                                     return error!(
@@ -451,6 +456,7 @@ impl Parser {
                     };
                     vec![Command::Function {
                         name: name.expect_atom("function name")?,
+                        table_name,
                         schema: self.parse_schema(inputs, output)?,
                         merge,
                         hidden,
@@ -475,11 +481,16 @@ impl Parser {
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
+                        let mut table_name = None;
                         let mut unextractable = false;
                         let mut hidden = false;
                         let mut let_binding = false;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
+                                (":table-name", [name]) => {
+                                    table_name =
+                                        Some(TableName::Public(name.expect_string("table name")?));
+                                }
                                 (":unextractable", []) => unextractable = true,
                                 (":internal-hidden", []) => hidden = true,
                                 (":internal-let", []) => let_binding = true,
@@ -491,6 +502,7 @@ impl Parser {
                         vec![Command::Constructor {
                             span,
                             name: name.expect_atom("constructor name")?,
+                            table_name,
                             schema: self.parse_schema(inputs, output)?,
                             cost,
                             unextractable,
@@ -508,13 +520,28 @@ impl Parser {
                 }
             }
             "relation" => match tail {
-                [name, inputs] => vec![Command::Relation {
-                    span,
-                    name: name.expect_atom("relation name")?,
-                    inputs: map_fallible(inputs.expect_list("input sorts")?, self, |_, sexp| {
-                        sexp.expect_atom("input sort")
-                    })?,
-                }],
+                [name, inputs, rest @ ..] => {
+                    let mut table_name = None;
+                    for (key, val) in self.parse_options(rest)? {
+                        match (key, val) {
+                            (":table-name", [name]) => {
+                                table_name =
+                                    Some(TableName::Public(name.expect_string("table name")?));
+                            }
+                            _ => return error!(span, "could not parse relation options"),
+                        }
+                    }
+                    vec![Command::Relation {
+                        span,
+                        name: name.expect_atom("relation name")?,
+                        table_name,
+                        inputs: map_fallible(
+                            inputs.expect_list("input sorts")?,
+                            self,
+                            |_, sexp| sexp.expect_atom("input sort"),
+                        )?,
+                    }]
+                }
                 _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
             },
             "ruleset" => match tail {
