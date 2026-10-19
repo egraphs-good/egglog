@@ -38,6 +38,10 @@
 (check (= (unstable-app (unstable-fn "+" 1.0) 2.0) 3.0))
 (check (= (unstable-app (unstable-fn "+" 1) 2) 3))
 
+(sort F64Add (UnstableFn (f64 f64) f64))
+(check (= (unstable-app (unstable-fn "+") 1 2) 3))
+(check (= (unstable-app (unstable-fn "+") 1.0 2.0) 3.0))
+
 ; --- 2. unstable-app over a constructor in an action mints the eclass.
 (datatype Math (Num i64))
 (sort MathFn (UnstableFn (i64) Math))
