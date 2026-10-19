@@ -21,7 +21,8 @@ use thiserror::Error;
 
 /// A side condition is a rule-body fact that is just a container-producing
 /// primitive applied to bound variables — `(= v (vec-of e))`, `(= (set-of a)
-/// (set-of b))`, etc. Its proof is a bare [`Justification::Eval`] marker and it
+/// (set-of b))`, etc., or an equality between same-sort container aliases.
+/// Its proof is a bare [`Justification::Eval`] marker and it
 /// is verified by re-evaluation in [`ProofStore::check_side_condition`] rather
 /// than by matching a premise proposition.
 pub(super) fn is_container_side_condition(fact: &ResolvedFact) -> bool {
@@ -29,11 +30,17 @@ pub(super) fn is_container_side_condition(fact: &ResolvedFact) -> bool {
         matches!(
             expr,
             ResolvedExpr::Call(_, ResolvedCall::Primitive(p), _)
-                if p.output().is_eq_container_sort()
+                if p.output().is_container_sort()
         )
     }
     match fact {
-        ResolvedFact::Eq(_, lhs, rhs) => is_container_primitive(lhs) || is_container_primitive(rhs),
+        ResolvedFact::Eq(_, lhs, rhs) => {
+            is_container_primitive(lhs)
+                || is_container_primitive(rhs)
+                || matches!((lhs, rhs), (ResolvedExpr::Var(_, left), ResolvedExpr::Var(_, right))
+                    if left.sort.is_container_sort() && right.sort.is_container_sort()
+                        && left.sort.name() == right.sort.name())
+        }
         ResolvedFact::Fact(expr) => is_container_primitive(expr),
     }
 }
@@ -1037,9 +1044,15 @@ impl ProofStore {
         subst: &mut HashMap<String, TermId>,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
-        let ResolvedFact::Eq(_, lhs, rhs) = fact else {
-            // `is_container_side_condition` only flags `Eq` facts.
+        if let ResolvedFact::Fact(expr) = fact {
+            // A predicate matches whenever evaluation succeeds, regardless of
+            // the resulting value. In particular, never accept a partial
+            // container primitive merely because it carries an Eval marker.
+            self.eval_expr_with_subst(rule_name, expr, subst)?;
             return Ok(());
+        }
+        let ResolvedFact::Eq(_, lhs, rhs) = fact else {
+            unreachable!();
         };
         let lhs_val = self.eval_side(lhs, subst, rule_name)?;
         let rhs_val = self.eval_side(rhs, subst, rule_name)?;
@@ -1344,6 +1357,106 @@ impl ProofStore {
 mod tests {
     use super::*;
     use crate::{EGraph, ast::Literal};
+
+    #[test]
+    fn container_fact_side_conditions_reject_failed_evaluation() {
+        let mut graph = EGraph::new_with_proofs();
+        let mut store = graph
+            .parse_and_run_program(
+                None,
+                "(datatype E (N)) (rule () ((N))) (run 1) (prove-exists N)",
+            )
+            .unwrap()
+            .into_iter()
+            .find_map(|output| match output {
+                crate::CommandOutput::ProveExists { proof_store, .. } => Some(proof_store),
+                _ => None,
+            })
+            .unwrap();
+        let mut types = EGraph::default();
+        types
+            .parse_and_run_program(None, "(sort VI (Vec i64))")
+            .unwrap();
+        let command = types
+            .parse_program(None, "(check (vec-empty))")
+            .unwrap()
+            .remove(0);
+        let resolved = types.resolve_command_preserving_globals(command).unwrap();
+        let ResolvedNCommand::Check(_, facts) = &resolved[0] else {
+            panic!("expected Check");
+        };
+        assert!(is_container_side_condition(&facts[0]));
+        store
+            .check_side_condition(&facts[0], &mut HashMap::default(), "empty")
+            .unwrap();
+        types
+            .parse_and_run_program(None, "(sort VVI (Vec VI))")
+            .unwrap();
+        for (expr, succeeds) in [
+            ("(vec-of 0)", true),
+            ("(vec-get (vec-of (vec-of 0)) 0)", true),
+            ("(vec-get (vec-of (vec-of 0)) 1)", false),
+        ] {
+            let command = types
+                .parse_program(None, &format!("(check {expr})"))
+                .unwrap()
+                .remove(0);
+            let resolved = types.resolve_command_preserving_globals(command).unwrap();
+            let ResolvedNCommand::Check(_, facts) = &resolved[0] else {
+                panic!("expected Check");
+            };
+            assert!(is_container_side_condition(&facts[0]));
+            assert_eq!(
+                store
+                    .check_side_condition(&facts[0], &mut HashMap::default(), "test")
+                    .is_ok(),
+                succeeds,
+                "{expr}"
+            );
+        }
+        let command = types
+            .parse_program(None, "(check (= (vec-of 0) a) (= (vec-of 1) b) (= a b))")
+            .unwrap()
+            .remove(0);
+        let resolved = types.resolve_command_preserving_globals(command).unwrap();
+        let ResolvedNCommand::Check(_, facts) = &resolved[0] else {
+            panic!("expected Check");
+        };
+        let equality = &facts[2];
+        assert!(is_container_side_condition(equality));
+        let zero = store.term_dag.lit(Literal::Int(0));
+        let one = store.term_dag.lit(Literal::Int(1));
+        let left = store.term_dag.app("vec-of".into(), vec![zero]);
+        let right = store.term_dag.app("vec-of".into(), vec![one]);
+        let mut subst = HashMap::from_iter([("a".into(), left), ("b".into(), right)]);
+        assert!(
+            store
+                .check_side_condition(equality, &mut subst, "distinct aliases")
+                .is_err()
+        );
+        subst.insert("b".into(), left);
+        store
+            .check_side_condition(equality, &mut subst, "same alias")
+            .unwrap();
+        let mut wrong_sort = equality.clone();
+        let ResolvedFact::Eq(_, _, ResolvedExpr::Var(_, right)) = &mut wrong_sort else {
+            unreachable!();
+        };
+        right.sort = types.type_info.get_sort_by_name("VVI").unwrap().clone();
+        assert!(!is_container_side_condition(&wrong_sort));
+        types
+            .parse_and_run_program(None, "(function f (VI) VI :merge old)")
+            .unwrap();
+        let command = types
+            .parse_program(None, "(check (= (f (vec-of 0)) a))")
+            .unwrap()
+            .remove(0);
+        let resolved = types.resolve_command_preserving_globals(command).unwrap();
+        let ResolvedNCommand::Check(_, facts) = &resolved[0] else {
+            panic!("expected Check");
+        };
+        assert!(!is_container_side_condition(&facts[0]));
+    }
 
     #[test]
     fn action_scope_checker_excludes_unreached_change_tails() {

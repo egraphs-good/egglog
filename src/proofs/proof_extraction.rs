@@ -117,7 +117,14 @@ impl ProofInstrumentor<'_> {
         let proof = proof_store.get(proof_id);
         let extra_rule_removed = match proof.justification() {
             Justification::Rule { premise_proofs, .. } => match premise_proofs.as_slice() {
-                [premise_proof_id] => *premise_proof_id,
+                [premise_proof_id]
+                    if !matches!(
+                        proof_store.get(*premise_proof_id).justification(),
+                        Justification::Eval
+                    ) =>
+                {
+                    *premise_proof_id
+                }
                 _ => proof_id,
             },
             _ => panic!("expected rule justification for existence proof"),

@@ -185,7 +185,7 @@ impl PrimitiveWithId {
         }
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
+            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64).into()))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))

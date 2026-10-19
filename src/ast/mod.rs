@@ -1725,7 +1725,9 @@ where
                     GenericAtomTerm::Var(span.clone(), v.clone())
                 }
             }
-            GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
+            GenericExpr::Lit(span, lit) => {
+                GenericAtomTerm::Literal(span.clone(), Arc::new(lit.clone()))
+            }
             GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
         }
     }

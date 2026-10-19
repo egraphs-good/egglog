@@ -4283,8 +4283,14 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
-            let core::ResolvedAtomTerm::Literal(ref span, Literal::String(ref name)) = args[0]
-            else {
+            let target = match &args[0] {
+                core::ResolvedAtomTerm::Literal(span, literal) => match literal.as_ref() {
+                    Literal::String(name) => Some((span, name)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some((span, name)) = target else {
                 return Err(Error::BackendError(
                     "expected a string literal as the first argument to `unstable-fn`".to_string(),
                 ));
@@ -6635,6 +6641,67 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn flat_scalar_container_queries_are_checked_by_evaluation() {
+        for testing in [false, true] {
+            let mut graph = EGraph::new_with_proofs();
+            if testing {
+                graph = graph.with_proof_testing();
+            }
+            let outputs = graph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                (datatype Item (A) (B))
+                (sort Items (Vec Item))
+                (sort Ints (Vec i64))
+                (A) (B)
+                (check (!= (vec-of 1) (vec-of 2)))
+                (check (vec-of 0))
+                (check (= (vec-of 0) xs))
+                (check (= 1 q0) (= 2 q1)
+                       (= (vec-of q0) v0) (= (vec-of q1) v1) (!= v0 v1))
+                (check (= (A) a) (= (B) b)
+                       (= (vec-of a) v0) (= (vec-of b) v1) (!= v0 v1))
+                (fail (check (= (vec-of 1) v0) (= (vec-of 2) v1) (= v0 v1)))
+                (union (A) (B))
+                (check (= (A) (B)) (= (vec-of (A)) (vec-of (B))))
+                (check (= (A) a) (= (B) b)
+                       (= (vec-of a) v0) (= (vec-of b) v1) (= v0 v1))
+                (datatype Witness (Wrap))
+                (rule ((= (vec-of 1) v0) (= (vec-of 2) v1) (!= v0 v1)) ((Wrap)))
+                (run 1)
+                (prove-exists Wrap)
+                (datatype PlainWitness (Plain))
+                (rule ((!= 1 2)) ((Plain)))
+                (run 1)
+                (prove-exists Plain)
+            "#,
+                )
+                .unwrap();
+            assert!(
+                outputs
+                    .iter()
+                    .any(|output| matches!(output, CommandOutput::ProveExists { .. }))
+            );
+            let (proof_store, proof_id) = outputs
+                .iter()
+                .rev()
+                .find_map(|output| match output {
+                    CommandOutput::ProveExists {
+                        proof_store,
+                        proof_id,
+                    } => Some((proof_store, proof_id)),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(matches!(
+                proof_store.get(*proof_id).justification(),
+                proofs::proof_format::Justification::Fiat
+            ));
+        }
     }
 
     #[test]

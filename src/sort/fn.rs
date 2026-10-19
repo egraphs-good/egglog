@@ -332,7 +332,9 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         );
         // If first arg is a literal string and we know the name of the function and can use that to know what
         // types to expect
-        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0] {
+        if let AtomTerm::Literal(_, literal) = &arguments[0]
+            && let Literal::String(name) = literal.as_ref()
+        {
             // The arguments contains the return sort as well as the function name
             let n_partial_args = arguments.len() - 2;
             if let Some(func_type) = typeinfo.get_func_type(name) {

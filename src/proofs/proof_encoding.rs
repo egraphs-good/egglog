@@ -898,19 +898,12 @@ impl<'a> ProofInstrumentor<'a> {
                 }
             }
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
-                let is_container_prim = |e: &ResolvedExpr| {
-                    matches!(
-                        e,
-                        ResolvedExpr::Call(_, ResolvedCall::Primitive(p), _)
-                            if p.output().is_eq_container_sort()
-                    )
-                };
                 // A container side condition: a fact that builds a container with
-                // a primitive (`(= xs (vec-of e))`, `(= (set-of a) (set-of b))`).
+                // a primitive or compares already-bound container aliases.
                 // The container has no carryable proof — emit just the `Eval`
                 // marker and the query bindings; the checker re-evaluates the side
                 // condition (see `check_side_condition`).
-                if is_container_prim(left_expr) || is_container_prim(right_expr) {
+                if crate::proofs::proof_checker::is_container_side_condition(fact) {
                     // A container side condition: emit the fact as-is so the
                     // e-graph computes the container (its arguments are already
                     // bound). Its proof is the `Eval` marker, checked by
@@ -929,7 +922,11 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedFact::Fact(generic_expr) => {
                 let (_, proof) = self.instrument_fact_expr(generic_expr, res, action_lookups);
-                proof
+                if crate::proofs::proof_checker::is_container_side_condition(fact) {
+                    format!("({})", self.proof_names().eval_constructor)
+                } else {
+                    proof
+                }
             }
         }
     }

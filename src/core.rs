@@ -243,7 +243,9 @@ impl IsFunc for String {
 #[derive(Debug, Clone)]
 pub enum GenericAtomTerm<Leaf> {
     Var(Span, Leaf),
-    Literal(Span, Literal),
+    // Alias substitution and repeated operands share concrete payloads. AST
+    // projection is the explicit boundary that materializes an owned Literal.
+    Literal(Span, Arc<Literal>),
     Global(Span, Leaf),
 }
 
@@ -294,7 +296,7 @@ impl<Leaf: Clone> GenericAtomTerm<Leaf> {
     pub fn to_expr<Head>(&self) -> GenericExpr<Head, Leaf> {
         match self {
             GenericAtomTerm::Var(span, v) => GenericExpr::Var(span.clone(), v.clone()),
-            GenericAtomTerm::Literal(span, l) => GenericExpr::Lit(span.clone(), l.clone()),
+            GenericAtomTerm::Literal(span, l) => GenericExpr::Lit(span.clone(), l.as_ref().clone()),
             GenericAtomTerm::Global(span, v) => GenericExpr::Var(span.clone(), v.clone()),
         }
     }
@@ -941,25 +943,79 @@ where
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
     ) -> GenericCoreRule<Head, Head, Leaf> {
         let mut result_rule = self;
-        loop {
-            let mut to_subst = None;
-            for atom in result_rule.body.atoms.iter() {
-                if atom.head.is_eq() && atom.args[0] != atom.args[1] {
-                    match &atom.args[..] {
-                        [GenericAtomTerm::Var(_, x), y] | [y, GenericAtomTerm::Var(_, x)] => {
-                            to_subst = Some((x, y));
-                            break;
-                        }
-                        _ => (),
+        // Only variables enter this union-find. Concrete terms anchor a class;
+        // two concrete representatives retain their original equality check.
+        let mut variables = IndexMap::default();
+        for atom in &result_rule.body.atoms {
+            if atom.head.is_eq() {
+                assert_eq!(atom.args.len(), 2);
+                for term in &atom.args {
+                    if let GenericAtomTerm::Var(_, name) = term {
+                        variables
+                            .entry(name.clone())
+                            .or_insert_with(|| term.clone());
                     }
                 }
             }
-            if let Some((x, y)) = to_subst {
-                let subst = HashMap::from_iter([(x.clone(), y.clone())]);
-                result_rule.subst(&subst);
-            } else {
-                break;
+        }
+        let mut parents: Vec<_> = (0..variables.len()).collect();
+        let mut sizes = vec![1usize; variables.len()];
+        let mut representatives: Vec<_> = variables.values().cloned().collect();
+        fn find(parents: &mut [usize], mut index: usize) -> usize {
+            while parents[index] != index {
+                parents[index] = parents[parents[index]];
+                index = parents[index];
             }
+            index
+        }
+        for atom in &result_rule.body.atoms {
+            if !atom.head.is_eq() {
+                continue;
+            }
+            let mut roots = [None, None];
+            for (position, term) in atom.args.iter().enumerate() {
+                if let GenericAtomTerm::Var(_, name) = term {
+                    roots[position] =
+                        Some(find(&mut parents, variables.get_index_of(name).unwrap()));
+                }
+            }
+            let lhs = roots[0]
+                .map(|root| representatives[root].clone())
+                .unwrap_or_else(|| atom.args[0].clone());
+            let rhs = roots[1]
+                .map(|root| representatives[root].clone())
+                .unwrap_or_else(|| atom.args[1].clone());
+            if lhs == rhs {
+                continue;
+            }
+            match (&lhs, &rhs) {
+                (GenericAtomTerm::Var(..), GenericAtomTerm::Var(..)) => {
+                    let (left, right) = (roots[0].unwrap(), roots[1].unwrap());
+                    let (parent, child) = if sizes[left] >= sizes[right] {
+                        (left, right)
+                    } else {
+                        (right, left)
+                    };
+                    parents[child] = parent;
+                    sizes[parent] += sizes[child];
+                    // Match ordered substitution's choice of the right variable,
+                    // independently of the balanced tree's structural root.
+                    representatives[parent] = rhs;
+                }
+                (GenericAtomTerm::Var(..), _) => representatives[roots[0].unwrap()] = rhs,
+                (_, GenericAtomTerm::Var(..)) => representatives[roots[1].unwrap()] = lhs,
+                _ => (),
+            }
+        }
+        let mut subst = HashMap::default();
+        for (index, (name, _)) in variables.iter().enumerate() {
+            let representative = &representatives[find(&mut parents, index)];
+            if !matches!(representative, GenericAtomTerm::Var(_, other) if other == name) {
+                subst.insert(name.clone(), representative.clone());
+            }
+        }
+        if !subst.is_empty() {
+            result_rule.subst(&subst);
         }
 
         let atoms = result_rule
@@ -987,7 +1043,7 @@ where
                                     args: vec![
                                         atom.args[0].clone(),
                                         atom.args[1].clone(),
-                                        GenericAtomTerm::Literal(atom.span.clone(), Literal::Unit),
+                                        GenericAtomTerm::Literal(atom.span.clone(), Literal::Unit.into()),
                                     ],
                                 })
                             }
@@ -1186,6 +1242,295 @@ mod tests {
 
     fn value_eq_string(_at1: &GenericAtomTerm<String>, _at2: &GenericAtomTerm<String>) -> String {
         "value-eq".to_string()
+    }
+
+    #[test]
+    fn canonicalize_shares_literal_payloads_without_changing_content_or_spans() {
+        use std::collections::hash_map::DefaultHasher;
+
+        let span = span!();
+        let payload = Arc::new(Literal::String("shared payload".repeat(4096)));
+        let literal = AtomTerm::Literal(span.clone(), payload.clone());
+        let result = GenericCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    GenericAtom {
+                        span: span!(),
+                        head: HeadOrEq::Eq,
+                        args: vec![make_var("x"), literal.clone()],
+                    },
+                    GenericAtom {
+                        span: span!(),
+                        head: HeadOrEq::Head("observe".into()),
+                        args: vec![make_var("x"); 1024],
+                    },
+                ],
+            },
+            head: GenericCoreActions(vec![]),
+        }
+        .canonicalize(value_eq_string);
+        assert_eq!(result.body.atoms.len(), 1);
+        for term in &result.body.atoms[0].args {
+            let AtomTerm::Literal(actual_span, actual) = term else {
+                panic!("substituted literal")
+            };
+            assert_eq!(actual_span, &span);
+            assert!(Arc::ptr_eq(actual, &payload));
+        }
+        let [GenericCoreAction::LetAtomTerm(_, name, AtomTerm::Literal(_, actual))] =
+            result.head.0.as_slice()
+        else {
+            panic!("one head alias")
+        };
+        assert_eq!(name, "x");
+        assert!(Arc::ptr_eq(actual, &payload));
+        let equal = AtomTerm::Literal(span!(), Arc::new(payload.as_ref().clone()));
+        assert_eq!(literal, equal);
+        let hash = |term: &AtomTerm| {
+            let mut hasher = DefaultHasher::new();
+            term.hash(&mut hasher);
+            hasher.finish()
+        };
+        assert_eq!(hash(&literal), hash(&equal));
+        for bits in [(-0.0_f64).to_bits(), 0x7ff8_0000_0000_0123] {
+            let value = Arc::new(Literal::Float(f64::from_bits(bits).into()));
+            let term = AtomTerm::Literal(span.clone(), value.clone());
+            let AtomTerm::Literal(actual_span, actual) = term.clone() else {
+                unreachable!()
+            };
+            assert_eq!(actual_span, span);
+            assert!(Arc::ptr_eq(&actual, &value));
+            let Expr::Lit(actual_span, Literal::Float(actual)) = term.to_expr::<String>() else {
+                unreachable!()
+            };
+            assert_eq!(actual_span, span);
+            assert_eq!(actual.0.to_bits(), bits);
+        }
+    }
+
+    #[test]
+    fn canonicalize_batches_variable_cycles_and_head_aliases() {
+        let mut atoms: Vec<_> = [["x", "y"], ["y", "z"], ["z", "x"], ["w", "x"]]
+            .into_iter()
+            .map(|[lhs, rhs]| GenericAtom {
+                span: span!(),
+                head: HeadOrEq::Eq,
+                args: vec![make_var(lhs), make_var(rhs)],
+            })
+            .collect();
+        atoms.push(GenericAtom {
+            span: span!(),
+            head: HeadOrEq::Head("observe".to_owned()),
+            args: ["x", "y", "z", "w"].into_iter().map(make_var).collect(),
+        });
+        let result = GenericCoreRule {
+            span: span!(),
+            body: Query { atoms },
+            head: GenericCoreActions(vec![GenericCoreAction::Union(
+                span!(),
+                make_var("x"),
+                make_var("w"),
+            )]),
+        }
+        .canonicalize(value_eq_string);
+        assert_eq!(result.body.atoms.len(), 1);
+        assert_eq!(result.body.atoms[0].args, vec![make_var("z"); 4]);
+        assert_eq!(result.head.0.len(), 4);
+        for name in ["x", "y", "w"] {
+            assert!(result.head.0.iter().any(
+                |action| matches!(action, GenericCoreAction::LetAtomTerm(_, bound, value)
+                    if bound == name && *value == make_var("z"))
+            ));
+        }
+    }
+
+    #[test]
+    fn canonicalize_keeps_distinct_concrete_constraints_and_spans() {
+        let spans = [
+            span!(),
+            span!(),
+            span!(),
+            span!(),
+            span!(),
+            span!(),
+            span!(),
+        ];
+        let one = GenericAtomTerm::Literal(span!(), Literal::Int(1).into());
+        let two = GenericAtomTerm::Literal(span!(), Literal::Int(2).into());
+        let global = GenericAtomTerm::Global(span!(), "global".to_owned());
+        let other = GenericAtomTerm::Global(span!(), "other".to_owned());
+        let equations = [
+            [make_var("x"), one.clone()],
+            [make_var("y"), two.clone()],
+            [make_var("x"), make_var("y")],
+            [make_var("z"), global.clone()],
+            [make_var("z"), other.clone()],
+            [one.clone(), two.clone()],
+            [global.clone(), one.clone()],
+        ];
+        let mut atoms: Vec<_> = equations
+            .into_iter()
+            .zip(&spans)
+            .map(|(args, span)| GenericAtom {
+                span: span.clone(),
+                head: HeadOrEq::Eq,
+                args: args.to_vec(),
+            })
+            .collect();
+        atoms.push(GenericAtom {
+            span: span!(),
+            head: HeadOrEq::Head("observe".to_owned()),
+            args: vec![make_var("x"), make_var("y"), make_var("z")],
+        });
+        let result = GenericCoreRule {
+            span: span!(),
+            body: Query { atoms },
+            head: GenericCoreActions(vec![GenericCoreAction::Union(
+                span!(),
+                make_var("x"),
+                make_var("z"),
+            )]),
+        }
+        .canonicalize(value_eq_string);
+        let expected = [
+            (2, one.clone(), two.clone()),
+            (4, global.clone(), other),
+            (5, one.clone(), two.clone()),
+            (6, global.clone(), one.clone()),
+        ];
+        assert_eq!(result.body.atoms.len(), expected.len() + 1);
+        for (atom, (index, lhs, rhs)) in result.body.atoms.iter().zip(expected) {
+            assert_eq!(atom.head, "value-eq");
+            assert_eq!(atom.span, spans[index]);
+            assert_eq!(
+                atom.args,
+                vec![
+                    lhs,
+                    rhs,
+                    GenericAtomTerm::Literal(spans[index].clone(), Literal::Unit.into())
+                ]
+            );
+        }
+        assert_eq!(
+            result.body.atoms.last().unwrap().args,
+            vec![one.clone(), two.clone(), global.clone()]
+        );
+        for (name, expected) in [("x", one), ("y", two), ("z", global)] {
+            assert!(result.head.0.iter().any(
+                |action| matches!(action, GenericCoreAction::LetAtomTerm(_, bound, value)
+                    if bound == name && *value == expected)
+            ));
+        }
+    }
+
+    #[test]
+    fn canonicalize_matches_sequential_substitution_semantics() {
+        fn head_unions(head: &GenericCoreActions<String, String>) -> Vec<[AtomTerm; 2]> {
+            let mut bindings = HashMap::default();
+            let mut result = Vec::new();
+            for action in &head.0 {
+                match action {
+                    GenericCoreAction::LetAtomTerm(_, name, term) => {
+                        let value = match term {
+                            GenericAtomTerm::Var(_, name) => bindings.get(name).unwrap_or(term),
+                            _ => term,
+                        }
+                        .clone();
+                        bindings.insert(name.clone(), value);
+                    }
+                    GenericCoreAction::Union(_, lhs, rhs) => {
+                        result.push([lhs, rhs].map(|term| {
+                            match term {
+                                GenericAtomTerm::Var(_, name) => bindings.get(name).unwrap_or(term),
+                                _ => term,
+                            }
+                            .clone()
+                        }));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            result
+        }
+        let one = GenericAtomTerm::Literal(span!(), Literal::Int(1).into());
+        let two = GenericAtomTerm::Literal(span!(), Literal::Int(2).into());
+        let global = GenericAtomTerm::Global(span!(), "global".to_owned());
+        let other = GenericAtomTerm::Global(span!(), "other".to_owned());
+        for equations in [
+            vec![
+                [make_var("x"), make_var("y")],
+                [make_var("y"), make_var("z")],
+                [make_var("z"), make_var("x")],
+            ],
+            vec![
+                [make_var("x"), one.clone()],
+                [make_var("y"), two.clone()],
+                [make_var("x"), make_var("y")],
+            ],
+            vec![
+                [make_var("x"), make_var("y")],
+                [make_var("y"), one.clone()],
+                [make_var("x"), two.clone()],
+            ],
+            vec![
+                [make_var("x"), global.clone()],
+                [make_var("y"), other.clone()],
+                [make_var("x"), make_var("y")],
+            ],
+            vec![
+                [make_var("x"), make_var("y")],
+                [make_var("y"), global.clone()],
+                [make_var("z"), make_var("x")],
+                [make_var("z"), other.clone()],
+            ],
+        ] {
+            let mut atoms: Vec<_> = equations
+                .into_iter()
+                .map(|args| GenericAtom {
+                    span: span!(),
+                    head: HeadOrEq::Eq,
+                    args: args.to_vec(),
+                })
+                .collect();
+            atoms.push(GenericAtom {
+                span: span!(),
+                head: HeadOrEq::Head("observe".to_owned()),
+                args: vec![make_var("x"), make_var("y"), make_var("z")],
+            });
+            let rule = GenericCoreRule {
+                span: span!(),
+                body: Query { atoms },
+                head: GenericCoreActions(vec![GenericCoreAction::Union(
+                    span!(),
+                    make_var("x"),
+                    make_var("y"),
+                )]),
+            };
+            let mut sequential = rule.clone();
+            // Reference the former one-equality-at-a-time elimination strategy.
+            loop {
+                let next = sequential.body.atoms.iter().find_map(|atom| {
+                    if atom.head.is_eq() && atom.args[0] != atom.args[1] {
+                        match &atom.args[..] {
+                            [GenericAtomTerm::Var(_, name), value]
+                            | [value, GenericAtomTerm::Var(_, name)] => {
+                                Some((name.clone(), value.clone()))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                });
+                let Some((name, value)) = next else { break };
+                sequential.subst(&HashMap::from_iter([(name, value)]));
+            }
+            let expected = sequential.canonicalize(value_eq_string);
+            let actual = rule.canonicalize(value_eq_string);
+            assert_eq!(actual.body.atoms, expected.body.atoms);
+            assert_eq!(head_unions(&actual.head), head_unions(&expected.head));
+        }
     }
 
     #[test]
