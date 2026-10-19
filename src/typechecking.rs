@@ -304,29 +304,25 @@ impl EGraph {
         }
     }
 
-    /// Bind a text-compiler alias without registering another native instance.
+    /// Bind a compiler alias without registering another native instance.
     /// The target must be a registered non-equality sort, never another alias.
+    /// Encoded modes bind each environment's own target sort: generated runtime
+    /// declarations can retain the authored spelling, but not its sort object.
     pub fn bind_source_sort_alias(
         &mut self,
         alias: &str,
         target: &str,
         span: Span,
     ) -> Result<(), String> {
-        let sort = self
-            .type_info
-            .sorts
-            .get(target)
-            .filter(|sort| !sort.is_eq_sort())
-            .cloned()
-            .ok_or_else(|| {
-                format!("source sort alias requires a registered non-equality sort: {target}")
-            })?;
-        if self.type_info.get_sort_by_name(alias).is_some() {
-            return Err(TypeError::SortAlreadyBound(alias.into(), span).to_string());
-        }
-        if self.type_info.func_types.contains_key(alias) {
-            return Err(TypeError::FunctionAlreadyBound(alias.into(), span).to_string());
-        }
+        let authoring_sort = self
+            .authoring_type_info()
+            .source_sort_alias_target(alias, target, &span)?;
+        let runtime_sort = if self.proof_state.original_typechecking.is_some() {
+            self.type_info
+                .source_sort_alias_target(alias, target, &span)?
+        } else {
+            authoring_sort.clone()
+        };
         self.names
             .check_shadowing(&ResolvedNCommand::Sort {
                 span,
@@ -341,7 +337,13 @@ impl EGraph {
             .map_err(|error| error.to_string())?;
         self.type_info
             .source_sort_aliases
-            .insert(alias.into(), sort);
+            .insert(alias.into(), runtime_sort);
+        if let Some(original) = self.proof_state.original_typechecking.as_deref_mut() {
+            original
+                .type_info
+                .source_sort_aliases
+                .insert(alias.into(), authoring_sort);
+        }
         Ok(())
     }
 
@@ -1357,6 +1359,31 @@ impl TypeInfo {
         })
     }
 
+    // Validate both encoded environments before reserving the shared name or
+    // inserting either alias; target aliases and partial bindings are invalid.
+    fn source_sort_alias_target(
+        &self,
+        alias: &str,
+        target: &str,
+        span: &Span,
+    ) -> Result<ArcSort, String> {
+        let sort = self
+            .sorts
+            .get(target)
+            .filter(|sort| !sort.is_eq_sort())
+            .cloned()
+            .ok_or_else(|| {
+                format!("source sort alias requires a registered non-equality sort: {target}")
+            })?;
+        if self.get_sort_by_name(alias).is_some() {
+            return Err(TypeError::SortAlreadyBound(alias.into(), span.clone()).to_string());
+        }
+        if self.func_types.contains_key(alias) {
+            return Err(TypeError::FunctionAlreadyBound(alias.into(), span.clone()).to_string());
+        }
+        Ok(sort)
+    }
+
     pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {
         self.sorts
             .get(sym)
@@ -1528,6 +1555,144 @@ pub enum TypeError {
 #[cfg(test)]
 mod test {
     use crate::{EGraph, Error, typechecking::TypeError};
+
+    #[test]
+    fn source_sort_aliases_keep_authoring_types_and_native_runtime_distinct() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::default().with_term_encoding_enabled(),
+                2 => EGraph::default().with_proofs_enabled(),
+                _ => EGraph::default().with_proofs_enabled().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(None, "(sort V (Vec i64)) (ruleset taken)")
+                .unwrap();
+            assert!(
+                graph
+                    .bind_source_sort_alias("taken", "V", crate::span!())
+                    .is_err()
+            );
+            graph
+                .bind_source_sort_alias("W", "V", crate::span!())
+                .unwrap();
+            assert_eq!(
+                graph
+                    .authoring_type_info()
+                    .get_sort_by_name("W")
+                    .unwrap()
+                    .name(),
+                "V"
+            );
+            let runtime = graph.type_info();
+            assert!(std::sync::Arc::ptr_eq(
+                runtime.get_sort_by_name("W").unwrap(),
+                runtime.get_sort_by_name("V").unwrap()
+            ));
+            assert!(std::sync::Arc::ptr_eq(
+                graph.authoring_type_info().get_sort_by_name("W").unwrap(),
+                graph.authoring_type_info().get_sort_by_name("V").unwrap()
+            ));
+            assert_eq!(
+                graph
+                    .type_info()
+                    .get_arcsorts_by(|sort| matches!(sort.name(), "V" | "W"))
+                    .len(),
+                1
+            );
+            assert!(
+                graph
+                    .bind_source_sort_alias("Again", "W", crate::span!())
+                    .is_err()
+            );
+            graph.parse_and_run_program(None, "(push 1)").unwrap();
+            graph
+                .bind_source_sort_alias("Scoped", "V", crate::span!())
+                .unwrap();
+            graph.parse_and_run_program(None, "(pop 1)").unwrap();
+            assert!(
+                graph
+                    .authoring_type_info()
+                    .get_sort_by_name("Scoped")
+                    .is_none()
+            );
+            graph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                (datatype X (XV V) (XW W) (Value))
+                (function f (V) X :merge old)
+                (XW (vec-empty))
+                (XW (vec-of 1))
+                (rule ((XW xs)) ((XV xs) (set (f xs) (Value))))
+                (run 1)
+                (check (XV (vec-empty)) (XV (vec-of 1)) (= (f (vec-of 1)) (Value)))
+            "#,
+                )
+                .unwrap();
+            if mode >= 2 {
+                graph
+                    .parse_and_run_program(None, "(prove (XV (vec-of 1)))")
+                    .unwrap();
+            }
+            assert!(graph.parse_and_run_program(None, "(ruleset W)").is_err());
+            if mode != 0 {
+                let staged = graph
+                    .parse_program(None, "(sort Staged (Vec i64))")
+                    .unwrap()
+                    .pop()
+                    .unwrap();
+                graph.resolve_command_preserving_globals(staged).unwrap();
+                assert!(
+                    graph
+                        .bind_source_sort_alias("NotInstalled", "Staged", crate::span!())
+                        .is_err()
+                );
+                assert!(
+                    graph
+                        .authoring_type_info()
+                        .get_sort_by_name("NotInstalled")
+                        .is_none()
+                );
+                assert!(graph.type_info().get_sort_by_name("NotInstalled").is_none());
+                graph
+                    .parse_and_run_program(None, "(ruleset NotInstalled)")
+                    .unwrap();
+            }
+
+            // Merely using the native sort syntax still creates distinct sorts.
+            // Only the explicit compiler-alias API changes authoring equality.
+            let mut native = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::default().with_term_encoding_enabled(),
+                2 => EGraph::default().with_proofs_enabled(),
+                _ => EGraph::default().with_proofs_enabled().with_proof_testing(),
+            };
+            native
+                .parse_and_run_program(None, "(sort V (Vec i64)) (sort W (Vec i64))")
+                .unwrap();
+            assert_eq!(
+                native
+                    .authoring_type_info()
+                    .get_sort_by_name("W")
+                    .unwrap()
+                    .name(),
+                "W"
+            );
+            assert_eq!(
+                native.type_info().get_sort_by_name("W").unwrap().name(),
+                "W"
+            );
+            assert!(
+                native
+                    .parse_and_run_program(
+                        None,
+                        "(datatype X (XV V) (XW W)) (XW (vec-of 1)) (rule ((XW xs)) ((XV xs)))"
+                    )
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_arity_mismatch() {
