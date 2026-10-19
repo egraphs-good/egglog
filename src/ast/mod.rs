@@ -910,8 +910,8 @@ where
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
     Action(GenericAction<Head, Leaf>),
-    /// One action with lexical temporaries: local Lets followed by exactly one
-    /// non-Let terminal action, compiled and executed as a single action block.
+    /// A nonempty ordered action block with lexical temporaries, compiled and
+    /// executed together.
     ActionScope(Span, GenericActions<Head, Leaf>),
     /// `extract` a datatype from the egraph, choosing
     /// the smallest representative.

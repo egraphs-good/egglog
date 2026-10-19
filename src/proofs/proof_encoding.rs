@@ -1779,8 +1779,33 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::UserDefined(..) => {
                 panic!("User defined commands unsupported in term encoding");
             }
-            ResolvedNCommand::ActionScope(..) => {
-                unreachable!("action-scope rejected before term encoding");
+            ResolvedNCommand::ActionScope(span, actions) => {
+                let mut instrumented = Vec::new();
+                for action in &actions.0 {
+                    if let ResolvedAction::Panic(span, message) = action {
+                        instrumented.push(Action::Panic(span.clone(), message.clone()));
+                        continue;
+                    }
+                    let statements = self.instrument_action(action, &Justification::Fiat);
+                    for command in self.parse_program(&statements.join("\n")) {
+                        let Command::Action(action) = command else {
+                            unreachable!("action instrumentation emits only actions")
+                        };
+                        instrumented.push(action);
+                    }
+                }
+                // Literal term actions need no proof instrumentation, but the
+                // original block still owns one execution/observation boundary.
+                if instrumented.is_empty() {
+                    instrumented.push(Action::Expr(
+                        span.clone(),
+                        Expr::Lit(span.clone(), Literal::Unit),
+                    ));
+                }
+                res.push(Command::ActionScope(
+                    span.clone(),
+                    Actions::new(instrumented),
+                ));
             }
         }
     }

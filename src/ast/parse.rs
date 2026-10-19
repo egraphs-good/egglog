@@ -866,27 +866,20 @@ impl Parser {
                 [body] => {
                     let members = body.expect_list("scoped actions")?;
                     let mut actions = vec![];
-                    for (position, member) in members.iter().enumerate() {
-                        if position + 1 == members.len()
-                            && !matches!(member, Sexp::List(items, _) if matches!(items.first(), Some(Sexp::Atom(..))))
+                    for member in members {
+                        if !matches!(member, Sexp::List(items, _) if matches!(items.first(), Some(Sexp::Atom(..))))
                         {
                             actions.push(Action::Expr(member.span(), self.parse_expr(member)?));
                         } else {
                             actions.extend(self.parse_action(member)?);
                         }
                     }
-                    if !matches!(actions.split_last(), Some((terminal, prefix))
-                        if !matches!(terminal, Action::Let(..))
-                            && prefix.iter().all(|action| matches!(action, Action::Let(..))))
-                    {
-                        return error!(
-                            span,
-                            "action-scope requires local lets followed by one non-let action"
-                        );
+                    if actions.is_empty() {
+                        return error!(span, "action-scope requires a nonempty action block");
                     }
                     vec![Command::ActionScope(span, GenericActions(actions))]
                 }
-                _ => return error!(span, "usage: (action-scope (<let>* <action>))"),
+                _ => return error!(span, "usage: (action-scope (<action>+))"),
             },
             "fail" => match tail {
                 [subcommand] => {

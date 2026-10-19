@@ -482,8 +482,6 @@ pub enum ProofEncodingUnsupportedReason {
     UserDefinedCommand,
     #[error("input commands are not supported.")]
     InputCommand,
-    #[error("action-scope commands require normal execution mode.")]
-    ActionScopeCommand,
     #[error("missing merge function. All functions need to specify a :merge function.")]
     NoMergeOnNonGlobalFunction,
     #[error(
@@ -561,13 +559,6 @@ pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    let mut inner = command;
-    while let GenericCommand::Fail(_, command) = inner {
-        inner = command;
-    }
-    if matches!(inner, GenericCommand::ActionScope(..)) {
-        return Err(ProofEncodingUnsupportedReason::ActionScopeCommand);
-    }
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
     if let crate::ast::GenericCommand::Rule { rule } = command

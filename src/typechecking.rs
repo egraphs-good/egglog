@@ -632,10 +632,7 @@ impl EGraph {
                 }
             }
             NCommand::ActionScope(span, actions) => {
-                if !matches!(actions.0.split_last(), Some((terminal, prefix))
-                    if !matches!(terminal, Action::Let(..))
-                        && prefix.iter().all(|action| matches!(action, Action::Let(..))))
-                {
+                if actions.0.is_empty() {
                     return Err(TypeError::InvalidActionScope(span.clone()));
                 }
                 ResolvedNCommand::ActionScope(
@@ -1508,7 +1505,7 @@ pub enum TypeError {
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(String, Span),
-    #[error("{0}\naction-scope requires local lets followed by one non-let action")]
+    #[error("{0}\naction-scope requires a nonempty action block")]
     InvalidActionScope(Span),
     #[error("{1}\nThe output type of constructor function {0} must be sort")]
     ConstructorOutputNotSort(String, Span),
