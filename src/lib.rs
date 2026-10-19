@@ -183,7 +183,7 @@ pub struct ScopedActionBuilder<'a> {
     translator: BackendRule<'a>,
     symbol_gen: &'a mut SymbolGen,
     bindings: IndexMap<String, (Span, ArcSort)>,
-    captured: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    captured: Arc<std::sync::Mutex<Vec<(String, Value, ColumnTy)>>>,
 }
 
 impl ScopedActionBuilder<'_> {
@@ -271,11 +271,21 @@ impl ScopedActionBuilder<'_> {
     /// Retain an equality local once this position has completed. Captures
     /// preceding a failing later action are returned by `eval_scoped_actions`.
     pub fn capture_eq_class(&mut self, name: &str) -> Result<(), Error> {
-        let (span, sort) = self
-            .bindings
+        self.bindings
             .get(name)
             .filter(|(_, sort)| sort.is_eq_sort())
             .ok_or_else(|| Error::BackendError(format!("unbound equality local {name}")))?;
+        self.capture_local(name).map(|_| ())
+    }
+
+    /// Capture a bound local and return its native sort. Equality values are
+    /// canonicalized after recovery; base/container handles retain their type.
+    pub fn capture_local(&mut self, name: &str) -> Result<ArcSort, Error> {
+        let (span, sort) = self
+            .bindings
+            .get(name)
+            .ok_or_else(|| Error::BackendError(format!("unbound local {name}")))?;
+        let column = sort.column_ty(self.translator.rb.egraph());
         let argument = self.translator.entry(&ResolvedAtomTerm::Var(
             span.clone(),
             ResolvedVar {
@@ -291,13 +301,16 @@ impl ScopedActionBuilder<'_> {
                 let [value] = args else {
                     unreachable!("capture has one argument")
                 };
-                captured.lock().unwrap().push((name.clone(), *value));
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((name.clone(), *value, column));
                 Some(*value)
             })),
             &[argument],
-            ColumnTy::Id,
+            column,
         );
-        Ok(())
+        Ok(sort.clone())
     }
 }
 
@@ -1848,9 +1861,15 @@ impl EGraph {
             result.map_err(|error| Error::from_backend(error.as_ref()))
         })();
         let mut captured = std::mem::take(&mut *captured.lock().unwrap());
-        for (_, value) in &mut captured {
-            *value = self.backend.get_canon_repr(*value, ColumnTy::Id);
+        for (_, value, column) in &mut captured {
+            if matches!(column, ColumnTy::Id) {
+                *value = self.backend.get_canon_repr(*value, ColumnTy::Id);
+            }
         }
+        let captured = captured
+            .into_iter()
+            .map(|(name, value, _)| (name, value))
+            .collect();
         if execute && compiled {
             observer(ExecutionEvent::ActionsFinished {
                 origin: ExecutionOrigin::Requested,
@@ -6101,6 +6120,72 @@ mod tests {
         assert!(result.is_err());
         assert!(captured.is_empty());
         assert_eq!(graph.materialized_eq_classes(), prefix);
+    }
+
+    #[test]
+    fn scoped_typed_captures_preserve_base_values_and_equality_guards() {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(None, "(datatype A (N i64))")
+            .unwrap();
+        let functions = graph.get_function_names();
+        let compile = |builder: &mut ScopedActionBuilder<'_>| {
+            builder.fresh_eq_class("a".into(), "A", span!())?;
+            builder.fresh_eq_class("b".into(), "A", span!())?;
+            builder.action(Action::Union(
+                span!(),
+                Expr::Var(span!(), "a".into()),
+                Expr::Var(span!(), "b".into()),
+            ))?;
+            builder.capture_eq_class("b")?;
+            for (name, literal, sort) in [
+                ("integer", Literal::Int(1), "i64"),
+                ("text", Literal::String("typed capture".into()), "String"),
+            ] {
+                builder.action(Action::Let(
+                    span!(),
+                    name.into(),
+                    Expr::Lit(span!(), literal),
+                ))?;
+                assert_eq!(builder.capture_local(name)?.name(), sort);
+            }
+            Ok(())
+        };
+        let (result, captured) = graph.eval_scoped_actions(&[], false, compile);
+        result.unwrap();
+        assert!(captured.is_empty());
+        assert!(graph.materialized_eq_classes().is_empty());
+        for _ in 0..3 {
+            let (result, captured) = graph.eval_scoped_actions(&[], true, compile);
+            result.unwrap();
+            let [(name, equality), (_, integer), (_, text)] = captured.as_slice() else {
+                panic!("three typed captures")
+            };
+            assert_eq!(name, "b");
+            assert!(
+                graph
+                    .materialized_eq_classes()
+                    .iter()
+                    .any(|(_, value)| value == equality)
+            );
+            assert_eq!(graph.value_to_base::<i64>(*integer), 1);
+            assert_eq!(
+                graph.value_to_base::<sort::S>(*text).as_str(),
+                "typed capture"
+            );
+        }
+        let (result, captured) = graph.eval_scoped_actions(&[], false, |builder| {
+            builder.action(Action::Let(
+                span!(),
+                "integer".into(),
+                Expr::Lit(span!(), Literal::Int(1)),
+            ))?;
+            builder.capture_eq_class("integer")
+        });
+        assert!(result.is_err());
+        assert!(captured.is_empty());
+        assert_eq!(graph.get_function_names(), functions);
+        assert_eq!(graph.num_tuples(), 0);
     }
 
     #[test]
