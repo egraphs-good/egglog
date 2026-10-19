@@ -1099,8 +1099,16 @@ where
                 unextractable,
             } => {
                 write!(f, "(function {name} {schema}")?;
-                if let Some(TableName::Public(name)) = table_name {
-                    write!(f, " :table-name {}", Literal::String(name.clone()))?;
+                match table_name {
+                    Some(TableName::Public(name)) => {
+                        write!(f, " :table-name {}", Literal::String(name.clone()))?
+                    }
+                    Some(TableName::Default(name)) => write!(
+                        f,
+                        " :internal-default-table-name {}",
+                        Literal::String(name.clone())
+                    )?,
+                    _ => (),
                 }
                 if let Some(merge) = &merge {
                     write!(f, " :merge {merge}")?;
@@ -1133,8 +1141,16 @@ where
                 term_constructor,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
-                if let Some(TableName::Public(name)) = table_name {
-                    write!(f, " :table-name {}", Literal::String(name.clone()))?;
+                match table_name {
+                    Some(TableName::Public(name)) => {
+                        write!(f, " :table-name {}", Literal::String(name.clone()))?
+                    }
+                    Some(TableName::Default(name)) => write!(
+                        f,
+                        " :internal-default-table-name {}",
+                        Literal::String(name.clone())
+                    )?,
+                    _ => (),
                 }
                 if let Some(cost) = cost {
                     write!(f, " :cost {cost}")?;
@@ -1160,8 +1176,16 @@ where
                 inputs,
             } => {
                 write!(f, "(relation {name} ({})", ListDisplay(inputs, " "))?;
-                if let Some(TableName::Public(name)) = table_name {
-                    write!(f, " :table-name {}", Literal::String(name.clone()))?;
+                match table_name {
+                    Some(TableName::Public(name)) => {
+                        write!(f, " :table-name {}", Literal::String(name.clone()))?
+                    }
+                    Some(TableName::Default(name)) => write!(
+                        f,
+                        " :internal-default-table-name {}",
+                        Literal::String(name.clone())
+                    )?,
+                    _ => (),
                 }
                 write!(f, ")")
             }
@@ -1381,6 +1405,10 @@ impl Display for FunctionSubtype {
 pub enum TableName {
     /// A logical selector for an existing table, written `:table-name "name"`.
     Public(String),
+    /// A relocated ordinary name. Explicit public aliases may shadow it, just
+    /// as they may shadow an unannotated table's physical name. Written by
+    /// adapters as `:internal-default-table-name "name"`.
+    Default(String),
     /// Compiler-owned provenance: contributes to aggregate counts under this
     /// display name, but does not publish a logical selector.
     Internal(String),

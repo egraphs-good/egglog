@@ -108,6 +108,118 @@ fn reflective_table_names_keep_physical_access_and_registration_identity() -> Re
     Ok(())
 }
 
+#[test]
+fn relocated_default_names_keep_shadow_priority_scopes_and_private_names() -> Result<(), Error> {
+    let text = r#"
+        (sort T)
+        (constructor physical (i64) T :internal-default-table-name "A")
+        (function storage () i64 :merge old :internal-default-table-name "value")
+        (relation rows (i64) :internal-default-table-name "facts")
+        (physical 1) (physical 2) (set (storage) 9) (rows 7)
+    "#;
+    let mut graph = EGraph::default();
+    let commands = graph.parse_program(None, text)?;
+    let printed = commands
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    graph.parse_and_run_program(None, &printed)?;
+    graph.read(|state| {
+        assert_eq!(state.named_table_size("A"), Some(2));
+        assert_eq!(state.named_table_size("physical"), None);
+        assert_eq!(state.table_size("physical"), Some(2));
+        assert_eq!(state.named_table_size("value"), Some(1));
+        assert_eq!(state.named_table_size("facts"), Some(1));
+    });
+    graph.push();
+    graph.parse_and_run_program(
+        None,
+        r#"(constructor shadow () T :table-name "A") (shadow)"#,
+    )?;
+    graph.read(|state| {
+        assert_eq!(state.named_table_size("A"), Some(1));
+        assert_eq!(
+            state
+                .named_table_sizes()
+                .iter()
+                .map(|(_, _, size)| size)
+                .sum::<usize>(),
+            5
+        );
+    });
+    let sibling = graph.clone();
+    graph.pop()?;
+    graph.read(|state| assert_eq!(state.named_table_size("A"), Some(2)));
+    sibling.read(|state| assert_eq!(state.named_table_size("A"), Some(1)));
+    let mut public_first = EGraph::default();
+    public_first.parse_and_run_program(None, r#"(sort T) (constructor explicit () T :table-name "A") (explicit) (constructor relocated (i64) T :internal-default-table-name "A") (relocated 1) (relocated 2)"#)?;
+    public_first.read(|state| {
+        assert_eq!(state.named_table_size("A"), Some(1));
+        assert_eq!(state.table_size("relocated"), Some(2));
+        assert_eq!(
+            state
+                .named_table_sizes()
+                .iter()
+                .map(|(_, _, size)| size)
+                .sum::<usize>(),
+            3
+        );
+    });
+
+    for declaration in [
+        r#"(constructor duplicate () T :internal-default-table-name "A")"#,
+        "(constructor A () T)",
+    ] {
+        assert!(matches!(
+            graph.parse_and_run_program(None, declaration),
+            Err(Error::TypeError(egglog::TypeError::TableNameAlreadyBound(
+                ..
+            )))
+        ));
+    }
+    let mut reverse = EGraph::default();
+    reverse.parse_and_run_program(None, "(sort T) (constructor A () T)")?;
+    assert!(matches!(
+        reverse.parse_and_run_program(
+            None,
+            r#"(constructor relocated () T :internal-default-table-name "A")"#
+        ),
+        Err(Error::TypeError(egglog::TypeError::TableNameAlreadyBound(
+            ..
+        )))
+    ));
+    for options in [
+        r#":table-name "A" :internal-default-table-name "A""#,
+        r#":internal-default-table-name "A" :table-name "A""#,
+    ] {
+        assert!(
+            EGraph::default()
+                .parse_program(None, &format!("(relation rows () {options})"))
+                .is_err()
+        );
+    }
+    // Ordinary native defaults stay soft without any new annotation.
+    reverse.parse_and_run_program(
+        None,
+        r#"(constructor explicit () T :table-name "A") (A) (explicit)"#,
+    )?;
+    reverse.read(|state| assert_eq!(state.named_table_size("A"), Some(1)));
+
+    let mut internal = graph.parse_program(None, "(constructor private () T)")?;
+    let egglog::ast::Command::Constructor { table_name, .. } = &mut internal[0] else {
+        unreachable!()
+    };
+    *table_name = Some(egglog::ast::TableName::Internal("internal-display".into()));
+    graph.run_program(internal)?;
+    graph.read(|state| {
+        assert_eq!(state.named_table_size("private"), None);
+        assert_eq!(state.named_table_size("internal-display"), None);
+        assert_eq!(state.table_size("private"), Some(0));
+    });
+    Ok(())
+}
+
 /// `constructor_enodes_for_eclass` returns exactly the rows a full scan would,
 /// filtered on the eclass column — that equivalence is the invariant the
 /// indexed path has to preserve.

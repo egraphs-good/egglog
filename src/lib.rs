@@ -1224,6 +1224,19 @@ impl EGraph {
     }
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        let default_name = match &decl.table_name {
+            Some(ast::TableName::Default(name)) => Some(name),
+            None => Some(&decl.name),
+            _ => None,
+        };
+        if let Some(name) = default_name
+            && (self.type_info.table_names.values().any(|(other, _)| {
+                matches!(other, ast::TableName::Default(other_name) if other_name == name)
+            }) || matches!(decl.table_name, Some(ast::TableName::Default(_)))
+                && self.functions.get(name).is_some_and(|function| function.func_type().table_name.is_none()))
+        {
+            return Err(TypeError::TableNameAlreadyBound(name.clone(), decl.span.clone()).into());
+        }
         if let Some(ast::TableName::Public(name)) = &decl.table_name
             && self.type_info.table_names.values().any(|(other, _)| {
                 matches!(other, ast::TableName::Public(other_name) if other_name == name)

@@ -415,8 +415,19 @@ impl Parser {
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
                             (":table-name", [name]) => {
+                                if matches!(table_name, Some(TableName::Default(_))) {
+                                    return error!(span, "conflicting table-name options");
+                                }
                                 table_name =
                                     Some(TableName::Public(name.expect_string("table name")?));
+                            }
+                            (":internal-default-table-name", [name]) => {
+                                if table_name.is_some() {
+                                    return error!(span, "conflicting table-name options");
+                                }
+                                table_name = Some(TableName::Default(
+                                    name.expect_string("default table name")?,
+                                ));
                             }
                             (":no-merge", []) => {
                                 if merge.is_some() {
@@ -488,8 +499,19 @@ impl Parser {
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
                                 (":table-name", [name]) => {
+                                    if matches!(table_name, Some(TableName::Default(_))) {
+                                        return error!(span, "conflicting table-name options");
+                                    }
                                     table_name =
                                         Some(TableName::Public(name.expect_string("table name")?));
+                                }
+                                (":internal-default-table-name", [name]) => {
+                                    if table_name.is_some() {
+                                        return error!(span, "conflicting table-name options");
+                                    }
+                                    table_name = Some(TableName::Default(
+                                        name.expect_string("default table name")?,
+                                    ));
                                 }
                                 (":unextractable", []) => unextractable = true,
                                 (":internal-hidden", []) => hidden = true,
@@ -525,8 +547,19 @@ impl Parser {
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
                             (":table-name", [name]) => {
+                                if matches!(table_name, Some(TableName::Default(_))) {
+                                    return error!(span, "conflicting table-name options");
+                                }
                                 table_name =
                                     Some(TableName::Public(name.expect_string("table name")?));
+                            }
+                            (":internal-default-table-name", [name]) => {
+                                if table_name.is_some() {
+                                    return error!(span, "conflicting table-name options");
+                                }
+                                table_name = Some(TableName::Default(
+                                    name.expect_string("default table name")?,
+                                ));
                             }
                             _ => return error!(span, "could not parse relation options"),
                         }

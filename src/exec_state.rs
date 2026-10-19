@@ -426,16 +426,26 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 
     /// Resolve a reflective selector without exposing a compiler-owned physical
-    /// name. Explicit public aliases take priority over ordinary native names;
-    /// aliases may therefore equal another namespace's physical spelling.
+    /// name. Explicit public aliases take priority over relocated defaults and
+    /// ordinary native names; they may shadow those fallback spellings.
     fn named_table_size(&self, name: &str) -> Option<usize> {
         if let Some(types) = self.type_info() {
+            let mut default_size = None;
             for (table_name, action) in types.table_names.values() {
-                if matches!(table_name, crate::ast::TableName::Public(public) if public == name)
-                    && action.is_live(self.es())
-                {
-                    return Some(action.row_count(self.es()));
+                if action.is_live(self.es()) {
+                    match table_name {
+                        crate::ast::TableName::Public(public) if public == name => {
+                            return Some(action.row_count(self.es()));
+                        }
+                        crate::ast::TableName::Default(default) if default == name => {
+                            default_size = Some(action.row_count(self.es()))
+                        }
+                        _ => (),
+                    }
                 }
+            }
+            if default_size.is_some() {
+                return default_size;
             }
             if types.table_names.contains_key(name) {
                 return None;
@@ -469,8 +479,9 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
                 if !action.is_live(self.es()) {
                     return None;
                 }
-                let (crate::ast::TableName::Public(name) | crate::ast::TableName::Internal(name)) =
-                    name;
+                let (crate::ast::TableName::Public(name)
+                | crate::ast::TableName::Default(name)
+                | crate::ast::TableName::Internal(name)) = name;
                 Some((
                     physical.as_str(),
                     name.as_str(),
