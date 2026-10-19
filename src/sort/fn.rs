@@ -125,7 +125,7 @@ impl Presort for FunctionSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,

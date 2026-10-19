@@ -242,7 +242,7 @@ impl Presort for VecSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,
@@ -268,6 +268,13 @@ impl Presort for VecSort {
 
 impl ContainerSort for VecSort {
     type Container = VecContainer;
+
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        Some(builtin::NativeFamilyInstance {
+            family: "Vec".into(),
+            parameters: vec![self.element.clone()],
+        })
+    }
 
     fn name(&self) -> &str {
         &self.name
@@ -298,9 +305,6 @@ impl ContainerSort for VecSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc: Arc<dyn Sort> = self.clone().to_arcsort();
-        eg.type_info
-            .register_builtin_sort("Vec", arc.clone(), vec![self.element.clone()])
-            .expect("invalid Vec family instance");
         let empty = eg
             .type_info
             .instantiate_builtin("egglog.core.vec.empty", &arc)
@@ -616,6 +620,40 @@ impl WritePrim for Union {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_preparation_matches_direct_and_factory_registration() {
+        let mut graph = EGraph::default();
+        let args = Some(("Vec".into(), vec![Expr::Var(Span::Panic, "i64".into())]));
+        let prepared = graph
+            .type_info()
+            .prepare_sort("Factory".into(), &args, Span::Panic)
+            .unwrap();
+        let expected = graph.type_info().prepared_sort_pattern(&prepared).unwrap();
+        assert!(graph.get_sort_by_name("Factory").is_none());
+        graph.add_arcsort(prepared.sort, Span::Panic).unwrap();
+        let element = graph.get_sort_by_name("i64").unwrap().clone();
+        crate::prelude::add_container_sort(
+            &mut graph,
+            VecSort {
+                name: "Direct".into(),
+                element,
+            },
+            Span::Panic,
+        )
+        .unwrap();
+        graph
+            .parse_and_run_program(None, "(sort Text (Vec i64))")
+            .unwrap();
+        for name in ["Factory", "Direct", "Text"] {
+            let sort = graph.get_sort_by_name(name).unwrap().clone();
+            assert_eq!(
+                graph.type_info().native_sort_pattern(&sort).unwrap(),
+                expected
+            );
+        }
+        assert!(graph.type_info().builtin_catalog().is_ok());
+    }
 
     #[test]
     fn test_vec_make_expr() {

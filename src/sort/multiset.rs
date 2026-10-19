@@ -285,7 +285,7 @@ impl Presort for MultiSetSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,
@@ -311,6 +311,13 @@ impl Presort for MultiSetSort {
 
 impl ContainerSort for MultiSetSort {
     type Container = MultiSetContainer;
+
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        Some(builtin::NativeFamilyInstance {
+            family: "MultiSet".into(),
+            parameters: vec![self.element.clone()],
+        })
+    }
 
     fn name(&self) -> &str {
         &self.name
@@ -341,9 +348,6 @@ impl ContainerSort for MultiSetSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
-        eg.type_info
-            .register_builtin_sort("MultiSet", arc.clone(), vec![self.element.clone()])
-            .expect("invalid MultiSet family instance");
         let [
             of,
             single,

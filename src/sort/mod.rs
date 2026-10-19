@@ -51,6 +51,13 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Returns the name of this sort.
     fn name(&self) -> &str;
 
+    /// Exact native family provenance, available before registration. Providers
+    /// must return their own family and resolved parameters without mutation.
+    /// Both direct and text-factory registration consume this same description.
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        None
+    }
+
     /// Returns the backend-specific column type. See [`ColumnTy`].
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
@@ -183,15 +190,30 @@ pub trait Presort {
     fn container_type() -> Option<TypeId> {
         None
     }
+    /// Pure provider preparation. Validate arguments against registered types
+    /// and construct the native sort; registration/catalog mutation happens
+    /// only when the compiler consumes its provider-owned family provenance.
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,
     ) -> Result<ArcSort, TypeError>;
 }
 
-pub type MkSort = fn(&mut TypeInfo, String, &[Expr], Span) -> Result<ArcSort, TypeError>;
+pub type MkSort = fn(&TypeInfo, String, &[Expr], Span) -> Result<ArcSort, TypeError>;
+
+/// One provider-prepared sort, before backend or primitive registration.
+/// Its exact provenance comes from the sort, not from parsing factory arguments.
+#[derive(Debug)]
+pub struct PreparedSort {
+    pub sort: ArcSort,
+    pub family: Option<builtin::NativeFamilyInstance>,
+}
+
+/// Call-local compiler choice after pure provider preparation. `None` installs
+/// the prepared instance; a name selects a compatible registered representative.
+pub type SortSelector<'a> = dyn FnMut(&TypeInfo, &PreparedSort) -> Option<String> + 'a;
 
 #[derive(Clone)]
 pub(crate) struct PresortProvider {

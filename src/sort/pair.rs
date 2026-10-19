@@ -137,7 +137,7 @@ impl Presort for PairSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,
@@ -167,6 +167,13 @@ impl Presort for PairSort {
 
 impl ContainerSort for PairSort {
     type Container = PairContainer;
+
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        Some(builtin::NativeFamilyInstance {
+            family: "Pair".into(),
+            parameters: vec![self.first.clone(), self.second.clone()],
+        })
+    }
 
     fn name(&self) -> &str {
         &self.name
@@ -200,13 +207,6 @@ impl ContainerSort for PairSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
-        eg.type_info
-            .register_builtin_sort(
-                "Pair",
-                arc.clone(),
-                vec![self.first.clone(), self.second.clone()],
-            )
-            .unwrap();
         let make = eg
             .type_info
             .instantiate_builtin("egglog.core.pair.make", &arc)

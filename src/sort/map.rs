@@ -238,7 +238,7 @@ impl Presort for MapSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,
@@ -268,6 +268,13 @@ impl Presort for MapSort {
 
 impl ContainerSort for MapSort {
     type Container = MapContainer;
+
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        Some(builtin::NativeFamilyInstance {
+            family: "Map".into(),
+            parameters: vec![self.key.clone(), self.value.clone()],
+        })
+    }
 
     fn name(&self) -> &str {
         &self.name
@@ -301,13 +308,6 @@ impl ContainerSort for MapSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
-        eg.type_info
-            .register_builtin_sort(
-                "Map",
-                arc.clone(),
-                vec![self.key.clone(), self.value.clone()],
-            )
-            .unwrap();
         let empty = eg
             .type_info
             .instantiate_builtin("egglog.core.map.empty", &arc)

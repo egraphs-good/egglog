@@ -62,6 +62,14 @@ pub struct FamilyDescription {
     pub arity: usize,
 }
 
+/// Provider-owned structural identity of one native sort. The exact parameter
+/// sorts are retained, including nominal equality-sort occurrences.
+#[derive(Clone, Debug)]
+pub struct NativeFamilyInstance {
+    pub family: String,
+    pub parameters: Vec<ArcSort>,
+}
+
 /// A partial native inventory: missing descriptions remain explicit gaps.
 pub struct BuiltinCatalog {
     pub descriptions: Vec<Arc<BuiltinDescription>>,
@@ -345,7 +353,7 @@ impl TypeConstraint for InstanceConstraint {
                         && native.value_type() == Some(*carrier)
                         && types.builtin_sorts.get(native.name()).is_some_and(
                             |(family, parameters)| {
-                                *family == name
+                                family == name
                                     && args.len() == parameters.len()
                                     && args.iter().zip(parameters).all(|(binding, native)| {
                                         matches(binding, native, types, depth + 1)
@@ -609,9 +617,22 @@ impl TypeInfo {
     /// Register structural provenance without erasing exact nominal parameters.
     pub fn register_builtin_sort(
         &mut self,
-        family: &'static str,
+        family: impl Into<String>,
         sort: ArcSort,
         parameters: Vec<ArcSort>,
+    ) -> Result<(), String> {
+        let family = family.into();
+        self.validate_builtin_sort(&family, &sort, &parameters)?;
+        self.builtin_sorts
+            .insert(sort.name().into(), (family, parameters));
+        Ok(())
+    }
+
+    pub(crate) fn validate_builtin_sort(
+        &self,
+        family: &str,
+        sort: &ArcSort,
+        parameters: &[ArcSort],
     ) -> Result<(), String> {
         let expected = self
             .builtin_families
@@ -634,8 +655,6 @@ impl TypeInfo {
                 sort.name()
             ));
         }
-        self.builtin_sorts
-            .insert(sort.name().into(), (family, parameters));
         Ok(())
     }
 
@@ -663,23 +682,54 @@ impl TypeInfo {
 
     /// Recover structural patterns from native provenance, never alias spelling.
     pub fn native_sort_pattern(&self, native: &ArcSort) -> Result<SortPattern, String> {
+        self.sort_pattern(native, None)
+    }
+
+    /// Describe a pure provider result before installation, using the same
+    /// native structural interpretation as registered sorts. Every parameter
+    /// still resolves against this registered environment.
+    pub fn prepared_sort_pattern(
+        &self,
+        prepared: &sort::PreparedSort,
+    ) -> Result<SortPattern, String> {
+        self.sort_pattern(&prepared.sort, Some(prepared))
+    }
+
+    fn sort_pattern(
+        &self,
+        native: &ArcSort,
+        prepared: Option<&sort::PreparedSort>,
+    ) -> Result<SortPattern, String> {
         fn visit(
             types: &TypeInfo,
             native: &ArcSort,
             active: &mut HashSet<String>,
+            prepared: Option<&sort::PreparedSort>,
         ) -> Result<SortPattern, String> {
             if active.len() >= 256 || !active.insert(native.name().into()) {
                 return Err("cyclic or too-deep native sort provenance".into());
             }
-            let registered = types
-                .get_sort_by_name(native.name())
-                .ok_or("unregistered native sort")?;
-            if registered.is_eq_sort() != native.is_eq_sort()
-                || registered.is_container_sort() != native.is_container_sort()
-                || registered.value_type() != native.value_type()
-            {
-                return Err("native sort disagrees with its registered representation".into());
+            if prepared.is_none() {
+                let registered = types
+                    .get_sort_by_name(native.name())
+                    .ok_or("unregistered native sort")?;
+                if registered.is_eq_sort() != native.is_eq_sort()
+                    || registered.is_container_sort() != native.is_container_sort()
+                    || registered.value_type() != native.value_type()
+                {
+                    return Err("native sort disagrees with its registered representation".into());
+                }
             }
+            let instance = match prepared {
+                Some(prepared) => prepared
+                    .family
+                    .as_ref()
+                    .map(|family| (family.family.as_str(), family.parameters.as_slice())),
+                None => types
+                    .builtin_sorts
+                    .get(native.name())
+                    .map(|(family, parameters)| (family.as_str(), parameters.as_slice())),
+            };
             let pattern = if native.is_eq_sort() {
                 SortPattern::Eq(native.name().into())
             } else if let Ok(function) = native.clone().as_arc_any().downcast::<FunctionSort>() {
@@ -687,16 +737,16 @@ impl TypeInfo {
                     inputs: function
                         .inputs()
                         .iter()
-                        .map(|sort| visit(types, sort, active))
+                        .map(|sort| visit(types, sort, active, None))
                         .collect::<Result<_, _>>()?,
-                    output: Box::new(visit(types, &function.output(), active)?),
+                    output: Box::new(visit(types, &function.output(), active, None)?),
                 }
-            } else if let Some((family, parameters)) = types.builtin_sorts.get(native.name()) {
+            } else if let Some((family, parameters)) = instance {
                 SortPattern::Family {
-                    name: (*family).into(),
+                    name: family.into(),
                     args: parameters
                         .iter()
-                        .map(|sort| visit(types, sort, active))
+                        .map(|sort| visit(types, sort, active, None))
                         .collect::<Result<_, _>>()?,
                 }
             } else if !native.is_container_sort() && native.value_type().is_some() {
@@ -713,7 +763,7 @@ impl TypeInfo {
             active.remove(native.name());
             Ok(pattern)
         }
-        visit(self, native, &mut HashSet::default())
+        visit(self, native, &mut HashSet::default(), prepared)
     }
 
     /// Match complete native occurrences without invoking implementation code or
@@ -739,7 +789,7 @@ impl TypeInfo {
             if let Some((family, _)) = types.builtin_sorts.get(native.name())
                 && let Some(carrier) = types
                     .mksorts
-                    .get(*family)
+                    .get(family)
                     .and_then(|provider| provider.container_type)
                 && (!native.is_container_sort() || native.value_type() != Some(carrier))
             {
@@ -854,7 +904,7 @@ impl TypeInfo {
                         .builtin_sorts
                         .get(native.name())
                         .ok_or("native signature lacks family provenance")?;
-                    if *family != name || parameters.len() != args.len() {
+                    if family != name || parameters.len() != args.len() {
                         return Err("builtin argument/result sort mismatch".into());
                     }
                     for (pattern, actual) in args.iter().zip(parameters) {
@@ -1076,7 +1126,7 @@ impl TypeInfo {
             .builtin_sorts
             .get(native.name())
             .ok_or("unregistered family instance")?;
-        if self.builtin_owners.get(key) != Some(family) {
+        if self.builtin_owners.get(key).copied() != Some(family.as_str()) {
             return Err("builtin description belongs to another family".into());
         }
         let BuiltinTyping::Signature(signature) = &description.typing else {

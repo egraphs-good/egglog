@@ -229,7 +229,7 @@ pub struct TypeInfo {
     pub(crate) builtin_families: HashMap<String, Arc<builtin::FamilyDescription>>,
     pub(crate) builtin_owners: HashMap<String, &'static str>,
     pub(crate) builtin_family_gaps: Vec<String>,
-    pub(crate) builtin_sorts: HashMap<String, (&'static str, Vec<ArcSort>)>,
+    pub(crate) builtin_sorts: HashMap<String, (String, Vec<ArcSort>)>,
     pub(crate) builtin_instances: HashMap<String, Vec<PrimitiveWithId>>,
     pub(crate) builtin_errors: Vec<String>,
     func_types: HashMap<String, Arc<FuncType>>,
@@ -264,32 +264,31 @@ impl EGraph {
         presort_and_args: &Option<(String, Vec<Expr>)>,
         span: Span,
     ) -> Result<(), TypeError> {
-        let name = name.into();
-        if self.type_info.source_sort_aliases.contains_key(&name) {
-            return Err(TypeError::SortAlreadyBound(name, span));
-        }
-        if self.type_info.func_types.contains_key(&name) {
-            return Err(TypeError::FunctionAlreadyBound(name, span));
-        }
-
-        let sort = match presort_and_args {
-            None => Arc::new(EqSort { name }),
-            Some((presort, args)) => {
-                if let Some(mksort) = self.type_info.mksorts.get(presort) {
-                    (mksort.make_sort)(&mut self.type_info, name, args, span.clone())?
-                } else {
-                    return Err(TypeError::PresortNotFound(presort.clone(), span));
-                }
-            }
-        };
-
-        self.add_arcsort(sort, span)
+        let prepared = self
+            .type_info
+            .prepare_sort(name.into(), presort_and_args, span.clone())?;
+        self.install_prepared_sort(prepared, span)
     }
 
     /// Add a user-defined sort to the e-graph.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
+        let family = sort.family_instance();
+        self.install_prepared_sort(sort::PreparedSort { sort, family }, span)
+    }
+
+    fn install_prepared_sort(
+        &mut self,
+        prepared: sort::PreparedSort,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let sort::PreparedSort { sort, family } = prepared;
         if self.type_info.source_sort_aliases.contains_key(sort.name()) {
             return Err(TypeError::SortAlreadyBound(sort.name().into(), span));
+        }
+        if let Some(instance) = &family {
+            self.type_info
+                .validate_builtin_sort(&instance.family, &sort, &instance.parameters)
+                .map_err(|message| TypeError::InvalidSortProvenance(message, span.clone()))?;
         }
         sort.register_type(&mut self.backend);
 
@@ -298,6 +297,13 @@ impl EGraph {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
                 e.insert(sort.clone());
+                if let Some(instance) = family {
+                    self.type_info
+                        .register_builtin_sort(instance.family, sort.clone(), instance.parameters)
+                        .map_err(|message| {
+                            TypeError::InvalidSortProvenance(message, span.clone())
+                        })?;
+                }
                 sort.register_primitives(self);
                 Ok(())
             }
@@ -344,6 +350,29 @@ impl EGraph {
                 .source_sort_aliases
                 .insert(alias.into(), authoring_sort);
         }
+        Ok(())
+    }
+
+    // Sort typing already bound the authoring alias without installing a new
+    // instance. Finish the independent encoded environment before retaining the
+    // original Sort execution anchor; no proof helpers are needed for an alias.
+    pub(crate) fn complete_prepared_sort_alias(
+        &mut self,
+        alias: &str,
+        target: &str,
+        span: Span,
+        command: &ResolvedNCommand,
+    ) -> Result<(), Error> {
+        let runtime_sort = self
+            .type_info
+            .source_sort_alias_target(alias, target, &span)
+            .map_err(|message| TypeError::InvalidSortProvenance(message, span.clone()))?;
+        // Fail checks its child in a temporary name scope. Retain the actual
+        // wrapper here just as the ordinary encoded resolution path does.
+        self.names.check_shadowing(command)?;
+        self.type_info
+            .source_sort_aliases
+            .insert(alias.into(), runtime_sort);
         Ok(())
     }
 
@@ -534,15 +563,20 @@ impl EGraph {
     pub(crate) fn typecheck_program(
         &mut self,
         program: &[(NCommand, ExecutionOrigin)],
+        select_sort: &mut sort::SortSelector<'_>,
     ) -> Result<Vec<(ResolvedNCommand, ExecutionOrigin)>, TypeError> {
         let mut result = vec![];
         for (command, origin) in program {
-            result.push((self.typecheck_command(command)?, *origin));
+            result.push((self.typecheck_command(command, select_sort)?, *origin));
         }
         Ok(result)
     }
 
-    fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
+    fn typecheck_command(
+        &mut self,
+        command: &NCommand,
+        select_sort: &mut sort::SortSelector<'_>,
+    ) -> Result<ResolvedNCommand, TypeError> {
         let symbol_gen = &mut self.parser.symbol_gen;
 
         let command: ResolvedNCommand = match command {
@@ -578,7 +612,42 @@ impl EGraph {
             } => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
-                self.declare_sort(name.clone(), presort_and_args, span.clone())?;
+                let prepared =
+                    self.type_info
+                        .prepare_sort(name.clone(), presort_and_args, span.clone())?;
+                let representative = if presort_and_args.is_some()
+                    && uf.is_none()
+                    && proof_func.is_none()
+                    && container_rebuild.is_none()
+                    && proof_constructors.is_none()
+                    && *unionable
+                {
+                    select_sort(&self.type_info, &prepared)
+                } else {
+                    None
+                };
+                if let Some(target) = representative {
+                    let canonical = self
+                        .type_info
+                        .source_sort_alias_target(name, &target, span)
+                        .map_err(|message| {
+                            TypeError::InvalidSortProvenance(message, span.clone())
+                        })?;
+                    let requested = self.type_info.prepared_sort_pattern(&prepared);
+                    if requested.is_err()
+                        || requested != self.type_info.native_sort_pattern(&canonical)
+                    {
+                        return Err(TypeError::InvalidSortProvenance(
+                            format!("incompatible sort representative {target} for {name}"),
+                            span.clone(),
+                        ));
+                    }
+                    self.type_info
+                        .source_sort_aliases
+                        .insert(name.clone(), canonical);
+                } else {
+                    self.install_prepared_sort(prepared, span.clone())?;
+                }
                 // Mark as non-unionable if the sort declaration says so
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
@@ -697,9 +766,10 @@ impl EGraph {
                 span.clone(),
                 self.type_info.typecheck_facts(symbol_gen, facts)?,
             ),
-            NCommand::Fail(span, cmd) => {
-                ResolvedNCommand::Fail(span.clone(), Box::new(self.typecheck_command(cmd)?))
-            }
+            NCommand::Fail(span, cmd) => ResolvedNCommand::Fail(
+                span.clone(),
+                Box::new(self.typecheck_command(cmd, select_sort)?),
+            ),
             NCommand::RunSchedule(schedule) => ResolvedNCommand::RunSchedule(
                 self.type_info.typecheck_schedule(symbol_gen, schedule)?,
             ),
@@ -823,6 +893,37 @@ impl EGraph {
 }
 
 impl TypeInfo {
+    /// Resolve one sort factory without registering types, primitives or catalog
+    /// entries. The provider owns both argument validation and exact provenance.
+    pub fn prepare_sort(
+        &self,
+        name: String,
+        presort_and_args: &Option<(String, Vec<Expr>)>,
+        span: Span,
+    ) -> Result<sort::PreparedSort, TypeError> {
+        if self.get_sort_by_name(&name).is_some() {
+            return Err(TypeError::SortAlreadyBound(name, span));
+        }
+        if self.func_types.contains_key(&name) {
+            return Err(TypeError::FunctionAlreadyBound(name, span));
+        }
+        let sort: ArcSort = match presort_and_args {
+            None => Arc::new(EqSort { name }),
+            Some((presort, args)) => {
+                let provider = self
+                    .mksorts
+                    .get(presort)
+                    .ok_or_else(|| TypeError::PresortNotFound(presort.clone(), span.clone()))?;
+                (provider.make_sort)(self, name, args, span.clone())?
+            }
+        };
+        let family = sort.family_instance();
+        if let Some(instance) = &family {
+            self.validate_builtin_sort(&instance.family, &sort, &instance.parameters)
+                .map_err(|message| TypeError::InvalidSortProvenance(message, span.clone()))?;
+        }
+        Ok(sort::PreparedSort { sort, family })
+    }
     /// Return extension-owned state from this type-environment snapshot.
     /// Cloning the environment clones its state; graph scopes restore it along
     /// with native registrations.
@@ -1464,6 +1565,8 @@ impl TypeInfo {
 
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
+    #[error("{1}\nInvalid native sort provenance: {0}")]
+    InvalidSortProvenance(String, Span),
     #[error("{}\nArity mismatch, expected {expected} args: {expr}", .expr.span())]
     Arity { expr: Expr, expected: usize },
     #[error(
@@ -1552,6 +1655,108 @@ pub enum TypeError {
 #[cfg(test)]
 mod test {
     use crate::{EGraph, Error, typechecking::TypeError};
+
+    #[test]
+    fn prepared_sort_selection_keeps_native_alias_and_fail_boundaries() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            let mut select = |types: &crate::TypeInfo, prepared: &crate::sort::PreparedSort| {
+                let existing = types.get_sort_by_name("V")?;
+                (types.prepared_sort_pattern(prepared).ok()?
+                    == types.native_sort_pattern(existing).ok()?)
+                .then(|| "V".to_owned())
+            };
+            let commands = graph
+                .parse_program(None, "(sort V (Vec i64)) (sort W (Vec i64))")
+                .unwrap();
+            let mut resolved = Vec::new();
+            let mut completed = Vec::new();
+            graph
+                .run_program_observed_with_sort_selection(
+                    commands,
+                    &mut |_, _, _| {},
+                    &mut |cause, event| match event {
+                        crate::ExecutionEvent::CommandResolved { commands } => {
+                            resolved.push((cause, commands.len()))
+                        }
+                        crate::ExecutionEvent::CommandCompleted {
+                            command: crate::ast::ResolvedNCommand::Sort { name, .. },
+                            ..
+                        } => completed.push(name.clone()),
+                        _ => (),
+                    },
+                    &mut select,
+                )
+                .unwrap();
+            assert_eq!(resolved, [(0, 1), (1, 1)]);
+            assert!(completed.iter().any(|name| name == "W"));
+            for types in [graph.authoring_type_info(), &graph.type_info] {
+                assert!(std::sync::Arc::ptr_eq(
+                    types.get_sort_by_name("V").unwrap(),
+                    types.get_sort_by_name("W").unwrap()
+                ));
+                assert_eq!(types.get_arcsorts_by(|sort| sort.name() == "W").len(), 0);
+            }
+            if mode != 0 {
+                assert!(!std::sync::Arc::ptr_eq(
+                    graph.authoring_type_info().get_sort_by_name("V").unwrap(),
+                    graph.type_info.get_sort_by_name("V").unwrap()
+                ));
+            }
+            for wrappers in 1..=3 {
+                let name = format!("Alias{wrappers}");
+                let mut source = format!("(sort {name} (Vec i64))");
+                for _ in 0..wrappers {
+                    source = format!("(fail {source})");
+                }
+                let commands = graph.parse_program(None, &source).unwrap();
+                let result = graph.run_program_observed_with_sort_selection(
+                    commands,
+                    &mut |_, _, _| {},
+                    &mut |_, _| {},
+                    &mut select,
+                );
+                assert_eq!(result.is_ok(), wrappers == 2);
+                assert_eq!(
+                    graph
+                        .authoring_type_info()
+                        .get_sort_by_name(&name)
+                        .unwrap()
+                        .name(),
+                    "V"
+                );
+                assert_eq!(graph.type_info.get_sort_by_name(&name).unwrap().name(), "V");
+                // Native Fail scopes name reservations even though the sort
+                // installation survives. The following ruleset may reuse it.
+                graph
+                    .parse_and_run_program(None, &format!("(ruleset {name})"))
+                    .unwrap();
+            }
+            let commands = graph
+                .parse_program(None, "(fail (sort Invalid (Vec i64)))")
+                .unwrap();
+            assert!(matches!(
+                graph.run_program_observed_with_sort_selection(
+                    commands,
+                    &mut |_, _, _| {},
+                    &mut |_, _| {},
+                    &mut |_, _| Some("i64".into())
+                ),
+                Err(Error::TypeError(TypeError::InvalidSortProvenance(..)))
+            ));
+            assert!(
+                graph
+                    .authoring_type_info()
+                    .get_sort_by_name("Invalid")
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn source_sort_aliases_keep_authoring_types_and_native_runtime_distinct() {

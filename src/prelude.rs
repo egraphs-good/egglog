@@ -905,6 +905,11 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
 pub trait ContainerSort: Any + Send + Sync + Debug {
     type Container: ContainerValue;
     fn name(&self) -> &str;
+    /// Provider-owned structural provenance, identical for direct and factory
+    /// installation and available before any registration side effects.
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        None
+    }
     fn is_eq_container_sort(&self) -> bool;
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &ContainerValues, _: Value) -> Vec<(ArcSort, Value)>;
@@ -940,6 +945,10 @@ struct ContainerSortImpl<T: ContainerSort>(T);
 impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     fn name(&self) -> &str {
         self.0.name()
+    }
+
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        self.0.family_instance()
     }
 
     fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {

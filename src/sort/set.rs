@@ -170,7 +170,7 @@ impl Presort for SetSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        typeinfo: &TypeInfo,
         name: String,
         args: &[Expr],
         span: Span,
@@ -196,6 +196,13 @@ impl Presort for SetSort {
 
 impl ContainerSort for SetSort {
     type Container = SetContainer;
+
+    fn family_instance(&self) -> Option<builtin::NativeFamilyInstance> {
+        Some(builtin::NativeFamilyInstance {
+            family: "Set".into(),
+            parameters: vec![self.element.clone()],
+        })
+    }
 
     fn name(&self) -> &str {
         &self.name
@@ -226,9 +233,6 @@ impl ContainerSort for SetSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
-        eg.type_info
-            .register_builtin_sort("Set", arc.clone(), vec![self.element.clone()])
-            .expect("invalid Set family instance");
         let [
             empty,
             of,

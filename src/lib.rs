@@ -135,6 +135,13 @@ pub enum RepeatContinuation {
 /// timings to the leaf reports would count that work twice.
 #[derive(Debug)]
 pub enum ExecutionEvent<'a> {
+    /// One input command has been desugared and typechecked, before
+    /// global removal, proof admission or instrumentation. The borrowed batch
+    /// retains original globals and source-level definitions. This is not an
+    /// installation/completion event: later admission or execution may fail.
+    CommandResolved {
+        commands: &'a [(ResolvedNCommand, ExecutionOrigin)],
+    },
     /// One actual action block completed or failed after its ordinary recovery.
     /// `changed` includes committed prefixes on error, not attempted writes.
     /// This is not a Run and adds no schedule output, rule report or timing.
@@ -1416,6 +1423,7 @@ impl EGraph {
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
             &|_, _| None,
+            &mut |_, _| None,
         )?;
 
         self.proof_check_program = resolved.desugared_before_proofs;
@@ -2045,7 +2053,12 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved = self.resolve_command(command, CommandPurpose::Authored)?;
+        let resolved = self.resolve_command(
+            command,
+            CommandPurpose::Authored,
+            &mut |_| {},
+            &mut |_, _| None,
+        )?;
         if self.are_proofs_enabled() {
             self.proof_check_program
                 .extend(resolved.desugared_before_proofs);
@@ -2737,7 +2750,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let typechecked: Vec<_> = self
-            .desugar_and_typecheck_command(command, CommandPurpose::Authored)?
+            .desugar_and_typecheck_command(command, CommandPurpose::Authored, &mut |_, _| None)?
             .into_iter()
             .map(|(command, _)| command)
             .collect();
@@ -2758,6 +2771,7 @@ impl EGraph {
         &mut self,
         command: Command,
         purpose: CommandPurpose,
+        select_sort: &mut SortSelector<'_>,
     ) -> Result<Vec<(ResolvedNCommand, ExecutionOrigin)>, Error> {
         let desugared = desugar_command(
             command,
@@ -2766,8 +2780,8 @@ impl EGraph {
         )?;
         let typechecking = self.proof_state.original_typechecking.as_deref_mut();
         Ok(match typechecking {
-            Some(original) => original.typecheck_program(&desugared)?,
-            None => self.typecheck_program(&desugared)?,
+            Some(original) => original.typecheck_program(&desugared, select_sort)?,
+            None => self.typecheck_program(&desugared, select_sort)?,
         })
     }
 
@@ -2782,7 +2796,12 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         Ok(self
-            .resolve_command_before_proofs_with_origins(command, CommandPurpose::Authored)?
+            .resolve_command_before_proofs_with_origins(
+                command,
+                CommandPurpose::Authored,
+                &mut |_| {},
+                &mut |_, _| None,
+            )?
             .into_iter()
             .map(|(command, _)| command)
             .collect())
@@ -2792,8 +2811,13 @@ impl EGraph {
         &mut self,
         command: Command,
         purpose: CommandPurpose,
+        observer: &mut dyn FnMut(ExecutionEvent<'_>),
+        select_sort: &mut SortSelector<'_>,
     ) -> Result<Vec<(ResolvedNCommand, ExecutionOrigin)>, Error> {
-        let typechecked = self.desugar_and_typecheck_command(command, purpose)?;
+        let typechecked = self.desugar_and_typecheck_command(command, purpose, select_sort)?;
+        observer(ExecutionEvent::CommandResolved {
+            commands: &typechecked,
+        });
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_ref() {
             for (command, _) in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
@@ -2839,9 +2863,15 @@ impl EGraph {
         &mut self,
         command: Command,
         purpose: CommandPurpose,
+        observer: &mut dyn FnMut(ExecutionEvent<'_>),
+        select_sort: &mut SortSelector<'_>,
     ) -> Result<ResolvedNCommands, Error> {
-        let resolved_before_proofs =
-            self.resolve_command_before_proofs_with_origins(command, purpose)?;
+        let resolved_before_proofs = self.resolve_command_before_proofs_with_origins(
+            command,
+            purpose,
+            observer,
+            select_sort,
+        )?;
 
         // Add term encoding when it is enabled
         if self.proof_state.original_typechecking.is_none() {
@@ -2858,6 +2888,32 @@ impl EGraph {
                 desugared_before_proofs: vec![],
             })
         } else {
+            // An applied-sort alias has already selected the original
+            // environment's registered representative. Bind the runtime
+            // environment's own instance, then keep this actual Sort/Fail
+            // anchor without re-declaring or instrumenting that instance.
+            if let [(command, origin)] = resolved_before_proofs.as_slice() {
+                let mut anchor = command;
+                while let ResolvedNCommand::Fail(_, inner) = anchor {
+                    anchor = inner;
+                }
+                if let ResolvedNCommand::Sort { name, span, .. } = anchor
+                    && let Some(target) = self.authoring_type_info().get_sort_by_name(name)
+                    && target.name() != name
+                {
+                    let target = target.name().to_owned();
+                    self.complete_prepared_sort_alias(name, &target, span.clone(), command)?;
+                    return Ok(ResolvedNCommands {
+                        desugared: vec![OriginatedCommand {
+                            command: command.clone(),
+                            origin: *origin,
+                            schedule: None,
+                            command_tail: false,
+                        }],
+                        desugared_before_proofs: vec![command.clone()],
+                    });
+                }
+            }
             // Now remove globals for actual execution (but NOT from desugared_commands)
             let typechecked_no_globals: Vec<_> = resolved_before_proofs
                 .iter()
@@ -2916,7 +2972,7 @@ impl EGraph {
             }
 
             // Now typecheck using self, adding term type information.
-            let desugared_typechecked = self.typecheck_program(&desugared)?;
+            let desugared_typechecked = self.typecheck_program(&desugared, &mut |_, _| None)?;
             // remove globals again, but this time allow primitive globals
             let desugared_typechecked =
                 desugared_typechecked
@@ -3076,7 +3132,21 @@ impl EGraph {
         result
     }
 
+    /// Expand one command against this compiler's selected authoring types,
+    /// advancing its own symbol generator without cloning the type environment.
+    pub fn expand_command_macros(&mut self, command: Command) -> Result<Vec<Command>, Error> {
+        let macro_type_info = self
+            .proof_state
+            .original_typechecking
+            .as_ref()
+            .map(|graph| &graph.type_info)
+            .unwrap_or(&self.type_info);
+        self.command_macros
+            .apply(command, &mut self.parser.symbol_gen, macro_type_info)
+    }
+
     /// Process a program through the shared native compiler/interpreter.
+    #[allow(clippy::too_many_arguments)]
     fn process_program_internal(
         &mut self,
         program: Vec<Command>,
@@ -3085,6 +3155,7 @@ impl EGraph {
         observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
         repeat_policy: &dyn Fn(usize, ScheduleLocation<'_>) -> RepeatContinuation,
         scheduler_selector: &dyn Fn(usize, ScheduleLocation<'_>) -> Option<scheduler::SchedulerId>,
+        select_sort: &mut SortSelector<'_>,
     ) -> Result<ResolvedNCommands, Error> {
         let executing = matches!(
             mode,
@@ -3097,17 +3168,7 @@ impl EGraph {
         for (cause, before_expanded_command) in program.into_iter().enumerate() {
             // First do user-provided macro expansion for this command,
             // which may rely on type information from previous commands.
-            let macro_type_info = self
-                .proof_state
-                .original_typechecking
-                .as_ref()
-                .map(|egraph| &egraph.type_info)
-                .unwrap_or(&self.type_info);
-            let macro_expanded = self.command_macros.apply(
-                before_expanded_command,
-                &mut self.parser.symbol_gen,
-                macro_type_info,
-            )?;
+            let macro_expanded = self.expand_command_macros(before_expanded_command)?;
 
             for command in macro_expanded {
                 // handle include specially- we keep them as-is for desugaring
@@ -3125,11 +3186,17 @@ impl EGraph {
                         &mut |_, event| observer(cause, event),
                         &|_, site| repeat_policy(cause, site),
                         &|_, site| scheduler_selector(cause, site),
+                        select_sort,
                     )?;
                     desugared.extend(resolved.desugared);
                     desugared_before_proofs.extend(resolved.desugared_before_proofs);
                 } else {
-                    let resolved = self.resolve_command(command, CommandPurpose::Authored)?;
+                    let resolved = self.resolve_command(
+                        command,
+                        CommandPurpose::Authored,
+                        &mut |event| observer(cause, event),
+                        select_sort,
+                    )?;
                     if executing && self.are_proofs_enabled() {
                         self.proof_check_program
                             .extend(resolved.desugared_before_proofs.clone());
@@ -3283,6 +3350,7 @@ impl EGraph {
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
             &|_, _| None,
+            &mut |_, _| None,
         )?;
         Ok(())
     }
@@ -3307,6 +3375,30 @@ impl EGraph {
         })
     }
 
+    /// Execute with call-local applied-sort representative selection. Providers
+    /// prepare each sort once without mutation; selection precedes native type,
+    /// backend, primitive and proof-helper installation. Returning a registered
+    /// name requests a structurally compatible alias, validated by the compiler.
+    /// The policy is never stored and ordinary execution/Fail boundaries remain.
+    pub fn run_program_observed_with_sort_selection(
+        &mut self,
+        program: Vec<Command>,
+        outputs: &mut dyn FnMut(usize, ExecutionOrigin, CommandOutput),
+        observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
+        select_sort: &mut SortSelector<'_>,
+    ) -> Result<(), Error> {
+        self.process_program_internal(
+            program,
+            ProcessingMode::Execute,
+            outputs,
+            observer,
+            &|_, _| RepeatContinuation::CanStop,
+            &|_, _| None,
+            select_sort,
+        )?;
+        Ok(())
+    }
+
     /// Run with a call-local continuation policy for bounded requested loops.
     ///
     /// The callback receives the submitted command index and its original
@@ -3329,6 +3421,7 @@ impl EGraph {
             observer,
             repeat_policy,
             &|_, _| None,
+            &mut |_, _| None,
         )?;
         Ok(())
     }
@@ -3356,6 +3449,7 @@ impl EGraph {
             observer,
             repeat_policy,
             scheduler_selector,
+            &mut |_, _| None,
         )?;
         Ok(())
     }
@@ -3380,6 +3474,7 @@ impl EGraph {
             observer,
             &|_, _| RepeatContinuation::CanStop,
             scheduler_selector,
+            &mut |_, _| None,
         )?;
         Ok(())
     }
@@ -3448,8 +3543,12 @@ impl EGraph {
     /// execution boundary, just as for an ordinary Check.
     pub fn validate_condition(&self, span: Span, facts: Vec<Fact>) -> Result<(), Error> {
         let mut compiler = self.clone();
-        let resolved =
-            compiler.resolve_command(Command::Check(span, facts), CommandPurpose::Condition)?;
+        let resolved = compiler.resolve_command(
+            Command::Check(span, facts),
+            CommandPurpose::Condition,
+            &mut |_| {},
+            &mut |_, _| None,
+        )?;
         for command in resolved.desugared {
             compiler.compile_command(command.command, command.origin)?;
         }
@@ -3469,8 +3568,12 @@ impl EGraph {
         facts: Vec<Fact>,
         observer: &mut dyn FnMut(ExecutionEvent<'_>),
     ) -> Result<(), Error> {
-        let resolved =
-            self.resolve_command(Command::Check(span, facts), CommandPurpose::Condition)?;
+        let resolved = self.resolve_command(
+            Command::Check(span, facts),
+            CommandPurpose::Condition,
+            observer,
+            &mut |_, _| None,
+        )?;
         if self.are_proofs_enabled() {
             self.proof_check_program
                 .extend(resolved.desugared_before_proofs);
@@ -3497,15 +3600,32 @@ impl EGraph {
     /// Runtime errors such as a missing witness are left to actual execution.
     pub fn validate_program(&self, program: Vec<Command>) -> Result<Self, Error> {
         let mut compiler = self.clone();
-        compiler.process_program_internal(
+        compiler.compile_program_observed(program, &mut |_, _| {})?;
+        Ok(compiler)
+    }
+
+    /// Register and compile a program in this compiler context, without running
+    /// authored actions, schedules, checks or primitive bodies. Unlike
+    /// [`Self::validate_program`], this does not clone the graph: successful
+    /// registrations and partial compiler metadata remain in place on error.
+    /// Observers receive original [`ExecutionEvent::CommandResolved`] batches,
+    /// but no execution/completion events. `Fail` validates its inner command;
+    /// it does not assert an expected execution error in this compile-only mode.
+    pub fn compile_program_observed(
+        &mut self,
+        program: Vec<Command>,
+        observer: &mut dyn FnMut(usize, ExecutionEvent<'_>),
+    ) -> Result<(), Error> {
+        self.process_program_internal(
             program,
             ProcessingMode::Compile,
             &mut |_, _, _| {},
-            &mut |_, _| {},
+            observer,
             &|_, _| RepeatContinuation::CanStop,
             &|_, _| None,
+            &mut |_, _| None,
         )?;
-        Ok(compiler)
+        Ok(())
     }
 
     /// Prepares an explicitly opted-in extension declaration without invoking
@@ -3534,6 +3654,7 @@ impl EGraph {
             &mut |_, _| {},
             &|_, _| RepeatContinuation::CanStop,
             &|_, _| None,
+            &mut |_, _| None,
         )?;
         Ok(res
             .desugared
@@ -5252,7 +5373,12 @@ mod tests {
                 // but snapshot after each physical command: helpers may commit
                 // rows which trailing maintenance removes before the endpoint.
                 let resolved = graph
-                    .resolve_command(command, CommandPurpose::Authored)
+                    .resolve_command(
+                        command,
+                        CommandPurpose::Authored,
+                        &mut |_| {},
+                        &mut |_, _| None,
+                    )
                     .unwrap();
                 if graph.are_proofs_enabled() {
                     graph
@@ -6405,6 +6531,83 @@ mod tests {
     impl FullPrim for FullOnly {
         fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, _args: &[Value]) -> Option<Value> {
             Some(state.base_values().get::<i64>(1))
+        }
+    }
+
+    #[test]
+    fn compile_program_observes_original_commands_once_without_execution() {
+        for mode in 0..4 {
+            let mut graph = EGraph::default();
+            graph.add_full_primitive(FullOnly, None);
+            let mut graph = match mode {
+                0 => graph,
+                1 => graph.with_term_encoding_enabled(),
+                2 => graph.with_proofs_enabled(),
+                _ => graph.with_proofs_enabled().with_proof_testing(),
+            };
+            let program = graph
+                .parse_program(
+                    None,
+                    "(datatype E (N i64)) (let $held (N 1))
+                 (rule ((N x)) ((N (+ x 1))) :name \"compiled\")",
+                )
+                .unwrap();
+            let mut batches = Vec::new();
+            graph
+                .compile_program_observed(program, &mut |cause, event| match event {
+                    ExecutionEvent::CommandResolved { commands } => {
+                        batches.push((
+                            cause,
+                            commands
+                                .iter()
+                                .map(|(command, _)| command.clone())
+                                .collect::<Vec<_>>(),
+                        ));
+                    }
+                    other => panic!("compile emitted an execution event: {other:?}"),
+                })
+                .unwrap();
+            assert_eq!(
+                batches.iter().map(|(cause, _)| *cause).collect::<Vec<_>>(),
+                [0, 1, 2]
+            );
+            assert!(
+                matches!(batches[1].1.as_slice(), [ResolvedNCommand::CoreAction(ResolvedAction::Let(_, variable, ResolvedExpr::Call(_, _, _)))] if variable.name == "$held")
+            );
+            assert!(
+                matches!(batches[2].1.as_slice(), [ResolvedNCommand::NormRule { rule }] if rule.name == "compiled")
+            );
+            assert_eq!(
+                graph.num_tuples(),
+                0,
+                "compile executed an initializer/helper"
+            );
+
+            let invalid = graph
+                .parse_program(None, "(action-scope ((missing)))")
+                .unwrap();
+            let mut resolved = 0;
+            assert!(
+                graph
+                    .compile_program_observed(invalid, &mut |_, _| resolved += 1)
+                    .is_err()
+            );
+            assert_eq!(resolved, 0, "typechecking failure emitted a resolved batch");
+
+            let guarded = graph
+                .parse_program(None, "(action-scope ((full-only)))")
+                .unwrap();
+            let mut resolved = 0;
+            let result = graph.compile_program_observed(guarded, &mut |_, event| {
+                assert!(matches!(event, ExecutionEvent::CommandResolved { .. }));
+                resolved += 1;
+            });
+            assert_eq!(
+                resolved, 1,
+                "admission must follow the original resolved batch"
+            );
+            assert_eq!(result.is_ok(), mode == 0);
+            assert_eq!(graph.num_tuples(), 0);
         }
     }
 
