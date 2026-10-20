@@ -33,6 +33,8 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+mod radix_sort;
+
 #[doc(hidden)]
 pub mod bench_support;
 
@@ -735,88 +737,15 @@ impl PositionedIndexBase for ColumnIndex {
     }
 }
 
-/// Number of 8-bit radix passes needed to cover values up to `max`.
-fn radix_passes_for(max: u32) -> u32 {
-    if max < 256 {
-        1
-    } else if max < 65_536 {
-        2
-    } else if max < (1 << 24) {
-        3
-    } else {
-        4
-    }
-}
-
-/// Adaptive value-only LSB radix sort of a single (Value, RowId) block, in place.
+/// Stable value sorting for a block projected in RowId order.
 ///
-/// `scratch` must be at least `data.len()` long; it is used as ping-pong space. Because the
-/// sort is stable and `data` arrives in RowId-ascending order, the result is ordered by
-/// (Value, RowId). The multi-column rebuild path sorts each column's block this way before
-/// merging, so no explicit RowId sort is ever needed.
+/// `scratch` must hold at least `data.len()` pairs. Stability preserves RowId
+/// order within each key, including the per-column blocks used by rebuilds.
 pub(crate) fn radix_sort_slice_by_value(
     data: &mut [(Value, RowId)],
     scratch: &mut [(Value, RowId)],
 ) {
-    let n = data.len();
-    if n < 64 {
-        data.sort_unstable();
-        return;
-    }
-
-    // One scan computes the pass count and detects already-sorted input (common
-    // when a column correlates with row order); a sorted block needs no work,
-    // since stability makes the result identical.
-    let mut max_val = 0u32;
-    let mut sorted = true;
-    let mut prev = 0u32;
-    for &(v, _) in data.iter() {
-        let rep = v.rep();
-        max_val = max_val.max(rep);
-        sorted &= prev <= rep;
-        prev = rep;
-    }
-    if sorted {
-        return;
-    }
-    let n_passes = radix_passes_for(max_val);
-
-    let mut src: &mut [(Value, RowId)] = data;
-    let mut dst: &mut [(Value, RowId)] = &mut scratch[..n];
-
-    for pass in 0..n_passes {
-        let shift = pass * 8;
-        let mut count = [0u32; 256];
-
-        // Count occurrences of the relevant byte of each Value.
-        for pair in src.iter() {
-            let bucket = (pair.0.rep() >> shift) & 0xFF;
-            count[bucket as usize] += 1;
-        }
-
-        // Convert counts to exclusive prefix sums (start positions per bucket).
-        let mut prefix = 0u32;
-        for c in &mut count {
-            let prev = *c;
-            *c = prefix;
-            prefix += prev;
-        }
-
-        // Stable scatter: write each element to its bucket's next position.
-        for &pair in src.iter() {
-            let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
-            dst[count[bucket] as usize] = pair;
-            count[bucket] += 1;
-        }
-
-        core::mem::swap(&mut src, &mut dst);
-    }
-
-    // After `n_passes` swaps, `src` points to the sorted data. If odd, that is `scratch`;
-    // copy it back into `data` (which is now `dst`).
-    if n_passes % 2 == 1 {
-        dst.copy_from_slice(src);
-    }
+    radix_sort::sort(data, scratch);
 }
 
 /// Merge two (Value, RowId)-sorted slices, *appending* the result to `out` and dropping pairs
