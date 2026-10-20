@@ -1248,46 +1248,52 @@ impl EGraph {
         // Desugaring also generates declarations (the functions global bindings
         // lower to, proof tables) without typechecking them; resolving those
         // here is what keeps every declared function reachable by name.
-        let func_type = match self.type_info.get_func_type(&decl.name) {
-            Some(func_type) => {
-                debug_assert!(
-                    func_type.subtype == decl.subtype
-                        && func_type.input.len() == decl.schema.input.len()
-                        && func_type
+        let func_type =
+            match self.type_info.get_func_type(&decl.name) {
+                Some(func_type) => {
+                    debug_assert!(
+                        func_type.subtype == decl.subtype
+                            && func_type.input.len() == decl.schema.input.len()
+                            && func_type.input.iter().zip(&decl.schema.input).all(
+                                |(sort, name)| {
+                                    self.type_info
+                                        .get_sort_by_name(name)
+                                        .is_some_and(|declared| sort.name() == declared.name())
+                                }
+                            )
+                            && self
+                                .type_info
+                                .get_sort_by_name(&decl.schema.output)
+                                .is_some_and(|sort| func_type.output.name() == sort.name()),
+                        "recorded signature for {} disagrees with its declaration",
+                        decl.name
+                    );
+                    func_type.clone()
+                }
+                None => {
+                    let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
+                        Some(sort) => Ok(sort.clone()),
+                        None => Err(Error::TypeError(TypeError::UndefinedSort(
+                            name.to_owned(),
+                            decl.span.clone(),
+                        ))),
+                    };
+                    let func_type = Arc::new(FuncType {
+                        name: decl.name.clone(),
+                        table_name: decl.table_name.clone(),
+                        subtype: decl.subtype,
+                        input: decl
+                            .schema
                             .input
                             .iter()
-                            .zip(&decl.schema.input)
-                            .all(|(sort, name)| sort.name() == name)
-                        && func_type.output.name() == decl.schema.output,
-                    "recorded signature for {} disagrees with its declaration",
-                    decl.name
-                );
-                func_type.clone()
-            }
-            None => {
-                let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
-                    Some(sort) => Ok(sort.clone()),
-                    None => Err(Error::TypeError(TypeError::UndefinedSort(
-                        name.to_owned(),
-                        decl.span.clone(),
-                    ))),
-                };
-                let func_type = Arc::new(FuncType {
-                    name: decl.name.clone(),
-                    table_name: decl.table_name.clone(),
-                    subtype: decl.subtype,
-                    input: decl
-                        .schema
-                        .input
-                        .iter()
-                        .map(get_sort)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    output: get_sort(&decl.schema.output)?,
-                });
-                self.type_info.declare_func_type(func_type.clone());
-                func_type
-            }
-        };
+                            .map(get_sort)
+                            .collect::<Result<Vec<_>, _>>()?,
+                        output: get_sort(&decl.schema.output)?,
+                    });
+                    self.type_info.declare_func_type(func_type.clone());
+                    func_type
+                }
+            };
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
