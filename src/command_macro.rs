@@ -46,6 +46,9 @@ impl CommandMacroRegistry {
         symbol_gen: &mut SymbolGen,
         type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
+        if !self.macros.is_empty() {
+            command.reserve_symbols(symbol_gen);
+        }
         // Start with the original command
         let mut commands = vec![command];
 
@@ -53,7 +56,12 @@ impl CommandMacroRegistry {
         for macro_impl in &self.macros {
             let mut next_commands = Vec::new();
             for cmd in commands {
-                next_commands.extend(macro_impl.transform(cmd, symbol_gen, type_info)?);
+                let expanded = macro_impl.transform(cmd, symbol_gen, type_info)?;
+                // A macro can import literal names that later expansions must avoid.
+                for command in &expanded {
+                    command.reserve_symbols(symbol_gen);
+                }
+                next_commands.extend(expanded);
             }
             commands = next_commands;
         }

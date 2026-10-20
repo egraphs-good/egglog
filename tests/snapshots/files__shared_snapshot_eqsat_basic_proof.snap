@@ -1,48 +1,49 @@
 ---
 source: tests/files.rs
+assertion_line: 88
 expression: snapshot_content_across_treatments
 ---
-(let t_0 (Mul (Num 2) (Add (Var "x") (Num 3))))
-(let t_1 (Mul (Num 2) (Var "x")))
-(let t_2 (Add (Num 6) t_1))
-(let t_3 (Mul (Num 2) (Num 3)))
-(let t_4 (Add t_3 t_1))
-(let t_5 (Add t_1 t_3))
-(let t_6 (premises (Fiat (= t_0 t_0))))
-(let t_7
+(let t (Mul (Num 2) (Add (Var "x") (Num 3))))
+(let t@1 (Mul (Num 2) (Var "x")))
+(let t@2 (Add (Num 6) t@1))
+(let t@3 (Mul (Num 2) (Num 3)))
+(let t@4 (Add t@3 t@1))
+(let t@5 (Add t@1 t@3))
+(let t@6 (premises (Fiat (= t t))))
+(let t@7
   (substitution
                 (c (Num 3))
                 (a (Num 2))
                 (b (Var "x"))
-                (@rewrite_var___1 t_0)))
-(let t_8
+                (@rewrite_var__@1 t)))
+(let t@8
   (premises
           (Sym
-            (= t_0 t_5)
+            (= t t@5)
             (Rule
-              (= t_5 t_0)
+              (= t@5 t)
               (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
-              t_6
-              t_7))))
-(let t_9 (substitution (a t_1) (@rewrite_var___0 t_0) (b t_3)))
+              t@6
+              t@7))))
+(let t@9 (substitution (a t@1) (b t@3) (@rewrite_var__ t)))
 (Trans
-  (= t_0 t_2)
+  (= t t@2)
   (Sym
-    (= t_0 t_4)
-    (Rule (= t_4 t_0) (name "(rewrite (Add a b) (Add b a))") t_8 t_9))
+    (= t t@4)
+    (Rule (= t@4 t) (name "(rewrite (Add a b) (Add b a))") t@8 t@9))
   (Congr
-    (= t_4 t_2)
-    (Rule (= t_4 t_4) (name "(rewrite (Add a b) (Add b a))") t_8 t_9)
+    (= t@4 t@2)
+    (Rule (= t@4 t@4) (name "(rewrite (Add a b) (Add b a))") t@8 t@9)
     (Rule
-      (= t_3 (Num 6))
+      (= t@3 (Num 6))
       (name "(rewrite (Mul (Num a) (Num b)) (Num (* a b)))")
       (premises
         (Rule
-          (= t_3 t_3)
+          (= t@3 t@3)
           (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
-          t_6
-          t_7))
-      (substitution (a 2) (@rewrite_var___3 t_3) (b 3)))
+          t@6
+          t@7))
+      (substitution (a 2) (@rewrite_var__@3 t@3) (b 3)))
     0))
 ((Add 4)
  (Mul 3)

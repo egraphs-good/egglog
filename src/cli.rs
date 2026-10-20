@@ -273,7 +273,7 @@ fn welcome_prompt() -> String {
 }
 
 fn should_eval(curr_cmd: &str) -> bool {
-    all_sexps(SexpParser::new(None, curr_cmd)).is_ok()
+    all_sexps(SexpParser::new(None, curr_cmd, None)).is_ok()
 }
 
 fn run_commands<W>(
@@ -366,6 +366,7 @@ mod tests {
     fn test_should_eval() {
         #[rustfmt::skip]
         let test_cases = vec![
+            vec!["(let x@y 1)"],
             vec![
                 "(extract",
                 "\"1",

@@ -50,6 +50,19 @@ pub struct ProofConstructorNames {
     pub trans: String,
     pub sym: String,
     pub normalize: String,
+    /// Additional constructors needed to extract proofs from a replayed program.
+    /// Absent in the original four-name container-rebuild annotation.
+    pub extraction: Option<ProofExtractionNames>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProofExtractionNames {
+    pub fiat: String,
+    pub rule: String,
+    pub merge: String,
+    pub eval: String,
+    pub pcons: String,
+    pub pnil: String,
 }
 
 /// A lowered rule plus the execution options needed to rebuild it for scheduling.
@@ -551,6 +564,239 @@ impl<Head: Display, Leaf: Display> Display for GenericSchedule<Head, Leaf> {
 pub type Command = GenericCommand<String, String>;
 pub type ResolvedCommand = GenericCommand<ResolvedCall, ResolvedVar>;
 
+impl Command {
+    /// Reserve imported names before any transformation introduces fresh names.
+    /// Includes metadata and extension arguments that expression visitors omit.
+    pub(crate) fn reserve_symbols(&self, fresh: &mut SymbolGen) {
+        fn expr(expr: &Expr, fresh: &mut SymbolGen) {
+            expr.walk(
+                &mut |expr| match expr {
+                    Expr::Var(_, name) | Expr::Call(_, name, _) => fresh.reserve(name),
+                    Expr::Lit(..) => {}
+                },
+                &mut |_| {},
+            );
+        }
+        fn facts(facts: &[Fact], fresh: &mut SymbolGen) {
+            for fact in facts {
+                match fact {
+                    Fact::Eq(_, lhs, rhs) => {
+                        expr(lhs, fresh);
+                        expr(rhs, fresh);
+                    }
+                    Fact::Fact(value) => expr(value, fresh),
+                }
+            }
+        }
+        fn action(action: &Action, fresh: &mut SymbolGen) {
+            match action {
+                Action::Let(_, name, value) => {
+                    fresh.reserve(name);
+                    expr(value, fresh);
+                }
+                Action::Set(_, name, args, value) => {
+                    fresh.reserve(name);
+                    for arg in args {
+                        expr(arg, fresh);
+                    }
+                    expr(value, fresh);
+                }
+                Action::Change(_, _, name, args) => {
+                    fresh.reserve(name);
+                    for arg in args {
+                        expr(arg, fresh);
+                    }
+                }
+                Action::Union(_, lhs, rhs) => {
+                    expr(lhs, fresh);
+                    expr(rhs, fresh);
+                }
+                Action::Expr(_, value) => expr(value, fresh),
+                Action::Panic(..) => {}
+            }
+        }
+        fn schedule(value: &Schedule, fresh: &mut SymbolGen) {
+            match value {
+                Schedule::Saturate(_, inner) | Schedule::Repeat(_, _, inner) => {
+                    schedule(inner, fresh);
+                }
+                Schedule::Run(_, config) => {
+                    fresh.reserve(&config.ruleset);
+                    if let Some(until) = &config.until {
+                        facts(until, fresh);
+                    }
+                }
+                Schedule::Sequence(_, schedules) => {
+                    for inner in schedules {
+                        schedule(inner, fresh);
+                    }
+                }
+            }
+        }
+        fn variants(variants: &[Variant], fresh: &mut SymbolGen) {
+            for variant in variants {
+                fresh.reserve(&variant.name);
+                for ty in &variant.types {
+                    fresh.reserve(ty);
+                }
+            }
+        }
+        match self {
+            Command::Sort {
+                name,
+                presort_and_args,
+                uf,
+                proof_func,
+                container_rebuild,
+                proof_constructors,
+                ..
+            } => {
+                fresh.reserve(name);
+                if let Some((name, args)) = presort_and_args {
+                    fresh.reserve(name);
+                    for arg in args {
+                        expr(arg, fresh);
+                    }
+                }
+                if let Some((name, index)) = uf {
+                    fresh.reserve(name);
+                    if let Some(index) = index {
+                        fresh.reserve(index);
+                    }
+                }
+                if let Some(name) = proof_func {
+                    fresh.reserve(name);
+                }
+                if let Some(spec) = container_rebuild {
+                    fresh.reserve(&spec.internal_rebuild_prim);
+                    if let Some(name) = &spec.internal_rebuild_proof_prim {
+                        fresh.reserve(name);
+                    }
+                }
+                if let Some(names) = proof_constructors {
+                    for name in [&names.congr, &names.trans, &names.sym, &names.normalize] {
+                        fresh.reserve(name);
+                    }
+                    if let Some(names) = &names.extraction {
+                        for name in [
+                            &names.fiat,
+                            &names.rule,
+                            &names.merge,
+                            &names.eval,
+                            &names.pcons,
+                            &names.pnil,
+                        ] {
+                            fresh.reserve(name);
+                        }
+                    }
+                }
+            }
+            Command::Datatype {
+                name,
+                variants: items,
+                ..
+            } => {
+                fresh.reserve(name);
+                variants(items, fresh);
+            }
+            Command::Datatypes { datatypes, .. } => {
+                for (_, name, datatype) in datatypes {
+                    fresh.reserve(name);
+                    match datatype {
+                        Subdatatypes::Variants(items) => variants(items, fresh),
+                        Subdatatypes::NewSort(name, args) => {
+                            fresh.reserve(name);
+                            for arg in args {
+                                expr(arg, fresh);
+                            }
+                        }
+                    }
+                }
+            }
+            Command::Constructor {
+                name,
+                schema,
+                term_constructor,
+                ..
+            }
+            | Command::Function {
+                name,
+                schema,
+                term_constructor,
+                ..
+            } => {
+                fresh.reserve(name);
+                for name in &schema.input {
+                    fresh.reserve(name);
+                }
+                fresh.reserve(&schema.output);
+                if let Some(name) = term_constructor {
+                    fresh.reserve(name);
+                }
+                if let Command::Function {
+                    merge: Some(merge), ..
+                } = self
+                {
+                    expr(merge, fresh);
+                }
+            }
+            Command::Relation { name, inputs, .. }
+            | Command::UnstableCombinedRuleset(_, name, inputs) => {
+                fresh.reserve(name);
+                for name in inputs {
+                    fresh.reserve(name);
+                }
+            }
+            Command::AddRuleset(_, name)
+            | Command::ProveExists(_, name)
+            | Command::PrintFunction(_, name, ..)
+            | Command::Input { name, .. } => {
+                fresh.reserve(name);
+            }
+            Command::Rule { rule } => {
+                fresh.reserve(&rule.name);
+                fresh.reserve(&rule.ruleset);
+                facts(&rule.body, fresh);
+                for item in &rule.head.0 {
+                    action(item, fresh);
+                }
+            }
+            Command::Rewrite(ruleset, rewrite, _) | Command::BiRewrite(ruleset, rewrite) => {
+                fresh.reserve(ruleset);
+                fresh.reserve(&rewrite.name);
+                expr(&rewrite.lhs, fresh);
+                expr(&rewrite.rhs, fresh);
+                facts(&rewrite.conditions, fresh);
+            }
+            Command::Action(item) => action(item, fresh),
+            Command::Extract(_, value, count) => {
+                expr(value, fresh);
+                expr(count, fresh);
+            }
+            Command::RunSchedule(value) => schedule(value, fresh),
+            Command::Check(_, items) | Command::Prove(_, items) => facts(items, fresh),
+            Command::PrintSize(_, Some(name)) => fresh.reserve(name),
+            Command::Output { exprs, .. } => {
+                for item in exprs {
+                    expr(item, fresh);
+                }
+            }
+            Command::UserDefined(_, name, exprs) => {
+                fresh.reserve(name);
+                for item in exprs {
+                    expr(item, fresh);
+                }
+            }
+            Command::Fail(_, inner) => inner.reserve_symbols(fresh),
+            Command::PrintOverallStatistics(..)
+            | Command::PrintSize(_, None)
+            | Command::Push(_)
+            | Command::Pop(..)
+            | Command::Include(..) => {}
+        }
+    }
+}
+
 pub type Subsume = bool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1048,6 +1294,18 @@ where
                         " :internal-proof-names {} {} {} {}",
                         pc.congr, pc.trans, pc.sym, pc.normalize
                     )?;
+                    if let Some(names) = &pc.extraction {
+                        write!(
+                            f,
+                            " {} {} {} {} {} {}",
+                            names.fiat,
+                            names.rule,
+                            names.merge,
+                            names.eval,
+                            names.pcons,
+                            names.pnil
+                        )?;
+                    }
                 }
                 write!(f, ")")
             }
@@ -2189,8 +2447,8 @@ pub fn replace_internal_symbol_with(
         .collect()
 }
 
-/// Sanitizes internal names so they do not contain any internal characters.
-/// This enables printing desugared egglog in a way that can be re-parsed.
+/// Converts commands to unresolved syntax and flattens nested schedules.
+/// Names are preserved because generated names can now be parsed directly.
 pub fn sanitize_internal_names<Head, Leaf>(
     program: &[GenericCommand<Head, Leaf>],
 ) -> Vec<GenericCommand<String, String>>
@@ -2198,14 +2456,12 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    // first convert to unresolved
-    let unresolved = program
+    program
         .iter()
-        .map(|cmd| cmd.clone().make_unresolved())
-        .collect::<Vec<_>>();
-    // get the maximum number of underscores currently present, that way we can soundly add more than that to get fresh symbols
-    let max_underscores = get_max_underscores(&unresolved);
-    let replacement = "_".repeat(max_underscores + 1);
-    // replace occurances of the internal symbol with replacement
-    replace_internal_symbol_with(&unresolved, &replacement)
+        .map(|cmd| {
+            cmd.clone()
+                .make_unresolved()
+                .map_string_symbols(&mut |name| name)
+        })
+        .collect()
 }

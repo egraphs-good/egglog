@@ -17,7 +17,7 @@ use crate::{
 /// Holds all the names used in proof encoding.
 /// We need fresh names that don't collide with user-defined names.
 /// All of these names should be generated with the single global [`SymbolGen`].
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct EncodingNames {
     pub(crate) proof_list_sort: String,
     pub(crate) ast_sort: String,
@@ -128,9 +128,7 @@ impl ProofInstrumentor<'_> {
     }
 
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
-        self.egraph.parser.ensure_no_reserved_symbols = true;
 
         // This program is generated internally by term encoding, so a parse
         // failure is an egglog bug rather than a user error.
@@ -169,15 +167,12 @@ impl ProofInstrumentor<'_> {
 
     /// Internal parse helper for term encoding- parse and crash on failure.
     pub(crate) fn parse_schedule(&mut self, input: String) -> Schedule {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_schedule_from_string(None, &input);
-        self.egraph.parser.ensure_no_reserved_symbols = true;
         res.expect("internally generated term-encoding schedule must parse")
     }
 
     /// Internal parse helper for term encoding- parse and crash on failure.
     pub(crate) fn parse_facts(&mut self, input: &[String]) -> Vec<Fact> {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = input
             .iter()
             .map(|f| {
@@ -187,15 +182,12 @@ impl ProofInstrumentor<'_> {
                     .expect("internally generated term-encoding fact must parse")
             })
             .collect();
-        self.egraph.parser.ensure_no_reserved_symbols = true;
         res
     }
 
     /// Internal parse helper for term encoding- parse an expression and crash on failure.
     pub(crate) fn parse_expr(&mut self, input: &str) -> Expr {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_expr_from_string(None, input);
-        self.egraph.parser.ensure_no_reserved_symbols = true;
         res.expect("internally generated term-encoding expression must parse")
     }
 
@@ -386,9 +378,8 @@ impl ProofInstrumentor<'_> {
             "
 (sort {proof_list_sort})
 (sort {ast_sort}) ;; wrap sorts in this for proofs
-;; The proof datatype records the global proof constructor names so container
-;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
-(sort {proof_datatype} :internal-proof-names {congr_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor})
+;; Record proof constructors for container rebuilding and proof extraction on re-parse.
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor} {rule_constructor} {merge_fn_constructor} {eval_constructor} {pcons} {pnil})
 
 (constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort} :internal-hidden)
 (constructor {pnil} () {proof_list_sort} :internal-hidden)
