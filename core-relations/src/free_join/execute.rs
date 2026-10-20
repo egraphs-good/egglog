@@ -2344,6 +2344,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                         } else {
                                             updates.rollback();
                                         }
+                                        if updates.frames() >= chunk_size {
+                                            drain_updates!(updates);
+                                        }
                                     }
                                 } else if mode == &MatScanMode::KeyOnly {
                                     for (col, var) in bind.iter() {
@@ -2354,6 +2357,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
+                                    }
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates!(updates);
                                     }
                                 }
                             }
