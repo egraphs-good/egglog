@@ -43,8 +43,8 @@ use super::{
     ActionId, AtomId, ColumnIds, Database, TableId, Variable,
     frame_update::{FrameUpdates, UpdateInstr},
     join_tail::{
-        BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, JoinOrderContext, LeafScans,
-        LocalState, MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use,
+        BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, JoinOrderContext, JoinOrderHints,
+        LeafScans, LocalState, MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use,
         estimate_size, materialization_is_live_in_tail, sort_plan_by_size,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
@@ -235,7 +235,6 @@ impl Database {
                                 }
                             }
                         }
-
                         // Prepared slots are execution-local and can be large.
                         // Empty roots are common in fixpoint confirmation
                         // passes, so do not construct the sidecar until the
@@ -1438,10 +1437,15 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // Keep cur=0 fixed: top-level partitions describe that first
             // stage's scan, so changing it would invalidate their boundaries.
             // Packed child families support each new successor choice.
+            let hints = JoinOrderHints {
+                start: cur,
+                prepared,
+                remaining_stages: remaining_stages.map(StageMask::as_u128),
+            };
             sort_plan_by_size(
                 instr_order,
                 leaf_scans,
-                JoinOrderContext::Runtime { start: cur },
+                JoinOrderContext::RuntimeWithIndexes(&hints),
                 &stages.instrs,
                 binding_info,
             );

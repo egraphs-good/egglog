@@ -204,6 +204,25 @@ where
         boundaries[self.key_index() + 1] as usize - boundaries[self.key_index()] as usize
     }
 
+    /// Return a cached successor's key count, or `None` if absent.
+    /// Does not construct the index.
+    pub(crate) fn cached_child_key_count(self, family: usize) -> Option<usize> {
+        let slot = match self.node.children() {
+            PackedChildren::Leaf => return None,
+            PackedChildren::Direct(slots) => &slots[self.key_index()],
+            PackedChildren::Families(families) => {
+                let slots = families.get(family)?.load(Ordering::Acquire);
+                if slots.is_null() {
+                    return None;
+                }
+                // SAFETY: a published family has one initialized slot per
+                // parent key and lives as long as the parent arena node.
+                unsafe { &*slots.add(self.key_index()) }
+            }
+        };
+        slot.get().map(|node| node.key_len())
+    }
+
     /// Return the next scalar index below this cursor, building and publishing
     /// it once for the current key when necessary.
     ///
@@ -1178,9 +1197,11 @@ mod tests {
 
         WrappedTableRef::with_wrapper(&table, |table| {
             let mut scratch = Vec::new();
+            assert_eq!(cursor.cached_child_key_count(7), None);
             let first =
                 cursor.child_index(&handle, table, column(1), 7, ChildShape::Leaf, &mut scratch);
             assert_eq!(first.values(), &[value(0), value(1), value(2)]);
+            assert_eq!(cursor.cached_child_key_count(7), Some(3));
 
             let sentinel = (value(999), row(999));
             scratch.clear();
@@ -1215,6 +1236,8 @@ mod tests {
                 PackedKeyLen::new(1, ChildShape::Dynamic { families: 2 }, false)
             );
             let cursor = PackedCursor::new(parent, 0);
+            assert_eq!(cursor.cached_child_key_count(0), None);
+            assert_eq!(cursor.cached_child_key_count(1), None);
 
             WrappedTableRef::with_wrapper(&table, |table| {
                 let mut scratch = Vec::new();
@@ -1227,6 +1250,8 @@ mod tests {
                     &mut scratch,
                 );
                 assert_eq!(first_family.values(), &[value(0), value(1)]);
+                assert_eq!(cursor.cached_child_key_count(0), Some(2));
+                assert_eq!(cursor.cached_child_key_count(1), None);
 
                 let second_family = cursor.child_index(
                     &handle,
@@ -1237,6 +1262,7 @@ mod tests {
                     &mut scratch,
                 );
                 assert_eq!(second_family.values(), &[value(0), value(1), value(2)]);
+                assert_eq!(cursor.cached_child_key_count(1), Some(3));
                 assert!(!ptr::eq(first_family, second_family));
 
                 let cached_first = cursor.child_index(

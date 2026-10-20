@@ -398,21 +398,190 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
 
 /// Whether ordering prepares a new plan or resumes an executing join.
 #[derive(Clone, Copy)]
-pub(super) enum JoinOrderContext {
+pub(super) enum JoinOrderContext<'a, 'plan> {
     Initial,
     /// Select only the next execution position, `start`. Later positions and
     /// phases keep their order until execution provides fresh residual sizes.
+    #[allow(dead_code)] // Also supports direct ordering tests without index hints.
     Runtime {
         start: usize,
     },
+    RuntimeWithIndexes(&'a JoinOrderHints<'a, 'plan>),
+}
+
+/// Prepared indexes and remaining stages for a runtime ordering decision.
+// Borrow the wide mask so it does not enlarge each ordering-context copy.
+pub(super) struct JoinOrderHints<'a, 'plan> {
+    pub(super) start: usize,
+    pub(super) prepared: &'a PreparedJoinIndexes<'plan>,
+    pub(super) remaining_stages: Option<u128>,
+}
+
+/// Estimate possible keys plus surplus rows retained for later stages:
+/// `K * (1 + sum_live(rows_i / distinct_i - 1))`, where `K = min(distinct_i)`.
+///
+/// Inputs are row bounds, distinct-key estimates, and later-use flags. Key
+/// counts are capped by row bounds; empty inputs or a zero count yield zero.
+/// Average group sizes approximate the work; key overlap and skew are unknown.
+pub(super) fn estimated_retained_work(
+    inputs: impl IntoIterator<Item = (usize, usize, bool)>,
+) -> f64 {
+    let mut keys = usize::MAX;
+    // Sum retained groups: multiplying them would charge Cartesian products
+    // that factorized execution does not materialize.
+    let mut work_per_key = 1.0f64;
+    for (rows, distinct, live) in inputs {
+        let distinct = distinct.min(rows);
+        if distinct == 0 {
+            return 0.0;
+        }
+        keys = keys.min(distinct);
+        if live {
+            work_per_key += rows as f64 / distinct as f64 - 1.0;
+        }
+    }
+    if keys == usize::MAX {
+        0.0
+    } else {
+        keys as f64 * work_per_key
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retained_cost(
+    stage_index: usize,
+    instrs: &[JoinStage],
+    binding_info: &BindingInfo<'_, '_>,
+    prepared: Option<&PreparedJoinIndexes<'_>>,
+    order: &InstrOrder,
+    start: usize,
+    remaining_stages: Option<u128>,
+) -> f64 {
+    let stage = &instrs[stage_index];
+    let (JoinStage::Intersect { scans, .. }, Some(prepared)) = (stage, prepared) else {
+        return estimate_size(stage, binding_info) as f64;
+    };
+    let slots = prepared.stage(stage_index);
+    if slots.len() != scans.len() {
+        return estimate_size(stage, binding_info) as f64;
+    }
+    let later = remaining_stages.map(|remaining| remaining & !(1u128 << stage_index));
+    estimated_retained_work(scans.iter().zip(slots).map(|(scan, slot)| {
+        let rows = &binding_info.subsets[scan.atom];
+        let live = later
+            .and_then(|mask| prepared.rows_live_in_mask(scan.atom, mask))
+            .unwrap_or_else(|| {
+                // Without a mask, inspect only the unexecuted suffix.
+                (start..order.len()).any(|position| {
+                    let candidate = order.get(position);
+                    let mut touched = false;
+                    if candidate != stage_index {
+                        for_each_stage_atom(&instrs[candidate], |atom| {
+                            touched |= atom == scan.atom;
+                        });
+                    }
+                    touched
+                })
+            });
+        (
+            rows.size(),
+            rows.cached_column_size(prepared.resolve(slot)),
+            live,
+        )
+    }))
+}
+
+/// Select the guarded runtime winner without mutating the order; return `None`
+/// for an empty range. Missing key counts use row bounds (density one), but
+/// partially known statistics can still change the choice.
+#[cfg(test)]
+pub(super) fn select_runtime_stage(
+    order: &InstrOrder,
+    range: Range<usize>,
+    instrs: &[JoinStage],
+    binding_info: &BindingInfo<'_, '_>,
+    prepared: Option<&PreparedJoinIndexes<'_>>,
+    remaining_stages: Option<u128>,
+) -> Option<usize> {
+    let winner = range.clone().min_by_key(|&position| {
+        let stage = &instrs[order.get(position)];
+        (
+            estimate_size(stage, binding_info),
+            -num_intersected_rels(stage),
+        )
+    })?;
+    if winner == range.start {
+        return Some(winner);
+    }
+    Some(guard_runtime_swap(
+        order,
+        range.start,
+        winner,
+        instrs,
+        binding_info,
+        prepared,
+        remaining_stages,
+    ))
+}
+
+/// Return `winner`, or `start` when the retained-row guard rejects the swap.
+// Keep retained-cost work separate from the minimum-row and no-swap paths.
+#[inline(never)]
+fn guard_runtime_swap(
+    order: &InstrOrder,
+    start: usize,
+    winner: usize,
+    instrs: &[JoinStage],
+    binding_info: &BindingInfo<'_, '_>,
+    prepared: Option<&PreparedJoinIndexes<'_>>,
+    remaining_stages: Option<u128>,
+) -> usize {
+    let winner_stage = &instrs[order.get(winner)];
+    // Limit the model to opening a binary key domain. Additional predicates in
+    // a multiway intersection can filter keys before retained groups are read.
+    let JoinStage::Intersect { scans, .. } = winner_stage else {
+        return winner;
+    };
+    // A singleton cannot multiply the current frame into several key choices.
+    if scans.len() != 2 || estimate_size(winner_stage, binding_info) <= 1 {
+        return winner;
+    }
+    // Bound inputs and deltas can expose selectivity that average group sizes
+    // miss, even when their row bounds are unchanged.
+    let (Some(prepared), Some(_)) = (prepared, remaining_stages) else {
+        // Plans without prepared masks keep the minimum-row choice.
+        return winner;
+    };
+    if scans.iter().any(|scan| {
+        prepared.seminaive_focus() == Some(scan.atom)
+            || !binding_info.subsets[scan.atom].is_plan_root()
+    }) {
+        return winner;
+    }
+    let cost = |position| {
+        retained_cost(
+            order.get(position),
+            instrs,
+            binding_info,
+            Some(prepared),
+            order,
+            start,
+            remaining_stages,
+        )
+    };
+    if cost(winner) <= cost(start) {
+        winner
+    } else {
+        start
+    }
 }
 
 /// Reorder a suffix of the current execution schedule using the DVO policy.
 ///
-/// At runtime, select only the next executable stage by increasing residual
-/// row count, then decreasing number of intersected relations. Exact ties keep
-/// the first stage in physical order. Rows bound the candidates an intersection
-/// or fused cover can enumerate and already reflect earlier filtering.
+/// At runtime, choose the minimum-residual-row stage, then more intersected
+/// relations, then physical order. A cached retained-row estimate can veto
+/// swaps that open an untouched binary domain. Empty and singleton filters,
+/// seminaive focuses, and bound residuals keep the original choice.
 ///
 /// Swap the selected stage into the next position without sorting the rest of
 /// the suffix: its cardinalities will change when that stage executes. Initial
@@ -429,16 +598,23 @@ pub(super) fn sort_plan_by_size(
     let start = match context {
         JoinOrderContext::Initial => 0,
         JoinOrderContext::Runtime { start } => start,
+        JoinOrderContext::RuntimeWithIndexes(hints) => hints.start,
     };
+    // Always initialize flags. Later, only a changed stage permutation
+    // invalidates them; residual-size changes do not.
+    let mut changed = matches!(context, JoinOrderContext::Initial);
     let mut last_pos = start;
     for i in start..instrs.len() {
         if is_reorder_barrier(&instrs[i]) {
-            sort_plan_by_size_inner(order, last_pos..i, context, instrs, binding_info);
+            changed |= sort_plan_by_size_inner(order, last_pos..i, context, instrs, binding_info);
             last_pos = i + 1;
         }
     }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), context, instrs, binding_info);
-    recompute_leaf_scans(order, leaf_scans, instrs, start);
+    changed |=
+        sort_plan_by_size_inner(order, last_pos..instrs.len(), context, instrs, binding_info);
+    if changed {
+        recompute_leaf_scans(order, leaf_scans, instrs, start);
+    }
 }
 
 /// Recompute which scheduled stages can emit a factorized binding set.
@@ -544,28 +720,54 @@ pub(super) fn sort_plan_by_size_inner(
     context: JoinOrderContext,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo<'_, '_>,
-) {
+) -> bool {
     // Choose only the immediate stage at runtime. A later phase cannot use
     // these cardinalities until its preceding barrier has actually executed.
-    if let JoinOrderContext::Runtime { start } = context {
+    let runtime_start = match context {
+        JoinOrderContext::Initial => None,
+        JoinOrderContext::Runtime { start } => Some(start),
+        JoinOrderContext::RuntimeWithIndexes(hints) => Some(hints.start),
+    };
+    if let Some(start) = runtime_start {
         if range.start != start {
-            return;
+            return false;
         }
-        let best = range.clone().min_by_key(|&position| {
+        let Some(best) = range.min_by_key(|&position| {
             let stage = &instrs[order.get(position)];
             (
                 estimate_size(stage, binding_info),
                 -num_intersected_rels(stage),
             )
-        });
-        if let Some(best) = best {
-            order.data.swap(start, best);
+        }) else {
+            return false;
+        };
+        if best == start {
+            return false;
         }
-        return;
+        let (prepared, remaining_stages) = match context {
+            JoinOrderContext::RuntimeWithIndexes(hints) => {
+                (Some(hints.prepared), hints.remaining_stages)
+            }
+            _ => (None, None),
+        };
+        let best = guard_runtime_swap(
+            order,
+            start,
+            best,
+            instrs,
+            binding_info,
+            prepared,
+            remaining_stages,
+        );
+        if best != start {
+            order.data.swap(start, best);
+            return true;
+        }
+        return false;
     }
     // Nothing to sort if there's 0 or 1 element.
     if range.len() <= 1 {
-        return;
+        return false;
     }
     // How many times an atom has been intersected/joined
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
@@ -623,18 +825,21 @@ pub(super) fn sort_plan_by_size_inner(
         (-refine, rows, -relations, 0)
     };
 
+    let mut changed = false;
     for i in range.clone() {
         let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
         for j in (i + 1)..range.end {
             let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
             if key_j < key_i {
                 order.data.swap(i, j);
+                changed = true;
                 key_i = key_j;
             }
         }
         // Update the counts after a new instruction is selected.
         update_refinements(&instrs[order.get(i)], &mut times_refined);
     }
+    changed
 }
 
 /// Maps execution positions to stage indices in the logical plan. Dynamic

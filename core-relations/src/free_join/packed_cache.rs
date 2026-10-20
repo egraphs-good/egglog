@@ -258,6 +258,17 @@ impl OwnedAtomRows {
         self.plan_root
     }
 
+    /// Return a cached shared root's key count, or `None` if absent.
+    /// Does not construct the index.
+    pub(super) fn cached_packed_root_key_count(&self, family: FamilyId) -> Option<usize> {
+        let slots = self.shared.as_ref()?.packed_roots.get()?;
+        let address = *slots.get(family.index())?.get()?;
+        // SAFETY: shared roots publish nodes from the current execution arena,
+        // which is alive for all uses of the root.
+        let node = unsafe { &*(address as *const super::packed_trie::TrieNode<'_>) };
+        Some(node.values().len())
+    }
+
     /// Find the packed-root slot for an interned `(column, slow constraints)` family.
     /// As in the original column-index cache, dense slots avoid a separate
     /// hash table and canonicalization for each root. Families are fixed while

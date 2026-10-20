@@ -210,8 +210,45 @@ where
         self.cardinality
     }
 
+    /// Estimate distinct keys for this scalar access, capped by its row bound.
+    /// Missing statistics use the row bound; no index is constructed or refreshed.
+    /// Catalogs may cover a wider header range, so capped counts remain estimates.
+    pub(super) fn cached_column_size(&self, prepared: PreparedIndexRef<'_>) -> usize {
+        let family = |shared: bool| {
+            if shared {
+                prepared.families.first().map(|family| family.index())
+            } else {
+                Some(prepared.access.index())
+            }
+        };
+        let cached = match self.kind() {
+            AtomRowsKind::Owned(root) if root.is_plan_root() => prepared
+                .cached_root_key_count()
+                .or_else(|| root.cached_packed_root_key_count(*prepared.families.first()?)),
+            AtomRowsKind::Catalog {
+                continuation: Some(continuation),
+                ..
+            } => family(continuation.cache.is_shared()).and_then(|family| {
+                continuation
+                    .cache
+                    .cached_child_key_count(continuation.position, family)
+            }),
+            AtomRowsKind::Packed(cursor) => family(cursor.node().is_shared())
+                .and_then(|family| cursor.cached_child_key_count(family)),
+            _ => None,
+        };
+        cached.map_or(self.size(), |keys| keys.min(self.size()))
+    }
+
     pub(super) fn kind(&self) -> &AtomRowsKind<'rows, 'exec> {
         &self.kind
+    }
+
+    /// Whether these are still the atom's original header-filtered rows.
+    /// Every retained match or cover binding creates a non-root residual,
+    /// even when binding a key leaves the row count unchanged.
+    pub(super) fn is_plan_root(&self) -> bool {
+        matches!(&self.kind, AtomRowsKind::Owned(root) if root.is_plan_root())
     }
 
     pub(super) fn owned(root: Arc<OwnedAtomRows>) -> Self {

@@ -782,7 +782,7 @@ impl Query {
             // There is a single "focus" atom that we will constrain to look at new values.
             let (_, _, schema_info) = &self.atoms[focus_atom];
             let ts_col = ColumnId::from_usize(schema_info.ts_col());
-            let _ = rsb.add_rule_from_cached_plan(
+            let _ = rsb.add_rule_from_cached_plan_with_focus(
                 &cached_plan.plan,
                 &[(
                     cached_plan.atom_mapping[focus_atom],
@@ -791,6 +791,7 @@ impl Query {
                         val: mid_ts.to_value(),
                     },
                 )],
+                Some(cached_plan.atom_mapping[focus_atom]),
             );
             return;
         }
@@ -831,7 +832,11 @@ impl Query {
                     },
                 ));
             }
-            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
+            let _ = rsb.add_rule_from_cached_plan_with_focus(
+                &cached_plan.plan,
+                &constraints,
+                Some(cached_plan.atom_mapping[focus_atom]),
+            );
         }
     }
 }
