@@ -1240,7 +1240,136 @@ impl<'a> JoinState<'a> {
         );
     }
 
-    /// The core method for executing a free join plan.
+    /// Consume single-row stages without growing the native call stack. Other
+    /// stages retain the existing batched, recursive execution path.
+    #[allow(clippy::too_many_arguments)]
+    fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
+        &self,
+        stages: &'buf JoinStages,
+        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        action: A,
+        instr_order: &mut InstrOrder,
+        leaf_scans: &mut LeafScans,
+        mut cur: usize,
+        binding_info: &mut BindingInfo,
+        action_buf: &mut BUF,
+    ) where
+        'a: 'buf,
+    {
+        let mut restore = Vec::new();
+        'stages: while !self.exec_state.should_stop() {
+            if cur >= instr_order.len() {
+                action_buf.push_bindings_factorized(
+                    action,
+                    &mut binding_info.bindings,
+                    &binding_info.binding_sets,
+                    &self.exec_state,
+                );
+                break;
+            }
+            match &stages.instrs[instr_order.get(cur)] {
+                JoinStage::Intersect { var, scans }
+                    if !scans.is_empty()
+                        && scans
+                            .iter()
+                            .all(|scan| binding_info.subsets[scan.atom].size() == 1) =>
+                {
+                    let mut value = None;
+                    for scan in scans {
+                        let table = self.db.tables[atoms[scan.atom].table].table.as_ref();
+                        let mut row = TaggedRowBuffer::new(1);
+                        table.scan_project(
+                            binding_info.subsets[scan.atom].subset.as_ref(),
+                            &[scan.column],
+                            Offset::new(0),
+                            1,
+                            &scan.cs,
+                            &mut row,
+                        );
+                        let Some((_, key)) = row.iter().next() else {
+                            break 'stages;
+                        };
+                        if value.is_some_and(|value| value != key[0]) {
+                            break 'stages;
+                        }
+                        value = Some(key[0]);
+                    }
+                    binding_info.bindings.insert(*var, value.unwrap());
+                }
+                JoinStage::FusedIntersect {
+                    cover,
+                    bind,
+                    to_intersect,
+                } if binding_info.subsets[cover.to_index.atom].size() == 1 => {
+                    let cover_atom = cover.to_index.atom;
+                    let table = self.db.tables[atoms[cover_atom].table].table.as_ref();
+                    let proj =
+                        SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                    let mut row = TaggedRowBuffer::new(bind.len());
+                    table.scan_project(
+                        binding_info.subsets[cover_atom].subset.as_ref(),
+                        &proj,
+                        Offset::new(0),
+                        1,
+                        &cover.constraints,
+                        &mut row,
+                    );
+                    let Some((_, key)) = row.iter().next() else {
+                        break;
+                    };
+                    for (i, (_, var)) in bind.iter().enumerate() {
+                        binding_info.bindings.insert(*var, key[i]);
+                    }
+                    for (scan, cols) in to_intersect {
+                        let atom = scan.to_index.atom;
+                        let prober = self.get_index(
+                            atoms,
+                            atom,
+                            binding_info,
+                            scan.to_index.vars.iter().copied(),
+                        );
+                        let index_key = SmallVec::<[Value; 4]>::from_iter(
+                            cols.iter().map(|col| key[col.index()]),
+                        );
+                        let sub = prober.get_subset(&index_key);
+                        let table = self.db.tables[atoms[atom].table].table.as_ref();
+                        let subset = sub.map(|sub| {
+                            let need_live = sub.can_be_stale && table.has_stale_rows();
+                            if scan.constraints.is_empty() && !need_live {
+                                sub.inner.to_owned(&self.pool)
+                            } else {
+                                table.refine_ref(sub.inner, &scan.constraints, need_live)
+                            }
+                        });
+                        restore.push((atom, prober.node));
+                        let Some(subset) = subset.filter(|subset| !subset.is_empty()) else {
+                            break 'stages;
+                        };
+                        binding_info.insert_subset(atom, subset);
+                    }
+                }
+                _ => {
+                    self.run_plan_stage(
+                        stages,
+                        atoms,
+                        action,
+                        instr_order,
+                        leaf_scans,
+                        cur,
+                        binding_info,
+                        action_buf,
+                    );
+                    break;
+                }
+            }
+            cur += 1;
+        }
+        for (atom, node) in restore.into_iter().rev() {
+            binding_info.insert_node(atom, node);
+        }
+    }
+
+    /// The core method for executing a branching free join stage.
     ///
     /// This method takes the plan, mutable data-structures for variable binding and staging
     /// actions, and two indexes: `cur` which is the current stage of the plan to run, and `level`
@@ -1249,7 +1378,7 @@ impl<'a> JoinState<'a> {
     /// currently used as a heuristic to determine if we should increase parallelism more than the
     /// default.
     #[allow(clippy::too_many_arguments)]
-    fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
+    fn run_plan_stage<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
         stages: &'buf JoinStages,
         atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
