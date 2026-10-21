@@ -67,8 +67,10 @@ impl FreshGen<str, String> for SymbolGen {
 
         // A bare hint ending in `_digits` could equal another hint's numbered name.
         let bare = self.leave_off_zero && count == 0 && {
-            let trimmed = name_hint.trim_end_matches(|c: char| c.is_ascii_digit());
-            trimmed.len() == name_hint.len() || !trimmed.ends_with('_')
+            let has_counter_suffix = name_hint.rsplit_once('_').is_some_and(|(_, suffix)| {
+                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+            });
+            !has_counter_suffix
         };
         let mut buffer = itoa::Buffer::new();
         let suffix = if bare { "" } else { buffer.format(count) };
