@@ -1454,6 +1454,28 @@ fn test_shadowing_push() {
 }
 
 #[test]
+fn test_shadowing_scope_restores_names_after_error() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(datatype Math (Wrap i64))")
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(None, "(rule ((Wrap query)) ((let local 1) (let Wrap 2)))")
+        .unwrap_err();
+    assert!(matches!(error, Error::Shadowing(name, _, _) if name == "Wrap"));
+    egraph
+        .parse_and_run_program(
+            None,
+            "(rule ((Wrap query)) ((let local 1))) (constructor query () Math) (constructor local () Math)",
+        )
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(None, "(rule () ((let Wrap 2)))")
+        .unwrap_err();
+    assert!(matches!(error, Error::Shadowing(name, _, _) if name == "Wrap"));
+}
+
+#[test]
 fn test_print_function_size() {
     let s = "(function f () i64 :no-merge) (set (f) 2) (print-size f)";
     let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();

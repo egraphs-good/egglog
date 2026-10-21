@@ -902,7 +902,7 @@ impl TypeInfo {
             (Context::Pure, Context::Write)
         };
 
-        let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
+        let (query, mapped_query) = Facts::to_query(body, self, symbol_gen);
         let mut problem = Problem::default();
         problem.add_query(&query, self, query_ctx)?;
 
@@ -983,7 +983,7 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         facts: &[Fact],
     ) -> Result<Vec<ResolvedFact>, TypeError> {
-        let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, symbol_gen);
+        let (query, mapped_facts) = Facts::to_query(facts, self, symbol_gen);
         let mut problem = Problem::default();
         // Top-level query-shaped commands (e.g. `check`) are read-only:
         // primitives may inspect the database but not write to it.

@@ -7,7 +7,7 @@
 //! to reflect that.
 
 use egglog::prelude::*;
-use egglog::{Error, RawValues};
+use egglog::{ApiError, Error, RawValues, Value};
 
 fn make_eg_with_function() -> EGraph {
     let mut eg = EGraph::default();
@@ -24,6 +24,42 @@ fn test_set_then_lookup_function() -> Result<(), Error> {
         .update(|fs| fs.lookup("f", 1_i64))?
         .map(|v| eg.value_to_base::<i64>(v));
     assert_eq!(got, Some(42));
+    Ok(())
+}
+
+#[test]
+fn test_borrowed_raw_keys() -> Result<(), Error> {
+    let mut eg = make_eg_with_function();
+    eg.parse_and_run_program(None, "(function nullary () i64 :no-merge)")?;
+    let key = [eg.base_to_value(1_i64)];
+    let missing = [eg.base_to_value(2_i64)];
+    let empty: &[Value] = &[];
+    eg.update(|mut fs| -> Result<(), Error> {
+        fs.set("f", key.as_slice(), 42_i64)?;
+        fs.set("nullary", empty, 7_i64)
+    })?;
+
+    let found = eg.read(|fs| fs.lookup("f", key.as_slice()))?;
+    assert_eq!(found.map(|v| eg.value_to_base::<i64>(v)), Some(42));
+    assert_eq!(eg.read(|fs| fs.lookup("f", missing.as_slice()))?, None);
+    let nullary = eg.read(|fs| fs.lookup("nullary", empty))?;
+    assert_eq!(nullary.map(|v| eg.value_to_base::<i64>(v)), Some(7));
+    assert!(matches!(
+        eg.read(|fs| fs.lookup("f", empty)),
+        Err(Error::ApiError(ApiError::WrongArity {
+            expected: 1,
+            got: 0,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        eg.read(|fs| fs.lookup("nullary", key.as_slice())),
+        Err(Error::ApiError(ApiError::WrongArity {
+            expected: 0,
+            got: 1,
+            ..
+        }))
+    ));
     Ok(())
 }
 
