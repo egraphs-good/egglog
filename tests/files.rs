@@ -143,6 +143,8 @@ impl Run {
             .set_proof_checking_program(parsed_proof_check_prog, true)
             .expect("Failed to set proof checking program");
 
+        egraph.ensure_no_reserved_symbols(false);
+
         // Append print-size to every test file to ensure it works
         let program = format!("{program}\n(print-size)");
 

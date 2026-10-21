@@ -406,8 +406,8 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
-        let parser = Parser::default();
-        let proof_state = EncodingState::default();
+        let mut parser = Parser::default();
+        let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
             backend: Default::default(),
             parser,
@@ -652,6 +652,14 @@ impl EGraph {
     /// Returns `true` when missing `$` prefixes on globals are treated as errors.
     pub fn strict_mode(&self) -> bool {
         self.strict_mode
+    }
+
+    /// Configure whether the internal reserved symbol (@) is allowed in user-defined names.
+    /// WARNING: do not use, this is for testing running egglog after desugaring.
+    /// Public so files.rs can use it, hidden from documentation because it is not intended for general use.
+    #[doc(hidden)]
+    pub fn ensure_no_reserved_symbols(&mut self, should_ensure: bool) {
+        self.parser.ensure_no_reserved_symbols = should_ensure;
     }
 
     fn ensure_global_name_prefix(&mut self, span: &Span, name: &str) -> Result<(), TypeError> {
@@ -1364,7 +1372,6 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        command.reserve_symbols(&mut self.parser.symbol_gen);
         let resolved = self.resolve_command(command)?;
         if self.are_proofs_enabled() {
             self.proof_check_program
@@ -1412,11 +1419,9 @@ impl EGraph {
         output_sort: ArcSort,
         context: Context,
     ) -> Result<ResolvedExpr, TypeError> {
-        expr.visit_vars(&mut |_, name| self.parser.symbol_gen.reserve(name));
         let mut binding_map = IndexMap::default();
         binding_map.reserve(bindings.len());
         for (name, span, sort) in bindings {
-            self.parser.symbol_gen.reserve(name);
             if binding_map
                 .insert(name.as_str(), (span.clone(), sort.clone()))
                 .is_some()
@@ -1449,7 +1454,6 @@ impl EGraph {
         &mut self,
         expr: &ResolvedExpr,
     ) -> Result<(ResolvedExpr, Vec<(String, Value)>), Error> {
-        expr.visit_vars(&mut |_, var| self.parser.symbol_gen.reserve(&var.name));
         let mut bindings = Vec::new();
         let expr = self.prepare_unstable_fn_targets_for_eval_inner(expr, &mut bindings)?;
         Ok((expr, bindings))
@@ -1700,14 +1704,6 @@ impl EGraph {
                     names.eq_trans_constructor = pc.trans;
                     names.eq_sym_constructor = pc.sym;
                     names.container_normalize_constructor = pc.normalize;
-                    if let Some(extraction) = pc.extraction {
-                        names.fiat_constructor = extraction.fiat;
-                        names.rule_constructor = extraction.rule;
-                        names.merge_fn_constructor = extraction.merge;
-                        names.eval_constructor = extraction.eval;
-                        names.pcons = extraction.pcons;
-                        names.pnil = extraction.pnil;
-                    }
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -2056,52 +2052,13 @@ impl EGraph {
 
     fn resolve_command_before_proofs(
         &mut self,
-        mut command: Command,
+        command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
-        if let Some(original) = &self.proof_state.original_typechecking {
-            // A later input can use an earlier encoding temporary's spelling as
-            // a local. Rename that local so execution and printed replay agree.
-            let mut scoped = &command;
-            while let Command::Fail(_, inner) = scoped {
-                scoped = inner;
-            }
-            if matches!(
-                scoped,
-                Command::Rule { .. }
-                    | Command::Rewrite(..)
-                    | Command::BiRewrite(..)
-                    | Command::Check(..)
-                    | Command::Prove(..)
-                    | Command::RunSchedule(..)
-            ) {
-                let mut renamed = HashMap::default();
-                command = command.map_symbols(&mut |head| head, &mut |name| {
-                    if self.type_info.is_global(&name) && !original.type_info.is_global(&name) {
-                        renamed
-                            .entry(name.clone())
-                            .or_insert_with(|| self.parser.symbol_gen.fresh(&name))
-                            .clone()
-                    } else {
-                        name
-                    }
-                });
-            }
-        }
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
-            // All proof passes share one allocator, including the original checker.
-            std::mem::swap(
-                &mut self.parser.symbol_gen,
-                &mut original_typechecking.parser.symbol_gen,
-            );
-            let typechecked = original_typechecking.typecheck_program(&desugared);
-            std::mem::swap(
-                &mut self.parser.symbol_gen,
-                &mut original_typechecking.parser.symbol_gen,
-            );
-            let typechecked = typechecked?;
+            let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
@@ -2184,14 +2141,6 @@ impl EGraph {
         program: Vec<Command>,
         run_commands: bool,
     ) -> Result<ResolvedNCommandsWithOutput, Error> {
-        // Reserve the full AST batch before macros or lowering can allocate.
-        // This also covers callers of run_program that did not parse text here.
-        for command in &program {
-            command.reserve_symbols(&mut self.parser.symbol_gen);
-            if let Command::Include(_, file) = command {
-                self.parser.reserve_include_names(file)?;
-            }
-        }
         let mut outputs = Vec::new();
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
@@ -3675,47 +3624,6 @@ mod tests {
                 (check (= out (and2 (var "x") x1)))
                 "#,
             )
-            .unwrap();
-    }
-
-    #[test]
-    fn test_fresh_symbols_remain_unique_after_pop() {
-        let mut egraph = EGraph::default();
-        let before = egraph.parser.symbol_gen.fresh("x");
-        egraph.push();
-        let during = egraph.parser.symbol_gen.fresh("x_0");
-        egraph.push();
-        let nested = egraph.parser.symbol_gen.fresh("x");
-        egraph.pop().unwrap();
-        let after_nested = egraph.parser.symbol_gen.fresh("x_0");
-        egraph.pop().unwrap();
-        let after = egraph.parser.symbol_gen.fresh("x");
-        let names = HashSet::from_iter([before, during, nested, after_nested, after]);
-        assert_eq!(names.len(), 5);
-    }
-
-    #[test]
-    fn test_fresh_anonymous_variables_survive_print_and_reparse() {
-        let resolved = EGraph::default()
-            .resolve_program(
-                None,
-                r#"
-                (relation input_pair (i64 i64))
-                (relation seen (i64))
-                (input_pair 1 2)
-                (rule ((input_pair _ _)) ((seen 7)))
-                (run 1)
-                (check (seen 7))
-                "#,
-            )
-            .unwrap();
-        let rendered = resolved
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        EGraph::default()
-            .parse_and_run_program(None, &rendered)
             .unwrap();
     }
 }

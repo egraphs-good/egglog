@@ -458,14 +458,6 @@ impl EGraph {
                     names.eq_trans_constructor = pc.trans.clone();
                     names.eq_sym_constructor = pc.sym.clone();
                     names.container_normalize_constructor = pc.normalize.clone();
-                    if let Some(extraction) = &pc.extraction {
-                        names.fiat_constructor = extraction.fiat.clone();
-                        names.rule_constructor = extraction.rule.clone();
-                        names.merge_fn_constructor = extraction.merge.clone();
-                        names.eval_constructor = extraction.eval.clone();
-                        names.pcons = extraction.pcons.clone();
-                        names.pnil = extraction.pnil.clone();
-                    }
                 }
                 // A container sort under the term/proof encoding carries a spec
                 // for its rebuild primitives; register them here so they are

@@ -137,9 +137,6 @@ fn parse_container_rebuild_spec(sexp: &Sexp) -> Result<ContainerRebuildSpec, Par
     })
 }
 
-/// Generate fresh names with the supplied [`Parser::symbol_gen`]. Extensions
-/// introducing literal names must reserve them before allocating names that
-/// could otherwise use the same spelling.
 pub trait Macro<T>: Send + Sync {
     fn name(&self) -> &str;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
@@ -179,6 +176,7 @@ pub struct Parser {
     exprs: HashMap<String, Arc<dyn Macro<Expr>>>,
     user_defined: HashSet<String>,
     pub symbol_gen: SymbolGen,
+    pub ensure_no_reserved_symbols: bool,
 }
 
 impl Default for Parser {
@@ -189,94 +187,31 @@ impl Default for Parser {
             exprs: Default::default(),
             user_defined: Default::default(),
             symbol_gen: SymbolGen::new(INTERNAL_SYMBOL_PREFIX.to_string()),
+            ensure_no_reserved_symbols: true,
         }
     }
 }
 
 impl Parser {
+    fn ensure_symbol_not_reserved(&self, symbol: &str, span: &Span) -> Result<(), ParseError> {
+        if self.symbol_gen.is_reserved(symbol) && self.ensure_no_reserved_symbols {
+            return error!(
+                span.clone(),
+                "symbols starting with '{}' are reserved for egglog internals",
+                self.symbol_gen.reserved_prefix()
+            );
+        }
+        Ok(())
+    }
+
     pub fn get_program_from_string(
         &mut self,
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<Command>, ParseError> {
-        let sexps = all_sexps(SexpParser::new(filename, input, Some(&mut self.symbol_gen)))?;
-        for sexp in &sexps {
-            self.reserve_rule_name(sexp);
-            if let Sexp::List(items, _) = sexp
-                && let [Sexp::Atom(head, _), Sexp::Literal(Literal::String(file), _)] =
-                    items.as_slice()
-                && head == "include"
-                && !self.commands.contains_key("include")
-                && !self.user_defined.contains("include")
-            {
-                self.reserve_include_names(file)?;
-            }
-        }
+        let sexps = all_sexps(SexpParser::new(filename, input))?;
         let nested: Vec<Vec<_>> = map_fallible(&sexps, self, Self::parse_command)?;
         Ok(nested.into_iter().flatten().collect())
-    }
-
-    // Rule names are quoted strings; ordinary string data must not advance counters.
-    fn reserve_rule_name(&mut self, sexp: &Sexp) {
-        let Sexp::List(items, _) = sexp else { return };
-        let Some(Sexp::Atom(head, _)) = items.first() else {
-            return;
-        };
-        if self.commands.contains_key(head) || self.user_defined.contains(head) {
-            return;
-        }
-        match head.as_str() {
-            "fail" if items.len() == 2 => self.reserve_rule_name(&items[1]),
-            "rule" | "rewrite" | "birewrite" => {
-                for pair in items.windows(2) {
-                    if let [
-                        Sexp::Atom(option, _),
-                        Sexp::Literal(Literal::String(name), _),
-                    ] = pair
-                        && option == ":name"
-                    {
-                        self.symbol_gen.reserve(name);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Reserve existing static includes before parsing allocates names in their caller.
-    pub(crate) fn reserve_include_names(&mut self, file: &str) -> Result<(), ParseError> {
-        let mut pending = vec![file.to_owned()];
-        let mut visited = HashSet::default();
-        while let Some(file) = pending.pop() {
-            if !visited.insert(file.clone()) {
-                continue;
-            }
-            // Keep missing-file errors at execution, as with ordinary includes.
-            let Ok(input) = std::fs::read_to_string(&file) else {
-                continue;
-            };
-            let Ok(sexps) = all_sexps(SexpParser::new(
-                Some(file),
-                &input,
-                Some(&mut self.symbol_gen),
-            )) else {
-                // Actual include execution reports syntax errors after earlier commands run.
-                continue;
-            };
-            for sexp in sexps {
-                self.reserve_rule_name(&sexp);
-                if let Sexp::List(items, _) = sexp
-                    && let [Sexp::Atom(head, _), Sexp::Literal(Literal::String(file), _)] =
-                        items.as_slice()
-                    && head == "include"
-                    && !self.commands.contains_key("include")
-                    && !self.user_defined.contains("include")
-                {
-                    pending.push(file.clone());
-                }
-            }
-        }
-        Ok(())
     }
 
     // currently only used for testing, but no reason it couldn't be used elsewhere later
@@ -285,11 +220,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Expr, ParseError> {
-        let sexp = sexp(&mut SexpParser::new(
-            filename,
-            input,
-            Some(&mut self.symbol_gen),
-        ))?;
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
         self.parse_expr(&sexp)
     }
 
@@ -298,11 +229,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Schedule, ParseError> {
-        let sexp = sexp(&mut SexpParser::new(
-            filename,
-            input,
-            Some(&mut self.symbol_gen),
-        ))?;
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
         self.parse_schedule(&sexp)
     }
 
@@ -312,11 +239,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Fact, ParseError> {
-        let sexp = sexp(&mut SexpParser::new(
-            filename,
-            input,
-            Some(&mut self.symbol_gen),
-        ))?;
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
         self.parse_fact(&sexp)
     }
 
@@ -433,38 +356,13 @@ impl Parser {
                                     proof_func =
                                         Some(pf.expect_atom("internal-proof-func function name")?);
                                 }
-                                (
-                                    ":internal-proof-names",
-                                    [congr, trans, sym, normalize, rest @ ..],
-                                ) => {
-                                    let extraction = match rest {
-                                        [] => None,
-                                        [fiat, rule, merge, eval, pcons, pnil] => {
-                                            Some(ProofExtractionNames {
-                                                fiat: fiat.expect_atom("fiat constructor")?,
-                                                rule: rule.expect_atom("rule constructor")?,
-                                                merge: merge.expect_atom("merge constructor")?,
-                                                eval: eval.expect_atom("eval constructor")?,
-                                                pcons: pcons
-                                                    .expect_atom("proof-list cons constructor")?,
-                                                pnil: pnil
-                                                    .expect_atom("proof-list nil constructor")?,
-                                            })
-                                        }
-                                        _ => {
-                                            return error!(
-                                                span,
-                                                ":internal-proof-names requires four or ten constructor names"
-                                            );
-                                        }
-                                    };
+                                (":internal-proof-names", [congr, trans, sym, normalize]) => {
                                     proof_constructors = Some(ProofConstructorNames {
                                         congr: congr.expect_atom("congr constructor")?,
                                         trans: trans.expect_atom("trans constructor")?,
                                         sym: sym.expect_atom("sym constructor")?,
                                         normalize: normalize
                                             .expect_atom("container-normalize constructor")?,
-                                        extraction,
                                     });
                                 }
                                 _ => {
@@ -1026,7 +924,9 @@ impl Parser {
         Ok(match head.as_str() {
             "let" => match tail {
                 [name, value] => {
+                    let binding_span = name.span();
                     let binding = name.expect_atom("binding name")?;
+                    self.ensure_symbol_not_reserved(&binding, &binding_span)?;
                     vec![Action::Let(span, binding, self.parse_expr(value)?)]
                 }
                 _ => return error!(span, "usage: (let <name> <expr>)"),
@@ -1092,6 +992,7 @@ impl Parser {
                 if *symbol == "_" {
                     self.symbol_gen.fresh(symbol)
                 } else {
+                    self.ensure_symbol_not_reserved(symbol, span)?;
                     symbol.clone()
                 },
             ),
@@ -1207,26 +1108,20 @@ impl Parser {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct SexpParser<'a> {
+#[derive(Clone, Debug)]
+pub(crate) struct SexpParser {
     source: Arc<SrcFile>,
     index: usize,
-    symbol_gen: Option<&'a mut SymbolGen>,
 }
 
-impl<'a> SexpParser<'a> {
-    pub(crate) fn new(
-        name: Option<String>,
-        contents: &str,
-        symbol_gen: Option<&'a mut SymbolGen>,
-    ) -> Self {
+impl SexpParser {
+    pub(crate) fn new(name: Option<String>, contents: &str) -> SexpParser {
         SexpParser {
             source: Arc::new(SrcFile {
                 name,
                 contents: contents.to_string(),
             }),
             index: 0,
-            symbol_gen,
         }
     }
 
@@ -1340,7 +1235,7 @@ enum Token {
     Other,
 }
 
-fn sexp(ctx: &mut SexpParser<'_>) -> Result<Sexp, ParseError> {
+fn sexp(ctx: &mut SexpParser) -> Result<Sexp, ParseError> {
     let mut stack: Vec<(EgglogSpan, Vec<Sexp>)> = vec![];
 
     loop {
@@ -1388,13 +1283,6 @@ fn sexp(ctx: &mut SexpParser<'_>) -> Result<Sexp, ParseError> {
             }
         };
 
-        // Reserve the whole input before AST parsing can mint names for `_` or macros.
-        if let Some(symbol_gen) = ctx.symbol_gen.as_mut()
-            && let Sexp::Atom(symbol, _) = &sexp
-        {
-            symbol_gen.reserve(symbol);
-        }
-
         if stack.is_empty() {
             return Ok(sexp);
         } else {
@@ -1403,7 +1291,7 @@ fn sexp(ctx: &mut SexpParser<'_>) -> Result<Sexp, ParseError> {
     }
 }
 
-pub(crate) fn all_sexps(mut ctx: SexpParser<'_>) -> Result<Vec<Sexp>, ParseError> {
+pub(crate) fn all_sexps(mut ctx: SexpParser) -> Result<Vec<Sexp>, ParseError> {
     let mut sexps = Vec::new();
     ctx.advance_past_whitespace();
     while !ctx.is_at_end() {
@@ -1416,56 +1304,6 @@ pub(crate) fn all_sexps(mut ctx: SexpParser<'_>) -> Result<Vec<Sexp>, ParseError
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn input_symbols_are_reserved_before_wildcards() {
-        let mut parser = Parser::default();
-        assert_eq!(
-            parser
-                .get_expr_from_string(None, "(f _ @v @v@7)")
-                .unwrap()
-                .to_string(),
-            "(f @v@8 @v @v@7)"
-        );
-        assert_eq!(
-            parser
-                .get_fact_from_string(None, "(= _ @v@20)")
-                .unwrap()
-                .to_string(),
-            "(= @v@21 @v@20)"
-        );
-        let commands = Parser::default()
-            .get_program_from_string(None, "(let x _) (let @v 1) (rule () () :name \"@v@3\")")
-            .unwrap();
-        assert_eq!(commands[0].to_string(), "(let x @v@4)");
-    }
-
-    #[test]
-    fn generated_names_parse_without_a_special_mode() {
-        let mut parser = Parser::default();
-        parser
-            .get_program_from_string(
-                None,
-                r#"
-            (sort @S)
-            (constructor x@y () @S)
-            (let @x (x@y))
-            (rule () () :name "rule@name")
-        "#,
-            )
-            .unwrap();
-        assert_eq!(
-            parser
-                .get_expr_from_string(None, "(x@y @x)")
-                .unwrap()
-                .to_string(),
-            "(x@y @x)"
-        );
-        parser.get_fact_from_string(None, "(= @x (x@y))").unwrap();
-        parser
-            .get_schedule_from_string(None, "(run rules@internal)")
-            .unwrap();
-    }
 
     #[test]
     fn test_parser_display_roundtrip() {
@@ -1521,7 +1359,7 @@ mod tests {
     #[test]
     fn test_parser_macros() {
         let mut parser = Parser::default();
-        let y = "@generated";
+        let y = "xxxx";
         parser.add_expr_macro(Arc::new(SimpleMacro::new("qqqq", |tail, span, macros| {
             Ok(Expr::Call(
                 span,
@@ -1530,7 +1368,7 @@ mod tests {
             ))
         })));
         let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
-        let t = r#"(f (@generated a 3) 4.0 (H "hello"))"#;
+        let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
         let e = parser.get_expr_from_string(None, s).unwrap();
         assert_eq!(format!("{e}"), t);
     }

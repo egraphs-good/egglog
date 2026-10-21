@@ -3,7 +3,8 @@ use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
 
-#[derive(Clone, Default)]
+// TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
+#[derive(Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
     pub uf_function: HashMap<String, String>,
@@ -28,12 +29,30 @@ pub(crate) struct EncodingState {
     pub original_typechecking: Option<Box<EGraph>>,
     pub proofs_enabled: bool,
     pub proof_testing: bool,
-    /// Allocated with the term header, or restored from desugared proof metadata.
     pub proof_names: EncodingNames,
     /// Test-only knob: annotate RHS-reading rules `:naive` (the safe
     /// whole-database baseline) instead of `:unsafe-seminaive`, so tests can
     /// assert the two produce the same database.
     pub force_proof_naive: bool,
+}
+
+impl EncodingState {
+    pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
+        Self {
+            uf_parent: HashMap::default(),
+            uf_function: HashMap::default(),
+            proof_func_parent: HashMap::default(),
+            container_rebuild_name: HashMap::default(),
+            container_rebuild_proof_name: HashMap::default(),
+            merge_current: HashMap::default(),
+            term_header_added: false,
+            original_typechecking: None,
+            proofs_enabled: false,
+            proof_names: EncodingNames::new(symbol_gen),
+            proof_testing: false,
+            force_proof_naive: false,
+        }
+    }
 }
 
 /// Thin wrapper around an [`EGraph`] for the term encoding
@@ -1655,9 +1674,6 @@ impl<'a> ProofInstrumentor<'a> {
         let mut res = vec![];
 
         if !self.egraph.proof_state.term_header_added {
-            // Input names are reserved before allocating the encoding's names.
-            self.egraph.proof_state.proof_names =
-                EncodingNames::new(&mut self.egraph.parser.symbol_gen);
             res.extend(self.term_header());
             if self.egraph.proof_state.proofs_enabled {
                 let proof_header = self.proof_header();

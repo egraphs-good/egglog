@@ -1,6 +1,5 @@
 ---
 source: tests/files.rs
-assertion_line: 97
 expression: err_msg
 ---
 In 10:1-29 of union_relation.egg: (union (edge 1 2) (edge 3 4))

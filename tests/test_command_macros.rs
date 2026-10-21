@@ -153,7 +153,7 @@ fn test_multiple_macros_compose_with_desugar_program() {
     let output = result.join("\n");
 
     assert!(
-        output.contains("second__first_"),
+        output.contains(format!("second_{INTERNAL_SYMBOL_PREFIX}first_").as_str()),
         "Expected rule name to have both prefixes in order: {output}"
     );
 }
@@ -257,11 +257,11 @@ fn test_complex_macro_composition() {
     // Then PrefixRuleMacro adds "prefixed_" to both
     // So we should have: prefixed_dup1_$rule_<n> and prefixed_dup2_$rule_<n>
     assert!(
-        output.contains("prefixed__dup1_"),
+        output.contains(&format!("prefixed_{INTERNAL_SYMBOL_PREFIX}dup1_")),
         "Expected first rule with both transformations: {output}"
     );
     assert!(
-        output.contains("prefixed__dup2_"),
+        output.contains(&format!("prefixed_{INTERNAL_SYMBOL_PREFIX}dup2_")),
         "Expected second rule with both transformations: {output}"
     );
 
