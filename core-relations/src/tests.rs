@@ -2066,6 +2066,73 @@ fn fused_cover_partition_fixture(
 }
 
 #[test]
+fn gj_deep_fanout_preserves_bindings_and_materialization() {
+    fn evaluate(workers: usize) -> (usize, Vec<Vec<Value>>, u64) {
+        let pool = egglog_concurrency::ThreadPool::new(workers);
+        pool.install(|| {
+            let mut db = Database::default();
+            let left = add_set_table(&mut db, 5);
+            let right = add_set_table(&mut db, 5);
+            let output = add_set_table(&mut db, 5);
+            const ROWS: usize = 8193;
+            for table in [left, right] {
+                let mut buf = db.new_buffer(table);
+                for i in 0..ROWS {
+                    buf.stage_insert(&[v(7), v(11), v(13), v(i), v(100_000 + i)]);
+                }
+            }
+            db.merge_all();
+
+            let mut rsb = db.new_rule_set();
+            let mut query = rsb.new_rule();
+            query.set_plan_strategy(PlanStrategy::Gj);
+            query.set_no_decomp(true);
+            let vars = (0..5).map(|_| query.new_var()).collect::<Vec<_>>();
+            let args = vars.iter().map(|var| (*var).into()).collect::<Vec<_>>();
+            query.add_atom(left, &args, &[]).unwrap();
+            query.add_atom(right, &args, &[]).unwrap();
+            let mut rule = query.build();
+            rule.insert(output, &args).unwrap();
+            rule.build_with_description("deep-fanout");
+            let rules = rsb.build();
+            let (plan, _, _) = rules.plans.values().next().unwrap();
+            let Plan::SinglePlan(plan) = plan else {
+                panic!("expected a single generic-join plan")
+            };
+            assert_eq!(plan.stages.instrs.len(), 5);
+            for (stage, var) in plan.stages.instrs.iter().zip(&vars) {
+                assert!(
+                    matches!(stage, JoinStage::Intersect { var: actual, .. } if actual == var),
+                    "three singleton prefixes must precede the wide fourth level"
+                );
+            }
+
+            pool.reset_scheduler_metrics();
+            let report = db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+            let metrics = pool.scheduler_metrics();
+            assert_eq!(report.num_matches("deep-fanout"), ROWS);
+            let rows = table_rows(&db, output);
+            assert_eq!(rows.len(), ROWS);
+            assert_eq!(
+                metrics.local_pushes,
+                metrics.local_pops + metrics.donated_jobs
+            );
+            (
+                report.num_matches("deep-fanout"),
+                rows,
+                metrics.local_pushes,
+            )
+        })
+    }
+
+    let serial = evaluate(1);
+    let parallel = evaluate(4);
+    assert_eq!(parallel.0, serial.0);
+    assert_eq!(parallel.1, serial.1);
+    assert!(parallel.2 > 0, "deep fanout should expose work to the pool");
+}
+
+#[test]
 fn gj_small_top_fallback_uses_local_queue() {
     let pool = egglog_concurrency::ThreadPool::new(4);
     pool.install(|| {
