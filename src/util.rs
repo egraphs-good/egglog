@@ -11,13 +11,12 @@ pub use egglog_ast::generic_ast_helpers::INTERNAL_SYMBOL_PREFIX;
 
 /// Generates fresh symbols for internal use during typechecking and flattening.
 /// Names consist of the reserved prefix, hint, and an underscore-separated counter.
-/// By default, zero is omitted unless the hint ends in `_` and ASCII digits.
+/// Zero is omitted unless the hint ends in `_` and ASCII digits.
 /// Generating a symbol after its counter is exhausted panics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolGen {
     hint_to_count: HashMap<String, usize>,
     reserved_string: String,
-    leave_off_zero: bool,
 }
 
 impl SymbolGen {
@@ -26,14 +25,7 @@ impl SymbolGen {
         Self {
             hint_to_count: HashMap::default(),
             reserved_string,
-            leave_off_zero: true,
         }
-    }
-
-    /// Include zero even when the hint does not already end in `_digits`.
-    /// By default, an ordinary hint starts with "var" instead of "var_0".
-    pub fn include_zero(&mut self, include: bool) {
-        self.leave_off_zero = !include;
     }
 
     /// Check if this symbol generator has been used to generate any symbols.
@@ -66,7 +58,7 @@ impl FreshGen<str, String> for SymbolGen {
             .expect("fresh symbol counter exhausted");
 
         // A bare hint ending in `_digits` could equal another hint's numbered name.
-        let bare = self.leave_off_zero && count == 0 && {
+        let bare = count == 0 && {
             let has_counter_suffix = name_hint.rsplit_once('_').is_some_and(|(_, suffix)| {
                 !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
             });
@@ -153,7 +145,7 @@ mod symbol_gen_tests {
     }
 
     #[test]
-    fn exhaustive_short_hints_are_unique_with_zero_toggles() {
+    fn exhaustive_short_hints_are_unique() {
         let mut hints = vec![String::new()];
         let mut last = vec![String::new()];
         for _ in 0..4 {
@@ -167,8 +159,7 @@ mod symbol_gen_tests {
         for prefix in ["", "@", "_", "12"] {
             let mut generator = SymbolGen::new(prefix.to_owned());
             let mut seen = HashSet::default();
-            for round in 0..4 {
-                generator.include_zero(round % 2 != 0);
+            for _ in 0..4 {
                 for hint in &hints {
                     assert!(seen.insert(generator.fresh(hint)), "{prefix:?} {hint:?}");
                 }

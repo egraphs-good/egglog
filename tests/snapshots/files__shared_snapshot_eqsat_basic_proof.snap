@@ -2,34 +2,34 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-(let t_0 (Mul (Num 2) (Add (Var "x") (Num 3))))
+(let t (Mul (Num 2) (Add (Var "x") (Num 3))))
 (let t_1 (Mul (Num 2) (Var "x")))
 (let t_2 (Add (Num 6) t_1))
 (let t_3 (Mul (Num 2) (Num 3)))
 (let t_4 (Add t_3 t_1))
 (let t_5 (Add t_1 t_3))
-(let t_6 (premises (Fiat (= t_0 t_0))))
+(let t_6 (premises (Fiat (= t t))))
 (let t_7
   (substitution
                 (c (Num 3))
                 (a (Num 2))
                 (b (Var "x"))
-                (@rewrite_var___1 t_0)))
+                (@rewrite_var___1 t)))
 (let t_8
   (premises
           (Sym
-            (= t_0 t_5)
+            (= t t_5)
             (Rule
-              (= t_5 t_0)
+              (= t_5 t)
               (name "(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))")
               t_6
               t_7))))
-(let t_9 (substitution (a t_1) (b t_3) (@rewrite_var__ t_0)))
+(let t_9 (substitution (a t_1) (b t_3) (@rewrite_var__ t)))
 (Trans
-  (= t_0 t_2)
+  (= t t_2)
   (Sym
-    (= t_0 t_4)
-    (Rule (= t_4 t_0) (name "(rewrite (Add a b) (Add b a))") t_8 t_9))
+    (= t t_4)
+    (Rule (= t_4 t) (name "(rewrite (Add a b) (Add b a))") t_8 t_9))
   (Congr
     (= t_4 t_2)
     (Rule (= t_4 t_4) (name "(rewrite (Add a b) (Add b a))") t_8 t_9)
