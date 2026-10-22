@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use divan::{Bencher, counter::ItemsCount};
 use egglog_concurrency::{ThreadPool, scope};
-use egglog_core_relations::{Database, SortedWritesTable, Table, Value};
+use egglog_core_relations::{ColumnId, Database, SortedWritesTable, Table, Value};
 use egglog_numeric_id::NumericId;
 use rand::{Rng, SeedableRng, rng, rngs::StdRng};
 
@@ -352,8 +352,8 @@ fn bench_delete_only<const N: usize>(bench: Bencher, table_size: usize, removals
 fn new_table<const K: usize, const C: usize>() -> SortedWritesTable {
     SortedWritesTable::new(
         K,
-        C,
-        None,
+        C + 1,
+        ColumnId::from_usize(C),
         vec![],
         Box::new(|_, old, new, out: &mut Vec<Value>| {
             out.extend_from_slice(new);
@@ -363,7 +363,7 @@ fn new_table<const K: usize, const C: usize>() -> SortedWritesTable {
 }
 
 fn new_rejecting_table() -> SortedWritesTable {
-    SortedWritesTable::new(3, 5, None, vec![], Box::new(|_, _, _, _| false))
+    SortedWritesTable::new(3, 6, ColumnId::new(5), vec![], Box::new(|_, _, _, _| false))
 }
 
 fn stage_inserts<const C: usize>(table: &SortedWritesTable, rows: &[[Value; C]]) {
@@ -372,7 +372,9 @@ fn stage_inserts<const C: usize>(table: &SortedWritesTable, rows: &[[Value; C]])
             let mut buf = table.new_buffer();
             scope.spawn(move |_| {
                 for row in rows {
-                    buf.stage_insert(row);
+                    let mut timestamped = row.to_vec();
+                    timestamped.push(Value::new(0));
+                    buf.stage_insert(&timestamped);
                 }
             });
         }
@@ -411,7 +413,11 @@ fn stage_operations_with_batch_size<const K: usize, const C: usize>(
             scope.spawn(move |_| {
                 for op in batch {
                     match op {
-                        Operation::Insert(row) => buf.stage_insert(row),
+                        Operation::Insert(row) => {
+                            let mut timestamped = row.to_vec();
+                            timestamped.push(Value::new(0));
+                            buf.stage_insert(&timestamped);
+                        }
                         Operation::Remove(key) => buf.stage_remove(key),
                     }
                 }

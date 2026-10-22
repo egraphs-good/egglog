@@ -16,11 +16,14 @@ use crate::{
     free_join::{
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
         Variable,
-        plan::{JoinHeader, Plan, PlanStrategy},
+        plan::{JoinHeader, Plan, PlanStrategy, SharedHeaderSubset},
     },
     pool::{Pooled, with_pool_set},
     table_spec::{ColumnId, Constraint},
 };
+
+#[cfg(test)]
+mod tests;
 
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 
@@ -94,6 +97,25 @@ impl RuleSet {
 pub struct RuleSetBuilder<'outer> {
     rule_set: RuleSet,
     db: &'outer mut Database,
+    /// Rows cannot change through this builder. Cache processed headers only
+    /// until it is consumed; the next ruleset rechecks the database after merge.
+    /// Constraint order is preserved, and atom ids deliberately are not keys.
+    header_cache: DenseIdMap<TableId, HashMap<Vec<Constraint>, Option<CachedHeaderConstraints>>>,
+}
+
+struct CachedHeaderConstraints {
+    fast: Pooled<Vec<Constraint>>,
+    subset: SharedHeaderSubset,
+}
+
+impl CachedHeaderConstraints {
+    fn header(&self, atom: AtomId) -> JoinHeader {
+        JoinHeader {
+            atom,
+            constraints: Pooled::cloned(&self.fast),
+            subset: self.subset.clone(),
+        }
+    }
 }
 
 impl<'outer> RuleSetBuilder<'outer> {
@@ -101,6 +123,7 @@ impl<'outer> RuleSetBuilder<'outer> {
         Self {
             rule_set: Default::default(),
             db,
+            header_cache: Default::default(),
         }
     }
 
@@ -131,11 +154,15 @@ impl<'outer> RuleSetBuilder<'outer> {
     }
 
     fn reprocess_constraints(
-        &self,
+        &mut self,
         table: TableId,
         atom: AtomId,
         constraints: &[Constraint],
     ) -> Option<JoinHeader> {
+        let table_cache = self.header_cache.get_or_insert(table, HashMap::default);
+        if let Some(cached) = table_cache.get(constraints) {
+            return cached.as_ref().map(|cached| cached.header(atom));
+        }
         let processed = self.db.process_constraints(table, constraints);
         if !processed.slow.is_empty() {
             panic!(
@@ -143,18 +170,18 @@ impl<'outer> RuleSetBuilder<'outer> {
                  Got: {constraints:?} for table {table:?}",
             );
         }
-        if processed.subset.size() == 0 {
-            return None;
-        }
-        Some(JoinHeader {
-            atom,
-            constraints: processed.fast,
+        let cached = (processed.subset.size() != 0).then(|| CachedHeaderConstraints {
+            fast: processed.fast,
             subset: processed.subset,
-        })
+        });
+        let header = cached.as_ref().map(|cached| cached.header(atom));
+        // Borrowed slice lookup above allocates a key only on a cache miss.
+        table_cache.insert(constraints.to_vec(), cached);
+        header
     }
 
     fn push_extra_constraints(
-        &self,
+        &mut self,
         headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         extra_constraints: &[(AtomId, Constraint)],
@@ -172,7 +199,7 @@ impl<'outer> RuleSetBuilder<'outer> {
     }
 
     fn reprocess_existing_headers(
-        &self,
+        &mut self,
         headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         existing: &[JoinHeader],
@@ -189,7 +216,7 @@ impl<'outer> RuleSetBuilder<'outer> {
     }
 
     fn get_rule_with_extra_constraints(
-        &self,
+        &mut self,
         cached: &CachedPlan,
         action_id: ActionId,
         extra_constraints: &[(AtomId, Constraint)],

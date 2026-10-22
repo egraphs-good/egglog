@@ -1222,7 +1222,7 @@ impl EGraph {
                             return Err(Error::RuleAlreadyExists(rule.name, rule.span));
                         }
                         indexmap::map::Entry::Vacant(e) => e.insert(CompiledRule {
-                            core: core_rule,
+                            core: Arc::new(core_rule),
                             backend_id: rule_id,
                             seminaive,
                             requires_read_context,
@@ -2134,8 +2134,8 @@ impl EGraph {
         }
     }
 
-    /// Run a program, returning the desugared outputs as well as the CommandOutputs.
-    /// Can optionally not run the commands, just adding type information.
+    /// Run a program, returning its CommandOutputs, or collect its desugared
+    /// commands without running them, just adding type information.
     fn process_program_internal(
         &mut self,
         program: Vec<Command>,
@@ -2180,8 +2180,10 @@ impl EGraph {
                             .extend(resolved.desugared_before_proofs.clone());
                     }
 
-                    desugared_before_proofs.extend(resolved.desugared_before_proofs);
-                    desugared.extend(resolved.desugared.clone());
+                    if !run_commands {
+                        desugared_before_proofs.extend(resolved.desugared_before_proofs);
+                        desugared.extend(resolved.desugared.clone());
+                    }
 
                     for processed in resolved.desugared {
                         // even in desugar mode we still run push and pop

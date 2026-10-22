@@ -54,8 +54,18 @@ impl OffsetRange {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Default, PartialEq, Eq, Debug, Hash)]
 pub struct SortedOffsetVector(Vec<RowId>);
+
+impl Clone for SortedOffsetVector {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.0.clone_from(&source.0);
+    }
+}
 
 impl SortedOffsetVector {
     pub(crate) fn slice(&self) -> &SortedOffsetSlice {

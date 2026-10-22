@@ -201,8 +201,8 @@ where
                 .into_iter()
                 .map(|bexpr| bexpr.visit_exprs(f))
                 .collect(),
-            name: self.name.clone(),
-            ruleset: self.ruleset.clone(),
+            name: self.name,
+            ruleset: self.ruleset,
             eval_mode: self.eval_mode,
             no_decomp: self.no_decomp,
             include_subsumed: self.include_subsumed,
@@ -338,18 +338,31 @@ where
     Head: Clone + Display,
     Leaf: Clone + Eq + Display + Hash,
 {
+    /// Visits every variable occurrence, including `let` binders before their values.
     pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
-        if let GenericAction::Let(span, lhs, _) = self {
-            f(span, lhs);
-        }
-        let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
-            GenericExpr::Var(span, var) => {
-                f(&span, &var);
-                GenericExpr::Var(span, var)
+        match self {
+            GenericAction::Let(span, lhs, rhs) => {
+                f(span, lhs);
+                rhs.visit_vars(f);
             }
-            other => other,
-        };
-        let _ = self.clone().visit_exprs(&mut visit);
+            GenericAction::Set(_, _, args, rhs) => {
+                for arg in args {
+                    arg.visit_vars(f);
+                }
+                rhs.visit_vars(f);
+            }
+            GenericAction::Change(_, _, _, args) => {
+                for arg in args {
+                    arg.visit_vars(f);
+                }
+            }
+            GenericAction::Union(_, lhs, rhs) => {
+                lhs.visit_vars(f);
+                rhs.visit_vars(f);
+            }
+            GenericAction::Panic(..) => {}
+            GenericAction::Expr(_, expr) => expr.visit_vars(f),
+        }
     }
 
     // Applys `f` to all expressions in the action.
@@ -391,24 +404,22 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericAction::Let(span, lhs, rhs) => {
-                GenericAction::Let(span, lhs.clone(), rhs.visit_exprs(f))
-            }
+            GenericAction::Let(span, lhs, rhs) => GenericAction::Let(span, lhs, rhs.visit_exprs(f)),
             // TODO should we refactor `Set` so that we can map over Expr::Call(lhs, args)?
             // This seems more natural to oflatt
             // Currently, visit_exprs does not apply f to the first argument of Set.
             GenericAction::Set(span, lhs, args, rhs) => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Set(span, lhs.clone(), args, rhs.visit_exprs(f))
+                GenericAction::Set(span, lhs, args, rhs.visit_exprs(f))
             }
             GenericAction::Change(span, change, lhs, args) => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
+                GenericAction::Change(span, change, lhs, args)
             }
             GenericAction::Union(span, lhs, rhs) => {
                 GenericAction::Union(span, lhs.visit_exprs(f), rhs.visit_exprs(f))
             }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
+            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg),
             GenericAction::Expr(span, e) => GenericAction::Expr(span, e.visit_exprs(f)),
         }
     }
@@ -516,14 +527,13 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
-        let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
-            GenericExpr::Var(span, var) => {
-                f(&span, &var);
-                GenericExpr::Var(span, var)
+        match self {
+            GenericFact::Eq(_, lhs, rhs) => {
+                lhs.visit_vars(f);
+                rhs.visit_vars(f);
             }
-            other => other,
-        };
-        let _ = self.clone().visit_exprs(&mut visit);
+            GenericFact::Fact(expr) => expr.visit_vars(f),
+        }
     }
 
     pub fn visit_exprs(
@@ -590,14 +600,11 @@ where
 
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
-        let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
-            GenericExpr::Var(span, var) => {
-                f(&span, &var);
-                GenericExpr::Var(span, var)
+        self.walk(&mut |_| {}, &mut |expr| {
+            if let GenericExpr::Var(span, var) = expr {
+                f(span, var);
             }
-            other => other,
-        };
-        let _ = self.clone().visit_exprs(&mut visit);
+        });
     }
 
     pub fn span(&self) -> Span {
@@ -676,7 +683,7 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
             GenericExpr::Var(..) => f(self),
             GenericExpr::Call(span, op, children) => {
                 let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
-                f(GenericExpr::Call(span, op.clone(), children))
+                f(GenericExpr::Call(span, op, children))
             }
         }
     }
@@ -780,6 +787,144 @@ impl Display for Literal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span::RustSpan;
+    use std::sync::Arc;
+
+    #[test]
+    fn visit_vars_expr_preserves_occurrences_and_spans() {
+        let spans: Vec<_> = (1..=3)
+            .map(|line| {
+                Span::Rust(Arc::new(RustSpan {
+                    file: file!(),
+                    line,
+                    column: 1,
+                }))
+            })
+            .collect();
+        let expr = GenericExpr::Call(
+            Span::Panic,
+            "outer",
+            vec![
+                GenericExpr::Lit(Span::Panic, Literal::Int(1)),
+                GenericExpr::Var(spans[0].clone(), "x"),
+                GenericExpr::Call(
+                    Span::Panic,
+                    "inner",
+                    vec![
+                        GenericExpr::Var(spans[1].clone(), "y"),
+                        GenericExpr::Var(spans[2].clone(), "x"),
+                    ],
+                ),
+                GenericExpr::Call(Span::Panic, "empty", vec![]),
+            ],
+        );
+        let mut visited = Vec::new();
+        expr.visit_vars(&mut |span, var| visited.push((span.clone(), *var)));
+
+        assert_eq!(
+            visited,
+            vec![
+                (spans[0].clone(), "x"),
+                (spans[1].clone(), "y"),
+                (spans[2].clone(), "x"),
+            ]
+        );
+    }
+
+    #[test]
+    fn visit_vars_facts_visit_both_sides_in_order() {
+        let facts = [
+            GenericFact::Eq(
+                Span::Panic,
+                GenericExpr::Call(
+                    Span::Panic,
+                    "f",
+                    vec![
+                        GenericExpr::Var(Span::Panic, "x"),
+                        GenericExpr::Var(Span::Panic, "x"),
+                    ],
+                ),
+                GenericExpr::Var(Span::Panic, "y"),
+            ),
+            GenericFact::Fact(GenericExpr::Var(Span::Panic, "z")),
+        ];
+        let mut visited = Vec::new();
+        for fact in &facts {
+            fact.visit_vars(&mut |_, var| visited.push(*var));
+        }
+
+        assert_eq!(visited, vec!["x", "x", "y", "z"]);
+    }
+
+    #[test]
+    fn visit_vars_actions_include_binders_before_uses() {
+        let action_span = Span::Rust(Arc::new(RustSpan {
+            file: file!(),
+            line: 1,
+            column: 1,
+        }));
+        let var_span = Span::Rust(Arc::new(RustSpan {
+            file: file!(),
+            line: 2,
+            column: 1,
+        }));
+        let actions = GenericActions(vec![
+            GenericAction::Let(
+                action_span.clone(),
+                "bound",
+                GenericExpr::Var(var_span.clone(), "bound"),
+            ),
+            GenericAction::Set(
+                action_span.clone(),
+                "function",
+                vec![
+                    GenericExpr::Var(var_span.clone(), "arg1"),
+                    GenericExpr::Var(var_span.clone(), "arg2"),
+                ],
+                GenericExpr::Var(var_span.clone(), "value"),
+            ),
+            GenericAction::Change(
+                action_span.clone(),
+                Change::Delete,
+                "function",
+                vec![GenericExpr::Var(var_span.clone(), "deleted")],
+            ),
+            GenericAction::Change(
+                action_span.clone(),
+                Change::Subsume,
+                "function",
+                vec![GenericExpr::Var(var_span.clone(), "subsumed")],
+            ),
+            GenericAction::Union(
+                action_span.clone(),
+                GenericExpr::Var(var_span.clone(), "left"),
+                GenericExpr::Var(var_span.clone(), "right"),
+            ),
+            GenericAction::Panic(action_span.clone(), "message".into()),
+            GenericAction::Expr(
+                action_span.clone(),
+                GenericExpr::Var(var_span.clone(), "expr"),
+            ),
+        ]);
+        let mut visited = Vec::new();
+        actions.visit_vars(&mut |span, var| visited.push((span.clone(), *var)));
+
+        assert_eq!(
+            visited,
+            vec![
+                (action_span, "bound"),
+                (var_span.clone(), "bound"),
+                (var_span.clone(), "arg1"),
+                (var_span.clone(), "arg2"),
+                (var_span.clone(), "value"),
+                (var_span.clone(), "deleted"),
+                (var_span.clone(), "subsumed"),
+                (var_span.clone(), "left"),
+                (var_span.clone(), "right"),
+                (var_span, "expr"),
+            ]
+        );
+    }
 
     #[test]
     fn display_nullary_call_without_trailing_space() {

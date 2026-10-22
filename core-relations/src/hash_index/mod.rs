@@ -33,6 +33,8 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+mod radix_sort;
+
 #[doc(hidden)]
 pub mod bench_support;
 
@@ -101,6 +103,18 @@ impl<TI: IndexBase> Index<TI> {
 
     pub(crate) fn needs_refresh(&self, table: WrappedTableRef) -> bool {
         table.version() != self.updated_to
+    }
+
+    /// Physical rows that [`Index::refresh`] would scan for a table at `current`.
+    pub(crate) fn stale_rows(&self, current: TableVersion) -> usize {
+        if current.major == self.updated_to.major {
+            current
+                .minor
+                .index()
+                .saturating_sub(self.updated_to.minor.index())
+        } else {
+            current.minor.index()
+        }
     }
 
     pub(crate) fn refresh(&mut self, table: WrappedTableRef) {
@@ -643,7 +657,8 @@ impl IndexBase for ColumnIndex {
         // order. `bounds[b]..bounds[b + 1]` delimits column `b`'s block; the number of columns
         // is tiny, so it stays inline.
         let rows = subset.size();
-        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(rows * cols.len());
+        let mut pairs: Pooled<Vec<(Value, RowId)>> = with_pool_set(|ps| ps.get());
+        pairs.reserve(rows * cols.len());
         let mut bounds: SmallVec<[usize; 8]> = SmallVec::new();
         bounds.push(0);
         for &col in cols {
@@ -653,8 +668,8 @@ impl IndexBase for ColumnIndex {
 
         // Value-only sort each block. Since each block arrives RowId-ascending and the sort is
         // stable, the block ends up ordered by (Value, RowId) without any RowId pass.
-        let mut scratch: Vec<(Value, RowId)> =
-            vec![(Value::new_const(0), RowId::new_const(0)); rows];
+        let mut scratch: Pooled<Vec<(Value, RowId)>> = with_pool_set(|ps| ps.get());
+        scratch.resize(rows, (Value::new_const(0), RowId::new_const(0)));
         for b in 0..cols.len() {
             radix_sort_slice_by_value(&mut pairs[bounds[b]..bounds[b + 1]], &mut scratch);
         }
@@ -722,88 +737,15 @@ impl PositionedIndexBase for ColumnIndex {
     }
 }
 
-/// Number of 8-bit radix passes needed to cover values up to `max`.
-fn radix_passes_for(max: u32) -> u32 {
-    if max < 256 {
-        1
-    } else if max < 65_536 {
-        2
-    } else if max < (1 << 24) {
-        3
-    } else {
-        4
-    }
-}
-
-/// Adaptive value-only LSB radix sort of a single (Value, RowId) block, in place.
+/// Stable value sorting for a block projected in RowId order.
 ///
-/// `scratch` must be at least `data.len()` long; it is used as ping-pong space. Because the
-/// sort is stable and `data` arrives in RowId-ascending order, the result is ordered by
-/// (Value, RowId). The multi-column rebuild path sorts each column's block this way before
-/// merging, so no explicit RowId sort is ever needed.
+/// `scratch` must hold at least `data.len()` pairs. Stability preserves RowId
+/// order within each key, including the per-column blocks used by rebuilds.
 pub(crate) fn radix_sort_slice_by_value(
     data: &mut [(Value, RowId)],
     scratch: &mut [(Value, RowId)],
 ) {
-    let n = data.len();
-    if n < 64 {
-        data.sort_unstable();
-        return;
-    }
-
-    // One scan computes the pass count and detects already-sorted input (common
-    // when a column correlates with row order); a sorted block needs no work,
-    // since stability makes the result identical.
-    let mut max_val = 0u32;
-    let mut sorted = true;
-    let mut prev = 0u32;
-    for &(v, _) in data.iter() {
-        let rep = v.rep();
-        max_val = max_val.max(rep);
-        sorted &= prev <= rep;
-        prev = rep;
-    }
-    if sorted {
-        return;
-    }
-    let n_passes = radix_passes_for(max_val);
-
-    let mut src: &mut [(Value, RowId)] = data;
-    let mut dst: &mut [(Value, RowId)] = &mut scratch[..n];
-
-    for pass in 0..n_passes {
-        let shift = pass * 8;
-        let mut count = [0u32; 256];
-
-        // Count occurrences of the relevant byte of each Value.
-        for pair in src.iter() {
-            let bucket = (pair.0.rep() >> shift) & 0xFF;
-            count[bucket as usize] += 1;
-        }
-
-        // Convert counts to exclusive prefix sums (start positions per bucket).
-        let mut prefix = 0u32;
-        for c in &mut count {
-            let prev = *c;
-            *c = prefix;
-            prefix += prev;
-        }
-
-        // Stable scatter: write each element to its bucket's next position.
-        for &pair in src.iter() {
-            let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
-            dst[count[bucket] as usize] = pair;
-            count[bucket] += 1;
-        }
-
-        core::mem::swap(&mut src, &mut dst);
-    }
-
-    // After `n_passes` swaps, `src` points to the sorted data. If odd, that is `scratch`;
-    // copy it back into `data` (which is now `dst`).
-    if n_passes % 2 == 1 {
-        dst.copy_from_slice(src);
-    }
+    radix_sort::sort(data, scratch);
 }
 
 /// Merge two (Value, RowId)-sorted slices, *appending* the result to `out` and dropping pairs
@@ -850,14 +792,15 @@ fn merge2_into(a: &[(Value, RowId)], b: &[(Value, RowId)], out: &mut Vec<(Value,
 /// reused as the other buffer) rather than a fresh `Vec` per merge. Because merging two
 /// de-duplicated sorted runs leaves any shared pair adjacent, dedup composes across rounds.
 fn merge_sorted_blocks_dedup(
-    mut src: Vec<(Value, RowId)>,
+    mut src: Pooled<Vec<(Value, RowId)>>,
     bounds: &[usize],
-) -> Vec<(Value, RowId)> {
+) -> Pooled<Vec<(Value, RowId)>> {
     let n = src.len();
     debug_assert!(bounds.len() >= 2);
 
     // `src` holds the current rounds's runs, delimited by `cur`; `dst` receives the merged runs.
-    let mut dst: Vec<(Value, RowId)> = Vec::with_capacity(n);
+    let mut dst: Pooled<Vec<(Value, RowId)>> = with_pool_set(|ps| ps.get());
+    dst.reserve(n);
     let mut cur: SmallVec<[usize; 8]> = bounds.iter().copied().collect();
 
     // Each round more than halves the run count (`cur.len() - 1`); stop at a single run.

@@ -64,7 +64,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{
     common::{HashMap, HashSet, IndexSet},
-    offsets::Subset,
+    offsets::{OffsetRange, Subset, SubsetRef},
     pool::Pooled,
     query::{Atom, Query, VarColumnMap},
     table_spec::Constraint,
@@ -96,21 +96,54 @@ pub(crate) enum MatScanMode {
     Lookup(SmallVec<[Variable; 16]>),
 }
 
+/// Immutable row storage shared by processed constraints and their headers.
+/// Dense timestamp ranges stay inline; sparse offsets are owned independently
+/// of the table indexes that produced them.
+#[derive(Debug, Clone)]
+pub(crate) enum SharedHeaderSubset {
+    Dense(OffsetRange),
+    Sparse(Arc<Subset>),
+}
+
+impl From<Subset> for SharedHeaderSubset {
+    fn from(subset: Subset) -> Self {
+        match subset {
+            Subset::Dense(range) => Self::Dense(range),
+            subset @ Subset::Sparse(_) => Self::Sparse(Arc::new(subset)),
+        }
+    }
+}
+
+impl SharedHeaderSubset {
+    pub(crate) fn as_ref(&self) -> SubsetRef<'_> {
+        match self {
+            Self::Dense(range) => SubsetRef::Dense(*range),
+            Self::Sparse(subset) => subset.as_ref().as_ref(),
+        }
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        self.as_ref().size()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.size() == 0
+    }
+}
+
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
 /// of the join plan is executed.
 pub(crate) struct JoinHeader {
     pub atom: AtomId,
-    /// We currently aren't using these at all. The plan is to use this to
-    /// dedup plan stages later (it also helps for debugging).
-    #[allow(unused)]
+    /// Fast constraints used to refresh cached plans and identify reusable headers.
     pub constraints: Pooled<Vec<Constraint>>,
     /// A pre-computed table subset that we can use to filter the table,
-    /// given these constaints.
+    /// given these constraints.
     ///
     /// Why use the constraints at all? Because we want to use them to
     /// discover common plan nodes from different queries (subsets can be
     /// large).
-    pub subset: Subset,
+    pub subset: SharedHeaderSubset,
 }
 
 impl std::fmt::Debug for JoinHeader {

@@ -138,6 +138,7 @@ env_logger = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 im-rc = { workspace = true }
 indexmap = { workspace = true }
+itoa = "1.0"
 log = { workspace = true }
 num = { workspace = true }
 ordered-float = { workspace = true }

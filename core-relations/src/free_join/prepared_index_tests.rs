@@ -90,11 +90,14 @@ fn cover_only_stages_skip_prepared_index_state() {
 
 #[test]
 fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
-    use crate::{PlanStrategy, table::SortedWritesTable, table_shortcuts::v};
+    use crate::{
+        PlanStrategy,
+        table_shortcuts::{TimestampedTable, v},
+    };
 
     let mut db = Database::new();
     let table = db.add_table(
-        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
+        TimestampedTable::new(1, 1, Box::new(|_, _, _, _| false)),
         std::iter::empty(),
         std::iter::empty(),
     );

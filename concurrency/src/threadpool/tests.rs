@@ -35,6 +35,51 @@ fn scope_runs_spawned_work_and_waits() {
 }
 
 #[test]
+fn scope_available_parallelism_follows_its_own_pools_stalled_gauge() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 2);
+    let (sender, receiver) = super::unbounded();
+    let other = ThreadPoolState::new(sender, receiver, 3);
+    other
+        .instrumentation
+        .stalled_workers
+        .store(3, Ordering::Release);
+
+    // Drive the gauge directly to avoid depending on worker startup timing.
+    // A scope can query its pool even with no ambient pool or a different one.
+    assert_eq!(current_num_threads(), 1);
+    state.scope(|scope| {
+        assert!(!scope.has_available_parallelism());
+        super::install_pool(&other, || {
+            assert_eq!(current_num_threads(), 3);
+            assert!(!scope.has_available_parallelism());
+            state
+                .instrumentation
+                .stalled_workers
+                .store(1, Ordering::Release);
+            assert!(scope.has_available_parallelism());
+        });
+        assert!(scope.has_available_parallelism());
+        state
+            .instrumentation
+            .stalled_workers
+            .store(0, Ordering::Release);
+        assert!(!scope.has_available_parallelism());
+    });
+}
+
+#[test]
+fn single_worker_scope_has_no_available_parallelism() {
+    let (sender, receiver) = super::unbounded();
+    let state = ThreadPoolState::new(sender, receiver, 1);
+    state
+        .instrumentation
+        .stalled_workers
+        .store(1, Ordering::Release);
+    state.scope(|scope| assert!(!scope.has_available_parallelism()));
+}
+
+#[test]
 fn spawn_remains_a_global_queue_compatibility_alias() {
     let pool = ThreadPool::new(1);
     pool.reset_scheduler_metrics();

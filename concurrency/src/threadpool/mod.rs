@@ -1176,6 +1176,27 @@ impl<'scope> Scope<'scope> {
         }
     }
 
+    /// Return an advisory hint that another primary worker may be available.
+    ///
+    /// This checks whether this scope's pool has multiple primary workers and
+    /// at least one is currently waiting for global work or scope completion.
+    /// It reads one atomic gauge without taking scheduler-metrics locks. The
+    /// result refers to this scope's pool, even if a different pool is installed
+    /// on the calling thread.
+    ///
+    /// The hint does not reserve a worker: queued work and concurrent scheduling
+    /// can make it stale immediately. A `false` result also does not guarantee
+    /// saturation, since a busy worker may become available next. Use this to
+    /// decide whether optional recursive work should fork; correctness and
+    /// progress must not depend on the result. Single-worker pools always
+    /// return `false`.
+    pub fn has_available_parallelism(&self) -> bool {
+        // SAFETY: the scope's owning call keeps the pool alive until every
+        // callback using this scope has finished.
+        let pool = unsafe { self.pool.as_ref() };
+        pool.thread_count() > 1 && pool.instrumentation.has_stalled_workers()
+    }
+
     /// Spawn a callback onto the pool's global queue.
     ///
     /// The callback receives the current scope and may add nested work. It may

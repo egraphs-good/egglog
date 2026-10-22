@@ -427,6 +427,7 @@ pool_set! {
         // TODO: work on scaffolding/DI/etc. so that we can share allocations
         // between vec_vals and shared_vals.
         rows: Vec<RowId> [ 1 << 25 ],
+        index_pairs: Vec<(Value, RowId)> [ 1 << 25 ],
         offset_vec: SortedOffsetVector [ 1 << 20 ],
         column_index: IndexMap<Value, BufferedSubset> [ 1 << 20 ],
         constraints: Vec<Constraint> [ 1 << 20 ],

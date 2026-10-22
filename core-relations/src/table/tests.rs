@@ -11,12 +11,23 @@ use crate::{
         CompactHash, FullHash, HashedRowBuffer, KnownRemoval, ProbeHash, ShardHash,
         SortedWritesTable, TableEntry, shard_hash,
     },
-    table_shortcuts::{fill_table, v},
+    table_shortcuts::{fill_table, fill_timestamped_table, v},
     table_spec::{ColumnId, Constraint, MutationBuffer, Offset, Table, WrappedTable},
 };
 use egglog_concurrency::ThreadPool;
 
 use super::sharded_hash_table::ShardedHashTable;
+
+fn parallel_insert(table: &mut SortedWritesTable, state: &crate::ExecutionState<'_>) -> bool {
+    table.parallel_insert(
+        state,
+        super::SortChecker {
+            col: table.sort_by,
+            baseline: table.offsets.last().map(|(value, _)| *value),
+            current: None,
+        },
+    )
+}
 
 #[test]
 fn compact_hash_preserves_bucket_bits_and_exact_h2_tag() {
@@ -99,8 +110,8 @@ fn same_shard_compact_collision_survives_table_lifecycle() {
     empty_execution_state!(e);
     let mut table = SortedWritesTable::new(
         2,
-        3,
-        None,
+        4,
+        ColumnId::new(3),
         vec![],
         Box::new(|_, old, new, out: &mut Vec<Value>| {
             out.extend_from_slice(new);
@@ -112,17 +123,17 @@ fn same_shard_compact_collision_survives_table_lifecycle() {
 
     table
         .new_buffer()
-        .stage_insert(&[left_key[0], left_key[1], v(10)]);
+        .stage_insert(&[left_key[0], left_key[1], v(10), v(0)]);
     table
         .new_buffer()
-        .stage_insert(&[right_key[0], right_key[1], v(20)]);
+        .stage_insert(&[right_key[0], right_key[1], v(20), v(0)]);
     table.merge(&mut e);
     assert_eq!(table.get_row(&left_key).unwrap().vals[2], v(10));
     assert_eq!(table.get_row(&right_key).unwrap().vals[2], v(20));
 
     table
         .new_buffer()
-        .stage_insert(&[left_key[0], left_key[1], v(30)]);
+        .stage_insert(&[left_key[0], left_key[1], v(30), v(1)]);
     table.merge(&mut e);
     assert_eq!(table.get_row(&left_key).unwrap().vals[2], v(30));
     assert_eq!(table.get_row(&right_key).unwrap().vals[2], v(20));
@@ -138,7 +149,7 @@ fn same_shard_compact_collision_survives_table_lifecycle() {
 
     table
         .new_buffer()
-        .stage_insert(&[right_key[0], right_key[1], v(40)]);
+        .stage_insert(&[right_key[0], right_key[1], v(40), v(3)]);
     table.merge(&mut e);
     assert_eq!(table.get_row(&left_key).unwrap().vals[2], v(30));
     assert_eq!(table.get_row(&right_key).unwrap().vals[2], v(40));
@@ -158,8 +169,8 @@ fn same_shard_compact_collision_survives_parallel_insert_and_delete() {
         empty_execution_state!(e);
         let mut table = SortedWritesTable::new(
             2,
-            3,
-            None,
+            4,
+            ColumnId::new(3),
             vec![],
             Box::new(|_, old, new, out: &mut Vec<Value>| {
                 out.extend_from_slice(new);
@@ -171,11 +182,11 @@ fn same_shard_compact_collision_survives_parallel_insert_and_delete() {
 
         table
             .new_buffer()
-            .stage_insert(&[left_key[0], left_key[1], v(10)]);
+            .stage_insert(&[left_key[0], left_key[1], v(10), v(0)]);
         table
             .new_buffer()
-            .stage_insert(&[right_key[0], right_key[1], v(20)]);
-        assert!(table.parallel_insert(&e, ()));
+            .stage_insert(&[right_key[0], right_key[1], v(20), v(0)]);
+        assert!(parallel_insert(&mut table, &e));
         assert_eq!(table.get_row(&left_key).unwrap().vals[2], v(10));
         assert_eq!(table.get_row(&right_key).unwrap().vals[2], v(20));
 
@@ -204,12 +215,10 @@ fn dump_subset(table: &impl Table, subset: SubsetRef) -> Vec<(RowId, Vec<Value>)
 #[test]
 fn empty_key() {
     empty_execution_state!(e);
-    let mut table = fill_table(
-        vec![vec![v(1), v(2)], vec![v(2), v(3)]],
-        0,
-        None,
-        |_, new| Some(new.to_vec()),
-    );
+    let mut table =
+        fill_timestamped_table(vec![vec![v(1), v(2)], vec![v(2), v(3)]], 0, |_, new| {
+            Some(new.to_vec())
+        });
     let row = table.get_row(&[]).expect("empty key should be present");
     assert_eq!(*row.vals, vec![v(2), v(3)]);
     table.new_buffer().stage_remove(&[]);
@@ -223,7 +232,7 @@ fn empty_key() {
 
 #[test]
 fn insert_scan() {
-    let table = fill_table(
+    let table = fill_timestamped_table(
         vec![
             vec![v(0), v(1), v(2)],
             vec![v(1), v(2), v(3)],
@@ -232,7 +241,6 @@ fn insert_scan() {
             vec![v(2), v(3), v(6)],
         ],
         2,
-        None,
         |_, new| Some(new.to_vec()),
     );
 
@@ -284,7 +292,7 @@ fn insert_scan_sorted() {
             vec![v(2), v(3), v(6)],
         ],
         2,
-        Some(ColumnId::new(2)),
+        ColumnId::new(2),
         |_, new| Some(new.to_vec()),
     );
 
@@ -334,7 +342,7 @@ fn known_row_removals_match_the_staged_row_id() {
             vec![v(2), v(3), v(4)],
         ],
         2,
-        None,
+        ColumnId::new(2),
         |_, new| Some(new.to_vec()),
     );
     let key = [v(1), v(2)];
@@ -360,7 +368,7 @@ fn pending_cached_hash_mutations_survive_table_clone() {
     let mut table = fill_table(
         vec![vec![v(1), v(10)], vec![v(2), v(20)]],
         1,
-        None,
+        ColumnId::new(1),
         |_, new| Some(new.to_vec()),
     );
     let known_row = table.get_row(&[v(2)]).unwrap().id;
@@ -389,8 +397,8 @@ fn cached_hashes_stay_aligned_through_parallel_duplicate_staging() {
         empty_execution_state!(e);
         let mut table = SortedWritesTable::new(
             1,
-            2,
-            None,
+            3,
+            ColumnId::new(2),
             vec![],
             Box::new(|_, old, new, out: &mut Vec<Value>| {
                 out.extend_from_slice(new);
@@ -401,16 +409,16 @@ fn cached_hashes_stay_aligned_through_parallel_duplicate_staging() {
         for base in (0..KEYS).step_by(257) {
             let mut buffer = table.new_buffer();
             for key in base..(base + 257).min(KEYS) {
-                buffer.stage_insert(&[v(key), v(key)]);
-                buffer.stage_insert(&[v(key), v(key + 1)]);
+                buffer.stage_insert(&[v(key), v(key), v(0)]);
+                buffer.stage_insert(&[v(key), v(key + 1), v(0)]);
             }
         }
 
-        assert!(table.parallel_insert(&e, ()));
+        assert!(parallel_insert(&mut table, &e));
         assert_eq!(table.len(), KEYS);
         for key in 0..KEYS {
             assert_eq!(
-                &*table.get_row(&[v(key)]).unwrap().vals,
+                &table.get_row(&[v(key)]).unwrap().vals[..2],
                 &[v(key), v(key + 1)]
             );
         }
@@ -424,21 +432,21 @@ fn parallel_insert_uses_merge_output_for_existing_row() {
         empty_execution_state!(e);
         let mut table = SortedWritesTable::new(
             1,
-            2,
-            None,
+            3,
+            ColumnId::new(2),
             vec![],
             Box::new(|_, old, new, out: &mut Vec<Value>| {
-                out.extend_from_slice(&[old[0], Value::new(old[1].rep() + new[1].rep())]);
+                out.extend_from_slice(&[old[0], Value::new(old[1].rep() + new[1].rep()), new[2]]);
                 true
             }),
         );
 
-        table.new_buffer().stage_insert(&[v(1), v(10)]);
+        table.new_buffer().stage_insert(&[v(1), v(10), v(0)]);
         table.merge(&mut e);
-        table.new_buffer().stage_insert(&[v(1), v(7)]);
+        table.new_buffer().stage_insert(&[v(1), v(7), v(1)]);
 
-        assert!(table.parallel_insert(&e, ()));
-        assert_eq!(&*table.get_row(&[v(1)]).unwrap().vals, &[v(1), v(17)]);
+        assert!(parallel_insert(&mut table, &e));
+        assert_eq!(&table.get_row(&[v(1)]).unwrap().vals[..2], &[v(1), v(17)]);
         assert_eq!(table.len(), 1);
     });
 }
@@ -450,26 +458,26 @@ fn parallel_insert_merges_duplicate_split_across_flushes() {
         empty_execution_state!(e);
         let mut table = SortedWritesTable::new(
             1,
-            2,
-            None,
+            3,
+            ColumnId::new(2),
             vec![],
             Box::new(|_, old, new, out: &mut Vec<Value>| {
-                out.extend_from_slice(&[old[0], Value::new(old[1].rep() + new[1].rep())]);
+                out.extend_from_slice(&[old[0], Value::new(old[1].rep() + new[1].rep()), new[2]]);
                 true
             }),
         );
         let target = super::PARALLEL_INSERT_BATCH_SIZE + 1;
         let mut buffer = table.new_buffer();
-        buffer.stage_insert(&[v(target), v(10)]);
+        buffer.stage_insert(&[v(target), v(10), v(0)]);
         for key in 0..super::PARALLEL_INSERT_BATCH_SIZE {
-            buffer.stage_insert(&[v(key), v(key)]);
+            buffer.stage_insert(&[v(key), v(key), v(0)]);
         }
-        buffer.stage_insert(&[v(target), v(7)]);
+        buffer.stage_insert(&[v(target), v(7), v(0)]);
         drop(buffer);
 
-        assert!(table.parallel_insert(&e, ()));
+        assert!(parallel_insert(&mut table, &e));
         assert_eq!(
-            &*table.get_row(&[v(target)]).unwrap().vals,
+            &table.get_row(&[v(target)]).unwrap().vals[..2],
             &[v(target), v(17)]
         );
         assert_eq!(table.len(), super::PARALLEL_INSERT_BATCH_SIZE + 1);
@@ -481,14 +489,15 @@ fn parallel_insert_reports_no_change_when_merge_rejects_update() {
     let pool = ThreadPool::new(4);
     pool.install(|| {
         empty_execution_state!(e);
-        let mut table = SortedWritesTable::new(1, 2, None, vec![], Box::new(|_, _, _, _| false));
+        let mut table =
+            SortedWritesTable::new(1, 3, ColumnId::new(2), vec![], Box::new(|_, _, _, _| false));
 
-        table.new_buffer().stage_insert(&[v(1), v(10)]);
+        table.new_buffer().stage_insert(&[v(1), v(10), v(0)]);
         table.merge(&mut e);
-        table.new_buffer().stage_insert(&[v(1), v(7)]);
+        table.new_buffer().stage_insert(&[v(1), v(7), v(1)]);
 
-        assert!(!table.parallel_insert(&e, ()));
-        assert_eq!(&*table.get_row(&[v(1)]).unwrap().vals, &[v(1), v(10)]);
+        assert!(!parallel_insert(&mut table, &e));
+        assert_eq!(&table.get_row(&[v(1)]).unwrap().vals[..2], &[v(1), v(10)]);
         assert_eq!(table.len(), 1);
     });
 }
@@ -500,143 +509,32 @@ fn parallel_insert_preserves_coalesced_merge_parenthesization() {
         empty_execution_state!(e);
         let mut table = SortedWritesTable::new(
             1,
-            2,
-            None,
+            3,
+            ColumnId::new(2),
             vec![],
             Box::new(|_, old, new, out: &mut Vec<Value>| {
                 out.extend_from_slice(&[
                     old[0],
                     Value::new(old[1].rep().checked_sub(new[1].rep()).unwrap()),
+                    new[2],
                 ]);
                 true
             }),
         );
 
-        table.new_buffer().stage_insert(&[v(1), v(20)]);
+        table.new_buffer().stage_insert(&[v(1), v(20), v(0)]);
         table.merge(&mut e);
 
         let mut buffer = table.new_buffer();
-        buffer.stage_insert(&[v(1), v(7)]);
-        buffer.stage_insert(&[v(1), v(3)]);
+        buffer.stage_insert(&[v(1), v(7), v(1)]);
+        buffer.stage_insert(&[v(1), v(3), v(1)]);
         drop(buffer);
 
-        assert!(table.parallel_insert(&e, ()));
+        assert!(parallel_insert(&mut table, &e));
         // Pending rows are coalesced before consulting the destination:
         // 20 - (7 - 3) = 16. Direct left-folding would produce 10.
-        assert_eq!(&*table.get_row(&[v(1)]).unwrap().vals, &[v(1), v(16)]);
+        assert_eq!(&table.get_row(&[v(1)]).unwrap().vals[..2], &[v(1), v(16)]);
         assert_eq!(table.len(), 1);
-    });
-}
-
-#[test]
-fn parallel_unsorted_rehash_compacts_heavy_stale_rows_and_repoints_entries() {
-    const KEYS: usize = 70_000;
-    const UPDATES: usize = 5;
-
-    let pool = ThreadPool::new(4);
-    pool.install(|| {
-        empty_execution_state!(e);
-        let mut table = SortedWritesTable::new(
-            1,
-            2,
-            None,
-            vec![],
-            Box::new(|_, old, new, out: &mut Vec<Value>| {
-                out.extend_from_slice(new);
-                old != new
-            }),
-        );
-
-        // Deliberately bypass `merge`'s compaction step so the final call
-        // crosses the normal parallel-compaction threshold with a row store
-        // that is overwhelmingly stale.
-        for update in 0..=UPDATES {
-            let mut buffer = table.new_buffer();
-            for key in 0..KEYS {
-                buffer.stage_insert(&[v(key), v(update)]);
-            }
-            drop(buffer);
-            assert!(table.do_insert(&mut e));
-        }
-
-        assert_eq!(table.data.data.len(), KEYS * (UPDATES + 1));
-        assert_eq!(table.data.stale_rows, KEYS * UPDATES);
-        let old_generation = table.generation;
-
-        table.maybe_rehash();
-
-        assert_eq!(table.generation.index(), old_generation.index() + 1);
-        assert_eq!(table.data.data.len(), KEYS);
-        assert_eq!(table.data.stale_rows, 0);
-        assert_eq!(table.len(), KEYS);
-
-        let mut seen_rows = vec![false; KEYS];
-        let mut seen_keys = vec![false; KEYS];
-        let shard_data = table.hash.shard_data();
-        for (shard_index, shard) in table.hash.mut_shards().iter().enumerate() {
-            for entry in shard.iter() {
-                let row = table.data.data.get_row(entry.row);
-                assert_eq!(row[1], v(UPDATES));
-                let expected_hash = shard_hash(shard_data, row, 1);
-                assert_eq!(entry.hash, expected_hash.compact);
-                assert_eq!(expected_hash.shard.index(), shard_index);
-
-                assert!(entry.row.index() < KEYS);
-                assert!(!seen_rows[entry.row.index()]);
-                seen_rows[entry.row.index()] = true;
-
-                let key = row[0].rep() as usize;
-                assert!(key < KEYS);
-                assert!(!seen_keys[key]);
-                seen_keys[key] = true;
-            }
-        }
-        assert!(seen_rows.into_iter().all(|seen| seen));
-        assert!(seen_keys.into_iter().all(|seen| seen));
-
-        // Exercise the repointed hash entries after compaction.
-        table.new_buffer().stage_insert(&[v(17), v(UPDATES + 1)]);
-        assert!(table.do_insert(&mut e));
-        assert_eq!(
-            &*table.get_row(&[v(17)]).unwrap().vals,
-            &[v(17), v(UPDATES + 1)]
-        );
-    });
-}
-
-#[test]
-fn parallel_unsorted_rehash_handles_no_live_rows() {
-    const KEYS: usize = 1_024;
-
-    let pool = ThreadPool::new(4);
-    pool.install(|| {
-        empty_execution_state!(e);
-        let mut table = SortedWritesTable::new(1, 2, None, vec![], Box::new(|_, _, _, _| false));
-
-        let mut inserts = table.new_buffer();
-        for key in 0..KEYS {
-            inserts.stage_insert(&[v(key), v(key + 1)]);
-        }
-        drop(inserts);
-        assert!(table.do_insert(&mut e));
-
-        let mut removals = table.new_buffer();
-        for key in 0..KEYS {
-            removals.stage_remove(&[v(key)]);
-        }
-        drop(removals);
-        assert!(table.do_delete());
-        assert_eq!(table.data.stale_rows, KEYS);
-        assert!(table.hash.mut_shards().iter().all(|shard| shard.is_empty()));
-
-        let old_generation = table.generation;
-        table.parallel_rehash();
-
-        assert_eq!(table.generation.index(), old_generation.index() + 1);
-        assert_eq!(table.data.data.len(), 0);
-        assert_eq!(table.data.stale_rows, 0);
-        assert_eq!(table.len(), 0);
-        assert!(table.hash.mut_shards().iter().all(|shard| shard.is_empty()));
     });
 }
 
