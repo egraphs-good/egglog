@@ -3,6 +3,13 @@ use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
 
+#[derive(Clone)]
+struct NoMergeCurrent {
+    table: String,
+    input_arity: usize,
+    output_sort: String,
+}
+
 // TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Clone)]
 pub(crate) struct EncodingState {
@@ -22,6 +29,10 @@ pub(crate) struct EncodingState {
     /// discard stale proof-view candidates whenever the current value already
     /// has a proof witness.
     pub merge_current: HashMap<String, (String, usize)>,
+    /// Function name -> hidden first-value authority for `:no-merge`
+    /// functions. Every user-visible row query joins this authority, so a
+    /// rejected candidate is never observable.
+    no_merge_current: HashMap<String, NoMergeCurrent>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -45,6 +56,7 @@ impl EncodingState {
             container_rebuild_name: HashMap::default(),
             container_rebuild_proof_name: HashMap::default(),
             merge_current: HashMap::default(),
+            no_merge_current: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
             proofs_enabled: false,
@@ -285,15 +297,20 @@ impl<'a> ProofInstrumentor<'a> {
         fdecl: &ResolvedFunctionDecl,
         child_names: &[String],
         child_names_str: &str,
-        _view_name: &str,
+        view_name: &str,
         rebuilding_ruleset: &str,
     ) -> String {
         let name = &fdecl.name;
 
-        let merge_fn = &fdecl
-            .merge
-            .as_ref()
-            .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
+        let Some(merge_fn) = &fdecl.merge else {
+            return self.handle_no_merge(
+                fdecl,
+                child_names,
+                child_names_str,
+                view_name,
+                rebuilding_ruleset,
+            );
+        };
 
         let current_name = self
             .egraph
@@ -397,6 +414,74 @@ impl<'a> ProofInstrumentor<'a> {
                         :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{current_cleanup_name}\")
                 ",
+        )
+    }
+
+    /// Emit the declarations enforcing `:no-merge` for `fdecl`: a hidden
+    /// first-value authority table, plus a rebuilding rule that deletes a
+    /// canonically distinct candidate's view row and panics with the public
+    /// function name.
+    fn handle_no_merge(
+        &mut self,
+        fdecl: &ResolvedFunctionDecl,
+        child_names: &[String],
+        child_names_str: &str,
+        view_name: &str,
+        rebuilding_ruleset: &str,
+    ) -> String {
+        let name = &fdecl.name;
+        let current_name = self
+            .egraph
+            .parser
+            .symbol_gen
+            .fresh(&format!("{name}NoMergeCurrent"));
+        self.egraph.proof_state.no_merge_current.insert(
+            name.clone(),
+            NoMergeCurrent {
+                table: current_name.clone(),
+                input_arity: child_names.len(),
+                output_sort: fdecl.schema.output.clone(),
+            },
+        );
+
+        let selected = self.fresh_var();
+        let candidate = self.fresh_var();
+        let mut candidate_row = child_names.to_vec();
+        candidate_row.push(candidate.clone());
+        let (view_query, _) = self.query_view_and_get_proof(name, &candidate_row);
+        let (selected_canonical_query, selected_canonical, selected_needs_naive) =
+            self.canonical_value_query(&fdecl.schema.output, &selected);
+        let (candidate_canonical_query, candidate_canonical, candidate_needs_naive) =
+            self.canonical_value_query(&fdecl.schema.output, &candidate);
+        let canonical_queries = selected_canonical_query
+            .into_iter()
+            .chain(candidate_canonical_query)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let eval_mode = if selected_needs_naive || candidate_needs_naive {
+            ":naive"
+        } else {
+            ""
+        };
+        let conflict_rule = self.egraph.parser.symbol_gen.fresh("no_merge_conflict");
+        let panic_message = Literal::String(format!("Illegal merge attempted for function {name}"));
+        let input_sorts = ListDisplay(&fdecl.schema.input, " ");
+
+        format!(
+            "(function {current_name} ({input_sorts}) {}
+                    :merge old
+                    :unextractable
+                    :internal-hidden)
+             (rule ((= {selected} ({current_name} {child_names_str}))
+                    {view_query}
+                    {canonical_queries}
+                    (!= {selected_canonical} {candidate_canonical}))
+                   ((delete ({view_name} {child_names_str} {candidate}))
+                    (panic {panic_message}))
+                    :ruleset {rebuilding_ruleset}
+                    {eval_mode}
+                    :name \"{conflict_rule}\")",
+            fdecl.schema.output,
         )
     }
 
@@ -569,6 +654,42 @@ impl<'a> ProofInstrumentor<'a> {
             .or_else(|| self.egraph.get_sort_by_name(name))
             .cloned()
             .unwrap_or_else(|| panic!("sort {name} not found while encoding"))
+    }
+
+    /// Return query clauses that bind a value's canonical representative, the
+    /// representative variable itself, and whether evaluating the clauses
+    /// requires a `:naive` rule. Equality sorts use the explicit UF index;
+    /// equality containers use their registered structural rebuild primitive.
+    fn canonical_value_query(
+        &mut self,
+        sort_name: &str,
+        value: &str,
+    ) -> (Vec<String>, String, bool) {
+        let sort = self.sort_by_name(sort_name);
+        if sort.is_eq_sort() {
+            let canonical = self.fresh_var();
+            let uf_function = self.uf_function_name(sort_name);
+            let queries = if self.egraph.proof_state.proofs_enabled {
+                let pair = self.fresh_var();
+                vec![
+                    format!("(= {pair} ({uf_function} {value}))"),
+                    format!("(= {canonical} (pair-first {pair}))"),
+                ]
+            } else {
+                vec![format!("(= {canonical} ({uf_function} {value}))")]
+            };
+            (queries, canonical, false)
+        } else if sort.is_eq_container_sort() {
+            let canonical = self.fresh_var();
+            let rebuild = self.ensure_container_rebuild(&sort);
+            (
+                vec![format!("(= {canonical} ({rebuild} {value}))")],
+                canonical,
+                true,
+            )
+        } else {
+            (vec![], value.to_string(), false)
+        }
     }
 
     /// The declared sorts of `fdecl`'s columns, inputs followed by the output.
@@ -857,6 +978,7 @@ impl<'a> ProofInstrumentor<'a> {
         fact: &ResolvedFact,
         res: &mut Vec<String>,
         action_lookups: &mut Vec<String>,
+        requires_naive: &mut bool,
     ) -> String {
         match fact {
             // In proof normal form, this is the only way that function calls appear.
@@ -876,11 +998,42 @@ impl<'a> ProofInstrumentor<'a> {
                 new_args.push(v.to_string());
 
                 let view_name = self.view_name(head.name());
-                let args_str = ListDisplay(new_args, " ");
+                let args_str = ListDisplay(&new_args, " ");
 
                 // View is always a function; query it and bind the output
                 let proof_var = self.fresh_var();
                 res.push(format!("(= {proof_var} ({view_name} {args_str}))"));
+
+                // A no-merge row is observable only when its output agrees
+                // with the first-value authority for the same inputs.
+                if let Some(current) = self
+                    .egraph
+                    .proof_state
+                    .no_merge_current
+                    .get(head.name())
+                    .cloned()
+                {
+                    debug_assert_eq!(
+                        new_args.len(),
+                        current.input_arity + 1,
+                        "no-merge view row arity mismatch for {}",
+                        head.name()
+                    );
+                    if new_args.len() == current.input_arity + 1 {
+                        let inputs = ListDisplay(&new_args[..current.input_arity], " ");
+                        let selected = self.fresh_var();
+                        res.push(format!("(= {selected} ({} {inputs}))", current.table));
+
+                        let (candidate_queries, candidate, candidate_needs_naive) =
+                            self.canonical_value_query(&current.output_sort, &v.to_string());
+                        let (selected_queries, selected, selected_needs_naive) =
+                            self.canonical_value_query(&current.output_sort, &selected);
+                        res.extend(candidate_queries);
+                        res.extend(selected_queries);
+                        res.push(format!("(= {candidate} {selected})"));
+                        *requires_naive |= candidate_needs_naive || selected_needs_naive;
+                    }
+                }
 
                 if self.egraph.proof_state.proofs_enabled {
                     let mut proof = proof_var;
@@ -1091,23 +1244,33 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Return the instrumented query and a proof that it matched.
-    /// Returns `(body_facts, action_lookups, proof)`. Eq-sort variables'
+    /// Returns `(body_facts, action_lookups, proof, requires_naive)`. Eq-sort variables'
     /// `term_proof` fetches are emitted into `action_lookups` as
     /// `(let p (term_proof v))` lines for the caller to splice into the
     /// rule's actions (the rule is then `:unsafe-seminaive`). Callers
     /// that don't build a proof (`run :until`, `check`) discard the
     /// lookups and the proof.
-    fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, Vec<String>, String) {
+    fn instrument_facts(
+        &mut self,
+        facts: &[ResolvedFact],
+    ) -> (Vec<String>, Vec<String>, String, bool) {
         let mut res = vec![];
         let mut action_lookups = vec![];
         let mut proof = vec![];
+        let mut requires_naive = false;
 
         for fact in facts.iter() {
-            let f_proof = self.instrument_fact(fact, &mut res, &mut action_lookups);
+            let f_proof =
+                self.instrument_fact(fact, &mut res, &mut action_lookups, &mut requires_naive);
             proof.push(f_proof);
         }
 
-        (res, action_lookups, self.format_prooflist(&proof))
+        (
+            res,
+            action_lookups,
+            self.format_prooflist(&proof),
+            requires_naive,
+        )
     }
 
     // Actions need to be instrumented to add to the view
@@ -1216,6 +1379,18 @@ impl<'a> ProofInstrumentor<'a> {
             let inputs = ListDisplay(&args[..input_arity], " ");
             let output = &args[input_arity];
             return format!("{view_update}\n(set ({current_name} {inputs}) {output})");
+        }
+        if let Some(current) = self.egraph.proof_state.no_merge_current.get(fname).cloned() {
+            debug_assert_eq!(
+                args.len(),
+                current.input_arity + 1,
+                "no-merge set arity mismatch for {fname}"
+            );
+            if args.len() == current.input_arity + 1 {
+                let inputs = ListDisplay(&args[..current.input_arity], " ");
+                let output = &args[current.input_arity];
+                return format!("{view_update}\n(set ({} {inputs}) {output})", current.table);
+            }
         }
         view_update
     }
@@ -1403,7 +1578,8 @@ impl<'a> ProofInstrumentor<'a> {
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         // term_proofs are fetched as action-side lookups (see instrument_facts),
         // so a rule with any needs a Read/Full action context (`eval_opt` below).
-        let (facts, action_lookups, proof_str) = self.instrument_facts(&rule.body);
+        let (facts, action_lookups, proof_str, facts_require_naive) =
+            self.instrument_facts(&rule.body);
         let proof_var = self.fresh_var();
         let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
         let reads_in_rhs = !action_lookups.is_empty();
@@ -1429,7 +1605,7 @@ impl<'a> ProofInstrumentor<'a> {
         // Preserve a user `:naive` (else it silently reverts to seminaive).
         // Otherwise an RHS-reading rule needs `:unsafe-seminaive` (or `:naive`
         // under the test knob).
-        let eval_opt = if rule.eval_mode.is_naive() {
+        let eval_opt = if rule.eval_mode.is_naive() || facts_require_naive {
             ":naive"
         } else if reads_in_rhs {
             if self.egraph.proof_state.force_proof_naive {
@@ -1477,7 +1653,8 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
-                        let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
+                        let (instrumented, _lookups, _proof, _requires_naive) =
+                            self.instrument_facts(facts);
                         let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
@@ -1596,7 +1773,8 @@ impl<'a> ProofInstrumentor<'a> {
                 res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
-                let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
+                let (instrumented, _lookups, _proof, _requires_naive) =
+                    self.instrument_facts(facts);
                 res.push(Command::Check(
                     span.clone(),
                     self.parse_facts(&instrumented),
@@ -1606,12 +1784,25 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
             }
             ResolvedNCommand::Fail(span, cmd) => {
-                self.term_encode_command(cmd, res);
-                // Every term-encodable inner command pushes at least one command, so
-                // this pop cannot fail; an empty `res` would be an egglog bug.
-                let last = res
+                let no_merge_set = matches!(
+                    cmd.as_ref(),
+                    ResolvedNCommand::CoreAction(ResolvedAction::Set(_, head, _, _))
+                        if self.egraph.proof_state.no_merge_current.contains_key(head.name())
+                );
+                let mut inner = vec![];
+                self.term_encode_command(cmd, &mut inner);
+
+                // A no-merge conflict only surfaces during rebuild, so for a
+                // no-merge `set` the rebuild becomes the expected command.
+                // Other commands keep wrapping their final instrumented
+                // command (e.g. an explicit panic stays inside the fail).
+                if no_merge_set {
+                    inner.push(Command::RunSchedule(self.rebuild()));
+                }
+                let last = inner
                     .pop()
                     .expect("(fail ...) inner command produced no instrumented command");
+                res.extend(inner);
                 res.push(Command::Fail(span.clone(), Box::new(last)));
             }
             ResolvedNCommand::Extract(span, expr, variants) => {
