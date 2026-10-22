@@ -145,3 +145,62 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
         "Expected (Lit 3), got: {normal_extracted}"
     );
 }
+
+#[test]
+fn extraction_preserves_wide_rows_and_aliases_after_delayed_dependencies() {
+    // A six-level dependency chain under a row with 18 mixed children, in all three encodings.
+    let gate = "(Step5 (Step4 (Step3 (Step2 (Step1 (Seed))))))";
+    let row = r#"(Wide child1 1 false "row" (vec-of child1 child2 child1) child2 "tail" -1 true
+        (map-insert (map-empty) child1 1) (OtherLeaf false) 101 (OtherLeaf true) child1
+        (vec-of child1 child2 child1) false "end" (OtherLeaf false))"#;
+    let program = format!(
+        r#"
+        (datatype Gate0 (Seed :cost 1)) (datatype Gate1 (Step1 Gate0 :cost 1))
+        (datatype Gate2 (Step2 Gate1 :cost 1)) (datatype Gate3 (Step3 Gate2 :cost 1))
+        (datatype Gate4 (Step4 Gate3 :cost 1)) (datatype Gate5 (Step5 Gate4 :cost 1))
+        (let gate {gate})
+        (datatype Child (ChildLeaf Gate5 i64 :cost 1) (Old :cost 100))
+        (datatype Other (OtherLeaf bool :cost 1))
+        (sort Children (Vec Child)) (sort ChildMap (Map Child i64))
+        (datatype Root (Wide Child i64 bool String Children Child String i64 bool
+            ChildMap Other i64 Other Child Children bool String Other :cost 1))
+        (let old (Old)) (let child0 (ChildLeaf gate 0)) (union old child0)
+        (let child1 (ChildLeaf gate 1)) (let child2 (ChildLeaf gate 2))
+        (let wide {row})
+        (extract wide) (extract wide 2) (extract old)"#
+    );
+    let term = row
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("child2", &format!("(ChildLeaf {gate} 2)"))
+        .replace("child1", &format!("(ChildLeaf {gate} 1)"))
+        .replace("map-insert (map-empty)", "map-of");
+    let expected = [
+        (Some(97), vec![term.clone()]),
+        (None, vec![term]),
+        (Some(8), vec![format!("(ChildLeaf {gate} 0)")]),
+    ];
+    for mut graph in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ] {
+        let actual: Vec<_> = graph
+            .parse_and_run_program(None, &program)
+            .unwrap()
+            .into_iter()
+            .filter_map(|output| match output {
+                CommandOutput::ExtractBest(dag, cost, term) => {
+                    Some((Some(cost), vec![dag.to_string(term)]))
+                }
+                CommandOutput::ExtractVariants(dag, terms) => {
+                    Some((None, terms.into_iter().map(|t| dag.to_string(t)).collect()))
+                }
+                CommandOutput::RunSchedule(_) => None,
+                other => panic!("unexpected extraction output: {other:?}"),
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}

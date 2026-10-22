@@ -15,6 +15,7 @@
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
+use numeric_id::NumericId;
 use std::collections::VecDeque;
 
 /// A value that can be used to rank extraction candidates.
@@ -274,10 +275,150 @@ pub struct TreeExtractor<'g, C: Cost> {
     egraph: &'g EGraph,
     funcs: Vec<String>,
     cost_model: Box<dyn TreeExtractorCostModel<C> + 'g>,
-    costs: HashMap<String, HashMap<Value, C>>,
-    topo_rnk_cnt: usize,
-    topo_rnk: HashMap<String, HashMap<Value, usize>>,
-    parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
+    /// Dense id assigned to each eq sort that some extractable function outputs;
+    /// indexes into `costs` and `parent_edge`.
+    sort_ids: HashMap<String, usize>,
+    costs: Vec<HashMap<Value, RankedCost<C>>>,
+    parent_edge: Vec<HashMap<Value, (usize, Vec<Value>)>>,
+}
+
+/// Every successful relaxation updates the cost and chronological rank together.
+struct RankedCost<C> {
+    cost: C,
+    rank: usize,
+}
+
+/// How extraction treats one child column of a function, resolved once so the
+/// per-row cost loops avoid repeated sort dispatch and name-keyed lookups.
+enum ChildKind {
+    /// An eq-sort column; `Some` holds the sort's dense id, `None` means no
+    /// extractable function outputs this sort (its terms have no cost).
+    EqSort(Option<usize>),
+    Container(ArcSort),
+    Base(ArcSort),
+}
+
+/// Per-function data for [`TreeExtractor::bellman_ford`]: resolved schema facts
+/// plus a flat materialized copy of the table's non-subsumed rows, so each
+/// relaxation pass iterates memory instead of re-scanning the table.
+struct FuncData<'a> {
+    func: &'a Function,
+    /// The function whose `:cost` prices this table (a view table's term constructor).
+    cost_func: &'a Function,
+    /// Row width in `rows`: the function's inputs plus its output column.
+    arity: usize,
+    output_idx: usize,
+    output_sort_id: usize,
+    child_kinds: Vec<ChildKind>,
+    rows: Vec<Value>,
+}
+
+/// The rows reading each eq value as a child, directly or inside a container.
+///
+/// Eq-sort ids come from one backend counter, so a value alone names its class.
+struct ChildIndex {
+    /// Each read value's local id, an index into `offsets`.
+    ids: HashMap<Value, u32>,
+    /// `offsets[l]..offsets[l + 1]` is the run in `readers` for local id `l`.
+    offsets: Vec<u32>,
+    /// `(function, row)` pairs, one run per value.
+    readers: Vec<(u32, u32)>,
+}
+
+impl ChildIndex {
+    /// Indexes the `(value, function, row)` triples that `reads` yields. Each
+    /// call to `reads` must yield the same triples in the same order. Panics
+    /// past 2^32 triples.
+    fn new<I: Iterator<Item = (Value, u32, u32)>>(reads: impl Fn() -> I) -> Self {
+        // `locals` holds each read's value, then its local id. A value's offset
+        // counts its reads, then holds its run's end; the fill pass moves it back
+        // to the run's start.
+        let mut ids: HashMap<Value, u32> = HashMap::default();
+        let mut offsets: Vec<u32> = Vec::new();
+        let mut locals: Vec<u32> = Vec::new();
+        reads().for_each(|(value, _, _)| locals.push(value.rep()));
+        for read in &mut locals {
+            let local = *ids.entry(Value::new(*read)).or_insert_with(|| {
+                offsets.push(0);
+                (offsets.len() - 1) as u32
+            });
+            offsets[local as usize] += 1;
+            *read = local;
+        }
+        assert!(
+            u32::try_from(locals.len()).is_ok(),
+            "extraction index exceeds 2^32 child reads"
+        );
+        let mut end = 0;
+        for offset in offsets.iter_mut() {
+            end += *offset;
+            *offset = end;
+        }
+        offsets.reserve_exact(1);
+        offsets.push(end);
+        let mut readers = vec![(0, 0); locals.len()];
+        let mut read = 0;
+        reads().for_each(|(_, function, row)| {
+            let start = &mut offsets[locals[read] as usize];
+            read += 1;
+            *start -= 1;
+            readers[*start as usize] = (function, row);
+        });
+        ChildIndex {
+            ids,
+            offsets,
+            readers,
+        }
+    }
+
+    /// The `(function, row)` pairs reading `value`, in no particular order.
+    fn readers(&self, value: Value) -> &[(u32, u32)] {
+        self.ids.get(&value).map_or(&[], |&local| {
+            let local = local as usize;
+            &self.readers[self.offsets[local] as usize..self.offsets[local + 1] as usize]
+        })
+    }
+}
+
+/// Dirty rows are visited in sweep order.
+struct DirtyRows {
+    words: Vec<u64>,
+    count: usize,
+}
+
+impl DirtyRows {
+    fn full(len: usize) -> Self {
+        let mut words = vec![u64::MAX; len.div_ceil(64)];
+        if let Some(last) = words.last_mut() {
+            *last >>= len.div_ceil(64) * 64 - len; // clear the padding bits
+        }
+        Self { words, count: len }
+    }
+
+    fn insert(&mut self, row: usize) {
+        let bit = 1 << (row % 64);
+        let word = &mut self.words[row / 64];
+        if *word & bit == 0 {
+            *word |= bit;
+            self.count += 1;
+        }
+    }
+
+    fn pop_from(&mut self, cursor: usize) -> Option<usize> {
+        if self.count == 0 {
+            return None;
+        }
+        let mut wi = cursor / 64;
+        let mut pending = *self.words.get(wi)? & (u64::MAX << (cursor % 64));
+        while pending == 0 {
+            wi += 1;
+            pending = *self.words.get(wi)?;
+        }
+        let bit = pending.trailing_zeros() as usize;
+        self.words[wi] &= !(1 << bit);
+        self.count -= 1;
+        Some(wi * 64 + bit)
+    }
 }
 
 impl<'g, C: Cost> TreeExtractor<'g, C> {
@@ -375,29 +516,24 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
 
         // Initialize the tables to have the reachable entries
-        let mut costs: HashMap<String, HashMap<Value, C>> = Default::default();
-        let mut topo_rnk: HashMap<String, HashMap<Value, usize>> = Default::default();
-        let mut parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>> =
-            Default::default();
-
+        let mut sort_ids: HashMap<String, usize> = Default::default();
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
             let output_sort_name = func.extraction_output_sort().name();
-            if !costs.contains_key(output_sort_name) {
-                costs.insert(output_sort_name.to_owned(), Default::default());
-                topo_rnk.insert(output_sort_name.to_owned(), Default::default());
-                parent_edge.insert(output_sort_name.to_owned(), Default::default());
-            }
+            let next_id = sort_ids.len();
+            sort_ids
+                .entry(output_sort_name.to_owned())
+                .or_insert(next_id);
         }
+        let n_sorts = sort_ids.len();
 
         let mut extractor = TreeExtractor {
             egraph,
             funcs,
             cost_model: Box::new(cost_model),
-            costs,
-            topo_rnk_cnt: 0,
-            topo_rnk,
-            parent_edge,
+            sort_ids,
+            costs: (0..n_sorts).map(|_| Default::default()).collect(),
+            parent_edge: (0..n_sorts).map(|_| Default::default()).collect(),
         };
 
         extractor.bellman_ford(egraph);
@@ -420,7 +556,9 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     .total_container_cost(egraph, sort, value, &ch_costs),
             )
         } else if sort.is_eq_sort() {
-            self.costs.get(sort.name())?.get(&value).cloned()
+            self.costs[*self.sort_ids.get(sort.name())?]
+                .get(&value)
+                .map(|entry| entry.cost.clone())
         } else {
             // Primitive
             Some(self.cost_model.base_value_cost(egraph, sort, value))
@@ -468,8 +606,10 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
                 })
         } else if sort.is_eq_sort() {
-            if let Some(t) = self.topo_rnk.get(sort.name()) {
-                *t.get(&value).unwrap_or(&usize::MAX)
+            if let Some(id) = self.sort_ids.get(sort.name()) {
+                self.costs[*id]
+                    .get(&value)
+                    .map_or(usize::MAX, |entry| entry.rank)
             } else {
                 usize::MAX
             }
@@ -478,21 +618,110 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
     }
 
-    fn compute_topo_rnk_hyperedge(
+    /// Compute the child costs of one materialized row into `ch_costs`, and fold them
+    /// into the row's total cost. Returns `None` if any child is uncomputed so far.
+    fn row_cost(
         &self,
         egraph: &EGraph,
-        row: &egglog_bridge::ScanEntry,
-        func: &Function,
-    ) -> usize {
-        let sorts = &func.func_type.input;
-        let num_children = func.extraction_num_children();
-        row.vals
-            .iter()
-            .take(num_children)
-            .zip(sorts.iter())
-            .fold(0, |ret, (value, sort)| {
-                usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
-            })
+        f: &FuncData,
+        row: &[Value],
+        ch_costs: &mut Vec<C>,
+    ) -> Option<C> {
+        ch_costs.clear();
+        for (kind, value) in f.child_kinds.iter().zip(row) {
+            ch_costs.push(match kind {
+                ChildKind::EqSort(Some(id)) => self.costs[*id].get(value)?.cost.clone(),
+                ChildKind::EqSort(None) => return None,
+                ChildKind::Container(sort) => self.compute_cost_node(egraph, *value, sort)?,
+                ChildKind::Base(sort) => self.cost_model.base_value_cost(egraph, sort, *value),
+            });
+        }
+        let enode = Enode {
+            name: f.func.extraction_term_name(),
+            children: &row[..f.output_idx],
+            eclass: row[f.output_idx],
+            subsumed: false,
+        };
+        Some(
+            self.cost_model
+                .total_enode_cost(egraph, f.cost_func, &enode, ch_costs),
+        )
+    }
+
+    /// The chronological rank of one child; a row's edge rank is its children's maximum.
+    fn child_rank(&self, egraph: &EGraph, kind: &ChildKind, value: Value) -> usize {
+        match kind {
+            ChildKind::EqSort(Some(id)) => self.costs[*id]
+                .get(&value)
+                .map_or(usize::MAX, |entry| entry.rank),
+            ChildKind::EqSort(None) => usize::MAX,
+            ChildKind::Container(sort) => self.compute_topo_rnk_node(egraph, value, sort),
+            ChildKind::Base(_) => 0,
+        }
+    }
+
+    /// Report every eq value a container value's cost depends on, found by
+    /// recursing through nested container values.
+    fn register_container_deps(
+        &self,
+        egraph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+        register: &mut impl FnMut(Value),
+    ) {
+        if sort.is_container_sort() {
+            for (inner_sort, inner_value) in
+                sort.inner_values(egraph.backend.container_values(), value)
+            {
+                self.register_container_deps(egraph, &inner_sort, inner_value, register);
+            }
+        } else if sort.is_eq_sort() && self.sort_ids.contains_key(sort.name()) {
+            register(value);
+        }
+    }
+
+    /// Builds the [`ChildIndex`] of `func_data`.
+    fn child_index(&self, egraph: &EGraph, func_data: &[FuncData]) -> ChildIndex {
+        // Walking a container allocates, so each is walked once and its reads kept.
+        let mut container_reads = Vec::new();
+        for (fi, f) in func_data.iter().enumerate() {
+            if !f
+                .child_kinds
+                .iter()
+                .any(|k| matches!(k, ChildKind::Container(_)))
+            {
+                continue;
+            }
+            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
+                for (kind, value) in f.child_kinds.iter().zip(row) {
+                    if let ChildKind::Container(sort) = kind {
+                        self.register_container_deps(egraph, sort, *value, &mut |v| {
+                            container_reads.push((v, fi as u32, ri as u32))
+                        });
+                    }
+                }
+            }
+        }
+        ChildIndex::new(|| {
+            func_data
+                .iter()
+                .enumerate()
+                .flat_map(|(fi, f)| {
+                    f.rows
+                        .chunks_exact(f.arity)
+                        .enumerate()
+                        .flat_map(move |(ri, row)| {
+                            f.child_kinds
+                                .iter()
+                                .zip(row)
+                                .filter_map(move |(kind, value)| {
+                                    matches!(kind, ChildKind::EqSort(Some(_)))
+                                        .then_some((*value, fi as u32, ri as u32))
+                                })
+                        })
+                })
+                .chain(container_reads.iter().copied())
+        })
     }
 
     /// We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
@@ -506,97 +735,142 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
     /// It computes a topological rank for each eclass
     /// and only allows each eclass to have children of classes of strictly smaller ranks in the extraction.
     fn bellman_ford(&mut self, egraph: &EGraph) {
-        let mut ensure_fixpoint = false;
-
-        let funcs = self.funcs.clone();
-
-        while !ensure_fixpoint {
-            ensure_fixpoint = true;
-
-            for func_name in funcs.iter() {
+        // Materialize each function's non-subsumed rows once, so the relaxation
+        // passes below iterate plain memory instead of re-scanning every table.
+        let func_data: Vec<FuncData> = self
+            .funcs
+            .iter()
+            .map(|func_name| {
                 let func = egraph.functions.get(func_name).unwrap();
-                let target_sort = func.extraction_output_sort();
-
-                let output_idx = func.extraction_output_index();
-                let relax_hyperedge = |row: egglog_bridge::ScanEntry| {
+                let num_children = func.extraction_num_children();
+                let child_kinds = func.func_type.input[..num_children]
+                    .iter()
+                    .map(|sort| {
+                        if sort.is_container_sort() {
+                            ChildKind::Container(sort.clone())
+                        } else if sort.is_eq_sort() {
+                            ChildKind::EqSort(self.sort_ids.get(sort.name()).copied())
+                        } else {
+                            ChildKind::Base(sort.clone())
+                        }
+                    })
+                    .collect();
+                let arity = func.func_type.input.len() + 1;
+                // Reserved from the table's size at the first live row, so the copy never
+                // regrows and a fully subsumed table allocates nothing.
+                let reserve = egraph.backend.table_size(func.backend_id) * arity;
+                let mut rows = Vec::new();
+                egraph.backend.for_each(func.backend_id, |row| {
                     if !row.subsumed {
-                        let target = &row.vals[output_idx];
-                        let mut updated = false;
-                        if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
-                            match self
-                                .costs
-                                .get_mut(target_sort.name())
-                                .unwrap()
-                                .entry(*target)
-                            {
-                                HEntry::Vacant(e) => {
-                                    updated = true;
-                                    e.insert(new_cost);
-                                }
-                                HEntry::Occupied(mut e) => {
-                                    if new_cost < *(e.get()) {
-                                        updated = true;
-                                        e.insert(new_cost);
-                                    }
-                                }
-                            }
+                        if rows.is_empty() {
+                            rows.reserve_exact(reserve);
                         }
-                        // record the chronological order of the updates
-                        // which serves as a topological order that avoids cycles
-                        // even when a term has a cost equal to its subterms
-                        if updated {
-                            ensure_fixpoint = false;
-                            self.topo_rnk_cnt += 1;
-                            self.topo_rnk
-                                .get_mut(target_sort.name())
-                                .unwrap()
-                                .insert(*target, self.topo_rnk_cnt);
-                        }
+                        rows.extend_from_slice(row.vals);
                     }
-                };
+                });
+                FuncData {
+                    func,
+                    cost_func: func
+                        .decl
+                        .term_constructor
+                        .as_ref()
+                        .and_then(|name| egraph.functions.get(name))
+                        .unwrap_or(func),
+                    arity,
+                    output_idx: func.extraction_output_index(),
+                    output_sort_id: self.sort_ids[func.extraction_output_sort().name()],
+                    child_kinds,
+                    rows,
+                }
+            })
+            .collect();
 
-                egraph.backend.for_each(func.backend_id, relax_hyperedge);
+        let child_index = self.child_index(egraph, &func_data);
+
+        let mut topo_rnk_cnt = 0usize;
+        // Semi-naive relaxation: a row recomputes exactly the same cost against a
+        // never-increasing target unless one of its child (sort, value) costs
+        // changed since the row was last evaluated, so only such "dirty" rows are
+        // (re)visited.
+        let mut dirty: Vec<DirtyRows> = func_data
+            .iter()
+            .map(|f| DirtyRows::full(f.rows.len() / f.arity))
+            .collect();
+
+        let mut ch_costs: Vec<C> = Vec::new();
+        loop {
+            let mut any = false;
+            for (fi, f) in func_data.iter().enumerate() {
+                if dirty[fi].count == 0 {
+                    continue;
+                }
+                any = true;
+                // Marks set at or behind the sweep cursor (including a row
+                // re-marking itself) stay for the next sweep; marks ahead of it
+                // are picked up in this one, matching the naive pass exactly.
+                let mut cursor = 0;
+                while let Some(ri) = dirty[fi].pop_from(cursor) {
+                    cursor = ri + 1;
+                    let row = &f.rows[ri * f.arity..(ri + 1) * f.arity];
+                    let Some(new_cost) = self.row_cost(egraph, f, row, &mut ch_costs) else {
+                        continue;
+                    };
+                    let target = row[f.output_idx];
+                    let entry = self.costs[f.output_sort_id].entry(target);
+                    if let HEntry::Occupied(old) = &entry
+                        && new_cost >= old.get().cost
+                    {
+                        continue;
+                    }
+                    // record the chronological order of the updates
+                    // which serves as a topological order that avoids cycles
+                    // even when a term has a cost equal to its subterms
+                    topo_rnk_cnt += 1;
+                    entry.insert(RankedCost {
+                        cost: new_cost,
+                        rank: topo_rnk_cnt,
+                    });
+                    for &(dfi, dri) in child_index.readers(target) {
+                        dirty[dfi as usize].insert(dri as usize);
+                    }
+                }
+            }
+            if !any {
+                break;
             }
         }
 
+        // Free the scheduler's state before the parent edges allocate.
+        drop((child_index, dirty));
+
         // Save the edges for reconstruction
-        for func_name in funcs.iter() {
-            let func = egraph.functions.get(func_name).unwrap();
-            let target_sort = func.extraction_output_sort();
-            let output_idx = func.extraction_output_index();
-
-            let save_best_parent_edge = |row: egglog_bridge::ScanEntry| {
-                if !row.subsumed {
-                    let target = &row.vals[output_idx];
-                    if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
-                        && Some(best_cost.clone())
-                            == self.compute_cost_hyperedge(egraph, &row, func)
-                    {
-                        // one of the possible best parent edges
-                        let target_topo_rnk = *self
-                            .topo_rnk
-                            .get(target_sort.name())
-                            .unwrap()
-                            .get(target)
-                            .unwrap();
-                        if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func) {
-                            // one of the parent edges that avoids cycles
-                            if let HEntry::Vacant(e) = self
-                                .parent_edge
-                                .get_mut(target_sort.name())
-                                .unwrap()
-                                .entry(*target)
-                            {
-                                e.insert((func.decl.name.clone(), row.vals.to_vec()));
-                            }
-                        }
-                    }
+        for (parents, costs) in self.parent_edge.iter_mut().zip(&self.costs) {
+            parents.reserve(costs.len());
+        }
+        for (fi, f) in func_data.into_iter().enumerate() {
+            for row in f.rows.chunks_exact(f.arity) {
+                let target = row[f.output_idx];
+                let Some(best) = self.costs[f.output_sort_id].get(&target) else {
+                    continue;
+                };
+                // one of the possible best parent edges
+                if self.row_cost(egraph, &f, row, &mut ch_costs).as_ref() != Some(&best.cost) {
+                    continue;
                 }
-            };
-
-            egraph
-                .backend
-                .for_each(func.backend_id, save_best_parent_edge);
+                let edge_rank = f
+                    .child_kinds
+                    .iter()
+                    .zip(row)
+                    .map(|(kind, value)| self.child_rank(egraph, kind, *value))
+                    .max()
+                    .unwrap_or(0);
+                // one of the parent edges that avoids cycles
+                if best.rank > edge_rank
+                    && let HEntry::Vacant(e) = self.parent_edge[f.output_sort_id].entry(target)
+                {
+                    e.insert((fi, row.to_vec()));
+                }
+            }
         }
     }
 
@@ -629,13 +903,10 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 ch_terms,
             )
         } else if sort.is_eq_sort() {
-            let (func_name, hyperedge) = self
-                .parent_edge
-                .get(sort.name())
-                .unwrap()
+            let (function, hyperedge) = self.parent_edge[self.sort_ids[sort.name()]]
                 .get(&value)
                 .unwrap();
-            let func = egraph.functions.get(func_name).unwrap();
+            let func = egraph.functions.get(&self.funcs[*function]).unwrap();
             let ch_sorts = &func.func_type.input;
 
             let num_children = func.extraction_num_children();
@@ -1023,5 +1294,79 @@ impl EGraph {
         self.backend.for_each_while(func.backend_id, extract_row);
 
         Ok((inputs, output, termdag))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dirty_rows_have_no_padding_rows() {
+        for len in [0, 1, 63, 64, 65, 127, 128, 129] {
+            let mut rows = DirtyRows::full(len);
+            for row in 0..len {
+                assert_eq!(rows.pop_from(row), Some(row));
+            }
+            assert_eq!(rows.pop_from(len), None);
+            assert_eq!(rows.pop_from(0), None);
+            assert_eq!(rows.count, 0);
+        }
+    }
+
+    #[test]
+    fn child_index_groups_every_read_under_its_value() {
+        // A fixed linear congruential stream, so values repeat across functions.
+        let mut state = 12345u64;
+        let mut next = |bound: u64| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((state >> 33) % bound) as u32
+        };
+        let reads: Vec<(Value, u32, u32)> = (0..2000)
+            .map(|_| (Value::new_const(next(300)), next(5), next(400)))
+            .collect();
+        let index = ChildIndex::new(|| reads.iter().copied());
+        let mut expected: HashMap<Value, Vec<(u32, u32)>> = HashMap::default();
+        for &(value, function, row) in &reads {
+            expected.entry(value).or_default().push((function, row));
+        }
+        for v in 0..310 {
+            let value = Value::new_const(v);
+            let mut got = index.readers(value).to_vec();
+            got.sort_unstable();
+            let mut want = expected.remove(&value).unwrap_or_default();
+            want.sort_unstable();
+            assert_eq!(got, want, "readers of {v}");
+        }
+        assert!(expected.is_empty());
+        assert_eq!(index.readers.len(), reads.len());
+        assert!(
+            ChildIndex::new(std::iter::empty)
+                .readers(Value::new_const(0))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dirty_rows_defer_marks_behind_the_cursor() {
+        let mut rows = DirtyRows::full(130);
+        for row in 0..130 {
+            assert_eq!(rows.pop_from(row), Some(row));
+        }
+        rows.insert(63);
+        rows.insert(129);
+        rows.insert(129);
+        assert_eq!(rows.count, 2);
+        assert_eq!(rows.pop_from(0), Some(63));
+        rows.insert(0);
+        rows.insert(63);
+        rows.insert(64);
+        assert_eq!(rows.pop_from(64), Some(64));
+        assert_eq!(rows.pop_from(65), Some(129));
+        assert_eq!(rows.pop_from(130), None);
+        assert_eq!(rows.count, 2);
+        assert_eq!(rows.pop_from(0), Some(0));
+        assert_eq!(rows.pop_from(1), Some(63));
+        assert_eq!(rows.count, 0);
     }
 }
