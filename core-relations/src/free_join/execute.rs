@@ -31,8 +31,8 @@ use crate::{
     numeric_id::{DenseIdMap, NumericId},
     offsets::{Offsets, RowId, SortedOffsetVector, Subset},
     parallel_heuristics::{
-        MIN_TOP_INDEX_KEYS_PER_WORKER, action_batch_size, free_join_fork_depth,
-        parallelize_db_level_op, top_index_shape_is_eligible,
+        MIN_TOP_INDEX_KEYS_PER_WORKER, action_batch_size, free_join_can_fork,
+        free_join_fork_min_frames, parallelize_db_level_op, top_index_shape_is_eligible,
     },
     query::{Atom, RuleSet},
     row_buffer::{RowBuffer, TaggedRowBuffer},
@@ -1280,6 +1280,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             && let Some(partitions) =
                 self.select_top_partitions::<M>(stages, prepared, atoms, &order, binding_info)
         {
+            log::debug!(
+                "free join action={} stages={} root_rows={} top_partitions={}",
+                action.index(),
+                order.len(),
+                estimate_size(&stages.instrs[order.get(0)], binding_info),
+                partitions.len(),
+            );
             let mut updates = FrameUpdates::with_capacity(0);
             for partition in partitions {
                 let db = self.db;
@@ -1326,6 +1333,16 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
             return;
         }
+        log::debug!(
+            "free join action={} stages={} root_rows={} top_partitions=0",
+            action.index(),
+            order.len(),
+            if order.len() == 0 {
+                0
+            } else {
+                estimate_size(&stages.instrs[order.get(0)], binding_info)
+            },
+        );
         self.run_plan(
             stages,
             prepared,
@@ -1425,7 +1442,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             || estimate_size(&stages.instrs[instr_order.get(cur)], binding_info),
             TopLevelPartition::scan_size,
         );
-        let chunk_size = action_buf.morsel_size(cur, instr_order.len());
+        let mut chunk_size = action_buf.morsel_size(cur, instr_order.len());
+        if action_buf.supports_parallel_drain() {
+            // Even root morsels must accumulate enough successful frames to
+            // amortize a handoff into a wide join tail.
+            chunk_size = chunk_size.max(free_join_fork_min_frames());
+        }
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // Re-evaluate the remaining suffix after observing the residuals
             // produced by earlier stages. Packed child families make the
@@ -1515,10 +1537,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 if self.exec_state.should_stop() {
                     return;
                 }
-                // TODO: `supports_parallel_drain` is a hack because currently
-                // `drain_updates_parallel!` is a bit slower because of the additional
-                // `ExecutionState` clone.
-                if cur < free_join_fork_depth() && action_buf.supports_parallel_drain() {
+                // Reject serial buffers first so coarse partition jobs avoid
+                // policy lookups as well as live-state cloning.
+                if action_buf.supports_parallel_drain()
+                    && free_join_can_fork(cur, instr_order.len(), cur_size, $updates.frames())
+                    && action_buf.has_available_parallelism()
+                {
                     drain_updates_parallel!($updates)
                 } else {
                     $updates.drain(|update| match update {
@@ -1569,6 +1593,63 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }};
             ($updates:expr, false) => {{
                 drain_updates_body!($updates);
+            }};
+        }
+
+        // A leaf group has already supplied its bindings and can advance
+        // directly. Keep early returns inside the closure so
+        // the caller always restores its cover and factorized binding stack.
+        macro_rules! advance_leaf {
+            () => {{
+                (|| {
+                    if self.exec_state.should_stop() {
+                        return;
+                    }
+                    if cur + 1 >= instr_order.len() {
+                        action_buf.push_bindings_factorized(
+                            action,
+                            &mut binding_info.bindings,
+                            &binding_info.binding_sets,
+                            &self.exec_state,
+                        );
+                    } else {
+                        self.run_plan(
+                            stages,
+                            prepared,
+                            atoms,
+                            action,
+                            instr_order,
+                            leaf_scans,
+                            cur + 1,
+                            None,
+                            remaining_after_current,
+                            binding_info,
+                            action_buf,
+                        );
+                    }
+                })();
+            }};
+        }
+
+        // A singleton has no Cartesian product to defer. Store its values
+        // directly to avoid an Arc and later expansion. Multirow groups
+        // retain factorized execution.
+        macro_rules! bind_leaf_rows {
+            ($rows:expr, $bind:expr) => {{
+                let singleton = $rows.len() == 1;
+                if singleton {
+                    let (_, row) = $rows.iter().next().unwrap();
+                    for ((_, var), value) in $bind.iter().zip(row) {
+                        binding_info.bindings.insert(*var, *value);
+                    }
+                } else {
+                    let vars = $bind.iter().map(|(_, var)| *var).collect();
+                    binding_info.binding_sets.push((vars, Arc::new($rows)));
+                }
+                advance_leaf!();
+                if !singleton {
+                    binding_info.binding_sets.pop();
+                }
             }};
         }
 
@@ -1877,7 +1958,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     let cover_subset = cover_node.subset();
 
                     let proj = ColumnIds::from_iter(bind.iter().map(|(col, _)| *col));
-                    let vars = bind.iter().map(|(_, var)| *var).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
                     let (scan_start, scan_size) =
                         cover_scan_bounds(top_partition, cover_subset.size());
@@ -1895,11 +1975,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                         return;
                     }
 
-                    binding_info.binding_sets.push((vars, Arc::new(buf)));
-                    let mut updates = FrameUpdates::with_capacity(1);
-                    updates.finish_frame();
-                    drain_updates!(updates);
-                    binding_info.binding_sets.pop();
+                    bind_leaf_rows!(buf, bind);
                     binding_info.move_back_node(cover_atom, cover_node);
                 } else {
                     let keep_cover = atom_tail_use(
@@ -2099,7 +2175,6 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     binding_info.materializations.unwrap_val(*cover)
                 };
                 (|| {
-                    let vars: SmallVec<[Variable; 4]> = bind.iter().map(|(_, v)| *v).collect();
                     let mut buf = TaggedRowBuffer::new_inline(bind.len());
                     let mut row_scratch: SmallVec<[Value; 8]> = SmallVec::new();
                     match mode {
@@ -2153,11 +2228,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     if buf.is_empty() {
                         return;
                     }
-                    binding_info.binding_sets.push((vars, Arc::new(buf)));
-                    let mut updates = FrameUpdates::with_capacity(1);
-                    updates.finish_frame();
-                    drain_updates!(updates);
-                    binding_info.binding_sets.pop();
+                    bind_leaf_rows!(buf, bind);
                 })();
                 if restore_materialization {
                     let previous = binding_info.materializations.insert(*cover, cover_mat);
@@ -2273,6 +2344,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                         } else {
                                             updates.rollback();
                                         }
+                                        if updates.frames() >= chunk_size {
+                                            drain_updates!(updates);
+                                        }
                                     }
                                 } else if mode == &MatScanMode::KeyOnly {
                                     for (col, var) in bind.iter() {
@@ -2283,6 +2357,9 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
+                                    }
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates!(updates);
                                     }
                                 }
                             }
@@ -2443,7 +2520,7 @@ where
         'rows: 'scope;
 
     /// Run one coarse partition as a global pool job, using a buffer whose
-    /// recursive work and action execution are both serial.  Implementations
+    /// recursive work and action execution are both serial. Implementations
     /// that return `false` from [`Self::supports_global_partition`] execute the
     /// callback inline; the scoped implementations enqueue exactly one job.
     fn recur_global_serial<'local, 'rows>(
@@ -2468,10 +2545,16 @@ where
 
     /// Whether this buffer supports parallel drain operations.
     ///
-    /// When `false`, `drain_updates` will use the serial path even at `cur <= 1`,
-    /// avoiding the per-frame `ExecutionState::clone()` overhead.
+    /// When `false`, `drain_updates` uses the serial path at every depth,
+    /// avoiding scheduling-policy checks and live-state cloning.
     fn supports_parallel_drain(&self) -> bool {
         true
+    }
+
+    /// Advisory pool pressure used only after a batch has enough join work to
+    /// amortize cloning its live state.
+    fn has_available_parallelism(&self) -> bool {
+        false
     }
 
     /// Whether this buffer can enqueue independent top-level partitions.
@@ -2820,6 +2903,10 @@ where
 
     fn supports_global_partition(&self) -> bool {
         true
+    }
+
+    fn has_available_parallelism(&self) -> bool {
+        self.scope.has_available_parallelism()
     }
 }
 
@@ -3186,6 +3273,10 @@ where
 
     fn supports_global_partition(&self) -> bool {
         true
+    }
+
+    fn has_available_parallelism(&self) -> bool {
+        self.scope.has_available_parallelism()
     }
 }
 

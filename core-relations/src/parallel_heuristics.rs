@@ -12,7 +12,9 @@ const DEFAULT_INCREMENTAL_REBUILD_CUTOFF: usize = 16 * 1024;
 const DEFAULT_INTRA_CONTAINER_CUTOFF: usize = 10_000;
 const DEFAULT_INTER_CONTAINER_CUTOFF: usize = 8;
 const DEFAULT_TABLE_OP_CUTOFF: usize = 400_000;
-const DEFAULT_FREE_JOIN_FORK_DEPTH: usize = 2;
+const DEFAULT_FREE_JOIN_FORK_DEPTH: usize = usize::MAX;
+const DEFAULT_FREE_JOIN_FORK_MIN_WIDTH: usize = 1024;
+const DEFAULT_FREE_JOIN_FORK_MIN_FRAMES: usize = 128;
 const DEFAULT_ACTION_BATCH_SIZE: usize = 8 * 1024;
 
 /// Minimum number of top-index leader keys required per worker before coarse
@@ -30,6 +32,8 @@ struct Cutoffs {
     inter_container: usize,
     table_op: usize,
     free_join_fork_depth: usize,
+    free_join_fork_min_width: usize,
+    free_join_fork_min_frames: usize,
     action_batch_size: usize,
 }
 
@@ -73,9 +77,36 @@ pub(crate) fn parallelize_table_op(table_size: usize) -> bool {
     should_parallelize(table_size, cutoffs().table_op)
 }
 
-/// Number of top free-join frames that may fork recursive drain work.
-pub(crate) fn free_join_fork_depth() -> usize {
-    cutoffs().free_join_fork_depth
+/// Minimum successful frame batch that can amortize a join-task handoff.
+pub(crate) fn free_join_fork_min_frames() -> usize {
+    cutoffs().free_join_fork_min_frames
+}
+
+/// Narrow prefixes can lead to wide residuals at any depth. Fork only complete
+/// batches with downstream join work; the caller also checks worker demand.
+pub(crate) fn free_join_can_fork(level: usize, total: usize, width: usize, frames: usize) -> bool {
+    let cutoffs = cutoffs();
+    free_join_fork_shape_is_eligible(
+        level,
+        total,
+        width,
+        frames,
+        cutoffs.free_join_fork_depth,
+        cutoffs.free_join_fork_min_width,
+        cutoffs.free_join_fork_min_frames,
+    )
+}
+
+fn free_join_fork_shape_is_eligible(
+    level: usize,
+    total: usize,
+    width: usize,
+    frames: usize,
+    max_depth: usize,
+    min_width: usize,
+    min_frames: usize,
+) -> bool {
+    level < max_depth && level + 1 < total && width >= min_width && frames >= min_frames
 }
 
 /// Whether a top free-join index has enough work and shard coverage to partition.
@@ -129,6 +160,16 @@ fn cutoffs() -> &'static Cutoffs {
             "EGGLOG_PARALLEL_FREE_JOIN_FORK_DEPTH",
             DEFAULT_FREE_JOIN_FORK_DEPTH,
         ),
+        free_join_fork_min_width: cutoff(
+            "EGGLOG_PARALLEL_FREE_JOIN_FORK_MIN_WIDTH",
+            DEFAULT_FREE_JOIN_FORK_MIN_WIDTH,
+        )
+        .max(1),
+        free_join_fork_min_frames: cutoff(
+            "EGGLOG_PARALLEL_FREE_JOIN_FORK_MIN_FRAMES",
+            DEFAULT_FREE_JOIN_FORK_MIN_FRAMES,
+        )
+        .max(1),
         action_batch_size: cutoff(
             "EGGLOG_PARALLEL_ACTION_BATCH_SIZE",
             DEFAULT_ACTION_BATCH_SIZE,
@@ -146,7 +187,24 @@ fn cutoff(name: &str, default: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::top_index_shape_is_eligible;
+    use super::{free_join_fork_shape_is_eligible, top_index_shape_is_eligible};
+
+    #[test]
+    fn recursive_forks_require_width_a_complete_batch_and_downstream_work() {
+        let eligible = |level, total, width, frames, max_depth| {
+            free_join_fork_shape_is_eligible(level, total, width, frames, max_depth, 1024, 128)
+        };
+        assert!(eligible(0, 2, 1024, 128, usize::MAX));
+        assert!(eligible(8, 10, 1024, 128, usize::MAX));
+        assert!(!eligible(0, 2, 1023, 128, usize::MAX));
+        assert!(!eligible(0, 2, 1024, 127, usize::MAX));
+        assert!(!eligible(0, 2, 1024, 0, usize::MAX));
+        assert!(!eligible(1, 2, 1024, 128, usize::MAX));
+        assert!(!eligible(0, 0, 1024, 128, usize::MAX));
+        assert!(!eligible(0, 2, 1024, 128, 0));
+        assert!(eligible(1, 3, 1024, 128, 2));
+        assert!(!eligible(2, 4, 1024, 128, 2));
+    }
 
     #[test]
     fn top_index_partitioning_rejects_serial_tiny_and_skewed_shapes() {

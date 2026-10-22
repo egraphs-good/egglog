@@ -8,8 +8,8 @@
 //!   make their types flow through the row-encoding APIs.
 //! - [`IntoValues`] / [`FromValues`] — a whole row of Rust values
 //!   ↔ a `&[Value]`. These are **sealed**: row shape is fixed to
-//!   tuples up to arity 8, plus the [`RawValues`] / `Vec<Value>` /
-//!   `()` escape hatches.
+//!   tuples up to arity 8, plus the [`RawValues`] / `&[Value]` /
+//!   `Vec<Value>` / `()` escape hatches.
 //!
 //! The API is **type-unsafe at the column level**: every column flows
 //! as a bare [`Value`]. The Rust trait machinery here only enforces
@@ -91,7 +91,8 @@ pub trait FromValue: Sized {
 ///
 /// Sealed; impls cover bare [`IntoValue`] (single-column row),
 /// tuples up to arity 8 of [`IntoValue`] values, and [`RawValues`]
-/// for variadic / pre-converted rows.
+/// or `&[Value]` for variadic / pre-converted rows. A borrowed slice
+/// copies its values without allocating a row.
 pub trait IntoValues: sealed::Sealed {
     fn into_values(self, bv: &BaseValues) -> impl Iterator<Item = Value>;
 }
@@ -185,6 +186,13 @@ impl sealed::Sealed for RawValues {}
 impl IntoValues for RawValues {
     fn into_values(self, _bv: &BaseValues) -> impl Iterator<Item = Value> {
         self.0.into_iter()
+    }
+}
+
+impl sealed::Sealed for &[Value] {}
+impl IntoValues for &[Value] {
+    fn into_values(self, _bv: &BaseValues) -> impl Iterator<Item = Value> {
+        self.iter().copied()
     }
 }
 

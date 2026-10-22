@@ -3,6 +3,7 @@
 ## [Unreleased] - ReleaseDate
 
 - Decomposed rules can run a bag's later messages as reorderable semijoin stages, filtering the bag before their lookup.
+- Index construction skips constant radix digits and uses wider digits for larger inputs when they reduce the pass count, preserving row order within each key.
 - Table rebuilds only go incremental when the reverse index is warm enough to be cheaper than a full scan, and repeated sparse full scans eventually warm a cold index. Tables with more than 100 rows (previously 10,000) are eligible. `math-microbenchmark` runs about 20% faster and the eggcc benchmarks 5–25% faster.
 - **Packed join indexes are shared across all plans of a rule-set run.** Plans that start from the same table and fast constraints already shared a trie root; now the packed indexes built below that root (catalog and projection continuations and their descendants) are published run-wide under per-table successor families, so an index over the same rows and column is built once per run instead of once per plan. Subsets of at most 8 rows reached through such a slot are also cached as packed nodes rather than re-indexed on every probe.
 - Free-join plans with 65 to 128 stages now use constant-time tail metadata (128-bit stage masks) instead of rescanning the remaining stages; smaller plans keep their 64-bit masks. `paged_llama` runs about 17% faster.

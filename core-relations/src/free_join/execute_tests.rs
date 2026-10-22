@@ -214,6 +214,228 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
 }
 
 #[test]
+fn materialized_full_and_key_only_morsels_preserve_rejected_frames_and_join_tails() {
+    use super::{InPlaceMaterializer, JoinState, MatSpec, ScopedMaterializer};
+    use crate::{
+        Database,
+        free_join::{ProcessedConstraints, plan::JoinStages},
+        numeric_id::DenseIdMap,
+        query::{Atom, VarColumnMap},
+        table_shortcuts::{TimestampedTable, v},
+    };
+
+    const KEYS: usize = 1025;
+    const VALUES: usize = 40;
+    let variables = [0, 1, 2].map(Variable::from_usize);
+    let [x, y, _] = variables;
+    let input_mat = MatId::from_usize(0);
+    let output_mat = MatId::from_usize(1);
+    let mut expected = Vec::new();
+    for key in 0..KEYS {
+        if key % 3 != 0 {
+            for value in 0..VALUES {
+                expected.push(vec![v(key), v(value), v(100_000 + key * VALUES + value)]);
+            }
+        }
+    }
+    // KeyOnly has 683 surviving frames: two full 256-frame morsels and a
+    // remainder. Full also crosses boundaries inside one materialized group.
+    assert!(KEYS - KEYS.div_ceil(3) > 2 * 256);
+
+    for mode in [MatScanMode::Full, MatScanMode::KeyOnly] {
+        for workers in [1, 4] {
+            let pool = egglog_concurrency::ThreadPool::new(workers);
+            let mut actual = pool.install(|| {
+                let mut db = Database::default();
+                let mut add_table = |arity| {
+                    db.add_table(
+                        TimestampedTable::new(arity, arity, Box::new(|_, _, _, _| false)),
+                        std::iter::empty(),
+                        std::iter::empty(),
+                    )
+                };
+                let facts = add_table(3);
+                let gate = add_table(1);
+                let mut materialization = IndexMap::default();
+                {
+                    let mut fact_buf = db.new_buffer(facts);
+                    let mut gate_buf = db.new_buffer(gate);
+                    for key in 0..KEYS {
+                        let mut values = RowBuffer::new(1);
+                        for value in 0..VALUES {
+                            fact_buf.stage_insert(&[
+                                v(key),
+                                v(value),
+                                v(100_000 + key * VALUES + value),
+                            ]);
+                            values.add_row(&[v(value)]);
+                        }
+                        materialization.insert(vec![v(key)], values);
+                        if key % 3 != 0 {
+                            gate_buf.stage_insert(&[v(key)]);
+                        }
+                    }
+                }
+                db.merge_all();
+                let mut atoms = DenseIdMap::new();
+                for (atom, table, vars) in [
+                    (AtomId::from_usize(0), facts, variables.as_slice()),
+                    (AtomId::from_usize(1), gate, variables[..1].as_ref()),
+                ] {
+                    let mut var_columns = VarColumnMap::default();
+                    for (column, var) in vars.iter().enumerate() {
+                        var_columns.insert(*var, ColumnId::from_usize(column));
+                    }
+                    atoms.insert(
+                        atom,
+                        Atom {
+                            table,
+                            var_columns,
+                            constraints: ProcessedConstraints::dummy(),
+                        },
+                    );
+                }
+                let atoms = Arc::new(atoms);
+                let full = mode == MatScanMode::Full;
+                let columns = if full {
+                    smallvec![ColumnId::new(0), ColumnId::new(1)]
+                } else {
+                    smallvec![ColumnId::new(0)]
+                };
+                let mut bind = smallvec![(ColumnId::new(0), x)];
+                if full {
+                    bind.push((ColumnId::new(1), y));
+                }
+                let mut instrs = vec![JoinStage::FusedIntersectMat {
+                    cover: input_mat,
+                    mode: mode.clone(),
+                    bind,
+                    // Reject after the first probe has buffered a refinement,
+                    // exercising rollback of both instructions and side rows.
+                    to_intersect: vec![
+                        (
+                            ScanSpec {
+                                to_index: SubAtom {
+                                    atom: AtomId::new(0),
+                                    vars: columns.clone(),
+                                },
+                                constraints: vec![],
+                            },
+                            columns,
+                        ),
+                        (scan(1), smallvec![ColumnId::new(0)]),
+                    ],
+                }];
+                if !full {
+                    instrs.push(intersect_stage(0, 1));
+                }
+                instrs.push(intersect_stage(0, 2));
+                let stages = JoinStages::new(instrs);
+                let layout = prepared_for(&stages.instrs);
+                let prepared = PreparedJoinIndexes::from_layout(&layout, &[]);
+                let mut binding_info = BindingInfo::default();
+                for (atom, info) in atoms.iter() {
+                    binding_info.insert_subset(atom, db.get_table(info.table).all());
+                }
+                binding_info
+                    .materializations
+                    .insert(input_mat, Arc::new(materialization));
+                let arena = egglog_concurrency::SharedArena::new();
+                let exec = super::ExecutionState::new(db.read_only_view(), Default::default());
+                let join = JoinState::new(&db, exec.seed(), None, &arena);
+                let mut order = InstrOrder::from_iter(0..stages.instrs.len());
+                let mut leaves = smallvec![false; stages.instrs.len()];
+                let remaining = prepared.all_stage_mask::<u64>();
+                let mut specs = DenseIdMap::new();
+                specs.insert(
+                    output_mat,
+                    MatSpec {
+                        msg_vars: variables.into_iter().collect(),
+                        val_vars: smallvec![],
+                    },
+                );
+                let output = if workers == 1 {
+                    let mut materializations = DenseIdMap::new();
+                    materializations.insert(output_mat, IndexMap::default());
+                    let mut buf = InPlaceMaterializer {
+                        specs: &specs,
+                        materializations,
+                        scratch_key: vec![],
+                        scratch_val: vec![],
+                    };
+                    join.run_plan(
+                        &stages,
+                        &prepared,
+                        &atoms,
+                        output_mat,
+                        &mut order,
+                        &mut leaves,
+                        0,
+                        None,
+                        remaining,
+                        &mut binding_info,
+                        &mut buf,
+                    );
+                    buf.materializations
+                        .unwrap_val(output_mat)
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    let retired = super::RetiredLocalStates::default();
+                    let mut outputs = DenseIdMap::new();
+                    outputs.insert(output_mat, Arc::new(crate::common::DashMap::default()));
+                    let outputs = Arc::new(outputs);
+                    let specs = Arc::new(specs);
+                    pool.scope(|scope| {
+                        let mut buf = ScopedMaterializer {
+                            scope,
+                            retired_states: &retired,
+                            specs,
+                            materializations: outputs.clone(),
+                            scratch_key: vec![],
+                            scratch_val: vec![],
+                        };
+                        join.run_plan(
+                            &stages,
+                            &prepared,
+                            &atoms,
+                            output_mat,
+                            &mut order,
+                            &mut leaves,
+                            0,
+                            None,
+                            remaining,
+                            &mut binding_info,
+                            &mut buf,
+                        );
+                    });
+                    outputs[output_mat]
+                        .iter()
+                        .map(|entry| (entry.key().clone(), entry.value().clone()))
+                        .collect()
+                };
+                assert!(binding_info.materializations.contains_key(input_mat));
+                for (atom, info) in atoms.iter() {
+                    assert_eq!(
+                        binding_info.subsets[atom].size(),
+                        db.get_table(info.table).all().size()
+                    );
+                }
+                output
+                    .into_iter()
+                    .map(|(key, rows)| {
+                        assert_eq!(rows.len(), 1, "each binding must be emitted exactly once");
+                        key
+                    })
+                    .collect::<Vec<_>>()
+            });
+            actual.sort();
+            assert_eq!(actual, expected, "{mode:?}, workers={workers}");
+        }
+    }
+}
+
+#[test]
 fn shared_packed_root_keys_are_canonical_and_single_flight() {
     let unshared = OwnedAtomRows::new(Subset::Dense(crate::OffsetRange::new(
         crate::RowId::from_usize(0),

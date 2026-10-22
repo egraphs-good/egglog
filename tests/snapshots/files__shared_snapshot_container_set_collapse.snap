@@ -3,18 +3,18 @@ source: tests/files.rs
 assertion_line: 88
 expression: snapshot_content_across_treatments
 ---
-(let prf0 (Fiat (= (B) (A))))
-(let t0 (Holds (set-of (A) (B))))
-(let prf1
+(let prf (Fiat (= (B) (A))))
+(let t (Holds (set-of (A) (B))))
+(let prf_1
   (Congr
-            (= t0 (Holds (set-of (A))))
-            (Fiat (= t0 t0))
+            (= t (Holds (set-of (A))))
+            (Fiat (= t t))
             (ContainerNormalize
               (= (set-of (A) (B)) (set-of (A)))
               (Congr
                 (= (set-of (A) (B)) (set-of (A) (A)))
                 (Fiat (= (set-of (A) (B)) (set-of (A) (B))))
-                prf0
+                prf
                 1))
             0))
 (Rule
@@ -22,20 +22,20 @@ expression: snapshot_content_across_treatments
   (name "@prove_exists_rule")
   (premises
     (Fiat (= (A) (A)))
-    prf0
+    prf
     (Eval)
-    prf0
+    prf
     (Eval)
     (Trans
       (= (Holds (set-of (A))) (Holds (set-of (A))))
-      (Sym (= (Holds (set-of (A))) t0) prf1)
-      prf1))
+      (Sym (= (Holds (set-of (A))) t) prf_1)
+      prf_1))
   (substitution
-    (@v34 (A))
-    (@v35 (set-of (A)))
-    (@v36 (A))
-    (@v37 (set-of (A)))
-    (@v33 (A))))
+    (@v_35 (set-of (A)))
+    (@v_34 (A))
+    (@v_37 (set-of (A)))
+    (@v_36 (A))
+    (@v_33 (A))))
 ((A 1)
  (B 1)
  (Holds 1))
