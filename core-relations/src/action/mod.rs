@@ -643,7 +643,7 @@ impl<'a> ExecutionState<'a> {
         let (subset, slow) = if let Some(subset) = table_info.table.fast_subset(&constraint) {
             (subset, Vec::new())
         } else if cacheable {
-            let index = get_column_index_from_tableinfo(table_info, col);
+            let index = get_column_index_from_tableinfo(table_info, col, &[]);
             let subset = match index.get().unwrap().get_subset(&value) {
                 Some(subset) => with_pool_set(|ps| subset.to_owned(&ps.get_pool())),
                 // No rows hold this key.

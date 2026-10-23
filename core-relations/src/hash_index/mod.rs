@@ -27,7 +27,7 @@ use crate::{
     parallel_heuristics::parallelize_index_construction,
     pool::{Pooled, with_pool_set},
     row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
-    table_spec::{ColumnId, Generation, Offset, TableVersion, WrappedTableRef},
+    table_spec::{ColumnId, Constraint, Generation, Offset, TableVersion, WrappedTableRef},
 };
 
 #[cfg(test)]
@@ -49,8 +49,11 @@ pub(crate) struct TableEntry<T> {
 #[derive(Clone)]
 pub(crate) struct Index<TI> {
     key: Vec<ColumnId>,
+    constraints: Vec<Constraint>,
     updated_to: TableVersion,
     table: TI,
+    #[cfg(test)]
+    refresh_count: usize,
 }
 
 /// A stable position for one key within a frozen index.
@@ -85,13 +88,29 @@ impl IndexPosition {
 
 impl<TI: IndexBase> Index<TI> {
     pub(crate) fn new(key: Vec<ColumnId>, table: TI) -> Self {
+        Self::with_constraints(key, Vec::new(), table)
+    }
+
+    /// Index only rows satisfying these predicates. Predicate columns, like
+    /// key columns, must be cacheable: changes must replace rows or advance
+    /// the table's major generation, rather than mutate live rows in place.
+    /// As with unfiltered indexes, previously indexed rows may become stale;
+    /// callers must still check liveness when consuming index candidates.
+    pub(crate) fn with_constraints(
+        key: Vec<ColumnId>,
+        constraints: Vec<Constraint>,
+        table: TI,
+    ) -> Self {
         Index {
             key,
+            constraints,
             updated_to: TableVersion {
                 major: Generation::new(0),
                 minor: Offset::new(0),
             },
             table,
+            #[cfg(test)]
+            refresh_count: 0,
         }
     }
 
@@ -122,12 +141,21 @@ impl<TI: IndexBase> Index<TI> {
         if cur_version == self.updated_to {
             return;
         }
+        #[cfg(test)]
+        {
+            self.refresh_count += 1;
+        }
         let is_full = cur_version.major != self.updated_to.major;
         let subset = if is_full {
             self.table.clear();
             table.all()
         } else {
             table.updates_since(self.updated_to.minor)
+        };
+        let subset = if self.constraints.is_empty() {
+            subset
+        } else {
+            table.refine_ref(subset.as_ref(), &self.constraints, table.has_stale_rows())
         };
         // Three ways to fold `subset` into the index; all produce the same result (each value's
         // rows sorted ascending and de-duplicated) but trade fixed overhead against throughput:
@@ -151,6 +179,11 @@ impl<TI: IndexBase> Index<TI> {
         }
 
         self.updated_to = cur_version;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn refresh_count(&self) -> usize {
+        self.refresh_count
     }
 
     /// Update the contents of the index to the current version of the table.
@@ -1183,6 +1216,13 @@ where
     #[cfg(test)]
     pub(crate) fn get_or_insert_calls(&self) -> usize {
         self.get_or_insert_calls.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_each(&self, mut f: impl FnMut(&K, &I)) {
+        for (key, index) in self.data.read().iter() {
+            f(key, index);
+        }
     }
 }
 
