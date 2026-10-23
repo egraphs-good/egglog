@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 
 use crate::{
     common::{IndexMap, Value},
-    numeric_id::{DenseIdMap, IdVec},
+    numeric_id::{DenseIdMap, IdVec, NumericId},
     offsets::Subset,
     row_buffer::{RowBuffer, SmallValueVec, TaggedRowBuffer},
 };
@@ -24,7 +24,7 @@ use super::{
     frame_update::FrameUpdates,
     packed_cache::OwnedAtomRows,
     packed_trie::ChildShape,
-    plan::{JoinStage, MatId, MatScanMode},
+    plan::{JoinStage, JoinStageData, MatId, MatScanMode},
     prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes, StageMask},
     probe::{AtomRows, Prober},
     with_pool_set,
@@ -378,6 +378,119 @@ pub(super) fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo<'
     }
 }
 
+/// Whether a stage before `position` in `order` binds `var`.
+pub(super) fn bound_before(
+    order: &InstrOrder,
+    instrs: &[JoinStage],
+    position: usize,
+    var: Variable,
+) -> bool {
+    (0..position).any(|position| binds(&instrs[order.get(position)], var))
+}
+
+/// Whether `stage` binds `var`.
+fn binds(stage: &JoinStage, var: Variable) -> bool {
+    match stage {
+        JoinStage::Intersect { var: bound, .. } => *bound == var,
+        JoinStage::FusedIntersect { bind, .. } | JoinStage::FusedIntersectMat { bind, .. } => {
+            bind.iter().any(|(_, bound)| *bound == var)
+        }
+    }
+}
+
+/// Over the `Semijoin`s of `instrs`, the least position of the last stage binding
+/// one's variables when every stage of the bag up to it binds one of them, else
+/// `usize::MAX`. DVO runs a later stage before the fence only when more refined.
+pub(super) fn semijoin_fence(instrs: &[JoinStage]) -> usize {
+    instrs
+        .iter()
+        .filter_map(|stage| {
+            let JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Semijoin,
+                bind,
+                ..
+            } = stage
+            else {
+                return None;
+            };
+            let binds_one = |stage: &JoinStage| bind.iter().any(|(_, var)| binds(stage, *var));
+            let fence = instrs.iter().rposition(binds_one)?;
+            let bag = instrs.iter().position(|stage| {
+                !matches!(
+                    stage,
+                    JoinStage::FusedIntersectMat {
+                        mode: MatScanMode::KeyOnly | MatScanMode::Semijoin,
+                        ..
+                    }
+                )
+            })?;
+            instrs
+                .get(bag..=fence)?
+                .iter()
+                .all(binds_one)
+                .then_some(fence)
+        })
+        .min()
+        .unwrap_or(usize::MAX)
+}
+
+/// The DVO key of `Semijoin` stage `stage` at `position` in `order`: how many of
+/// its variables the stages before `position` bind, a `KeyOnly` prologue's counting
+/// as one unless they cannot narrow its message; a size-1 lookup once all are.
+// Out of line, so that DVO keeps the key of every other stage inline.
+#[inline(never)]
+fn semijoin_key(
+    stage: &JoinStage,
+    order: &InstrOrder,
+    instrs: &[JoinStage],
+    position: usize,
+    binding_info: &BindingInfo<'_, '_>,
+    narrowing: &mut SmallVec<[(MatId, bool); 2]>,
+) -> (i64, usize, i32) {
+    let JoinStage::FusedIntersectMat { cover, bind, .. } = stage else {
+        unreachable!("only a Semijoin has a semijoin key")
+    };
+    let mut prologue = SmallVec::<[usize; 4]>::new();
+    let (free, refine) = bind.iter().fold((0, 0), |(free, refine), (col, var)| {
+        match (0..position)
+            .map(|position| &instrs[order.get(position)])
+            .find(|stage| binds(stage, *var))
+        {
+            None => (free + 1, refine),
+            Some(JoinStage::FusedIntersectMat {
+                mode: MatScanMode::KeyOnly,
+                ..
+            }) => {
+                prologue.push(col.index());
+                (free, refine)
+            }
+            Some(_) => (free, refine + 1),
+        }
+    });
+    let (refine, size) = if free == 0 {
+        (bind.len(), 1)
+    } else {
+        // When every key agrees on the prologue's variables, binding them narrows
+        // nothing and earns no credit; bound at once, the answer holds for the whole sort.
+        let message = &binding_info.materializations[*cover];
+        let narrows = !prologue.is_empty()
+            && match narrowing.iter().find(|(mat, _)| mat == cover) {
+                Some(&(_, narrows)) => narrows,
+                None => {
+                    let mut keys = message.keys();
+                    let answer = keys.next().is_some_and(|first| {
+                        message.len() == 1
+                            || keys.any(|key| prologue.iter().any(|&c| key[c] != first[c]))
+                    });
+                    narrowing.push((*cover, answer));
+                    answer
+                }
+            };
+        (refine + usize::from(narrows), message.len())
+    };
+    (-(refine as i64), size, -num_intersected_rels(stage))
+}
+
 fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
@@ -402,22 +515,24 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
 /// logical plan prefix, increasing live residual size, then decreasing number
 /// of intersected relations. Materialization stages that do not commute remain
 /// fixed barriers. Reordering can also change factorized leaf-scan eligibility,
-/// so [`recompute_leaf_scans`] runs after every change.
+/// so [`recompute_leaf_scans`] runs after every change. A refinement tie puts
+/// the stages up to the [`semijoin_fence`] first.
 pub(super) fn sort_plan_by_size(
     order: &mut InstrOrder,
     leaf_scans: &mut LeafScans,
     start: usize,
-    instrs: &[JoinStage],
+    stages: &JoinStageData,
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
+    let (instrs, fence) = (&stages.instrs[..], stages.fence);
     let mut last_pos = start;
     for i in start..instrs.len() {
         if is_reorder_barrier(&instrs[i]) {
-            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
+            sort_plan_by_size_inner(order, last_pos..i, instrs, fence, binding_info);
             last_pos = i + 1;
         }
     }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
+    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, fence, binding_info);
     recompute_leaf_scans(order, leaf_scans, instrs, start);
 }
 
@@ -434,7 +549,7 @@ pub(super) fn sort_plan_by_size(
 /// `FusedIntersect` or `FusedIntersectMat { mode: Full | KeyOnly | Value }`,
 /// has an empty `to_intersect`, and no later stage either (a) references the
 /// same cover atom for `FusedIntersect`, or (b) reads one of its bound variables
-/// as a scalar through `FusedIntersectMat { mode: Value | Lookup }`.
+/// as a scalar through `FusedIntersectMat { mode: Value | Lookup | Semijoin }`.
 /// `FusedIntersectMat::Lookup` binds nothing itself and is never a leaf scan.
 pub(super) fn recompute_leaf_scans(
     order: &InstrOrder,
@@ -497,7 +612,10 @@ pub(super) fn recompute_leaf_scans(
                     }
                 }
                 JoinStage::FusedIntersectMat {
-                    mode, to_intersect, ..
+                    mode,
+                    bind,
+                    to_intersect,
+                    ..
                 } => {
                     if let Some(ca) = cover_atom
                         && to_intersect.iter().any(|(s, _)| s.to_index.atom == ca)
@@ -507,6 +625,12 @@ pub(super) fn recompute_leaf_scans(
                     }
                     if let MatScanMode::Value(vars) | MatScanMode::Lookup(vars) = mode
                         && vars.iter().any(|v| bind_vars.contains(v))
+                    {
+                        blocked = true;
+                        break;
+                    }
+                    if *mode == MatScanMode::Semijoin
+                        && bind.iter().any(|(_, v)| bind_vars.contains(v))
                     {
                         blocked = true;
                         break;
@@ -522,6 +646,23 @@ pub(super) fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
     instrs: &[JoinStage],
+    fence: usize,
+    binding_info: &mut BindingInfo<'_, '_>,
+) {
+    // A bag without a fence gets its own copy, whose keys hold a constant flag.
+    if fence == usize::MAX {
+        dvo_select(order, range, instrs, |_| false, binding_info)
+    } else {
+        dvo_select(order, range, instrs, |stage| stage > fence, binding_info)
+    }
+}
+
+/// [`sort_plan_by_size_inner`], `fenced` holding for the stages after the fence.
+fn dvo_select(
+    order: &mut InstrOrder,
+    range: Range<usize>,
+    instrs: &[JoinStage],
+    fenced: impl Fn(usize) -> bool,
     binding_info: &mut BindingInfo<'_, '_>,
 ) {
     // Nothing to sort if there's 0 or 1 element.
@@ -547,6 +688,11 @@ pub(super) fn sort_plan_by_size_inner(
                         spec.to_index.vars.len() as i64;
                 });
             }
+            // The bag's stages binding a `Semijoin`'s variables count its atoms.
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Semijoin,
+                ..
+            } => {}
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
                     *refinements.get_or_default(spec.to_index.atom) +=
@@ -564,15 +710,20 @@ pub(super) fn sort_plan_by_size_inner(
     // We prioritize stages by
     //
     //   (1) how many times an atom used by the stage has been refined,
-    //   (2) then by the estimated input rows (smaller → earlier),
-    //   (3) then by how many relations the stage joins (more → earlier).
+    //   (2) then the stages up to the fence before the `fenced` ones,
+    //   (3) then by the estimated input rows (smaller → earlier),
+    //   (4) then by how many relations the stage joins (more → earlier).
     //
-    // Estimate size is second so that very small inputs (e.g. FunDep
+    // Estimate size precedes (4) so that very small inputs (e.g. FunDep
     // consequents with exactly one value) run before multi-relation stages
     // that happen to have a larger current estimate.
-    let key_fn = |join_stage: &JoinStage,
-                  binding_info: &BindingInfo<'_, '_>,
-                  refinements: &DenseIdMap<AtomId, i64>| {
+    let narrowing = &mut SmallVec::new();
+    let mut key_fn = |stage: usize,
+                      binding_info: &BindingInfo<'_, '_>,
+                      refinements: &DenseIdMap<AtomId, i64>,
+                      order: &InstrOrder,
+                      position: usize| {
+        let join_stage = &instrs[stage];
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
@@ -583,19 +734,28 @@ pub(super) fn sort_plan_by_size_inner(
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Semijoin,
+                ..
+            } => {
+                let (refine, size, rels) =
+                    semijoin_key(join_stage, order, instrs, position, binding_info, narrowing);
+                return (refine, fenced(stage), size, rels);
+            }
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
         (
             -refine,
+            fenced(stage),
             estimate_size(join_stage, binding_info),
             -num_intersected_rels(join_stage),
         )
     };
 
     for i in range.clone() {
-        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
+        let mut key_i = key_fn(order.get(i), binding_info, &times_refined, order, i);
         for j in (i + 1)..range.end {
-            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
+            let key_j = key_fn(order.get(j), binding_info, &times_refined, order, i);
             if key_j < key_i {
                 order.data.swap(i, j);
                 key_i = key_j;

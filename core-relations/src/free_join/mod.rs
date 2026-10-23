@@ -1039,9 +1039,14 @@ impl Database {
 
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
         let mut plan = plan::plan_query(query, ColumnCardEst::new(self));
-        // Intern the successor family of every indexed access now, so nodes
-        // shared across plans publish their children under ids that are fixed
-        // before any rule set runs.
+        self.intern_access_families(&mut plan);
+        plan
+    }
+
+    /// Interns the successor family of every indexed access of a plan not yet
+    /// shared or prepared, so nodes shared across plans publish their children
+    /// under ids fixed before any rule set runs.
+    fn intern_access_families(&mut self, plan: &mut Plan) {
         let atoms = plan.atoms();
         plan.for_each_stages_mut(|stages| {
             let mut families = Vec::new();
@@ -1058,7 +1063,6 @@ impl Database {
             });
             stages.set_families(families.into());
         });
-        plan
     }
 }
 
