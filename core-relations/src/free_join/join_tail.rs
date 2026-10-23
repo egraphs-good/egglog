@@ -413,6 +413,7 @@ pub(super) fn select_next_stage(
     instrs: &[JoinStage],
     binding_info: &BindingInfo<'_, '_>,
 ) {
+    let old_next = order.data.get(start).copied();
     let end = (start..order.len())
         .find(|&position| is_reorder_barrier(&instrs[order.get(position)]))
         .unwrap_or(order.len());
@@ -435,7 +436,11 @@ pub(super) fn select_next_stage(
     if let Some(best) = best {
         order.data[start..=best].rotate_right(1);
     }
-    recompute_leaf_scans(order, leaf_scans, instrs, start);
+    // Initialization always populates the flags, even if the root stays put.
+    // At runtime an unchanged winner leaves the entire physical order intact.
+    if start == 0 || old_next != order.data.get(start).copied() {
+        recompute_leaf_scans(order, leaf_scans, instrs, start);
+    }
 }
 
 /// Recompute which scheduled stages can emit a factorized binding set.

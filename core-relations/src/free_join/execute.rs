@@ -45,7 +45,7 @@ use super::{
     join_tail::{
         BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
-        materialization_is_live_in_tail, select_next_stage,
+        is_reorder_barrier, materialization_is_live_in_tail, select_next_stage,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
@@ -1450,7 +1450,14 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         // For very small residuals, keep the existing schedule instead of
         // paying for another candidate scan.
-        if cur_size > 1 && cur > 0 && cur < instr_order.len() - 1 {
+        if cur_size > 1
+            && cur > 0
+            && cur < instr_order.len() - 1
+            && !is_reorder_barrier(&stages.instrs[instr_order.get(cur)])
+            && !is_reorder_barrier(&stages.instrs[instr_order.get(cur + 1)])
+        {
+            // A barrier or the sole stage before one has no alternative.
+            // Leaving its order unchanged also preserves the leaf flags.
             // Select only the next stage from fresh residual sizes.
             // Leave later choices until their inputs exist.
             // Keep cur=0 fixed: top-level partitions describe that first

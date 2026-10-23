@@ -810,6 +810,36 @@ fn initial_dvo_keeps_materialization_barriers_and_later_phases_fixed() {
 }
 
 #[test]
+fn initial_dvo_initializes_leaf_scans_even_without_reordering() {
+    let stages = [
+        JoinStage::FusedIntersect {
+            cover: scan(0),
+            bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(0))],
+            to_intersect: Vec::new(),
+        },
+        intersect_stage(1, 1),
+    ];
+    let binding_info = binding_info_with_sizes(&[1, 2]);
+    // Cover empty, singleton, and multi-stage initialization. The first stage
+    // remains first in each case, but its factorization flag still needs work.
+    for len in 0..=stages.len() {
+        let mut order = InstrOrder::from_iter(0..len);
+        let mut leaf_scans = smallvec![false; len];
+
+        select_next_stage(
+            &mut order,
+            &mut leaf_scans,
+            0,
+            &stages[..len],
+            &binding_info,
+        );
+
+        assert_eq!(order, InstrOrder::from_iter(0..len));
+        assert_eq!(leaf_scans.as_slice(), &[true, false][..len]);
+    }
+}
+
+#[test]
 fn runtime_dvo_compares_residual_rows_regardless_of_prior_refinement() {
     let stages = vec![
         intersect_stage(0, 0),
@@ -1477,5 +1507,40 @@ fn row_handle_cardinality_tracks_each_storage_representation() {
         let clone = rows.clone();
         drop(rows);
         assert_eq!(clone.size(), clone.subset().size());
+    }
+}
+
+#[test]
+fn runtime_leaf_flags_match_full_refresh_after_changed_and_unchanged_choices() {
+    use crate::free_join::join_tail::recompute_leaf_scans;
+    let stages = vec![
+        intersect_stage(3, 0),
+        JoinStage::FusedIntersect {
+            cover: scan(0),
+            bind: SmallVec::new(),
+            to_intersect: Vec::new(),
+        },
+        intersect_stage(1, 0),
+        intersect_stage(0, 1),
+        JoinStage::FusedIntersect {
+            cover: scan(2),
+            bind: SmallVec::new(),
+            to_intersect: Vec::new(),
+        },
+    ];
+    let mut order = InstrOrder::from_iter(0..stages.len());
+    let mut leaf_scans = smallvec![false; stages.len()];
+    recompute_leaf_scans(&order, &mut leaf_scans, &stages, 0);
+    for sizes in [[10, 2, 20, 1], [10, 2, 20, 1], [1, 2, 20, 1], [10, 2, 1, 1]] {
+        select_next_stage(
+            &mut order,
+            &mut leaf_scans,
+            1,
+            &stages,
+            &binding_info_with_sizes(&sizes),
+        );
+        let mut expected = smallvec![false; stages.len()];
+        recompute_leaf_scans(&order, &mut expected, &stages, 0);
+        assert_eq!(leaf_scans, expected);
     }
 }
