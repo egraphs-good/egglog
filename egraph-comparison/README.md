@@ -6,10 +6,11 @@ cargo run -p egraph-comparison -- --terms-only left.json right.json
 ```
 
 The binary reads two complete, rebuilt databases and emits JSON with
-`terms_equal`, `database_equal`, `refinement_rounds`, and
-`database_refinement_rounds`. Exit status is 0 for
+`terms_equal`, `database_equal`, `refinement_steps`, and
+`database_refinement_steps`. Exit status is 0 for
 equality, 1 for disequality, and 2 for invalid input or I/O failure. `--terms-only`
 selects term equality for the exit status; both results are always reported.
+Step counts measure processed worklist blocks, not synchronous refinement depth.
 
 ## Semantics
 
@@ -23,8 +24,11 @@ that the same groups contain observable roots on both sides.
 This is the idea behind [DFA minimization](https://en.wikipedia.org/wiki/DFA_minimization).
 For its generalization to other transition structures, see Jacobs and Wißmann,
 [Fast Coalgebraic Bisimilarity Minimization](https://arxiv.org/abs/2204.12368).
-The implementation here uses whole-graph rounds; it does **not** implement
-Hopcroft's smaller-half splitter worklist or the fast algorithm in that paper.
+The comparator uses the paper's smaller-half worklist idea: when a block splits,
+its largest piece keeps the old ID. Only predecessors of newly numbered pieces
+become dirty. Each block stores its clean members contiguously, so processing
+recomputes dirty signatures plus one clean representative, without scanning all
+clean members. Clean members have identical signatures and stay together.
 
 This is conservative e-graph partition refinement: cycles merge only when the
 complete sets of e-nodes in their e-classes are identical modulo the refined
@@ -56,10 +60,13 @@ different observations.
 Costs, roots, extraction preferences, and runtime implementation details are
 outside this database format.
 
-The implementation recomputes exact signatures each round. It has at most a
-linear number of splitting rounds and can take quadratic time (plus signature
-sorting). There is no probabilistic equality or depth limit. Performance
-improvements preserve exact signature equality.
+Each class changes block IDs at most O(log n) times, giving O(m log n) reverse
+edge visits and O(n + m log n) signature evaluations for n classes and m child
+occurrences. A signature still scans, sorts, and deduplicates all of its class's
+nodes, so this is not an unconditional O(m log n) runtime guarantee. The reverse
+index and refinable partition use O(n + m) space, in addition to signature
+scratch storage. Comparisons remain exact, with no depth limit. Internal block
+IDs depend on worklist order and are not canonical serialization IDs.
 
 ## Version 1 JSON
 
