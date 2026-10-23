@@ -128,3 +128,55 @@ refinement algorithm. Certificates are valid witnesses, not guaranteed minimal.
 Structural and row verification use exact refinement. Certificate generation
 currently repeats comparison/refinement and row-witness search can be quadratic;
 it is opt-in so equality checks do not pay this diagnostic cost.
+
+For a concrete example, save these as `left.egg` and `right.egg`:
+
+```lisp
+; left.egg
+(datatype Expr (Num i64))
+(Num 1)
+```
+
+```lisp
+; right.egg
+(datatype Expr (Num i64))
+(Num 2)
+```
+
+Export both using `egglog --to-comparison-json`, then compare their JSON files
+with `--certificate`. The certificate field is:
+
+```json
+{"kind":"missing_term","side":"left","terms":[{"kind":"literal","sort":"i64","value":"1"},{"kind":"apply","function":"Num","inputs":[0]}],"term":1}
+```
+
+Entry 0 is the literal `1`; entry 1 builds `Num(1)` from it. Root 1 exists in the
+left database and has no interpretation in the right. Certificate term IDs are
+local indices in this topologically ordered DAG, so the same literal need only
+be stored once even if many applications use it.
+
+## Exporting egglog databases
+
+```sh
+cargo run -p egglog -- --to-comparison-json before.egg
+cargo run -p egglog -- --to-comparison-json after.egg
+cargo run -p egraph-comparison -- before.comparison.json after.comparison.json --certificate
+```
+
+`EGraph::serialize_for_comparison` is available with egglog's `comparison`
+feature (included by the default `bin` feature). It rebuilds before exporting
+all visible user tables, empty declarations, and subsumed rows. Relations are
+ordinary database tables. Global bindings and hidden helper tables are excluded.
+Visualization limits, splitting, and inlining do not affect this export.
+
+The initial exporter handles equality sorts and the built-in scalar types,
+including normalized floating-point zeros/NaNs. It rejects encountered container
+and custom base values, and rejects term/proof encoding. These cases require
+explicit value semantics or a projection to user-visible tables; treating their
+raw IDs or debug strings as values would give misleading equality results.
+
+
+Container support needs variable-arity observations with element sorts and
+container kind in the label. Ordered sequences, unordered sets, multiplicities,
+and map key/value pairing must be preserved when comparing child blocks. The
+current fixed-arity ordered `Function` schema cannot express all these cases.
