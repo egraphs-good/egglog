@@ -4,10 +4,7 @@
 //! Dynamic variable ordering updates the stage schedule and the leaf-scan
 //! flags that allow bindings to remain factorized until action execution.
 
-use std::{
-    ops::Range,
-    sync::{Arc, Mutex, atomic::AtomicUsize},
-};
+use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 use crossbeam::utils::CachePadded;
 use smallvec::SmallVec;
@@ -27,7 +24,6 @@ use super::{
     plan::{JoinStage, MatId, MatScanMode},
     prepared_index::{AccessId, PreparedIndexSlot, PreparedJoinIndexes, StageMask},
     probe::{AtomRows, Prober},
-    with_pool_set,
 };
 
 /// Visit every atom whose trie node can be read while executing `stage`.
@@ -396,13 +392,20 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
     )
 }
 
-/// Select only the next stage using its current residual rows.
+/// Select the next stage using the current input sizes.
 ///
-/// Prefer fewer rows, then more intersected relations. Exact ties retain the
-/// current physical order. Only this phase's next stage is selected: later
-/// choices wait until execution supplies fresh residuals. Stable insertion
-/// preserves the relative order of the other stages and cannot cross a fixed
-/// materialization barrier.
+/// Prefer materialized keys by decreasing bound-key count, then increasing
+/// row count and decreasing number of intersected relations. Use this same
+/// key before execution and when selecting a later stage. Exact ties keep
+/// the first stage in physical order. Rows bound the candidates an
+/// intersection or fused cover can enumerate and reflect earlier filtering.
+///
+/// Insert the selected stage at the next position, preserving the order of
+/// the other stages: their cardinalities change when that stage executes. This
+/// also selects the first stage before top-level partitions are created.
+/// Materialization stages that do not commute remain fixed barriers, and
+/// phases after a barrier keep their order until that barrier has executed.
+/// [`recompute_leaf_scans`] updates factorization flags for the resulting order.
 pub(super) fn select_next_stage(
     order: &mut InstrOrder,
     leaf_scans: &mut LeafScans,
@@ -415,7 +418,16 @@ pub(super) fn select_next_stage(
         .unwrap_or(order.len());
     let best = (start..end).min_by_key(|&position| {
         let stage = &instrs[order.get(position)];
+        let materialized_keys = match stage {
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::KeyOnly,
+                bind,
+                ..
+            } => bind.len() as i64,
+            _ => 0,
+        };
         (
+            -materialized_keys,
             estimate_size(stage, binding_info),
             -num_intersected_rels(stage),
         )
@@ -426,38 +438,13 @@ pub(super) fn select_next_stage(
     recompute_leaf_scans(order, leaf_scans, instrs, start);
 }
 
-/// Reorder a suffix of the cached logical plan using the DVO policy.
-///
-/// Within each phase, the greedy key is decreasing refinement count in the
-/// logical plan prefix, increasing live residual size, then decreasing number
-/// of intersected relations. Materialization stages that do not commute remain
-/// fixed barriers. Reordering can also change factorized leaf-scan eligibility,
-/// so [`recompute_leaf_scans`] runs after every change.
-pub(super) fn sort_plan_by_size(
-    order: &mut InstrOrder,
-    leaf_scans: &mut LeafScans,
-    start: usize,
-    instrs: &[JoinStage],
-    binding_info: &mut BindingInfo<'_, '_>,
-) {
-    let mut last_pos = start;
-    for i in start..instrs.len() {
-        if is_reorder_barrier(&instrs[i]) {
-            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
-            last_pos = i + 1;
-        }
-    }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
-    recompute_leaf_scans(order, leaf_scans, instrs, start);
-}
-
 /// Recompute which scheduled stages can emit a factorized binding set.
 ///
 /// A leaf scan produces bindings that no remaining stage needs to inspect. Its
 /// rows can therefore be stored as one [`BindingSet`] factor instead of
 /// recursively expanding every row through the rest of the join. Whether a
 /// scan is a leaf depends on what comes after it, so the flags are recomputed
-/// after the initial DVO sort and whenever runtime DVO reorders a suffix.
+/// after selecting the first stage and whenever runtime DVO reorders a suffix.
 ///
 /// This recomputes `leaf_scans[i]` for every position in
 /// `start..order.len()`. A position is eligible when its stage is either a
@@ -548,94 +535,6 @@ pub(super) fn recompute_leaf_scans(
     }
 }
 
-pub(super) fn sort_plan_by_size_inner(
-    order: &mut InstrOrder,
-    range: Range<usize>,
-    instrs: &[JoinStage],
-    binding_info: &mut BindingInfo<'_, '_>,
-) {
-    // Nothing to sort if there's 0 or 1 element.
-    if range.len() <= 1 {
-        return;
-    }
-    // How many times an atom has been intersected/joined
-    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
-    let update_refinements =
-        |stage: &JoinStage, refinements: &mut DenseIdMap<AtomId, i64>| match stage {
-            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *refinements.get_or_default(scan.atom) += 1;
-            }),
-            JoinStage::FusedIntersect {
-                cover,
-                to_intersect,
-                ..
-            } => {
-                *refinements.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *refinements.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-            JoinStage::FusedIntersectMat { to_intersect, .. } => {
-                to_intersect.iter().for_each(|(spec, _)| {
-                    *refinements.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
-                });
-            }
-        };
-
-    // Count how many times each atom has been refined in the logical plan
-    // prefix, as the DVO heuristic does.
-    for stage in &instrs[..range.start] {
-        update_refinements(stage, &mut times_refined);
-    }
-
-    // We prioritize stages by
-    //
-    //   (1) how many times an atom used by the stage has been refined,
-    //   (2) then by the estimated input rows (smaller → earlier),
-    //   (3) then by how many relations the stage joins (more → earlier).
-    //
-    // Estimate size is second so that very small inputs (e.g. FunDep
-    // consequents with exactly one value) run before multi-relation stages
-    // that happen to have a larger current estimate.
-    let key_fn = |join_stage: &JoinStage,
-                  binding_info: &BindingInfo<'_, '_>,
-                  refinements: &DenseIdMap<AtomId, i64>| {
-        let refine = match join_stage {
-            JoinStage::Intersect { scans, .. } => scans
-                .iter()
-                .map(|scan| refinements.get(scan.atom).copied().unwrap_or_default())
-                .max()
-                .unwrap(),
-            JoinStage::FusedIntersect { cover, .. } => refinements
-                .get(cover.to_index.atom)
-                .copied()
-                .unwrap_or_default(),
-            JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
-        };
-        (
-            -refine,
-            estimate_size(join_stage, binding_info),
-            -num_intersected_rels(join_stage),
-        )
-    };
-
-    for i in range.clone() {
-        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
-        for j in (i + 1)..range.end {
-            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
-            if key_j < key_i {
-                order.data.swap(i, j);
-                key_i = key_j;
-            }
-        }
-        // Update the counts after a new instruction is selected.
-        update_refinements(&instrs[order.get(i)], &mut times_refined);
-    }
-}
-
 /// Maps execution positions to stage indices in the logical plan. Dynamic
 /// variable ordering changes this permutation without moving the plan's stages
 /// or their prepared index state.
@@ -671,7 +570,7 @@ impl InstrOrder {
 /// `leaf_scans[i] == true` means the stage at
 /// `instrs[instr_order.get(i)]` has no consumers later in the current order and
 /// may append a [`BindingSet`] factor instead of expanding its rows immediately.
-/// [`sort_plan_by_size`] recomputes the flags whenever DVO changes that order.
+/// [`select_next_stage`] recomputes the flags whenever DVO changes that order.
 pub(super) type LeafScans = SmallVec<[bool; 8]>;
 
 /// Mutable view of the state used by a recursive join call. A call can update

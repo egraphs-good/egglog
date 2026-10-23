@@ -529,14 +529,7 @@ fn mat_stage(mat_id: usize) -> JoinStage {
 }
 
 fn intersect_stage(atom: usize, column: usize) -> JoinStage {
-    JoinStage::Intersect {
-        var: Variable::from_usize(column),
-        scans: smallvec![SingleScanSpec {
-            atom: AtomId::from_usize(atom),
-            column: ColumnId::from_usize(column),
-            cs: Vec::new(),
-        }],
-    }
+    intersect_atoms_stage(&[atom], column)
 }
 
 fn intersect_atoms_stage(atoms: &[usize], column: usize) -> JoinStage {
@@ -565,6 +558,255 @@ fn binding_info_with_sizes(sizes: &[usize]) -> BindingInfo<'static, 'static> {
         );
     }
     binding_info
+}
+
+#[test]
+fn initial_dvo_selects_only_the_first_stage() {
+    let stages = vec![
+        intersect_stage(0, 0),
+        intersect_stage(1, 0),
+        intersect_stage(0, 1),
+        intersect_stage(2, 0),
+    ];
+    let binding_info = binding_info_with_sizes(&[160, 80, 66]);
+    let mut order = InstrOrder::from_iter(0..stages.len());
+
+    select_next_stage(
+        &mut order,
+        &mut smallvec![false; stages.len()],
+        0,
+        &stages,
+        &binding_info,
+    );
+
+    // Choose the root before partitioning it, but defer the remaining choices
+    // until that root has actually filtered their inputs.
+    assert_eq!(order, InstrOrder::from_iter([3, 0, 1, 2].into_iter()));
+}
+
+#[test]
+fn initial_dvo_preserves_materialized_key_root_priority() {
+    let stages = vec![
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(0),
+            mode: MatScanMode::KeyOnly,
+            bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(0))],
+            to_intersect: Vec::new(),
+        },
+        intersect_stage(0, 1),
+    ];
+    for (rows, expected) in [(1, [0, 1]), (3, [0, 1])] {
+        let mut binding_info = binding_info_with_sizes(&[rows]);
+        let keys = (0..2)
+            .map(|key| (vec![Value::from_usize(key)], RowBuffer::new(1)))
+            .collect();
+        binding_info
+            .materializations
+            .insert(MatId::from_usize(0), Arc::new(keys));
+        let mut order = InstrOrder::from_iter(0..stages.len());
+
+        select_next_stage(
+            &mut order,
+            &mut smallvec![false; stages.len()],
+            0,
+            &stages,
+            &binding_info,
+        );
+
+        assert_eq!(order, InstrOrder::from_iter(expected.into_iter()));
+    }
+}
+
+#[test]
+fn runtime_dvo_preserves_materialized_key_priority_over_smaller_rows() {
+    let stages = vec![
+        intersect_stage(1, 0),
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(0),
+            mode: MatScanMode::KeyOnly,
+            bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(1))],
+            to_intersect: Vec::new(),
+        },
+        intersect_stage(0, 2),
+    ];
+    let mut binding_info = binding_info_with_sizes(&[1, 10]);
+    let keys = (0..2)
+        .map(|key| (vec![Value::from_usize(key)], RowBuffer::new(1)))
+        .collect();
+    binding_info
+        .materializations
+        .insert(MatId::from_usize(0), Arc::new(keys));
+    let mut order = InstrOrder::from_iter(0..stages.len());
+
+    select_next_stage(
+        &mut order,
+        &mut smallvec![false; stages.len()],
+        1,
+        &stages,
+        &binding_info,
+    );
+
+    // The common key applies after the root too. This intentionally differs
+    // from a first-only policy that uses row counts alone at runtime.
+    assert_eq!(order, InstrOrder::from_iter([0, 1, 2].into_iter()));
+}
+
+fn key_only_stage(mat_id: usize, arity: usize, probes: usize) -> JoinStage {
+    JoinStage::FusedIntersectMat {
+        cover: MatId::from_usize(mat_id),
+        mode: MatScanMode::KeyOnly,
+        bind: (0..arity)
+            .map(|i| (ColumnId::from_usize(i), Variable::from_usize(i)))
+            .collect(),
+        to_intersect: (0..probes).map(|atom| (scan(atom), smallvec![])).collect(),
+    }
+}
+
+fn insert_materialized_keys(binding_info: &mut BindingInfo<'_, '_>, id: usize, rows: usize) {
+    let keys = (0..rows)
+        .map(|key| (vec![Value::from_usize(key)], RowBuffer::new(1)))
+        .collect();
+    binding_info
+        .materializations
+        .insert(MatId::from_usize(id), Arc::new(keys));
+}
+
+#[test]
+fn common_dvo_key_orders_by_arity_then_rows_then_relations_then_physical_ties() {
+    // Arity beats the ordinary singleton and one-key materialization; rows
+    // break the two-key tie, then relations, then current physical order.
+    for prefix in [0, 1] {
+        let mut stages: Vec<_> = (0..prefix).map(|_| intersect_stage(0, 9)).collect();
+        stages.push(intersect_stage(0, 8));
+        stages.extend([
+            key_only_stage(0, 1, 0),
+            key_only_stage(1, 2, 0),
+            key_only_stage(2, 2, 0),
+            key_only_stage(3, 2, 1),
+            key_only_stage(4, 2, 1),
+        ]);
+        let mut binding_info = binding_info_with_sizes(&[1]);
+        for (id, rows) in [1, 4, 2, 2, 2].into_iter().enumerate() {
+            insert_materialized_keys(&mut binding_info, id, rows);
+        }
+        for reversed_tie in [false, true] {
+            let mut positions: Vec<_> = (0..stages.len()).collect();
+            if reversed_tie {
+                positions.swap(prefix + 4, prefix + 5);
+            }
+            let winner = positions[prefix + 4];
+            let mut expected = positions.clone();
+            expected.remove(prefix + 4);
+            expected.insert(prefix, winner);
+            let mut order = InstrOrder::from_iter(positions.into_iter());
+            select_next_stage(
+                &mut order,
+                &mut smallvec![false; stages.len()],
+                prefix,
+                &stages,
+                &binding_info,
+            );
+            assert_eq!(order, InstrOrder::from_iter(expected.into_iter()));
+        }
+    }
+}
+
+#[test]
+fn common_dvo_key_cannot_cross_barriers_but_applies_in_the_next_phase() {
+    for mode in [
+        MatScanMode::Full,
+        MatScanMode::Value(smallvec![Variable::from_usize(9)]),
+        MatScanMode::Lookup(smallvec![Variable::from_usize(9)]),
+    ] {
+        let stages = vec![
+            intersect_stage(0, 9),
+            JoinStage::FusedIntersectMat {
+                cover: MatId::from_usize(0),
+                mode,
+                bind: SmallVec::new(),
+                to_intersect: Vec::new(),
+            },
+            intersect_stage(0, 8),
+            key_only_stage(1, 2, 0),
+        ];
+        let mut binding_info = binding_info_with_sizes(&[1]);
+        insert_materialized_keys(&mut binding_info, 1, 100);
+        let mut order = InstrOrder::from_iter(0..stages.len());
+        let mut leaf_scans = smallvec![false; stages.len()];
+        for start in [0, 1] {
+            select_next_stage(&mut order, &mut leaf_scans, start, &stages, &binding_info);
+            assert_eq!(order, InstrOrder::from_iter(0..stages.len()));
+        }
+        select_next_stage(&mut order, &mut leaf_scans, 2, &stages, &binding_info);
+        assert_eq!(order, InstrOrder::from_iter([0, 1, 3, 2].into_iter()));
+    }
+}
+
+#[test]
+fn common_dvo_key_keeps_materialization_leaf_flags_consistent() {
+    use crate::free_join::join_tail::recompute_leaf_scans;
+    let stages = vec![
+        intersect_stage(0, 9),
+        intersect_stage(1, 8),
+        key_only_stage(0, 1, 0),
+        JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(1),
+            mode: MatScanMode::Lookup(smallvec![Variable::from_usize(0)]),
+            bind: SmallVec::new(),
+            to_intersect: Vec::new(),
+        },
+    ];
+    let mut binding_info = binding_info_with_sizes(&[1, 2]);
+    insert_materialized_keys(&mut binding_info, 0, 100);
+    let mut order = InstrOrder::from_iter(0..stages.len());
+    let mut leaf_scans = smallvec![false; stages.len()];
+    recompute_leaf_scans(&order, &mut leaf_scans, &stages, 0);
+    for _ in 0..2 {
+        select_next_stage(&mut order, &mut leaf_scans, 1, &stages, &binding_info);
+        assert_eq!(order, InstrOrder::from_iter([0, 2, 1, 3].into_iter()));
+        let mut expected = smallvec![false; stages.len()];
+        recompute_leaf_scans(&order, &mut expected, &stages, 0);
+        assert_eq!(leaf_scans, expected);
+        assert!(
+            !leaf_scans[1],
+            "the lookup still needs the materialized key scalar"
+        );
+    }
+}
+
+#[test]
+fn initial_dvo_keeps_materialization_barriers_and_later_phases_fixed() {
+    for mode in [
+        MatScanMode::Full,
+        MatScanMode::Value(smallvec![Variable::from_usize(0)]),
+        MatScanMode::Lookup(smallvec![Variable::from_usize(0)]),
+    ] {
+        let stages = vec![
+            intersect_stage(0, 0),
+            intersect_stage(1, 0),
+            JoinStage::FusedIntersectMat {
+                cover: MatId::from_usize(0),
+                mode,
+                bind: SmallVec::new(),
+                to_intersect: Vec::new(),
+            },
+            intersect_stage(0, 1),
+            intersect_stage(2, 0),
+        ];
+        let binding_info = binding_info_with_sizes(&[160, 66, 1]);
+        let mut order = InstrOrder::from_iter(0..stages.len());
+
+        select_next_stage(
+            &mut order,
+            &mut smallvec![false; stages.len()],
+            0,
+            &stages,
+            &binding_info,
+        );
+
+        // The singleton after the barrier cannot be selected or moved yet.
+        assert_eq!(order, InstrOrder::from_iter([1, 0, 2, 3, 4].into_iter()));
+    }
 }
 
 #[test]
