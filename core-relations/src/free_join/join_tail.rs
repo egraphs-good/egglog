@@ -396,6 +396,36 @@ pub(super) fn is_reorder_barrier(stage: &JoinStage) -> bool {
     )
 }
 
+/// Select only the next stage using its current residual rows.
+///
+/// Prefer fewer rows, then more intersected relations. Exact ties retain the
+/// current physical order. Only this phase's next stage is selected: later
+/// choices wait until execution supplies fresh residuals. Stable insertion
+/// preserves the relative order of the other stages and cannot cross a fixed
+/// materialization barrier.
+pub(super) fn select_next_stage(
+    order: &mut InstrOrder,
+    leaf_scans: &mut LeafScans,
+    start: usize,
+    instrs: &[JoinStage],
+    binding_info: &BindingInfo<'_, '_>,
+) {
+    let end = (start..order.len())
+        .find(|&position| is_reorder_barrier(&instrs[order.get(position)]))
+        .unwrap_or(order.len());
+    let best = (start..end).min_by_key(|&position| {
+        let stage = &instrs[order.get(position)];
+        (
+            estimate_size(stage, binding_info),
+            -num_intersected_rels(stage),
+        )
+    });
+    if let Some(best) = best {
+        order.data[start..=best].rotate_right(1);
+    }
+    recompute_leaf_scans(order, leaf_scans, instrs, start);
+}
+
 /// Reorder a suffix of the cached logical plan using the DVO policy.
 ///
 /// Within each phase, the greedy key is decreasing refinement count in the

@@ -45,7 +45,7 @@ use super::{
     join_tail::{
         BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
-        materialization_is_live_in_tail, sort_plan_by_size,
+        materialization_is_live_in_tail, select_next_stage, sort_plan_by_size,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
@@ -1448,11 +1448,13 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // amortize a handoff into a wide join tail.
             chunk_size = chunk_size.max(free_join_fork_min_frames());
         }
-        if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
-            // Re-evaluate the remaining suffix after observing the residuals
-            // produced by earlier stages. Packed child families make the
-            // resulting atom-local successor choice safe to cache again.
-            sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
+        // Reconsider the next stage whenever its current residual has more
+        // than one row, instead of sorting a suffix every third stage.
+        if cur_size > 1 && cur > 0 && cur < instr_order.len() - 1 {
+            // Keep the root fixed because its top-level partitions describe
+            // that stage's scan. Select from fresh residuals only in the
+            // current phase; later stages wait until their inputs exist.
+            select_next_stage(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 
