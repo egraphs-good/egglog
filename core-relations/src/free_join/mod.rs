@@ -41,6 +41,8 @@ use crate::action::{ExecutionState, ExternalContext};
 use crate::common::HashMap;
 
 pub(crate) mod execute;
+#[cfg(test)]
+mod filtered_index_tests;
 pub(crate) mod frame_update;
 mod join_tail;
 mod packed_cache;
@@ -171,8 +173,10 @@ pub struct TableInfo {
     pub(crate) name: Option<Arc<str>>,
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
-    pub(crate) indexes: IndexCatalog<ColumnIds, HashIndex>,
-    pub(crate) column_indexes: IndexCatalog<ColumnId, HashColumnIndex>,
+    /// Columns and canonical fast predicates identify each persistent index.
+    /// An empty predicate list denotes an unfiltered whole-table index.
+    pub(crate) indexes: IndexCatalog<(ColumnIds, SmallVec<[Constraint; 2]>), HashIndex>,
+    pub(crate) column_indexes: IndexCatalog<(ColumnId, SmallVec<[Constraint; 2]>), HashColumnIndex>,
     /// Every way a built plan indexes rows below this table's shared trie
     /// nodes, interned in plan-build order; see [`FamilyId`].
     successor_families: HashMap<SuccessorSig, FamilyId>,
@@ -962,7 +966,7 @@ impl Database {
             // We have or will build an index: upgrade this constraint to
             // 'fast'.
             fast.push(c.clone());
-            let index = get_column_index_from_tableinfo(table_info, col);
+            let index = get_column_index_from_tableinfo(table_info, col, &[]);
             match index.get().unwrap().get_subset(&val) {
                 Some(s) => {
                     with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
@@ -1069,14 +1073,20 @@ impl Drop for Database {
     }
 }
 
-/// The core logic behind getting and updating a hash index.
+/// Get and refresh a persistent index for these columns and fast predicates.
 ///
 /// This is in a separate function to allow us to reuse it while already
 /// borrowing a `TableInfo`.
-fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIndex {
-    let index: Arc<_> = table_info.indexes.get_or_insert(cols.into(), || {
-        Arc::new(ResettableOnceLock::new(Index::new(
+fn get_index_from_tableinfo(
+    table_info: &TableInfo,
+    cols: &[ColumnId],
+    constraints: &[Constraint],
+) -> HashIndex {
+    let key = (cols.into(), canonical_constraints(constraints));
+    let index: Arc<_> = table_info.indexes.get_or_insert(key, || {
+        Arc::new(ResettableOnceLock::new(Index::with_constraints(
             cols.to_vec(),
+            constraints.to_vec(),
             TupleIndex::new(cols.len()),
         )))
     });
@@ -1098,10 +1108,13 @@ fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIn
 pub(crate) fn get_column_index_from_tableinfo(
     table_info: &TableInfo,
     col: ColumnId,
+    constraints: &[Constraint],
 ) -> HashColumnIndex {
-    let index: Arc<_> = table_info.column_indexes.get_or_insert(col, || {
-        Arc::new(ResettableOnceLock::new(Index::new(
+    let key = (col, canonical_constraints(constraints));
+    let index: Arc<_> = table_info.column_indexes.get_or_insert(key, || {
+        Arc::new(ResettableOnceLock::new(Index::with_constraints(
             vec![col],
+            constraints.to_vec(),
             ColumnIndex::new(),
         )))
     });
@@ -1128,7 +1141,7 @@ impl ColumnCardEst<'_> {
     }
 
     pub fn col_uniqueness(&self, table: TableId, col: ColumnId) -> ColUniqueness {
-        let col_idx = get_column_index_from_tableinfo(&self.db.tables[table], col);
+        let col_idx = get_column_index_from_tableinfo(&self.db.tables[table], col, &[]);
         let table = &self.db.tables[table].table;
         ColUniqueness {
             col_size: col_idx.get().unwrap().len(),

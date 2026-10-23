@@ -128,10 +128,12 @@ mod catalog_filter {
         drop(get_column_index_from_tableinfo(
             db.get_table_info(table),
             ColumnId::new(0),
+            &[],
         ));
         drop(get_index_from_tableinfo(
             db.get_table_info(table),
             &[ColumnId::new(0), ColumnId::new(1)],
+            &[],
         ));
         {
             let mut buf = db.new_buffer(table);
@@ -199,7 +201,8 @@ mod catalog_filter {
     #[test]
     fn existence_matches_need_a_live_row() {
         let (db, table) = stale_db();
-        let index = get_column_index_from_tableinfo(db.get_table_info(table), ColumnId::new(0));
+        let index =
+            get_column_index_from_tableinfo(db.get_table_info(table), ColumnId::new(0), &[]);
         let index = index.get().unwrap();
         assert!(
             index.get_subset(&v(DEAD_GROUP)).is_some(),
@@ -238,7 +241,8 @@ mod catalog_filter {
     #[test]
     fn retained_unconstrained_matches_borrow_the_catalog_group() {
         let (db, table) = stale_db();
-        let index = get_column_index_from_tableinfo(db.get_table_info(table), ColumnId::new(0));
+        let index =
+            get_column_index_from_tableinfo(db.get_table_info(table), ColumnId::new(0), &[]);
         let index = index.get().unwrap();
         let continuations = RootContinuationCache::default();
         let prober = column_prober(
@@ -270,7 +274,8 @@ mod catalog_filter {
     #[test]
     fn constrained_matches_materialize_only_matching_live_rows() {
         let (db, table) = stale_db();
-        let index = get_column_index_from_tableinfo(db.get_table_info(table), ColumnId::new(0));
+        let index =
+            get_column_index_from_tableinfo(db.get_table_info(table), ColumnId::new(0), &[]);
         let index = index.get().unwrap();
         let continuations = RootContinuationCache::default();
 
@@ -380,7 +385,7 @@ mod catalog_filter {
     fn tuple_catalog_matches_apply_the_same_filter() {
         let (db, table) = stale_db();
         let columns = [ColumnId::new(0), ColumnId::new(1)];
-        let index = get_index_from_tableinfo(db.get_table_info(table), &columns);
+        let index = get_index_from_tableinfo(db.get_table_info(table), &columns, &[]);
         let index = index.get().unwrap();
         assert!(index.get_subset(&[v(0), v(0)]).is_some());
         let continuations = RootContinuationCache::default();

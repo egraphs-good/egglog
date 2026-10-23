@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 use crate::{
     common::{DashMap, HashMap, HashSet},
     numeric_id::{NumericId, define_id},
-    offsets::Subset,
+    offsets::{OffsetRange, Subset},
     table_spec::{ColumnId, Constraint},
 };
 
@@ -200,6 +200,14 @@ struct SharedRootIndexes {
     catalog_continuations: OnceLock<CatalogContinuationMap>,
 }
 
+/// A sparse root can use a persistent index of its fast predicates. Dense
+/// header constraints (in particular seminaive timestamp bounds) clip the
+/// resulting groups instead of creating a new catalog entry every round.
+pub(super) struct FilteredRootCatalog {
+    pub(super) constraints: SmallVec<[Constraint; 2]>,
+    pub(super) intersect_outer: Option<OffsetRange>,
+}
+
 /// Owning row subset for an atom. Lower trie levels are execution-scoped
 /// packed nodes; below a shared root they are shared across plans.
 ///
@@ -208,6 +216,7 @@ struct SharedRootIndexes {
 /// and belongs to a single frame.
 pub(crate) struct OwnedAtomRows {
     pub(super) subset: Subset,
+    pub(super) filtered_catalog: Option<Box<FilteredRootCatalog>>,
     /// Present only for roots shared across plans.
     shared: Option<SharedRootIndexes>,
     plan_root: bool,
@@ -225,6 +234,7 @@ impl OwnedAtomRows {
     pub(super) fn new(subset: Subset) -> Self {
         Self {
             subset,
+            filtered_catalog: None,
             shared: None,
             plan_root: true,
         }
@@ -233,6 +243,7 @@ impl OwnedAtomRows {
     pub(super) fn new_shared(subset: Subset) -> Self {
         Self {
             subset,
+            filtered_catalog: None,
             shared: Some(SharedRootIndexes::default()),
             plan_root: true,
         }
@@ -247,6 +258,7 @@ impl OwnedAtomRows {
     pub(super) fn new_residual(subset: Subset) -> Self {
         Self {
             subset,
+            filtered_catalog: None,
             shared: None,
             plan_root: false,
         }
