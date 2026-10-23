@@ -151,7 +151,7 @@ fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
     assert_eq!(
         refreshed
             .resolve(&slot)
-            .column_index(&db.tables[table], ColumnId::new(0))
+            .column_index(&db.tables[table], ColumnId::new(0), &[])
             .len(),
         1
     );
