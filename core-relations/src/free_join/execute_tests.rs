@@ -19,9 +19,9 @@ use crate::{
 
 use crate::free_join::{
     join_tail::{
-        BindingInfo, InstrOrder, JoinOrderContext, for_each_stage_atom,
+        BindingInfo, InstrOrder, JoinOrderContext, estimated_retained_work, for_each_stage_atom,
         materialization_is_live_in_tail, packed_child_shape_in_tail, scan_atom_tail_use,
-        sort_plan_by_size, sort_plan_by_size_inner, suffix_stage_mask,
+        select_runtime_stage, sort_plan_by_size, sort_plan_by_size_inner, suffix_stage_mask,
     },
     packed_cache::{FamilyId, OwnedAtomRows},
     packed_trie::ChildShape,
@@ -30,6 +30,18 @@ use crate::free_join::{
         PreparedJoinLayout, PreparedTailMaskWidth, StageMask,
     },
 };
+
+#[test]
+fn ordering_context_stays_compact_on_the_no_swap_path() {
+    assert_eq!(
+        std::mem::size_of::<JoinOrderContext<'_, '_>>(),
+        2 * std::mem::size_of::<usize>()
+    );
+    assert_eq!(
+        std::mem::align_of::<JoinOrderContext<'_, '_>>(),
+        std::mem::align_of::<usize>()
+    );
+}
 
 #[test]
 fn catalog_candidates_require_live_rows_before_terminal_match() {
@@ -413,6 +425,245 @@ fn runtime_dvo_compares_residual_rows_regardless_of_prior_refinement() {
 }
 
 #[test]
+fn retained_work_counts_live_row_storage_without_cartesian_expansion() {
+    assert_eq!(
+        estimated_retained_work([(2_000, 2, true), (2_000, 2, true)]),
+        3_998.0
+    );
+    assert_eq!(
+        estimated_retained_work([(2_000, 2, false), (2_000, 2, false)]),
+        2.0
+    );
+    assert_eq!(
+        estimated_retained_work([(2_000, 2, true), (2_000, 2, false)]),
+        2_000.0
+    );
+    assert_eq!(
+        estimated_retained_work([(17, 17, true), (83, 83, true)]),
+        17.0
+    );
+    assert_eq!(estimated_retained_work([(0, 0, true), (83, 83, true)]), 0.0);
+    // A structural join may scan more keys but retain fewer duplicate rows
+    // than joining a small dictionary to a repeated attribute.
+    assert!(
+        estimated_retained_work([(15_119, 3_558, true), (498, 193, true), (98, 86, true)])
+            < estimated_retained_work([(12, 13, true), (1_533, 13, true)])
+    );
+    // Small shape domains can be cheaper than following a broad list filter.
+    assert!(
+        estimated_retained_work([(18, 15, true), (18, 15, true), (48, 29, true)])
+            < estimated_retained_work([(697, 697, true), (1_542, 970, true)])
+    );
+}
+
+#[test]
+fn runtime_retained_guard_uses_cached_access_identity_and_keeps_singletons_first() {
+    use crate::free_join::packed_trie::{TrieNode, packed_node_builds};
+    let mut stages = vec![
+        intersect_stage(0, 0),
+        intersect_atoms_stage(&[1, 2], 1),
+        intersect_atoms_stage(&[1, 3], 2),
+    ];
+    // Atom 1 is accessed through a unique ID in stage 1, and a repeated
+    // attribute in stage 2. The prepared cache must distinguish the accesses.
+    let JoinStage::Intersect { scans, .. } = &mut stages[2] else {
+        unreachable!()
+    };
+    scans[0].column = ColumnId::from_usize(1);
+    let layout = prepared_for(&stages);
+    let prepared = PreparedJoinIndexes::from_layout(&layout, &[]);
+    let mut bindings = BindingInfo::default();
+    for (atom, rows) in [1, 100, 3, 2].into_iter().enumerate() {
+        bindings.insert_node(
+            AtomId::from_usize(atom),
+            Arc::new(OwnedAtomRows::new(Subset::Dense(crate::OffsetRange::new(
+                crate::RowId::from_usize(0),
+                crate::RowId::from_usize(rows),
+            )))),
+        );
+    }
+    let order = InstrOrder::from_iter(0..stages.len());
+    let pick = |bindings: &BindingInfo<'_, '_>| {
+        select_runtime_stage(
+            &order,
+            1..3,
+            &stages,
+            bindings,
+            Some(&prepared),
+            Some(0b110),
+        )
+    };
+    assert_eq!(
+        pick(&bindings),
+        Some(2),
+        "unknown statistics retain the minimum-row choice"
+    );
+    for stage in 1..3 {
+        assert!(
+            prepared
+                .stage(stage)
+                .iter()
+                .all(|slot| prepared.resolve(slot).cached_root_key_count().is_none())
+        );
+    }
+    let arena = egglog_concurrency::SharedArena::new();
+    let handle = arena.new_handle();
+    for stage in 1..3 {
+        let JoinStage::Intersect { scans, .. } = &stages[stage] else {
+            unreachable!()
+        };
+        for (scan, slot) in scans.iter().zip(prepared.stage(stage)) {
+            let rows = bindings.subsets[scan.atom].size();
+            let distinct = if stage == 2 && scan.atom == AtomId::from_usize(1) {
+                10
+            } else {
+                rows
+            };
+            let mut pairs: Vec<_> = (0..rows)
+                .map(|row| {
+                    (
+                        Value::from_usize(row % distinct),
+                        crate::RowId::from_usize(row),
+                    )
+                })
+                .collect();
+            pairs.sort_unstable();
+            let node = TrieNode::build_from_sorted_pairs(&handle, &pairs, ChildShape::Leaf, false);
+            prepared
+                .resolve(slot)
+                .packed_root(|| node as *const _ as usize);
+        }
+    }
+    let builds_before = packed_node_builds();
+    assert_eq!(
+        pick(&bindings),
+        Some(1),
+        "three identity matches retain less than two repeated attributes"
+    );
+    let replace_root_rows = |bindings: &mut BindingInfo<'_, '_>, size| {
+        bindings.insert_node(
+            AtomId::from_usize(3),
+            Arc::new(OwnedAtomRows::new(Subset::Dense(crate::OffsetRange::new(
+                crate::RowId::from_usize(0),
+                crate::RowId::from_usize(size),
+            )))),
+        );
+    };
+    replace_root_rows(&mut bindings, 2);
+    assert_eq!(
+        pick(&bindings),
+        Some(1),
+        "an untouched root supplies no binding evidence"
+    );
+    let mut multiway_stages = stages.clone();
+    let JoinStage::Intersect { scans, .. } = &mut multiway_stages[2] else {
+        unreachable!()
+    };
+    scans.push(SingleScanSpec {
+        atom: AtomId::from_usize(2),
+        column: ColumnId::from_usize(0),
+        cs: Vec::new(),
+    });
+    let multiway_layout = prepared_for(&multiway_stages);
+    let multiway_prepared = PreparedJoinIndexes::from_layout(&multiway_layout, &[]);
+    for stage in 1..3 {
+        for (source, destination) in prepared
+            .stage(stage)
+            .iter()
+            .zip(multiway_prepared.stage(stage))
+        {
+            let node = prepared.resolve(source).packed_root(|| unreachable!());
+            multiway_prepared.resolve(destination).packed_root(|| node);
+        }
+    }
+    assert_eq!(
+        select_runtime_stage(
+            &order,
+            1..3,
+            &multiway_stages,
+            &bindings,
+            Some(&multiway_prepared),
+            Some(0b110),
+        ),
+        Some(2),
+        "multiway filters keep their minimum-row priority despite duplicate groups"
+    );
+    // A retained match is a residual even when its bound key matches every
+    // row in the original root. No cardinality-history allocation is needed.
+    bindings.insert_node(
+        AtomId::from_usize(3),
+        crate::free_join::probe::AtomRows::from_owned(Subset::Dense(crate::OffsetRange::new(
+            crate::RowId::from_usize(0),
+            crate::RowId::from_usize(2),
+        ))),
+    );
+    assert_eq!(
+        pick(&bindings),
+        Some(2),
+        "a same-size input bound by an earlier stage keeps its priority"
+    );
+    replace_root_rows(&mut bindings, 2);
+    assert_eq!(
+        select_runtime_stage(&order, 1..3, &stages, &bindings, Some(&prepared), None),
+        Some(2),
+        "plans without execution masks preserve the minimum-row choice"
+    );
+    let focused_prepared = PreparedJoinIndexes::from_layout(&layout, &[])
+        .with_seminaive_focus(Some(AtomId::from_usize(3)));
+    for stage in 1..3 {
+        for (source, destination) in prepared
+            .stage(stage)
+            .iter()
+            .zip(focused_prepared.stage(stage))
+        {
+            let node = prepared.resolve(source).packed_root(|| unreachable!());
+            focused_prepared.resolve(destination).packed_root(|| node);
+        }
+    }
+    assert_eq!(
+        select_runtime_stage(
+            &order,
+            1..3,
+            &stages,
+            &bindings,
+            Some(&focused_prepared),
+            Some(0b110),
+        ),
+        Some(2),
+        "an explicitly marked delta keeps its minimum-row priority"
+    );
+    assert_eq!(pick(&bindings), Some(1), "focus is execution-local");
+    bindings.insert_node(
+        AtomId::from_usize(3),
+        Arc::new(OwnedAtomRows::new_residual(Subset::Dense(
+            crate::OffsetRange::new(crate::RowId::from_usize(0), crate::RowId::from_usize(2)),
+        ))),
+    );
+    assert_eq!(
+        pick(&bindings),
+        Some(2),
+        "an owned filtered residual also keeps its priority"
+    );
+    // Recursive tasks retain the same residual origin without copying a
+    // per-atom cardinality history.
+    let later_block = bindings.clone_for_join_tail(&stages, &order, 1);
+    assert!(!later_block.subsets[AtomId::from_usize(3)].is_plan_root());
+    assert_eq!(pick(&later_block), Some(2));
+    replace_root_rows(&mut bindings, 1);
+    assert!(bindings.subsets[AtomId::from_usize(3)].is_plan_root());
+    assert_eq!(
+        pick(&bindings),
+        Some(2),
+        "a singleton cannot multiply the current branch's frames"
+    );
+    assert_eq!(
+        packed_node_builds(),
+        builds_before,
+        "ordering must not construct indexes"
+    );
+}
+
+#[test]
 fn runtime_dvo_breaks_equal_row_counts_by_number_of_scans() {
     let stages = vec![
         intersect_stage(0, 0),
@@ -532,6 +783,71 @@ fn runtime_dvo_leaves_unexecuted_suffix_in_its_existing_order() {
         &mut binding_info,
     );
     assert_eq!(order, InstrOrder::from_iter([0, 1, 2, 3].into_iter()));
+}
+
+#[test]
+fn leaf_flags_initialize_without_swaps_and_follow_runtime_order_changes() {
+    let stages = vec![
+        intersect_stage(2, 0),
+        JoinStage::FusedIntersect {
+            cover: ScanSpec {
+                to_index: SubAtom {
+                    atom: AtomId::from_usize(0),
+                    vars: smallvec![ColumnId::from_usize(0)],
+                },
+                constraints: Vec::new(),
+            },
+            bind: smallvec![(ColumnId::from_usize(0), Variable::from_usize(1))],
+            to_intersect: Vec::new(),
+        },
+        intersect_stage(1, 2),
+    ];
+    let mut bindings = binding_info_with_sizes(&[2, 5, 1]);
+    let mut order = InstrOrder::from_iter(0..stages.len());
+    let mut flags = smallvec![false; stages.len()];
+    sort_plan_by_size(
+        &mut order,
+        &mut flags,
+        JoinOrderContext::Initial,
+        &stages,
+        &mut bindings,
+    );
+    assert_eq!(order, InstrOrder::from_iter(0..stages.len()));
+    assert_eq!(flags.as_slice(), &[false, true, false]);
+    assert!(!sort_plan_by_size_inner(
+        &mut order,
+        1..3,
+        JoinOrderContext::Runtime { start: 1 },
+        &stages,
+        &mut bindings,
+    ));
+    sort_plan_by_size(
+        &mut order,
+        &mut flags,
+        JoinOrderContext::Runtime { start: 1 },
+        &stages,
+        &mut bindings,
+    );
+    assert_eq!(flags.as_slice(), &[false, true, false]);
+
+    bindings = binding_info_with_sizes(&[20, 5, 1]);
+    let mut probe_order = order.clone();
+    assert!(sort_plan_by_size_inner(
+        &mut probe_order,
+        1..3,
+        JoinOrderContext::Runtime { start: 1 },
+        &stages,
+        &mut bindings,
+    ));
+    sort_plan_by_size(
+        &mut order,
+        &mut flags,
+        JoinOrderContext::Runtime { start: 1 },
+        &stages,
+        &mut bindings,
+    );
+    assert_eq!(order, probe_order);
+    assert_eq!(flags.as_slice(), &[false, false, true]);
 }
 
 #[test]
@@ -687,6 +1003,14 @@ fn assert_tail_masks_match_scanner<M: StageMask>(
                     masks.atom_tail_use(atom, remaining),
                     scan_atom_tail_use(atom, stages, &prepared, &instr_order, resume_pos),
                     "tail metadata diverged for order {order:?}, suffix {resume_pos}, atom {atom_index}"
+                );
+                assert_eq!(
+                    prepared.rows_live_in_mask(atom, remaining.as_u128()),
+                    Some(
+                        scan_atom_tail_use(atom, stages, &prepared, &instr_order, resume_pos)
+                            .keep_rows
+                    ),
+                    "retained-row liveness diverged for order {order:?}, suffix {resume_pos}, atom {atom_index}"
                 );
             }
         }

@@ -283,6 +283,14 @@ impl Plan {
         }
     }
 
+    /// The caller-supplied atom restricted to new tuples by this variant, if any.
+    pub(crate) fn seminaive_focus(&self) -> Option<AtomId> {
+        match self {
+            Plan::SinglePlan(p) => p.seminaive_focus,
+            Plan::DecomposedPlan(p) => p.seminaive_focus,
+        }
+    }
+
     /// Visit every stage block of the plan.
     pub(crate) fn for_each_stages_mut(&mut self, mut f: impl FnMut(&mut JoinStages)) {
         match self {
@@ -301,6 +309,7 @@ impl Plan {
 pub(crate) struct SinglePlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub header: Vec<JoinHeader>,
+    pub seminaive_focus: Option<AtomId>,
     pub stages: JoinStages,
     pub actions: ActionId,
 }
@@ -401,6 +410,7 @@ pub(crate) struct JoinStageBlocks {
 pub(crate) struct DecomposedPlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub header: Vec<JoinHeader>,
+    pub seminaive_focus: Option<AtomId>,
     pub stages: JoinStageBlocks,
     pub result_block: JoinStages,
     pub actions: ActionId,
@@ -1222,6 +1232,7 @@ pub(crate) fn tree_decompose_and_plan(
             Plan::SinglePlan(SinglePlan {
                 atoms: Arc::new(ctx.atoms),
                 header,
+                seminaive_focus: None,
                 stages,
                 actions,
             })
@@ -1280,6 +1291,7 @@ pub(crate) fn tree_decompose_and_plan(
     Plan::DecomposedPlan(DecomposedPlan {
         atoms: Arc::new(ctx.atoms),
         header,
+        seminaive_focus: None,
         stages: JoinStageBlocks { blocks },
         result_block,
         actions,

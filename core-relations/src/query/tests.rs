@@ -233,9 +233,26 @@ fn cached_seminaive_variants_share_base_headers_and_produce_correct_rows() {
         ));
         (cached, first, second)
     };
+    // An ordinary lower bound is not enough to establish delta provenance.
+    {
+        let mut builder = db.new_rule_set();
+        let unmarked = builder
+            .add_rule_from_cached_plan(
+                &cached,
+                &[(
+                    first_atom,
+                    Constraint::GeConst {
+                        col: ColumnId::new(2),
+                        val: v(6),
+                    },
+                )],
+            )
+            .unwrap();
+        assert_eq!(builder.build().plans[unmarked].0.seminaive_focus(), None);
+    }
     let mut builder = db.new_rule_set();
     let first = builder
-        .add_rule_from_cached_plan(
+        .add_rule_from_cached_plan_with_focus(
             &cached,
             &[(
                 first_atom,
@@ -244,6 +261,7 @@ fn cached_seminaive_variants_share_base_headers_and_produce_correct_rows() {
                     val: v(6),
                 },
             )],
+            Some(first_atom),
         )
         .unwrap();
     let second = builder
@@ -277,6 +295,13 @@ fn cached_seminaive_variants_share_base_headers_and_produce_correct_rows() {
     let rules = builder.build();
     assert_eq!(rules.plans.len(), 2);
     assert_eq!(rules.actions.iter().count(), 2);
+    assert_eq!(rules.plans[first].0.seminaive_focus(), Some(first_atom));
+    assert_eq!(rules.plans[second].0.seminaive_focus(), None);
+    assert_eq!(cached.plan.seminaive_focus(), None);
+    assert_eq!(
+        rules.build_cached_plan(first).plan.seminaive_focus(),
+        Some(first_atom)
+    );
     let first_headers = rules.plans[first].0.header();
     let second_headers = rules.plans[second].0.header();
     assert!(matches!(
@@ -348,12 +373,19 @@ fn cached_decomposed_plans_share_headers_without_changing_results() {
     };
     let mut builder = db.new_rule_set();
     let first = builder
-        .add_rule_from_cached_plan(&cached, &[(first_atom, eq(0, 1))])
+        .add_rule_from_cached_plan_with_focus(&cached, &[(first_atom, eq(0, 1))], Some(first_atom))
         .unwrap();
     let second = builder
         .add_rule_from_cached_plan(&cached, &[(first_atom, eq(0, 3))])
         .unwrap();
     let rules = builder.build();
+    assert_eq!(cached.plan.seminaive_focus(), None);
+    assert_eq!(rules.plans[first].0.seminaive_focus(), Some(first_atom));
+    assert_eq!(rules.plans[second].0.seminaive_focus(), None);
+    assert_eq!(
+        rules.build_cached_plan(first).plan.seminaive_focus(),
+        Some(first_atom)
+    );
     for (left, right) in rules.plans[first].0.header()[1..]
         .iter()
         .zip(&rules.plans[second].0.header()[1..])

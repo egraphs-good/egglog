@@ -220,6 +220,7 @@ impl<'outer> RuleSetBuilder<'outer> {
         cached: &CachedPlan,
         action_id: ActionId,
         extra_constraints: &[(AtomId, Constraint)],
+        seminaive_focus: Option<AtomId>,
     ) -> Option<Plan> {
         match &cached.plan {
             Plan::SinglePlan(cached_plan) => {
@@ -234,6 +235,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                 Some(Plan::SinglePlan(SinglePlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
+                    seminaive_focus,
                     stages,
                     actions: action_id,
                 }))
@@ -255,6 +257,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                 Some(Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
+                    seminaive_focus,
                     stages: JoinStageBlocks { blocks },
                     actions: action_id,
                     result_block,
@@ -280,10 +283,35 @@ impl<'outer> RuleSetBuilder<'outer> {
         cached: &CachedPlan,
         extra_constraints: &[(AtomId, Constraint)],
     ) -> Option<RuleId> {
+        self.add_rule_from_cached_plan_with_focus(cached, extra_constraints, None)
+    }
+
+    /// Add a cached rule variant with an explicit seminaive ordering hint.
+    ///
+    /// `seminaive_focus` names the atom restricted to newly added tuples by
+    /// `extra_constraints`, not an atom restricted to older tuples. Constraints
+    /// determine results; lower bounds alone do not imply a seminaive focus.
+    /// Returns `None` if the constrained rule is empty. Panics if the focus
+    /// does not belong to the cached plan.
+    pub fn add_rule_from_cached_plan_with_focus(
+        &mut self,
+        cached: &CachedPlan,
+        extra_constraints: &[(AtomId, Constraint)],
+        seminaive_focus: Option<AtomId>,
+    ) -> Option<RuleId> {
+        assert!(
+            seminaive_focus.is_none_or(|atom| cached.plan.atoms().contains_key(atom)),
+            "seminaive focus must belong to the cached plan"
+        );
         // Peek at the action_id without allocating it yet, so we don't break
         // the rules<->actions bijection if the query turns out to be empty.
         let action_id = self.rule_set.actions.next_id();
-        let plan = self.get_rule_with_extra_constraints(cached, action_id, extra_constraints)?;
+        let plan = self.get_rule_with_extra_constraints(
+            cached,
+            action_id,
+            extra_constraints,
+            seminaive_focus,
+        )?;
         // The query is non-empty: now commit the action and the plan.
         let actual_action_id = self.rule_set.actions.push(cached.actions.clone());
         debug_assert_eq!(action_id, actual_action_id);

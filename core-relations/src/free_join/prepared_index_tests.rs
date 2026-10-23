@@ -118,7 +118,9 @@ fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
     };
     let cloned_stages = plan.stages.clone();
     assert!(plan.stages.prepared_layout.get().is_none());
-    let first = PreparedJoinIndexes::new(&db, &plan.atoms, &plan.stages);
+    let focus = Some(AtomId::from_usize(0));
+    let first =
+        PreparedJoinIndexes::new(&db, &plan.atoms, &plan.stages).with_seminaive_focus(focus);
     let PreparedJoinIndexes::Indexed { layout, states, .. } = &first else {
         panic!("fixture must prepare indexed accesses")
     };
@@ -136,10 +138,45 @@ fn cached_plan_layout_reuses_analysis_but_not_execution_state() {
         unreachable!()
     };
     assert!(std::ptr::eq(*layout, *next_layout));
+    assert_eq!(first.seminaive_focus(), focus);
+    assert_eq!(next.seminaive_focus(), None);
     assert!(next_states[0].root.get().is_none());
     assert!(!std::ptr::eq(states.as_ptr(), next_states.as_ptr()));
     drop(first);
     drop(next);
+    let mut focused_plan = plan.clone();
+    focused_plan.seminaive_focus = focus;
+    let focused_plan = Plan::SinglePlan(focused_plan);
+    let PreparedPlanIndexes::Single(single) = PreparedPlanIndexes::new(&db, &focused_plan) else {
+        unreachable!()
+    };
+    assert_eq!(single.seminaive_focus(), focus);
+
+    // The same provenance reaches every decomposition block and its result,
+    // while all blocks may still share their immutable index layout.
+    let decomposed = Plan::DecomposedPlan(crate::free_join::plan::DecomposedPlan {
+        atoms: plan.atoms.clone(),
+        header: plan.header.clone(),
+        seminaive_focus: focus,
+        stages: crate::free_join::plan::JoinStageBlocks {
+            blocks: vec![(
+                plan.stages.clone(),
+                crate::free_join::plan::MatSpec {
+                    msg_vars: SmallVec::new(),
+                    val_vars: SmallVec::new(),
+                },
+            )],
+        },
+        result_block: plan.stages.clone(),
+        actions: plan.actions,
+    });
+    let PreparedPlanIndexes::Decomposed { blocks, result } =
+        PreparedPlanIndexes::new(&db, &decomposed)
+    else {
+        unreachable!()
+    };
+    assert!(blocks.iter().all(|block| block.seminaive_focus() == focus));
+    assert_eq!(result.seminaive_focus(), focus);
     // The same layout remains valid after table mutations; catalog handles
     // are reacquired from the fresh execution state.
     let mut buffer = db.new_buffer(table);

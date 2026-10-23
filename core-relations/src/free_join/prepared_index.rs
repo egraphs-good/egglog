@@ -260,6 +260,24 @@ impl RootContinuationCache {
         let slots = self.slots(family);
         &slots[position.shard as usize][position.slot as usize]
     }
+
+    /// Return a cached continuation's key count, or `None` if absent.
+    /// Does not construct the index.
+    pub(super) fn cached_child_key_count(
+        &self,
+        position: ContinuationPosition,
+        family: usize,
+    ) -> Option<usize> {
+        let slots = match self.storage.get()? {
+            RootContinuationStorage::Direct { slots, .. } => slots.get()?,
+            RootContinuationStorage::Dynamic { families, .. } => families.get(family)?.get()?,
+        };
+        let address = *slots[position.shard as usize][position.slot as usize].get()?;
+        // SAFETY: these slots publish only nodes from the current run's arena,
+        // which outlives every use of this continuation cache.
+        let node = unsafe { &*(address as *const super::packed_trie::TrieNode<'_>) };
+        Some(node.values().len())
+    }
 }
 
 /// The persistent-index strategy available to one logical join access.
@@ -367,6 +385,21 @@ pub(super) struct PreparedIndexRef<'a> {
 }
 
 impl<'a> PreparedIndexRef<'a> {
+    /// Return an existing root index's key count without constructing or
+    /// refreshing it. A catalog can include keys outside the header subset.
+    pub(super) fn cached_root_key_count(self) -> Option<usize> {
+        match self.state.root.get()? {
+            PreparedRootIndex::Tuple(index) => index.get().map(|index| index.len()),
+            PreparedRootIndex::Column(index) => index.get().map(|index| index.len()),
+            PreparedRootIndex::Packed(address) => {
+                // SAFETY: prepared roots belong to this execution's arena,
+                // which is alive for every use of the prepared state.
+                let node = unsafe { &*(*address as *const super::packed_trie::TrieNode<'_>) };
+                Some(node.values().len())
+            }
+        }
+    }
+
     pub(super) fn packed_root(self, build: impl FnOnce() -> usize) -> usize {
         let PreparedRootIndex::Packed(address) = self
             .state
@@ -480,6 +513,7 @@ pub(super) trait StageMask:
     const EMPTY: Self;
     fn stage_bit(stage: usize) -> Self;
     fn count_ones(self) -> u32;
+    fn as_u128(self) -> u128;
     /// The tail masks prepared at this width, if the plan was prepared at it.
     fn tail_masks(width: &PreparedTailMaskWidth) -> Option<&PreparedTailMasks<Self>>;
 }
@@ -494,6 +528,9 @@ macro_rules! impl_stage_mask {
             }
             fn count_ones(self) -> u32 {
                 <$ty>::count_ones(self)
+            }
+            fn as_u128(self) -> u128 {
+                self as u128
             }
             fn tail_masks(width: &PreparedTailMaskWidth) -> Option<&PreparedTailMasks<Self>> {
                 match width {
@@ -587,6 +624,12 @@ pub(super) struct PreparedTailMasks<M> {
 }
 
 impl<M: StageMask> PreparedTailMasks<M> {
+    fn rows_live_in_mask(&self, atom: AtomId, remaining_stages: M) -> bool {
+        self.atom_uses
+            .get(atom.index())
+            .is_some_and(|use_| remaining_stages & use_.touched_stages != M::EMPTY)
+    }
+
     pub(super) fn new(
         stages: &[JoinStage],
         prepared_stages: &[SmallVec<[PreparedIndexSlot; 4]>],
@@ -712,6 +755,8 @@ pub(super) enum PreparedJoinIndexes<'plan> {
         layout: &'plan PreparedJoinLayout,
         states: Box<[PreparedIndexState]>,
         families: &'plan [AccessFamilies],
+        // Focus belongs to this variant, not the shared plan layout.
+        seminaive_focus: Option<AtomId>,
     },
 }
 
@@ -825,6 +870,26 @@ impl<'plan> PreparedJoinIndexes<'plan> {
                 .take(layout.state_count)
                 .collect(),
             families,
+            seminaive_focus: None,
+        }
+    }
+
+    pub(super) fn with_seminaive_focus(mut self, focus: Option<AtomId>) -> Self {
+        if let Self::Indexed {
+            seminaive_focus, ..
+        } = &mut self
+        {
+            *seminaive_focus = focus;
+        }
+        self
+    }
+
+    pub(super) fn seminaive_focus(&self) -> Option<AtomId> {
+        match self {
+            Self::NoIndexes => None,
+            Self::Indexed {
+                seminaive_focus, ..
+            } => *seminaive_focus,
         }
     }
 
@@ -881,6 +946,24 @@ impl<'plan> PreparedJoinIndexes<'plan> {
             Self::Indexed { layout, .. } => M::tail_masks(&layout.tail_masks),
         }
     }
+
+    /// Whether any stage in the mask consumes the atom's rows, including covers.
+    /// Returns `None` when prepared masks are unavailable.
+    pub(super) fn rows_live_in_mask(&self, atom: AtomId, remaining_stages: u128) -> Option<bool> {
+        // Factorized covers still read each surviving row into a binding factor.
+        let Self::Indexed { layout, .. } = self else {
+            return None;
+        };
+        match &layout.tail_masks {
+            PreparedTailMaskWidth::None => None,
+            PreparedTailMaskWidth::Narrow(masks) => {
+                Some(masks.rows_live_in_mask(atom, remaining_stages as u64))
+            }
+            PreparedTailMaskWidth::Wide(masks) => {
+                Some(masks.rows_live_in_mask(atom, remaining_stages))
+            }
+        }
+    }
 }
 
 /// Execution-scoped index sidecar mirroring the shape of a logical [`Plan`].
@@ -894,18 +977,23 @@ pub(super) enum PreparedPlanIndexes<'plan> {
 
 impl<'plan> PreparedPlanIndexes<'plan> {
     pub(super) fn new(db: &Database, plan: &'plan Plan) -> Self {
+        let focus = plan.seminaive_focus();
         match plan {
-            Plan::SinglePlan(plan) => {
-                Self::Single(PreparedJoinIndexes::new(db, &plan.atoms, &plan.stages))
-            }
+            Plan::SinglePlan(plan) => Self::Single(
+                PreparedJoinIndexes::new(db, &plan.atoms, &plan.stages).with_seminaive_focus(focus),
+            ),
             Plan::DecomposedPlan(plan) => Self::Decomposed {
                 blocks: plan
                     .stages
                     .blocks
                     .iter()
-                    .map(|(stages, _)| PreparedJoinIndexes::new(db, &plan.atoms, stages))
+                    .map(|(stages, _)| {
+                        PreparedJoinIndexes::new(db, &plan.atoms, stages)
+                            .with_seminaive_focus(focus)
+                    })
                     .collect(),
-                result: PreparedJoinIndexes::new(db, &plan.atoms, &plan.result_block),
+                result: PreparedJoinIndexes::new(db, &plan.atoms, &plan.result_block)
+                    .with_seminaive_focus(focus),
             },
         }
     }
