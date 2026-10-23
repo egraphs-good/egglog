@@ -1,8 +1,8 @@
-use crate::ids::{BlockId, ClassId};
-use crate::{Database, Error, Function, FunctionKind};
+use crate::ids::{BlockId, ClassId, SymbolId};
+use crate::{Database, Error, Function, FunctionKind, HashMap};
 use egglog_numeric_id::NumericId;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use smallvec::SmallVec;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Comparison {
@@ -12,86 +12,122 @@ pub struct Comparison {
     pub database_equal: bool,
     /// Rounds in constructor-only refinement.
     pub refinement_rounds: usize,
-    /// Rounds in refinement including ordinary functions and subsumption.
+    /// Rounds in full-database refinement (reused when observations coincide).
     pub database_refinement_rounds: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Node<I = ClassId> {
-    Literal(String),
-    Call(String, Function, Vec<I>, bool),
+// Intern complete labels jointly across the inputs. Neither names nor schemas
+// are copied per node or per refinement round; hash collisions still use Eq.
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) enum Label<'a> {
+    Literal(&'a str),
+    Call(&'a str, &'a Function, bool),
 }
 
-pub(crate) struct Graph {
-    pub sorts: Vec<String>,
+fn intern<'a>(labels: &mut HashMap<Label<'a>, SymbolId>, label: Label<'a>) -> SymbolId {
+    let next = SymbolId::from_usize(labels.len());
+    *labels.entry(label).or_insert(next)
+}
+
+#[derive(Clone)]
+pub(crate) struct Node {
+    pub symbol: SymbolId,
+    pub children: SmallVec<[ClassId; 2]>,
+}
+
+pub(crate) struct Graph<'a> {
+    pub sorts: Vec<&'a str>,
     pub nodes: Vec<Vec<Node>>,
-    pub roots: BTreeSet<ClassId>,
-    pub index: BTreeMap<String, ClassId>,
+    /// Sorted, unique output IDs. Mark once per row instead of tree insertion.
+    pub roots: Vec<ClassId>,
 }
 
-impl Graph {
-    fn new(db: &Database, offset: usize, include_functions: bool) -> Self {
-        let ids: Vec<_> = db.classes.keys().cloned().collect();
-        let index: BTreeMap<_, _> = ids
-            .iter()
+impl<'a> Graph<'a> {
+    pub(crate) fn new(
+        db: &'a Database,
+        offset: usize,
+        include_functions: bool,
+        labels: &mut HashMap<Label<'a>, SymbolId>,
+    ) -> Self {
+        let index: HashMap<_, _> = db
+            .classes
+            .keys()
             .enumerate()
-            .map(|(i, id)| (id.clone(), ClassId::from_usize(i + offset)))
+            .map(|(i, id)| (id.as_str(), ClassId::from_usize(i + offset)))
             .collect();
-        let sorts = db.classes.values().map(|c| c.sort.clone()).collect();
-        let mut nodes = vec![Vec::new(); ids.len()];
+        let sorts = db.classes.values().map(|c| c.sort.as_str()).collect();
+        let mut nodes = vec![Vec::new(); db.classes.len()];
         for (id, class) in &db.classes {
             if let Some(literal) = &class.literal {
-                nodes[index[id].index() - offset].push(Node::Literal(literal.clone()));
+                nodes[index[id.as_str()].index() - offset].push(Node {
+                    symbol: intern(labels, Label::Literal(literal)),
+                    children: SmallVec::new(),
+                });
             }
         }
-        let mut roots = BTreeSet::new();
+        let operators: HashMap<_, _> = db
+            .functions
+            .iter()
+            .filter(|(_, f)| include_functions || f.kind == FunctionKind::Constructor)
+            .map(|(name, function)| {
+                (
+                    name.as_str(),
+                    [
+                        intern(labels, Label::Call(name, function, false)),
+                        intern(labels, Label::Call(name, function, include_functions)),
+                    ],
+                )
+            })
+            .collect();
+        let mut roots = vec![false; db.classes.len()];
         for row in &db.rows {
-            let function = &db.functions[&row.function];
-            if include_functions || function.kind == FunctionKind::Constructor {
-                roots.insert(index[&row.output]);
-                nodes[index[&row.output].index() - offset].push(Node::Call(
-                    row.function.clone(),
-                    function.clone(),
-                    row.inputs.iter().map(|id| index[id]).collect(),
-                    include_functions && row.subsumed,
-                ));
+            if let Some(symbols) = operators.get(row.function.as_str()) {
+                let output = index[row.output.as_str()].index() - offset;
+                roots[output] = true;
+                nodes[output].push(Node {
+                    symbol: symbols[usize::from(row.subsumed)],
+                    children: row.inputs.iter().map(|id| index[id.as_str()]).collect(),
+                });
             }
         }
         Self {
             sorts,
             nodes,
-            roots,
-            index,
+            roots: roots
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, root)| root.then_some(ClassId::from_usize(i + offset)))
+                .collect(),
         }
     }
 }
 
-pub(crate) struct Partition {
-    pub left: Graph,
-    pub right: Graph,
+pub(crate) struct Partition<'a> {
+    pub left: Graph<'a>,
+    pub right: Graph<'a>,
     pub blocks: Vec<BlockId>,
     pub rounds: usize,
 }
 
-impl Partition {
-    pub fn new(left: &Database, right: &Database) -> Self {
+impl<'a> Partition<'a> {
+    pub fn new(left: &'a Database, right: &'a Database) -> Self {
         Self::with_functions(left, right, false)
     }
 
-    pub fn database(left: &Database, right: &Database) -> Self {
+    pub fn database(left: &'a Database, right: &'a Database) -> Self {
         Self::with_functions(left, right, true)
     }
 
-    fn with_functions(left: &Database, right: &Database, include_functions: bool) -> Self {
-        let left = Graph::new(left, 0, include_functions);
-        let right = Graph::new(right, left.nodes.len(), include_functions);
-        // Sorts must never become equivalent, even for empty e-classes.
-        let mut sorts = BTreeMap::new();
+    fn with_functions(left: &'a Database, right: &'a Database, include_functions: bool) -> Self {
+        let mut labels = HashMap::default();
+        let left = Graph::new(left, 0, include_functions, &mut labels);
+        let right = Graph::new(right, left.nodes.len(), include_functions, &mut labels);
+        let mut sorts = HashMap::default();
         let blocks = left
             .sorts
             .iter()
             .chain(&right.sorts)
-            .map(|sort| {
+            .map(|&sort| {
                 let next = BlockId::from_usize(sorts.len());
                 *sorts.entry(sort).or_insert(next)
             })
@@ -105,31 +141,28 @@ impl Partition {
     }
 
     pub fn step(&mut self) -> bool {
-        let mut signatures = BTreeMap::new();
+        let mut signatures = crate::signatures::Signatures::default();
         let mut next_blocks = Vec::with_capacity(self.blocks.len());
+        // Scratch node signatures contain a symbol followed by child blocks.
+        // Unary/binary operators stay inline; unique class keys are copied into
+        // one flat arena, with cached hashes and exact comparisons on lookup.
+        let mut key: (BlockId, Vec<SmallVec<[usize; 3]>>) = (BlockId::from_usize(0), Vec::new());
         for (i, nodes) in self.left.nodes.iter().chain(&self.right.nodes).enumerate() {
-            let signature: BTreeSet<_> = nodes
-                .iter()
-                .map(|node| match node {
-                    Node::Literal(value) => Node::Literal(value.clone()),
-                    Node::Call(op, schema, children, subsumed) => Node::Call(
-                        op.clone(),
-                        schema.clone(),
-                        children
-                            .iter()
-                            .map(|&child| self.blocks[child.index()])
-                            .collect(),
-                        *subsumed,
-                    ),
-                })
-                .collect();
-            // Retain the old block: every round is a refinement, never a merge.
-            let next = BlockId::from_usize(signatures.len());
-            next_blocks.push(
-                *signatures
-                    .entry((self.blocks[i], signature))
-                    .or_insert(next),
-            );
+            key.0 = self.blocks[i]; // Retain old block: split, never merge.
+            key.1.clear();
+            key.1.extend(nodes.iter().map(|node| {
+                let mut signature = SmallVec::new();
+                signature.push(node.symbol.index());
+                signature.extend(
+                    node.children
+                        .iter()
+                        .map(|&child| self.blocks[child.index()].index()),
+                );
+                signature
+            }));
+            key.1.sort_unstable();
+            key.1.dedup();
+            next_blocks.push(signatures.intern(key.0, &key.1));
         }
         self.rounds += 1;
         let changed = next_blocks != self.blocks;
@@ -141,26 +174,25 @@ impl Partition {
         while self.step() {}
     }
 
-    pub fn root_blocks(&self, graph: &Graph) -> BTreeSet<BlockId> {
-        graph
-            .roots
-            .iter()
-            .map(|&id| self.blocks[id.index()])
-            .collect()
-    }
-
     pub fn terms_equal(&self) -> bool {
-        self.root_blocks(&self.left) == self.root_blocks(&self.right)
+        let mut coverage = vec![0u8; self.blocks.len()];
+        for &root in &self.left.roots {
+            coverage[self.blocks[root.index()].index()] |= 1;
+        }
+        for &root in &self.right.roots {
+            coverage[self.blocks[root.index()].index()] |= 2;
+        }
+        coverage.iter().all(|&sides| sides == 0 || sides == 3)
     }
 }
 
-/// Exact whole-graph refinement; no iteration/depth cutoff. This does not use
-/// Hopcroft's smaller-half splitter worklist.
+/// Exact whole-graph refinement; this does not use Hopcroft's smaller-half
+/// splitter worklist. Hash collisions use full equality; there is no depth cutoff.
 ///
-/// This intentionally starts with the straightforward whole-graph algorithm.
-/// A round scans all nodes and edges and sorts signatures; there are at most
-/// O(classes) splitting rounds. The result ignores row order and duplicate rows
-/// or bisimilar cyclic classes. Function rows do not participate in term syntax.
+/// Each round scans all nodes/edges and sorts each class's signatures. There
+/// are at most O(classes) splitting rounds, so worst-case time remains quadratic
+/// (plus signature sorting). Names, schemas, and IDs are resolved only at setup.
+/// Ordinary functions never participate in constructor-term syntax.
 pub fn compare(left: &Database, right: &Database) -> Result<Comparison, Error> {
     left.validate()?;
     right.validate()?;
@@ -168,30 +200,29 @@ pub fn compare(left: &Database, right: &Database) -> Result<Comparison, Error> {
     partition.finish();
     let terms_equal = partition.terms_equal();
     let refinement_rounds = partition.rounds;
-    // Constructor-only blocks can erase structure carried by ordinary functions.
-    // Refine again with all rows to preserve those observations, while keeping
-    // the term result and finite certificates strictly constructor-only.
+    let same_observations = [left, right].iter().all(|db| {
+        db.functions
+            .values()
+            .all(|f| f.kind == FunctionKind::Constructor)
+            && db.rows.iter().all(|row| !row.subsumed)
+    });
+    if same_observations {
+        return Ok(Comparison {
+            terms_equal,
+            database_equal: terms_equal && left.functions == right.functions,
+            refinement_rounds,
+            database_refinement_rounds: refinement_rounds,
+        });
+    }
+    // Release the first graph before constructing the full-database graph.
+    drop(partition);
     let mut partition = Partition::database(left, right);
     partition.finish();
-    let rows = |db: &Database, graph: &Graph| -> BTreeSet<_> {
-        db.rows
-            .iter()
-            .map(|row| {
-                (
-                    row.function.clone(),
-                    row.inputs
-                        .iter()
-                        .map(|id| partition.blocks[graph.index[id].index()])
-                        .collect::<Vec<_>>(),
-                    partition.blocks[graph.index[&row.output].index()],
-                    row.subsumed,
-                )
-            })
-            .collect()
-    };
-    let database_equal = terms_equal
-        && left.functions == right.functions
-        && rows(left, &partition.left) == rows(right, &partition.right);
+    // Every row is a member of an output class. Matching output blocks at the
+    // fixed point already implies matching rows modulo the child/output blocks;
+    // rebuilding a second set of string-keyed row signatures is redundant.
+    let database_equal =
+        terms_equal && left.functions == right.functions && partition.terms_equal();
     Ok(Comparison {
         terms_equal,
         database_equal,
