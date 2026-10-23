@@ -39,3 +39,8 @@ serial_id!(
 );
 define_id!(pub RowId, usize, "Index in one input database's rows, used by the representative worklist.");
 define_id!(pub(crate) SymbolId, usize, "Interned complete node label, shared by both inputs during joint refinement.");
+serial_id!(
+    SortId,
+    usize,
+    "Index in a canonical encoding's sorted sort-name table."
+);
