@@ -345,6 +345,18 @@ impl RowBuffer {
     /// RowIds. This method calls `remap` with the old and new RowIds for all
     /// non-stale rows.
     pub(crate) fn remove_stale(&mut self, mut remap: impl FnMut(&[Value], RowId, RowId)) {
+        // Check the complete storage invariant once before the unchecked row
+        // traversal. In particular, add_row's arity check is debug-only.
+        let expected_values = self
+            .total_rows
+            .checked_mul(self.n_columns)
+            .expect("row buffer dimensions overflow");
+        assert_eq!(
+            self.data.len(),
+            expected_values,
+            "row buffer storage does not match row count and arity"
+        );
+
         // Keep the unprocessed suffix intact if the remapping callback unwinds,
         // just as Vec::retain does, and keep the row count consistent with it.
         struct RetainRows<'a> {

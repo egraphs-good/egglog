@@ -82,6 +82,17 @@ fn remap_preserves_complete_rows_for_empty_and_mixed_layouts() {
 }
 
 #[test]
+#[should_panic(expected = "row buffer storage does not match row count and arity")]
+fn remap_rejects_inconsistent_storage_before_reading_rows() {
+    let mut rows = RowBuffer::new(2);
+    rows.add_row(&[v(1), v(2)]);
+    // Model a malformed internal caller without depending on debug-only
+    // checks: in release mode an undersized add_row can create this state.
+    rows.data.pop();
+    rows.remove_stale(|_, _, _| panic!("callback must not observe an invalid row"));
+}
+
+#[test]
 fn remap_panic_preserves_unprocessed_rows_and_row_count() {
     let mut rows = RowBuffer::new(2);
     for n in 0..5 {
