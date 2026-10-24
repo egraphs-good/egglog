@@ -24,7 +24,7 @@ use sharded_hash_table::ShardedHashTable;
 use crate::{
     Pooled, TableChange, TableId,
     action::ExecutionState,
-    common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
+    common::{ShardData, ShardId, SubsetTracker, Value},
     hash_index::{ColumnIndex, Index},
     offsets::{OffsetRange, Offsets, RowId, SortedOffsetVector, Subset, SubsetRef},
     parallel,
@@ -1134,167 +1134,140 @@ impl SortedWritesTable {
         }
     }
     fn parallel_rehash(&mut self) {
-        // Parallel rehashes go "hash-first" rather than "rows-first".
-        //
-        // We iterate over each shard and then write out new contents to a fresh row, in parallel.
         self.generation = self.generation.inc();
-        let sort_by = self.sort_by;
-        assert!(!self.offsets.is_empty());
-        struct TimestampStats {
-            value: Value,
-            count: usize,
-            histogram: Pooled<DenseIdMap<ShardId, usize>>,
-        }
-        impl Default for TimestampStats {
-            fn default() -> TimestampStats {
-                TimestampStats {
-                    value: Value::stale(),
-                    count: 0,
-                    histogram: with_pool_set(|ps| ps.get()),
-                }
+        // Compact in row order, so both reads and writes are sequential within
+        // each worker's range. The bitmap also gives the old-to-new row mapping
+        // without hashing keys, probing buckets, or histogramming timestamps.
+        let data = &self.data.data;
+        let mut ranks = vec![(0u64, RowId::new(0)); data.len().div_ceil(64)];
+        parallel::for_each_mut(&mut ranks, |block, (live, _)| {
+            let start = block * 64;
+            let mut bitmap = 0u64;
+            for old in start..(start + 64).min(data.len()) {
+                let is_live = !data.get_row(RowId::from_usize(old))[0].is_stale();
+                bitmap |= u64::from(is_live) << (old - start);
             }
-        }
-        let mut results = Vec::<TimestampStats>::with_capacity(self.offsets.len());
-        let offset_windows = self
-            .offsets
-            .windows(2)
-            .map(|xs| {
-                let [(start_val, start_row), (_, end_row)] = xs else {
-                    unreachable!()
-                };
-                (*start_val, *start_row, *end_row)
-            })
-            .collect::<Vec<_>>();
-        // Use a macro rather than a lambda to avoid borrow issues.
-        macro_rules! compute_hist {
-            ($start_val: expr, $start_row: expr, $end_row: expr) => {{
-                let mut histogram: Pooled<DenseIdMap<ShardId, usize>> =
-                    with_pool_set(|ps| ps.get());
-                let mut cur_row = $start_row;
-                let mut count = 0;
-                while cur_row < $end_row {
-                    if let Some(row) = self.data.get_row(cur_row) {
-                        count += 1;
-                        let hash = shard_hash(self.hash.shard_data(), row, self.n_keys);
-                        *histogram.get_or_default(hash.shard) += 1;
-                    }
-                    cur_row = cur_row.inc();
-                }
-                TimestampStats {
-                    value: $start_val,
-                    count,
-                    histogram,
-                }
-            }};
-        }
-        results.extend(parallel::map(
-            &offset_windows,
-            |_, (start_val, start_row, end_row)| compute_hist!(*start_val, *start_row, *end_row),
-        ));
-        // And here we handle the final one.
-        let (start_val, start_row) = self.offsets.last().unwrap();
-        let end_row = self.data.next_row();
-        let last = compute_hist!(*start_val, *start_row, end_row);
-        results.push(last);
-        // Now we need to compute cumulative statistics on the row layouts here.
-        // We do this serially a we currently don't have a ton of use for cases with thousands
-        // of timestamps or more. There are well-known parallel algorithms for computing these
-        // cumulative statistics in parallel, but they are not currently a good fit here.
-        let mut prev_count = 0;
-        self.offsets.clear();
-        for stats in results.iter_mut() {
-            if stats.count == 0 {
-                continue;
-            }
-            self.offsets
-                .push((stats.value, RowId::from_usize(prev_count)));
-            let mut inner = prev_count;
-            for (_, count) in stats.histogram.iter_mut() {
-                // Each entry in the histogram now points to the start row for that shard's
-                // rows for a given timestamp.
-                let tmp = *count;
-                *count = inner;
-                inner += tmp;
-            }
-            prev_count += stats.count;
-            debug_assert_eq!(inner, prev_count)
-        }
+            *live = bitmap;
+        });
 
-        // Now the part with some unsafe code.
-        // We will iterate over each shard and use the statistics in `results` to guide where
-        // each row will go.
-        //
-        // This involves doing unsynchronized writes to the table (ptr::copy_nonoverlapping)
-        // followed by a set_len. The safety of these operations relies on the fact that:
-        // * No one grabs a reference to the interior of `scratch` until these operations have
-        //   finished.
-        // * `scratch` does not overlap `data`.
-        // * The sharding function completely partitions the set of objects in the table: one
-        //   shard's writes will never stomp on those of another.
+        let mut live_rows = 0;
+        for (live, base) in &mut ranks {
+            *base = RowId::from_usize(live_rows);
+            live_rows += live.count_ones() as usize;
+        }
+        debug_assert_eq!(live_rows, data.len() - self.data.stale_rows);
+
+        // The number of live rows preceding any old boundary is its new
+        // boundary. Empty timestamp ranges vanish. This work is linear in the
+        // number of distinct timestamps, independent of the number of shards
+        // and of the numeric timestamp range.
+        let rank_before = |old: usize| {
+            if old == data.len() {
+                return live_rows;
+            }
+            let (live, base) = ranks[old / 64];
+            let preceding = (1u64 << (old % 64)) - 1;
+            base.index() + (live & preceding).count_ones() as usize
+        };
+        let mut write = 0;
+        for read in 0..self.offsets.len() {
+            let (timestamp, old_start) = self.offsets[read];
+            let old_end = self
+                .offsets
+                .get(read + 1)
+                .map_or(data.len(), |(_, row)| row.index());
+            let new_start = rank_before(old_start.index());
+            if rank_before(old_end) > new_start {
+                self.offsets[write] = (timestamp, RowId::from_usize(new_start));
+                write += 1;
+            }
+        }
+        self.offsets.truncate(write);
 
         self.data.scratch.clear();
-        self.data.scratch.reserve(prev_count);
+        self.data.scratch.reserve(live_rows);
         let scratch_ptr = self.data.scratch.raw_rows() as usize;
-        let data = &self.data.data;
         let n_columns = self.n_columns;
-        parallel::for_each_mut(self.hash.mut_shards(), |shard_id, shard| {
-            let shard_id = ShardId::from_usize(shard_id);
-            let scratch_ptr = scratch_ptr as *const Value;
-            let mut progress = HashMap::<Value /* timestamp */, RowId /* next row */>::default();
-            progress.reserve(results.len());
-            for stats in &results {
-                let Some(start) = stats.histogram.get(shard_id) else {
-                    continue;
-                };
-                progress.insert(stats.value, RowId::from_usize(*start));
-            }
-            for TableEntry { row: row_id, .. } in shard.iter_mut() {
-                let row = data.get_row(*row_id);
-                debug_assert!(!row[0].is_stale(), "shard should not map to a stale value");
-                let val = row[sort_by.index()];
-                let next = progress[&val];
-                // SAFETY: see above longer comment.
+        parallel::for_each_mut(&mut ranks, |block, (live, base)| {
+            let mut remaining = *live;
+            let mut next = base.index();
+            while remaining != 0 {
+                let offset = remaining.trailing_zeros() as usize;
+                remaining &= remaining - 1;
+                let row = data.get_row(RowId::from_usize(block * 64 + offset));
+                // SAFETY: the prefix sum assigns each block a disjoint output
+                // range with exactly as many rows as its bitmap has set bits.
+                // scratch is reserved for the sum of these counts, does not
+                // overlap data, and is not borrowed until all workers finish.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         row.as_ptr(),
-                        scratch_ptr.add(next.index() * n_columns) as *mut Value,
+                        (scratch_ptr as *mut Value).add(next * n_columns),
                         n_columns,
-                    )
+                    );
                 }
-                *row_id = next;
-                progress.insert(val, next.inc());
+                next += 1;
             }
         });
-        // SAFETY: see above longer comment.
-        unsafe { self.data.scratch.set_len(prev_count) };
+        // SAFETY: all live_rows rows were initialized by the joined workers.
+        unsafe { self.data.scratch.set_len(live_rows) };
+
+        // Existing key hashes and buckets remain valid. Only row IDs change.
+        parallel::for_each_mut(self.hash.mut_shards(), |_, shard| {
+            for entry in shard.iter_mut() {
+                let old = entry.row.index();
+                let (live, base) = ranks[old / 64];
+                let bit = 1u64 << (old % 64);
+                debug_assert_ne!(live & bit, 0, "hash entry mapped to a stale row");
+                entry.row =
+                    RowId::from_usize(base.index() + (live & (bit - 1)).count_ones() as usize);
+            }
+        });
         mem::swap(&mut self.data.data, &mut self.data.scratch);
         self.data.stale_rows = 0;
     }
 
     fn rehash_impl(
         sort_by: ColumnId,
-        n_keys: usize,
         rows: &mut Rows,
         offsets: &mut Vec<(Value, RowId)>,
         hash: &mut ShardedHashTable<TableEntry>,
     ) {
+        // Stable compaction maps an old row id to the number of live rows
+        // preceding it. Keep that rank in 64-row blocks instead of probing the
+        // key hash table again for every retained row. A block takes 16 bytes,
+        // versus 256 bytes for a dense old-to-new RowId map.
+        let mut ranks = vec![(0u64, RowId::new(0)); rows.data.len().div_ceil(64)];
         offsets.clear();
         rows.remove_stale(|row, old, new| {
-            let stale_entry = get_entry_mut(row, n_keys, hash, |x| x == old)
-                .expect("non-stale entry not mapped in hash");
-            *stale_entry = new;
+            let (live, base) = &mut ranks[old.index() / 64];
+            if *live == 0 {
+                *base = new;
+            }
+            *live |= 1u64 << (old.index() % 64);
             let sort_col = row[sort_by.index()];
             if offsets.last().is_none_or(|(max, _)| sort_col > *max) {
                 offsets.push((sort_col, new));
             }
-        })
+        });
+        // Keys and hashes are unchanged, so the existing buckets remain valid.
+        // Visiting them directly avoids recomputing key hashes and random probes.
+        for shard in hash.mut_shards() {
+            for entry in shard.iter_mut() {
+                let old = entry.row.index();
+                let (live, base) = ranks[old / 64];
+                let bit = 1u64 << (old % 64);
+                debug_assert_ne!(live & bit, 0, "hash entry mapped to a stale row");
+                entry.row =
+                    RowId::from_usize(base.index() + (live & (bit - 1)).count_ones() as usize);
+            }
+        }
     }
 
     fn rehash(&mut self) {
         self.generation = self.generation.inc();
         Self::rehash_impl(
             self.sort_by,
-            self.n_keys,
             &mut self.data,
             &mut self.offsets,
             &mut self.hash,
@@ -1315,20 +1288,6 @@ fn get_entry(
             ent.hash == hash.compact && test(ent.row)
         })
         .map(|ent| ent.row)
-}
-
-fn get_entry_mut<'a>(
-    row: &[Value],
-    n_keys: usize,
-    table: &'a mut ShardedHashTable<TableEntry>,
-    test: impl Fn(RowId) -> bool,
-) -> Option<&'a mut RowId> {
-    let hash = shard_hash(table.shard_data(), row, n_keys);
-    table.mut_shards()[hash.shard.index()]
-        .find_mut(hash.compact.probe().raw(), |ent| {
-            ent.hash == hash.compact && test(ent.row)
-        })
-        .map(|ent| &mut ent.row)
 }
 
 fn shard_hash(shard_data: ShardData, row: &[Value], n_keys: usize) -> ShardHash {

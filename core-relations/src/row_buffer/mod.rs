@@ -345,33 +345,84 @@ impl RowBuffer {
     /// RowIds. This method calls `remap` with the old and new RowIds for all
     /// non-stale rows.
     pub(crate) fn remove_stale(&mut self, mut remap: impl FnMut(&[Value], RowId, RowId)) {
-        let mut within_row = 0;
-        let mut row_in = 0;
-        let mut row_out = 0;
-        let mut keep_row = true;
-        let mut scratch = SmallVec::<[Value; 8]>::new();
-        self.data.retain(|entry| {
-            if within_row == 0 {
-                keep_row = !entry.get().is_stale();
-                if keep_row {
-                    scratch.push(entry.get());
-                    row_out += 1;
+        // Check the complete storage invariant once before the unchecked row
+        // traversal. In particular, add_row's arity check is debug-only.
+        let expected_values = self
+            .total_rows
+            .checked_mul(self.n_columns)
+            .expect("row buffer dimensions overflow");
+        assert_eq!(
+            self.data.len(),
+            expected_values,
+            "row buffer storage does not match row count and arity"
+        );
+
+        // Keep the unprocessed suffix intact if the remapping callback unwinds,
+        // just as Vec::retain does, and keep the row count consistent with it.
+        struct RetainRows<'a> {
+            rows: &'a mut RowBuffer,
+            original_len: usize,
+            read: usize,
+            write: usize,
+        }
+        impl Drop for RetainRows<'_> {
+            fn drop(&mut self) {
+                let remaining = self.original_len - self.read;
+                if self.write != self.read && remaining != 0 {
+                    let width = self.rows.n_columns;
+                    let ptr = self.rows.data.as_mut_ptr();
+                    // SAFETY: both ranges are initialized and within the original
+                    // buffer. Copy permits overlap; Value has no destructor.
+                    unsafe {
+                        std::ptr::copy(
+                            ptr.add(self.read * width),
+                            ptr.add(self.write * width),
+                            remaining * width,
+                        );
+                    }
                 }
-                row_in += 1;
-            } else if keep_row {
-                scratch.push(entry.get());
+                // SAFETY: retained rows and the unprocessed suffix are initialized.
+                unsafe { self.rows.set_len(self.write + remaining) };
             }
-            within_row += 1;
-            if within_row == self.n_columns {
-                within_row = 0;
-                if keep_row {
-                    remap(&scratch, RowId::new(row_in - 1), RowId::new(row_out - 1));
-                    scratch.clear();
+        }
+
+        let original_len = self.total_rows;
+        let width = self.n_columns;
+        let mut retain = RetainRows {
+            rows: self,
+            original_len,
+            read: 0,
+            write: 0,
+        };
+        let ptr = retain.rows.data.as_mut_ptr();
+        while retain.read < original_len {
+            // SAFETY: read is a valid row, and exclusive access to RowBuffer
+            // excludes concurrent mutation of its Cell<Value> storage.
+            let row = unsafe {
+                slice::from_raw_parts(ptr.add(retain.read * width).cast::<Value>(), width)
+            };
+            if !row[0].is_stale() {
+                remap(
+                    row,
+                    RowId::from_usize(retain.read),
+                    RowId::from_usize(retain.write),
+                );
+                if retain.write != retain.read {
+                    // SAFETY: write <= read, so the initialized destination is
+                    // in bounds and does not overwrite a future source row.
+                    // The row slice is no longer used after the callback.
+                    unsafe {
+                        std::ptr::copy(
+                            ptr.add(retain.read * width),
+                            ptr.add(retain.write * width),
+                            width,
+                        );
+                    }
                 }
+                retain.write += 1;
             }
-            keep_row
-        });
-        self.total_rows = row_out as usize;
+            retain.read += 1;
+        }
     }
 }
 
