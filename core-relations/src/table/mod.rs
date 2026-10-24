@@ -1231,7 +1231,8 @@ impl SortedWritesTable {
                 let row = data.get_row(*row_id);
                 debug_assert!(!row[0].is_stale(), "shard should not map to a stale value");
                 let val = row[sort_by.index()];
-                let next = progress[&val];
+                let cursor = progress.get_mut(&val).unwrap();
+                let next = *cursor;
                 // SAFETY: see above longer comment.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
@@ -1241,7 +1242,7 @@ impl SortedWritesTable {
                     )
                 }
                 *row_id = next;
-                progress.insert(val, next.inc());
+                *cursor = next.inc();
             }
         });
         // SAFETY: see above longer comment.
