@@ -46,6 +46,66 @@ fn remap_narrow() {
 }
 
 #[test]
+fn remap_preserves_complete_rows_for_empty_and_mixed_layouts() {
+    for width in [1, 2, 9, 17] {
+        for count in [0, 1, 7, 129] {
+            for pattern in 0..4 {
+                let mut rows = RowBuffer::new(width);
+                let mut expected = Vec::new();
+                let mut expected_remaps = Vec::new();
+                for old in 0..count {
+                    let row: Vec<_> = (0..width).map(|col| v(old * width + col)).collect();
+                    let id = rows.add_row(&row);
+                    let keep = match pattern {
+                        0 => true,
+                        1 => false,
+                        2 => old % 3 == 1,
+                        _ => old >= count / 3 && old < count * 2 / 3,
+                    };
+                    if keep {
+                        expected_remaps.push((row.clone(), id, RowId::from_usize(expected.len())));
+                        expected.push(row);
+                    } else {
+                        rows.set_stale(id);
+                    }
+                }
+                let mut got_remaps = Vec::new();
+                rows.remove_stale(|row, old, new| {
+                    got_remaps.push((row.to_vec(), old, new));
+                });
+                assert_eq!(got_remaps, expected_remaps);
+                assert_eq!(rows.len(), expected.len());
+                assert_eq!(rows.iter().map(<[_]>::to_vec).collect::<Vec<_>>(), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn remap_panic_preserves_unprocessed_rows_and_row_count() {
+    let mut rows = RowBuffer::new(2);
+    for n in 0..5 {
+        rows.add_row(&[v(n), v(n + 10)]);
+    }
+    rows.set_stale(RowId::new(1));
+    rows.set_stale(RowId::new(3));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rows.remove_stale(|_, old, _| {
+            assert_ne!(old, RowId::new(2), "intentional callback panic");
+        });
+    }));
+    assert!(result.is_err());
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.get_row(RowId::new(0)), &[v(0), v(10)]);
+    assert_eq!(rows.get_row(RowId::new(1)), &[v(2), v(12)]);
+    assert!(rows.get_row(RowId::new(2))[0].is_stale());
+    assert_eq!(rows.get_row(RowId::new(3)), &[v(4), v(14)]);
+    rows.remove_stale(|_, _, _| {});
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.get_row(RowId::new(2)), &[v(4), v(14)]);
+}
+
+#[test]
 fn basic_tagged_row() {
     let mut rows = TaggedRowBuffer::new(2);
     let r1 = rows.add_row(RowId::new(4), &[v(0), v(1)]);
