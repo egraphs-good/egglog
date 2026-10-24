@@ -482,6 +482,8 @@ impl<'db> ExecutionStateSeed<'db, '_> {
 /// tracks if a table has been modified.
 struct MutationBuffers<'a> {
     notify_list: &'a NotificationList<TableId>,
+    last_notified: Option<TableId>,
+    notification_generation: usize,
     buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
 }
 
@@ -496,6 +498,17 @@ impl Clone for MutationBuffers<'_> {
 }
 
 impl<'a> MutationBuffers<'a> {
+    fn notify_once(&mut self, table: TableId) {
+        // Database snapshots share the notification list and may reset it while
+        // this buffer is alive. Re-notify after a reset, even for the same table.
+        let generation = self.notify_list.generation();
+        if self.last_notified != Some(table) || self.notification_generation != generation {
+            self.notify_list.notify(table);
+            self.last_notified = Some(table);
+            self.notification_generation = generation;
+        }
+    }
+
     fn new(
         notify_list: &'a NotificationList<TableId>,
         buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
@@ -503,6 +516,8 @@ impl<'a> MutationBuffers<'a> {
         MutationBuffers {
             notify_list,
             buffers,
+            last_notified: None,
+            notification_generation: notify_list.generation(),
         }
     }
     fn lazy_init(&mut self, table_id: TableId, f: impl FnOnce() -> Box<dyn MutationBuffer>) {
@@ -510,12 +525,12 @@ impl<'a> MutationBuffers<'a> {
     }
     fn stage_insert(&mut self, table_id: TableId, row: &[Value]) {
         self.buffers[table_id].stage_insert(row);
-        self.notify_list.notify(table_id);
+        self.notify_once(table_id);
     }
 
     fn stage_remove(&mut self, table_id: TableId, key: &[Value]) {
         self.buffers[table_id].stage_remove(key);
-        self.notify_list.notify(table_id);
+        self.notify_once(table_id);
     }
 }
 
