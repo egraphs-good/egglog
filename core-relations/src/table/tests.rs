@@ -363,7 +363,10 @@ fn serial_compaction_preserves_rows_and_timestamp_offsets_across_rank_blocks() {
             assert_eq!(table.offsets, expected_offsets);
             for (old, row) in original.iter().enumerate() {
                 if keep[old] {
-                    assert_eq!(table.get_row(&row[..1]).unwrap().vals, row.as_slice());
+                    assert_eq!(
+                        table.get_row(&row[..1]).unwrap().vals.as_slice(),
+                        row.as_slice()
+                    );
                 } else {
                     assert!(table.get_row(&row[..1]).is_none());
                 }
