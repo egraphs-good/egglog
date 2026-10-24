@@ -310,6 +310,69 @@ fn same_shard_compact_collision_survives_table_lifecycle() {
 }
 
 #[test]
+fn serial_compaction_preserves_rows_and_timestamp_offsets_across_rank_blocks() {
+    for pattern in 0..3 {
+        let original: Vec<_> = (0..260)
+            .map(|n| vec![v(n + 1), v(n * 7), v(n / 32)])
+            .collect();
+        let keep: Vec<_> = (0..original.len())
+            .map(|old| match pattern {
+                0 => true,
+                1 => false,
+                // Leave a full 64-row block and two timestamp groups empty,
+                // and retain rows on both sides of rank-block boundaries.
+                _ => old / 64 != 1 && (old % 3 == 1 || old % 64 == 0 || old % 64 == 63),
+            })
+            .collect();
+        let mut table = fill_table(original.clone(), 1, ColumnId::new(2), |_, new| {
+            Some(new.to_vec())
+        });
+        // Stage the state immediately before compaction directly, so automatic
+        // threshold checks cannot compact the fixture before its block gaps exist.
+        for (old, &keep_row) in keep.iter().enumerate() {
+            if !keep_row {
+                table.data.set_stale(RowId::from_usize(old));
+            }
+        }
+        for shard in table.hash.mut_shards() {
+            shard.retain(|entry| keep[entry.row.index()]);
+        }
+        let expected: Vec<_> = original
+            .iter()
+            .zip(&keep)
+            .filter(|(_, keep_row)| **keep_row)
+            .map(|(row, _)| row.clone())
+            .enumerate()
+            .map(|(new, row)| (RowId::from_usize(new), row))
+            .collect();
+        let mut expected_offsets = Vec::new();
+        for (new, row) in &expected {
+            if expected_offsets
+                .last()
+                .is_none_or(|(val, _)| *val != row[2])
+            {
+                expected_offsets.push((row[2], *new));
+            }
+        }
+        // A second compaction also checks the no-stale case after remapping.
+        for _ in 0..2 {
+            table.rehash();
+            assert_eq!(table.data.stale_rows, 0);
+            assert_eq!(table.data.data.len(), expected.len());
+            assert_eq!(dump_subset(&table, table.all().as_ref()), expected);
+            assert_eq!(table.offsets, expected_offsets);
+            for (old, row) in original.iter().enumerate() {
+                if keep[old] {
+                    assert_eq!(table.get_row(&row[..1]).unwrap().vals, row.as_slice());
+                } else {
+                    assert!(table.get_row(&row[..1]).is_none());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn same_shard_compact_collision_survives_parallel_insert_and_delete() {
     ThreadPool::new(4).install(|| {
         let shard_data = crate::common::ShardData::new(16);

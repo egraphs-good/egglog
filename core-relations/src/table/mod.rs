@@ -1253,28 +1253,45 @@ impl SortedWritesTable {
 
     fn rehash_impl(
         sort_by: ColumnId,
-        n_keys: usize,
         rows: &mut Rows,
         offsets: &mut Vec<(Value, RowId)>,
         hash: &mut ShardedHashTable<TableEntry>,
     ) {
+        // Stable compaction maps an old row id to the number of live rows
+        // preceding it. Keep that rank in 64-row blocks instead of probing the
+        // key hash table again for every retained row. A block takes 16 bytes,
+        // versus 256 bytes for a dense old-to-new RowId map.
+        let mut ranks = vec![(0u64, RowId::new(0)); rows.data.len().div_ceil(64)];
         offsets.clear();
         rows.remove_stale(|row, old, new| {
-            let stale_entry = get_entry_mut(row, n_keys, hash, |x| x == old)
-                .expect("non-stale entry not mapped in hash");
-            *stale_entry = new;
+            let (live, base) = &mut ranks[old.index() / 64];
+            if *live == 0 {
+                *base = new;
+            }
+            *live |= 1u64 << (old.index() % 64);
             let sort_col = row[sort_by.index()];
             if offsets.last().is_none_or(|(max, _)| sort_col > *max) {
                 offsets.push((sort_col, new));
             }
-        })
+        });
+        // Keys and hashes are unchanged, so the existing buckets remain valid.
+        // Visiting them directly avoids recomputing key hashes and random probes.
+        for shard in hash.mut_shards() {
+            for entry in shard.iter_mut() {
+                let old = entry.row.index();
+                let (live, base) = ranks[old / 64];
+                let bit = 1u64 << (old % 64);
+                debug_assert_ne!(live & bit, 0, "hash entry mapped to a stale row");
+                entry.row =
+                    RowId::from_usize(base.index() + (live & (bit - 1)).count_ones() as usize);
+            }
+        }
     }
 
     fn rehash(&mut self) {
         self.generation = self.generation.inc();
         Self::rehash_impl(
             self.sort_by,
-            self.n_keys,
             &mut self.data,
             &mut self.offsets,
             &mut self.hash,
@@ -1295,20 +1312,6 @@ fn get_entry(
             ent.hash == hash.compact && test(ent.row)
         })
         .map(|ent| ent.row)
-}
-
-fn get_entry_mut<'a>(
-    row: &[Value],
-    n_keys: usize,
-    table: &'a mut ShardedHashTable<TableEntry>,
-    test: impl Fn(RowId) -> bool,
-) -> Option<&'a mut RowId> {
-    let hash = shard_hash(table.shard_data(), row, n_keys);
-    table.mut_shards()[hash.shard.index()]
-        .find_mut(hash.compact.probe().raw(), |ent| {
-            ent.hash == hash.compact && test(ent.row)
-        })
-        .map(|ent| &mut ent.row)
 }
 
 fn shard_hash(shard_data: ShardData, row: &[Value], n_keys: usize) -> ShardHash {
