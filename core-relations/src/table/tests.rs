@@ -836,3 +836,38 @@ fn shard_math() {
     // Picking low numbers should all get shard 0.
     assert!((0..100_000).all(|x| table.shard_data().shard_id(x as u64) == ShardId::new(0)));
 }
+
+#[test]
+fn parallel_compaction_matches_serial_at_partial_rank_block_boundaries() {
+    ThreadPool::new(4).install(|| {
+        for length in [1, 2, 63, 64, 65, 127, 128, 129, 255, 256, 257] {
+            let original: Vec<_> = (0..length)
+                .map(|old| vec![v(old + 1), v(17), v(old * 11), v(old / 3)])
+                .collect();
+            let table = fill_table(original, 2, ColumnId::new(3), |_, new| Some(new.to_vec()));
+            for pattern in 0..5 {
+                let mut table = table.clone();
+                let keep: Vec<_> = (0..length)
+                    .map(|old| match pattern {
+                        0 => true,
+                        1 => false,
+                        2 => old == 0,
+                        3 => old + 1 == length,
+                        // Leave a fully empty rank block and keep rows at both
+                        // sides of the neighboring block boundaries.
+                        _ => old / 64 != 1 && (old % 64 == 0 || old % 64 == 63),
+                    })
+                    .collect();
+                for (old, &keep_row) in keep.iter().enumerate() {
+                    if !keep_row {
+                        table.data.set_stale(RowId::from_usize(old));
+                    }
+                }
+                for shard in table.hash.mut_shards() {
+                    shard.retain(|entry| keep[entry.row.index()]);
+                }
+                assert_parallel_compaction_matches_serial(table);
+            }
+        }
+    });
+}
