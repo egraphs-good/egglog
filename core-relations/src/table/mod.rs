@@ -1145,57 +1145,36 @@ impl SortedWritesTable {
             count: usize,
             histogram: Pooled<DenseIdMap<ShardId, usize>>,
         }
-        impl Default for TimestampStats {
-            fn default() -> TimestampStats {
-                TimestampStats {
-                    value: Value::stale(),
-                    count: 0,
-                    histogram: with_pool_set(|ps| ps.get()),
+        // Every hash entry describes one live row and already identifies its shard.
+        // Its old row id also determines the timestamp range, so histogramming does
+        // not need to scan stale rows or load and hash row keys again. Distributing
+        // by shard keeps the work parallel even when one timestamp dominates.
+        let offsets = &self.offsets;
+        let counts_by_shard = parallel::map_mut(self.hash.mut_shards(), |_, shard| {
+            let mut counts = vec![0usize; offsets.len()];
+            for entry in shard.iter() {
+                let timestamp = offsets.partition_point(|(_, start)| *start <= entry.row) - 1;
+                counts[timestamp] += 1;
+            }
+            counts
+        });
+        let mut results = offsets
+            .iter()
+            .map(|(value, _)| TimestampStats {
+                value: *value,
+                count: 0,
+                histogram: with_pool_set(|ps| ps.get()),
+            })
+            .collect::<Vec<_>>();
+        for (shard, counts) in counts_by_shard.into_iter().enumerate() {
+            let shard = ShardId::from_usize(shard);
+            for (stats, count) in results.iter_mut().zip(counts) {
+                if count != 0 {
+                    stats.count += count;
+                    stats.histogram.insert(shard, count);
                 }
             }
         }
-        let mut results = Vec::<TimestampStats>::with_capacity(self.offsets.len());
-        let offset_windows = self
-            .offsets
-            .windows(2)
-            .map(|xs| {
-                let [(start_val, start_row), (_, end_row)] = xs else {
-                    unreachable!()
-                };
-                (*start_val, *start_row, *end_row)
-            })
-            .collect::<Vec<_>>();
-        // Use a macro rather than a lambda to avoid borrow issues.
-        macro_rules! compute_hist {
-            ($start_val: expr, $start_row: expr, $end_row: expr) => {{
-                let mut histogram: Pooled<DenseIdMap<ShardId, usize>> =
-                    with_pool_set(|ps| ps.get());
-                let mut cur_row = $start_row;
-                let mut count = 0;
-                while cur_row < $end_row {
-                    if let Some(row) = self.data.get_row(cur_row) {
-                        count += 1;
-                        let hash = shard_hash(self.hash.shard_data(), row, self.n_keys);
-                        *histogram.get_or_default(hash.shard) += 1;
-                    }
-                    cur_row = cur_row.inc();
-                }
-                TimestampStats {
-                    value: $start_val,
-                    count,
-                    histogram,
-                }
-            }};
-        }
-        results.extend(parallel::map(
-            &offset_windows,
-            |_, (start_val, start_row, end_row)| compute_hist!(*start_val, *start_row, *end_row),
-        ));
-        // And here we handle the final one.
-        let (start_val, start_row) = self.offsets.last().unwrap();
-        let end_row = self.data.next_row();
-        let last = compute_hist!(*start_val, *start_row, end_row);
-        results.push(last);
         // Now we need to compute cumulative statistics on the row layouts here.
         // We do this serially a we currently don't have a ton of use for cases with thousands
         // of timestamps or more. There are well-known parallel algorithms for computing these

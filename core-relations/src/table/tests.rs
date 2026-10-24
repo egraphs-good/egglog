@@ -29,6 +29,160 @@ fn parallel_insert(table: &mut SortedWritesTable, state: &crate::ExecutionState<
     )
 }
 
+fn compaction_test_table() -> SortedWritesTable {
+    let mut table = SortedWritesTable::new(
+        2,
+        4,
+        ColumnId::new(3),
+        vec![],
+        Box::new(|_, old, new, out| {
+            out.extend_from_slice(new);
+            old != new
+        }),
+    );
+    table.hash = ShardedHashTable::with_shards(16);
+    table.pending_state = std::sync::Arc::new(super::PendingState::new(table.hash.shard_data()));
+    table
+}
+
+fn assert_parallel_compaction_matches_serial(table: SortedWritesTable) {
+    let mut expected = dump_subset(&table, table.all().as_ref())
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+    expected.sort();
+
+    let mut serial = table.clone();
+    serial.rehash();
+    let mut parallel = table;
+    parallel.parallel_rehash();
+
+    assert_eq!(parallel.offsets, serial.offsets);
+    assert_eq!(parallel.version(), serial.version());
+    for compacted in [&serial, &parallel] {
+        assert_eq!(compacted.data.stale_rows, 0);
+        assert_eq!(compacted.data.data.len(), expected.len());
+        let mut actual = dump_subset(compacted, compacted.all().as_ref())
+            .into_iter()
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        actual.sort();
+        assert_eq!(actual, expected);
+        for row in &expected {
+            assert_eq!(&*compacted.get_row(&row[..2]).unwrap().vals, row);
+        }
+        for (timestamp, _) in &compacted.offsets {
+            let (start, end) = compacted.binary_search_sort_val(*timestamp).unwrap();
+            assert!(start < end);
+            for row in start.index()..end.index() {
+                assert_eq!(
+                    compacted.data.data.get_row(RowId::from_usize(row))[3],
+                    *timestamp
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn parallel_compaction_matches_serial_with_dominant_final_timestamp() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        for (timestamp, start, count) in [(3, 0, 5), (79, 3, 17), (1_000_003, 16, 4097)] {
+            let mut buffer = table.new_buffer();
+            for key in start..start + count {
+                buffer.stage_insert(&[v(key), v(11), v(timestamp + key), v(timestamp)]);
+            }
+            drop(buffer);
+            // Keep obsolete rows until the explicit compaction below.
+            assert!(table.do_insert(&mut e));
+        }
+        assert!(table.data.stale_rows > 0);
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_handles_a_single_timestamp() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        for (count, value) in [(64, 10), (32, 20)] {
+            let mut buffer = table.new_buffer();
+            for key in 0..count {
+                buffer.stage_insert(&[v(key), v(17), v(value), v(7_000_001)]);
+            }
+            drop(buffer);
+            assert!(table.do_insert(&mut e));
+        }
+        assert_eq!(table.offsets.len(), 1);
+        assert_eq!(table.data.stale_rows, 32);
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_removes_empty_timestamp_ranges_and_handles_empty_result() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        for (timestamp, keys) in [(0, vec![1, 2]), (57, vec![3, 4]), (2_000_011, vec![1, 5])] {
+            let mut buffer = table.new_buffer();
+            for key in keys {
+                buffer.stage_insert(&[v(key), v(13), v(key), v(timestamp)]);
+            }
+            drop(buffer);
+            assert!(table.do_insert(&mut e));
+        }
+        for key in [2, 3, 4] {
+            table.new_buffer().stage_remove(&[v(key), v(13)]);
+        }
+        table.do_delete();
+        assert_eq!(table.offsets.len(), 3);
+        assert_eq!(table.len(), 2);
+        assert_parallel_compaction_matches_serial(table.clone());
+
+        for key in [1, 5] {
+            table.new_buffer().stage_remove(&[v(key), v(13)]);
+        }
+        table.do_delete();
+        assert_eq!(table.len(), 0);
+        assert!(!table.offsets.is_empty());
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_preserves_collisions_and_sparse_shards() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        let left = [Value::new(70_759_468), Value::new(2_418_062_243)];
+        let right = [Value::new(3_427_223_041), Value::new(1_840_803_043)];
+        assert_eq!(
+            shard_hash(table.hash.shard_data(), &left, 2),
+            shard_hash(table.hash.shard_data(), &right, 2)
+        );
+        for (key, value, timestamp) in [(left, 10, 7), (right, 20, 7), (left, 30, 89)] {
+            table
+                .new_buffer()
+                .stage_insert(&[key[0], key[1], v(value), v(timestamp)]);
+            assert!(table.do_insert(&mut e));
+        }
+        assert_eq!(
+            table
+                .hash
+                .mut_shards()
+                .iter()
+                .filter(|s| !s.is_empty())
+                .count(),
+            1
+        );
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
 #[test]
 fn compact_hash_preserves_bucket_bits_and_exact_h2_tag() {
     const LOW_MASK: u64 = (1 << 25) - 1;
