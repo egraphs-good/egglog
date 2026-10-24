@@ -1142,11 +1142,12 @@ impl SortedWritesTable {
         let mut ranks = vec![(0u64, RowId::new(0)); data.len().div_ceil(64)];
         parallel::for_each_mut(&mut ranks, |block, (live, _)| {
             let start = block * 64;
+            let mut bitmap = 0u64;
             for old in start..(start + 64).min(data.len()) {
-                if !data.get_row(RowId::from_usize(old))[0].is_stale() {
-                    *live |= 1u64 << (old - start);
-                }
+                let is_live = !data.get_row(RowId::from_usize(old))[0].is_stale();
+                bitmap |= u64::from(is_live) << (old - start);
             }
+            *live = bitmap;
         });
 
         let mut live_rows = 0;
