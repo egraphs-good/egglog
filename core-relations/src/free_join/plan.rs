@@ -228,12 +228,13 @@ impl Plan {
         }
     }
 
-    pub(crate) fn to_report(&self, _symbol_map: &SymbolMap) -> egglog_reports::Plan {
+    pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
         match self {
-            Plan::SinglePlan(p) => p.to_report(_symbol_map),
-            Plan::DecomposedPlan(_) => {
-                todo!()
-            }
+            Plan::SinglePlan(p) => p.to_report(symbol_map),
+            Plan::DecomposedPlan(_) => egglog_reports::Plan {
+                text: Some(format!("{self:#?}\n{symbol_map:#?}")),
+                ..Default::default()
+            },
         }
     }
 
@@ -367,13 +368,11 @@ impl SinglePlan {
                         to_intersect: report_to_intersect,
                     }
                 }
-                JoinStage::FusedIntersectMat {
-                    cover: _,
-                    mode: _,
-                    bind: _,
-                    to_intersect: _,
-                } => {
-                    todo!("materialization")
+                JoinStage::FusedIntersectMat { .. } => {
+                    return ReportPlan {
+                        text: Some(format!("{self:#?}\n{symbol_map:#?}")),
+                        ..Default::default()
+                    };
                 }
             };
             let next = if i == self.stages.instrs.len() - 1 {
@@ -383,7 +382,7 @@ impl SinglePlan {
             };
             stages.push((report_stage, None, next));
         }
-        ReportPlan { stages }
+        ReportPlan { stages, text: None }
     }
 }
 

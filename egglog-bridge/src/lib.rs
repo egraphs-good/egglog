@@ -726,6 +726,20 @@ impl EGraph {
         install_thread_pool(thread_pool, || self.run_rules_inner(rules, context))
     }
 
+    /// Plan current rule queries on a disposable database clone. This never
+    /// runs scans/actions or advances the live rules' seminaive cursors.
+    pub fn explain_rules(&self, rules: &[RuleId]) -> Result<Vec<(Arc<str>, egglog_reports::Plan)>> {
+        let mut db = self.db.clone();
+        rules
+            .iter()
+            .map(|id| {
+                let rule = &self.rules[*id];
+                let plan = rule.query.build_cached_plan(&mut db, &rule.desc)?;
+                Ok((rule.desc.clone(), plan.plan.to_report()))
+            })
+            .collect()
+    }
+
     /// Observe committed effects of an action execution, including its error
     /// prefix and ordinary recovery. This neither flushes nor evaluates work.
     /// Nested observations and clones use the same native counter semantics.
@@ -791,12 +805,12 @@ impl EGraph {
     pub fn rebuild_now(&mut self) -> Result<Duration> {
         let thread_pool = self.thread_pool();
         install_thread_pool(thread_pool, || {
-            let timer = Instant::now();
+            let timer = (self.report_level != ReportLevel::Off).then(Instant::now);
             self.rebuild()?;
             if let Some(message) = self.panic_message.lock().unwrap().take() {
                 return Err(message.into());
             }
-            Ok(timer.elapsed())
+            Ok(timer.map_or(Duration::ZERO, |timer| timer.elapsed()))
         })
     }
 
@@ -853,9 +867,10 @@ impl EGraph {
             return Ok(iteration_report);
         }
 
-        let rebuild_timer = Instant::now();
+        let rebuild_timer = (self.report_level != ReportLevel::Off).then(Instant::now);
         self.rebuild()?;
-        iteration_report.rebuild_time = rebuild_timer.elapsed();
+        iteration_report.rebuild_time =
+            rebuild_timer.map_or(Duration::ZERO, |timer| timer.elapsed());
 
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(message.into());
@@ -924,7 +939,7 @@ impl EGraph {
         if do_parallel {
             return self.rebuild_parallel();
         }
-        let start = Instant::now();
+        let start = (self.report_level != ReportLevel::Off).then(Instant::now);
 
         // The database changed. Rebuild. New entries should land after the given rules.
         let mut changed = true;
@@ -956,7 +971,11 @@ impl EGraph {
                                 &mut self.rules,
                                 &[*rule],
                                 ts,
-                                ReportLevel::TimeOnly,
+                                if self.report_level == ReportLevel::Off {
+                                    ReportLevel::Off
+                                } else {
+                                    ReportLevel::TimeOnly
+                                },
                                 None,
                             )?
                             .changed;
@@ -972,7 +991,11 @@ impl EGraph {
                             &mut self.rules,
                             &[info.nonincremental_rebuild_rule],
                             ts,
-                            ReportLevel::TimeOnly,
+                            if self.report_level == ReportLevel::Off {
+                                ReportLevel::Off
+                            } else {
+                                ReportLevel::TimeOnly
+                            },
                             None,
                         )?
                         .changed;
@@ -984,7 +1007,9 @@ impl EGraph {
                 }
             }
         }
-        log::info!("rebuild took {:?}", start.elapsed());
+        if let Some(start) = start {
+            log::info!("rebuild took {:?}", start.elapsed());
+        }
         Ok(())
     }
 
@@ -993,7 +1018,7 @@ impl EGraph {
     /// slow processing down in a single-threaded setting, so it is only used
     /// when the number of active threads is greater than 1.
     fn rebuild_parallel(&mut self) -> Result<()> {
-        let start = Instant::now();
+        let start = (self.report_level != ReportLevel::Off).then(Instant::now);
         #[derive(Default)]
         struct RebuildState {
             nonincremental: Vec<FunctionId>,
@@ -1046,7 +1071,11 @@ impl EGraph {
                 &mut self.rules,
                 &scratch,
                 ts,
-                ReportLevel::TimeOnly,
+                if self.report_level == ReportLevel::Off {
+                    ReportLevel::Off
+                } else {
+                    ReportLevel::TimeOnly
+                },
                 None,
             )?
             .changed;
@@ -1063,14 +1092,20 @@ impl EGraph {
                     &mut self.rules,
                     &scratch,
                     ts,
-                    ReportLevel::TimeOnly,
+                    if self.report_level == ReportLevel::Off {
+                        ReportLevel::Off
+                    } else {
+                        ReportLevel::TimeOnly
+                    },
                     None,
                 )?
                 .changed;
                 scratch.clear();
             }
         }
-        log::info!("rebuild took {:?}", start.elapsed());
+        if let Some(start) = start {
+            log::info!("rebuild took {:?}", start.elapsed());
+        }
         Ok(())
     }
 

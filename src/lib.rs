@@ -577,6 +577,7 @@ pub struct EGraph {
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
+    collect_reports: bool,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
@@ -684,6 +685,7 @@ impl Default for EGraph {
             seminaive: true,
             no_decomp: false,
             overall_run_report: Default::default(),
+            collect_reports: true,
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
@@ -1738,7 +1740,57 @@ impl EGraph {
             .run_rules(&rule_ids, Some(&self.type_info))
             .map_err(|error| Error::from_backend(error.as_ref()))?;
 
-        Ok(RunReport::singleton(ruleset, iteration_report))
+        Ok(self.iteration_result(ruleset, iteration_report))
+    }
+
+    // Diagnostic collection must not allocate aggregate maps or an Arc history
+    // for an otherwise control-only native invocation, including internal queries.
+    fn iteration_result(
+        &self,
+        ruleset: &str,
+        iteration: egglog_reports::IterationReport,
+    ) -> RunReport {
+        if self.collect_reports {
+            RunReport::singleton(ruleset, iteration)
+        } else {
+            RunReport {
+                updated: iteration.changed(),
+                can_stop: !iteration.changed(),
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Inspect selected current rule queries without running or changing them.
+    pub fn explain_rulesets(&self, names: &[String]) -> Result<serde_json::Value, Error> {
+        fn collect(
+            graph: &EGraph,
+            name: &str,
+            ids: &mut Vec<egglog_bridge::RuleId>,
+        ) -> Result<(), Error> {
+            match graph
+                .rulesets
+                .get(name)
+                .ok_or_else(|| Error::NoSuchRuleset(name.into(), span!()))?
+            {
+                Ruleset::Rules(rules, _) => ids.extend(rules.values().map(|rule| rule.backend_id)),
+                Ruleset::Combined(names, _) => {
+                    for name in names {
+                        collect(graph, name, ids)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        let mut ids = vec![];
+        for name in names {
+            collect(self, name, &mut ids)?;
+        }
+        let plans = self
+            .backend
+            .explain_rules(&ids)
+            .map_err(|error| Error::from_backend(error.as_ref()))?;
+        serde_json::to_value(plans).map_err(|error| Error::BackendError(error.to_string()))
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -2401,7 +2453,7 @@ impl EGraph {
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let run_result = run_result
-            .map(|report| RunReport::singleton(&fresh_ruleset, report))
+            .map(|report| self.iteration_result(&fresh_ruleset, report))
             .map_err(|error| Error::from_backend(error.as_ref()));
         observer(ExecutionEvent::RunFinished {
             origin: ExecutionOrigin::Internal,
@@ -2501,7 +2553,7 @@ impl EGraph {
                 )?;
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
-                if policies.accumulate_schedule {
+                if policies.accumulate_schedule && self.collect_reports {
                     self.overall_run_report.union(report.clone());
                 }
                 return Ok(vec![CommandOutput::RunSchedule(report)]);
@@ -3531,7 +3583,9 @@ impl EGraph {
         let result = anchor(self, context);
         // Native RunSchedule publishes its aggregate only when the complete
         // anchor succeeds, before Fail may turn that success into ExpectFail.
-        if let Ok(report) = &result {
+        if let Ok(report) = &result
+            && self.collect_reports
+        {
             self.overall_run_report.union(report.clone());
         }
         let mut result = result.map(Some);
@@ -3931,6 +3985,7 @@ impl EGraph {
 
     /// Set the report verbosity level for rule execution output.
     pub fn set_report_level(&mut self, level: ReportLevel) {
+        self.collect_reports = level != ReportLevel::Off;
         self.backend.set_report_level(level);
     }
 

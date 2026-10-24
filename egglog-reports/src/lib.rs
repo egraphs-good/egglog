@@ -1,6 +1,7 @@
 use clap::clap_derive::ValueEnum;
 use rustc_hash::FxHasher;
 use serde::Serialize;
+use serde::ser::SerializeStruct;
 use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
@@ -11,8 +12,10 @@ use web_time::Duration;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub(crate) type IndexSet<T> = indexmap::IndexSet<T, BuildHasherDefault<FxHasher>>;
 
-#[derive(ValueEnum, Default, Serialize, Debug, Clone, Copy)]
+#[derive(ValueEnum, Default, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportLevel {
+    /// Preserve execution and scheduler decisions without collecting diagnostics.
+    Off,
     /// Report only the time taken in each search/apply, merge, rebuild phase.
     #[default]
     TimeOnly,
@@ -44,7 +47,7 @@ pub struct StageStats {
     pub num_succeeded: usize,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Plan {
     pub stages: Vec<(
         Stage,
@@ -52,6 +55,20 @@ pub struct Plan {
         // indices of next stages
         Vec<usize>,
     )>,
+    /// Backend text when the physical plan has no structured stage presentation.
+    pub text: Option<String>,
+}
+
+impl Serialize for Plan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut document = serializer.serialize_struct("Plan", 1)?;
+        if let Some(text) = &self.text {
+            document.serialize_field("text", text)?;
+        } else {
+            document.serialize_field("stages", &self.stages)?;
+        }
+        document.end()
+    }
 }
 
 #[derive(Debug, Serialize, Clone, Default)]

@@ -23,7 +23,7 @@ use dashmap::mapref::one::RefMut;
 use egglog_concurrency::Scope;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
-use web_time::Instant;
+use web_time::{Duration, Instant};
 
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
@@ -444,7 +444,12 @@ impl Database {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
-        let match_counter = Arc::new(MatchCounter::new(rule_set.actions.n_ids()));
+        let collect = report_level != ReportLevel::Off;
+        let match_counter = Arc::new(MatchCounter::new(if collect {
+            rule_set.actions.n_ids()
+        } else {
+            0
+        }));
         // Trie roots are shared across all plans in this run. Tables are frozen
         // for the duration, so a given root key always denotes the same subset;
         // the cache is scoped to (and dropped at the end of) this call. Only
@@ -468,19 +473,19 @@ impl Database {
             (!shared.is_empty()).then(|| Arc::new(TrieCache::with_shared(shared)))
         };
 
-        let search_and_apply_timer = Instant::now();
+        let search_and_apply_timer = collect.then(Instant::now);
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
         let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
         let exec_state = ExecutionState::new(self.read_only_view_with(context), Default::default());
         if parallelize_db_level_op(self.total_size_estimate) {
-            let dash_rule_reports: Arc<DashMap<Arc<str>, Vec<RuleReport>>> =
-                Arc::new(DashMap::default());
+            let dash_rule_reports: Option<Arc<DashMap<Arc<str>, Vec<RuleReport>>>> =
+                collect.then(|| Arc::new(DashMap::default()));
             let db: &Database = self;
             egglog_concurrency::scope(|scope| {
                 for (plan, desc, symbol_map) in rule_set.plans.values() {
                     // TODO: add stats
                     let report_plan = match report_level {
-                        ReportLevel::TimeOnly => None,
+                        ReportLevel::Off | ReportLevel::TimeOnly => None,
                         ReportLevel::WithPlan | ReportLevel::StageInfo => {
                             Some(plan.to_report(symbol_map))
                         }
@@ -496,7 +501,7 @@ impl Database {
                         let mut binding_info = BindingInfo::default();
                         let mut action_buf =
                             ScopedActionBuffer::new(rule_scope, rule_set, match_counter.clone());
-                        let search_and_apply_timer = Instant::now();
+                        let search_and_apply_timer = collect.then(Instant::now);
 
                         'eval: {
                             for (id, info) in plan.atoms().iter() {
@@ -588,24 +593,29 @@ impl Database {
                                 }
                             }
                         }
-                        let search_and_apply_time = search_and_apply_timer.elapsed();
+                        let search_and_apply_time =
+                            search_and_apply_timer.map_or(Duration::ZERO, |timer| timer.elapsed());
                         if action_buf.needs_flush {
                             action_buf.flush(&mut exec_state.clone());
                         }
-                        let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
-                            dash_rule_reports.entry(desc).or_default();
-                        rule_report.value_mut().push(RuleReport {
-                            plan: report_plan,
-                            search_and_apply_time,
-                            num_matches: usize::MAX,
-                        });
+                        if let Some(reports) = dash_rule_reports {
+                            let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
+                                reports.entry(desc).or_default();
+                            rule_report.value_mut().push(RuleReport {
+                                plan: report_plan,
+                                search_and_apply_time,
+                                num_matches: usize::MAX,
+                            });
+                        }
                     });
                 }
             });
-            rule_reports = dash_rule_reports
-                .iter()
-                .map(|entry| (entry.key().clone(), entry.value().clone()))
-                .collect();
+            rule_reports = dash_rule_reports.map_or_else(HashMap::default, |reports| {
+                reports
+                    .iter()
+                    .map(|entry| (entry.key().clone(), entry.value().clone()))
+                    .collect()
+            });
         } else {
             rule_reports = HashMap::default();
             let join_state = JoinState::new(self, exec_state.clone(), trie_cache.clone());
@@ -618,14 +628,14 @@ impl Database {
             };
             for (plan, desc, symbol_map) in rule_set.plans.values() {
                 let report_plan = match report_level {
-                    ReportLevel::TimeOnly => None,
+                    ReportLevel::Off | ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
                         Some(plan.to_report(symbol_map))
                     }
                 };
                 let mut binding_info = BindingInfo::default();
 
-                let search_and_apply_timer = Instant::now();
+                let search_and_apply_timer = collect.then(Instant::now);
                 'eval: {
                     for (id, info) in plan.atoms().iter() {
                         let headers: SmallVec<[&JoinHeader; 2]> =
@@ -691,20 +701,26 @@ impl Database {
                         }
                     }
                 }
-                let search_and_apply_time = search_and_apply_timer.elapsed();
+                let search_and_apply_time =
+                    search_and_apply_timer.map_or(Duration::ZERO, |timer| timer.elapsed());
 
                 // TODO: unnecessary cloning in many cases
-                let rule_report = rule_reports.entry(desc.clone()).or_default();
-                rule_report.push(RuleReport {
-                    plan: report_plan,
-                    search_and_apply_time,
-                    num_matches: usize::MAX,
-                });
+                if collect {
+                    let rule_report = rule_reports.entry(desc.clone()).or_default();
+                    rule_report.push(RuleReport {
+                        plan: report_plan,
+                        search_and_apply_time,
+                        num_matches: usize::MAX,
+                    });
+                }
             }
             action_buf.flush(&mut exec_state.clone());
         }
 
         for (plan, desc, _symbol_map) in rule_set.plans.values() {
+            if !collect {
+                break;
+            }
             let reports = rule_reports.get_mut(desc).unwrap();
             let i = reports
                 .iter()
@@ -718,11 +734,12 @@ impl Database {
             // caused by individual queries.
             reports[i].num_matches = match_counter.read_matches(plan.actions());
         }
-        let search_and_apply_time = search_and_apply_timer.elapsed();
+        let search_and_apply_time =
+            search_and_apply_timer.map_or(Duration::ZERO, |timer| timer.elapsed());
 
-        let merge_timer = Instant::now();
+        let merge_timer = collect.then(Instant::now);
         let changed = self.merge_all();
-        let merge_time = merge_timer.elapsed();
+        let merge_time = merge_timer.map_or(Duration::ZERO, |timer| timer.elapsed());
 
         RuleSetReport {
             changed,
@@ -2710,7 +2727,9 @@ impl MatchCounter {
     }
 
     fn inc_matches(&self, action: ActionId, by: usize) {
-        self.matches[action].fetch_add(by, std::sync::atomic::Ordering::Relaxed);
+        if let Some(matches) = self.matches.get(action) {
+            matches.fetch_add(by, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     fn read_matches(&self, action: ActionId) -> usize {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)

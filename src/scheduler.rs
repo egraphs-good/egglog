@@ -389,10 +389,10 @@ impl EGraph {
                     .map_err(|e| Error::BackendError(e.to_string()))?;
                 num_nodes.set(None);
             }
-            let mut action_report = RunReport::singleton(ruleset, action_iteration_report);
+            let mut action_report = self.iteration_result(ruleset, action_iteration_report);
 
             // Step 5: combine the reports
-            let mut query_report = RunReport::singleton(ruleset, query_iter_report);
+            let mut query_report = self.iteration_result(ruleset, query_iter_report);
 
             // query matches don't count
             query_report.updated = false;
@@ -857,6 +857,54 @@ mod test {
         assert_eq!(before, after);
         assert!(!report.updated);
         assert!(!report.can_stop);
+    }
+
+    #[test]
+    fn collection_off_keeps_scheduler_readiness_and_omits_detailed_history() {
+        let mut graph = EGraph::default();
+        graph.set_report_level(egglog_reports::ReportLevel::Off);
+        graph
+            .parse_and_run_program(
+                None,
+                "(ruleset r) (relation R (i64)) (R 1) (rule ((R x)) ((R x)) :ruleset r)",
+            )
+            .unwrap();
+        let scheduler = graph.add_scheduler(Box::new(DelayStopScheduler::default()));
+        let first = graph.step_rules_with_scheduler(scheduler, "r").unwrap();
+        assert!(!first.updated && !first.can_stop);
+        let second = graph.step_rules_with_scheduler(scheduler, "r").unwrap();
+        assert!(!second.updated && second.can_stop);
+        for report in [first, second] {
+            assert!(report.iterations.is_empty());
+            assert!(report.num_matches_per_rule.is_empty());
+            assert!(report.search_and_apply_time_per_rule.is_empty());
+            assert!(report.search_and_apply_time_per_ruleset.is_empty());
+            assert!(report.merge_time_per_ruleset.is_empty());
+            assert!(report.rebuild_time_per_ruleset.is_empty());
+        }
+        assert_eq!(graph.get_size("R"), 1);
+        assert!(graph.get_overall_run_report().iterations.is_empty());
+        let commands = graph.parse_program(None, "(check (R 1))").unwrap();
+        let [Command::Check(span, facts)] = commands.as_slice() else {
+            unreachable!()
+        };
+        let mut queries = 0;
+        graph
+            .check_condition_observed(span.clone(), facts.clone(), &mut |event| {
+                if let ExecutionEvent::RunFinished {
+                    result: Ok(report), ..
+                } = event
+                {
+                    queries += 1;
+                    assert!(
+                        report.iterations.is_empty(),
+                        "internal queries also skip report history"
+                    );
+                    assert!(report.num_matches_per_rule.is_empty());
+                }
+            })
+            .unwrap();
+        assert_eq!(queries, 1);
     }
 
     #[test]

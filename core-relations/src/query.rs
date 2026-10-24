@@ -40,6 +40,13 @@ pub struct CachedPlan {
     actions: ActionInfo,
 }
 
+impl CachedPlan {
+    /// Present an already planned query without running its actions or scans.
+    pub fn to_report(&self) -> egglog_reports::Plan {
+        self.plan.to_report(&self.symbol_map)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ActionInfo {
     pub(crate) used_vars: SmallVec<[Variable; 4]>,
