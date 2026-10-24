@@ -57,6 +57,11 @@ fn assert_parallel_compaction_matches_serial(table: SortedWritesTable) {
     let mut parallel = table;
     parallel.parallel_rehash();
 
+    assert_eq!(
+        dump_subset(&parallel, parallel.all().as_ref()),
+        dump_subset(&serial, serial.all().as_ref()),
+        "parallel compaction must preserve the original live-row order"
+    );
     assert_eq!(parallel.offsets, serial.offsets);
     assert_eq!(parallel.version(), serial.version());
     for compacted in [&serial, &parallel] {
@@ -181,6 +186,50 @@ fn parallel_compaction_preserves_collisions_and_sparse_shards() {
         );
         assert_parallel_compaction_matches_serial(table);
     });
+}
+
+#[test]
+fn parallel_compaction_preserves_many_sparse_timestamps_and_rank_boundaries() {
+    for threads in [1, 2, 3, 8] {
+        ThreadPool::new(threads).install(|| {
+            // Every row has its own widely spaced timestamp. This creates more
+            // timestamp ranges than either rows per rank block or hash shards.
+            let original: Vec<_> = (0..8193)
+                .map(|n| vec![v(n + 1), v(71), v(n * 7), v(n * 100_003)])
+                .collect();
+            let mut table = fill_table(original.clone(), 2, ColumnId::new(3), |_, new| {
+                Some(new.to_vec())
+            });
+            let keep: Vec<_> = (0..original.len())
+                .map(|old| {
+                    // Include completely stale blocks, bit 63, and a final
+                    // one-row partial block, while removing the first range.
+                    old > 0 && old / 64 % 3 != 1 && old % 3 != 0
+                })
+                .collect();
+            for (old, &keep_row) in keep.iter().enumerate() {
+                if !keep_row {
+                    table.data.set_stale(RowId::from_usize(old));
+                }
+            }
+            for shard in table.hash.mut_shards() {
+                shard.retain(|entry| keep[entry.row.index()]);
+            }
+            assert_parallel_compaction_matches_serial(table.clone());
+            table.parallel_rehash();
+            // Repeat on the compacted table to cover nonstale data, then the
+            // empty input after removing all rows in one operation.
+            assert_parallel_compaction_matches_serial(table.clone());
+            for old in 0..table.data.data.len() {
+                table.data.set_stale(RowId::from_usize(old));
+            }
+            for shard in table.hash.mut_shards() {
+                shard.clear();
+            }
+            table.parallel_rehash();
+            assert_parallel_compaction_matches_serial(table);
+        });
+    }
 }
 
 #[test]
