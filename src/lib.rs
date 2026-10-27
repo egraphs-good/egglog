@@ -1638,8 +1638,10 @@ impl EGraph {
                 Some(Value::new_const(0))
             })));
 
+        let mut rb = self.backend.new_rule("check_facts", false);
+        rb.set_no_decomp(self.no_decomp);
         let mut translator = BackendRule::new(
-            self.backend.new_rule("check_facts", false),
+            rb,
             &self.functions,
             &self.type_info,
             true, // global query: Read context (may read the DB)
