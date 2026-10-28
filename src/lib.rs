@@ -2736,7 +2736,10 @@ impl EGraph {
             }
 
             ResolvedNCommand::ProveExists(span, resolved_call) => {
-                let mut instrument = ProofInstrumentor { egraph: self };
+                let mut instrument = ProofInstrumentor {
+                    egraph: self,
+                    literal_bindings: HashMap::default(),
+                };
                 let (proof_store, proof_id) =
                     instrument
                         .prove_exists(&resolved_call)
@@ -4525,6 +4528,18 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
         Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
         Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
         Literal::Unit => egraph.base_value_constant::<()>(()),
+        Literal::Native(value) => {
+            let literal = value
+                .0
+                .as_ref()
+                .as_any()
+                .downcast_ref::<sort::BaseLiteral>()
+                .expect("engine native literal");
+            QueryEntry::Const {
+                val: literal.value.intern(egraph.base_values()),
+                ty: literal.sort.column_ty(egraph),
+            }
+        }
     }
 }
 
@@ -4632,6 +4647,14 @@ fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
         Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
         Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
         Literal::Unit => egraph.base_values().get::<()>(()),
+        Literal::Native(value) => value
+            .0
+            .as_ref()
+            .as_any()
+            .downcast_ref::<sort::BaseLiteral>()
+            .expect("engine native literal")
+            .value
+            .intern(egraph.base_values()),
     }
 }
 

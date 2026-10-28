@@ -773,6 +773,7 @@ impl Display for Literal {
                 write!(f, "\"")
             }
             Literal::Unit => write!(f, "()"),
+            Literal::Native(value) => Display::fmt(value, f),
         }
     }
 }

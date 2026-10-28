@@ -6,8 +6,8 @@ use std::path::Path;
 use crate::{
     EGraph, ExecutionOrigin, TypeInfo,
     ast::{
-        Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
-        ResolvedExprExt, ResolvedFact, Schedule,
+        Command, Expr, Fact, GenericCommand, Literal, ResolvedAction, ResolvedCommand,
+        ResolvedExpr, ResolvedExprExt, ResolvedFact, Schedule,
     },
     core::ResolvedCall,
     proofs::proof_encoding::ProofInstrumentor,
@@ -127,6 +127,24 @@ impl ProofInstrumentor<'_> {
             .fresh(&format!("UFPair_{sort}"))
     }
 
+    /// Antiquote every authored literal as owned AST data. Generated source
+    /// contains only a fresh placeholder, never the literal's presentation.
+    pub(crate) fn quote_literal(&mut self, literal: &Literal) -> String {
+        let token = self.egraph.parser.symbol_gen.fresh("literal");
+        self.literal_bindings.insert(token.clone(), literal.clone());
+        token
+    }
+
+    fn restore_literal(&self, expr: Expr) -> Expr {
+        match expr {
+            Expr::Var(span, name) => match self.literal_bindings.get(&name) {
+                Some(literal) => Expr::Lit(span, literal.clone()),
+                None => Expr::Var(span, name),
+            },
+            expr => expr,
+        }
+    }
+
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
@@ -135,6 +153,9 @@ impl ProofInstrumentor<'_> {
         // This program is generated internally by term encoding, so a parse
         // failure is an egglog bug rather than a user error.
         res.expect("internally generated term-encoding program must parse")
+            .into_iter()
+            .map(|command| command.visit_exprs(&mut |expr| self.restore_literal(expr)))
+            .collect()
     }
 
     pub(crate) fn format_prooflist(&self, proofs: &[String]) -> String {
@@ -173,15 +194,24 @@ impl ProofInstrumentor<'_> {
     /// Internal parse helper for term encoding- parse and crash on failure.
     pub(crate) fn parse_schedule(&mut self, input: String) -> Schedule {
         self.egraph.parser.ensure_no_reserved_symbols = false;
-        let res = self.egraph.parser.get_schedule_from_string(None, &input);
+        let schedule = self.egraph.parser.get_schedule_from_string(None, &input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res.expect("internally generated term-encoding schedule must parse")
+        // Parse a schedule directly: providers may own the top-level
+        // run-schedule command. The wrapper exists only for the AST visitor.
+        let command = Command::RunSchedule(
+            schedule.expect("internally generated term-encoding schedule must parse"),
+        )
+        .visit_exprs(&mut |expr| self.restore_literal(expr));
+        let Command::RunSchedule(schedule) = command else {
+            unreachable!("literal substitution preserves command variants")
+        };
+        schedule
     }
 
     /// Internal parse helper for term encoding- parse and crash on failure.
     pub(crate) fn parse_facts(&mut self, input: &[String]) -> Vec<Fact> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
-        let res = input
+        let res: Vec<Fact> = input
             .iter()
             .map(|f| {
                 self.egraph
@@ -191,7 +221,9 @@ impl ProofInstrumentor<'_> {
             })
             .collect();
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res
+        res.into_iter()
+            .map(|fact: Fact| fact.visit_exprs(&mut |expr| self.restore_literal(expr)))
+            .collect()
     }
 
     /// Internal parse helper for term encoding- parse an expression and crash on failure.
@@ -200,6 +232,7 @@ impl ProofInstrumentor<'_> {
         let res = self.egraph.parser.get_expr_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res.expect("internally generated term-encoding expression must parse")
+            .visit_exprs(&mut |expr| self.restore_literal(expr))
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.

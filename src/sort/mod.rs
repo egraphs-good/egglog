@@ -19,6 +19,10 @@ pub type Q = core_relations::Boxed<BigRational>;
 pub type F = core_relations::Boxed<OrderedFloat<f64>>;
 pub type S = core_relations::Boxed<String>;
 
+mod literal;
+pub(crate) use literal::BaseLiteral;
+pub use literal::{base_literal, downcast_base_literal};
+
 mod bigint;
 pub use bigint::*;
 mod bigrat;
@@ -144,6 +148,19 @@ pub trait Sort: Any + Send + Sync + Debug {
         todo!("reconstruct_termdag_container: {}", self.name());
     }
 
+    /// Format a base value as source for presentation, independently of its
+    /// structured literal representation used by native execution and proofs.
+    fn fmt_base_value(
+        &self,
+        base_values: &BaseValues,
+        value: Value,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let mut terms = TermDag::default();
+        let term = self.reconstruct_termdag_base(base_values, value, &mut terms);
+        f.write_str(&terms.to_string(term))
+    }
+
     /// Reconstruct a leaf primitive value in a TermDag
     fn reconstruct_termdag_base(
         &self,
@@ -258,5 +275,13 @@ pub fn literal_sort(lit: &Literal) -> ArcSort {
         Literal::String(_) => StringSort.to_arcsort(),
         Literal::Bool(_) => BoolSort.to_arcsort(),
         Literal::Unit => UnitSort.to_arcsort(),
+        Literal::Native(value) => value
+            .0
+            .as_ref()
+            .as_any()
+            .downcast_ref::<BaseLiteral>()
+            .expect("engine native literal")
+            .sort
+            .clone(),
     }
 }

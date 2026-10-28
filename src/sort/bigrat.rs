@@ -116,15 +116,21 @@ impl BaseSort for BigRatSort {
         termdag: &mut TermDag,
     ) -> TermId {
         let rat = base_values.unwrap::<Q>(value);
-        let numer = rat.numer();
-        let denom = rat.denom();
+        termdag.lit(base_literal(BigRatSort.to_arcsort(), rat).expect("BigRat native literal type"))
+    }
 
-        let numer_as_string = termdag.lit(Literal::String(numer.to_string()));
-        let denom_as_string = termdag.lit(Literal::String(denom.to_string()));
-
-        let numer_term = termdag.app("from-string".to_owned(), vec![numer_as_string]);
-        let denom_term = termdag.app("from-string".to_owned(), vec![denom_as_string]);
-
-        termdag.app("bigrat".to_owned(), vec![numer_term, denom_term])
+    fn fmt_value(
+        &self,
+        values: &BaseValues,
+        value: Value,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let rat = values.unwrap::<Q>(value);
+        write!(
+            f,
+            "(bigrat (from-string {}) (from-string {}))",
+            Literal::String(rat.numer().to_string()),
+            Literal::String(rat.denom().to_string())
+        )
     }
 }

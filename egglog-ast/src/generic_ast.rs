@@ -12,6 +12,8 @@ pub enum Literal {
     String(String),
     Bool(bool),
     Unit,
+    /// An owned scalar supplied by the native engine.
+    Native(crate::native_literal::NativeLiteralValue),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

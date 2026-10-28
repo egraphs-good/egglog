@@ -59,8 +59,17 @@ impl BaseSort for BigIntSort {
         termdag: &mut TermDag,
     ) -> TermId {
         let bigint = base_values.unwrap::<Z>(value);
+        termdag
+            .lit(base_literal(BigIntSort.to_arcsort(), bigint).expect("BigInt native literal type"))
+    }
 
-        let as_string = termdag.lit(Literal::String(bigint.0.to_string()));
-        termdag.app("from-string".to_owned(), vec![as_string])
+    fn fmt_value(
+        &self,
+        values: &BaseValues,
+        value: Value,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let bigint = values.unwrap::<Z>(value);
+        write!(f, "(from-string {})", Literal::String(bigint.0.to_string()))
     }
 }

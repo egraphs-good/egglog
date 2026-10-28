@@ -306,6 +306,14 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
                 Literal::String(x) => self.base_to_value(S::new(x.clone())),
                 Literal::Bool(x) => self.base_to_value(*x),
                 Literal::Unit => self.base_to_value(()),
+                Literal::Native(value) => value
+                    .0
+                    .as_ref()
+                    .as_any()
+                    .downcast_ref::<crate::sort::BaseLiteral>()
+                    .expect("engine native literal")
+                    .value
+                    .intern(self.base_values()),
             }),
             ResolvedExpr::Var(_, resolved_var) => {
                 assert!(

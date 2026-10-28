@@ -58,6 +58,7 @@ impl EncodingState {
 /// Thin wrapper around an [`EGraph`] for the term encoding
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
+    pub(crate) literal_bindings: HashMap<String, Literal>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -66,7 +67,11 @@ impl<'a> ProofInstrumentor<'a> {
         egraph: &'a mut EGraph,
         program: Vec<(ResolvedNCommand, ExecutionOrigin)>,
     ) -> Vec<OriginatedCommand<Command>> {
-        Self { egraph }.add_term_encoding_helper(program)
+        Self {
+            egraph,
+            literal_bindings: HashMap::default(),
+        }
+        .add_term_encoding_helper(program)
     }
 
     /// Mark two things as equal, adding proof if proofs are enabled.
@@ -908,6 +913,18 @@ impl<'a> ProofInstrumentor<'a> {
                     // e-graph computes the container (its arguments are already
                     // bound). Its proof is the `Eval` marker, checked by
                     // re-evaluation (see `check_side_condition`).
+                    let fact = fact
+                        .clone()
+                        .map_symbols(
+                            &mut |call: ResolvedCall| call.name().to_owned(),
+                            &mut |var: ResolvedVar| var.name,
+                        )
+                        .visit_exprs(&mut |expr| match expr {
+                            Expr::Lit(span, literal) => {
+                                Expr::Var(span, self.quote_literal(&literal))
+                            }
+                            expr => expr,
+                        });
                     res.push(fact.to_string());
                     format!("({})", self.proof_names().eval_constructor)
                 } else {
@@ -943,6 +960,7 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> (String, String) {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
+                let literal = self.quote_literal(lit);
                 let proof_code = if self.egraph.proof_state.proofs_enabled {
                     let fiat_constructor = &self.proof_names().fiat_constructor;
                     let lit_sort = literal_sort(lit);
@@ -951,12 +969,12 @@ impl<'a> ProofInstrumentor<'a> {
                         .sort_to_ast_constructor
                         .get(lit_sort.name())
                         .unwrap();
-                    format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))")
+                    format!("({fiat_constructor} ({to_ast} {literal}) ({to_ast} {literal}))")
                 } else {
                     "()".to_string()
                 };
 
-                (format!("{lit}"), proof_code)
+                (literal, proof_code)
             }
             ResolvedExpr::Var(_, resolved_var) => {
                 let var = &resolved_var.name;
@@ -997,7 +1015,11 @@ impl<'a> ProofInstrumentor<'a> {
                 let mut arg_proofs: Vec<Option<String>> = vec![];
                 for arg in args {
                     if matches!(arg, ResolvedExpr::Var(_, _) | ResolvedExpr::Lit(_, _)) {
-                        new_args.push(arg.to_string());
+                        new_args.push(match arg {
+                            ResolvedExpr::Lit(_, literal) => self.quote_literal(literal),
+                            ResolvedExpr::Var(_, var) => var.name.clone(),
+                            _ => unreachable!("simple fact argument"),
+                        });
                         arg_proofs.push(None);
                     } else {
                         let (arg_str, proof) = self.instrument_fact_expr(arg, res, action_lookups);
@@ -1321,7 +1343,7 @@ impl<'a> ProofInstrumentor<'a> {
         proof: &Justification,
     ) -> String {
         match expr {
-            ResolvedExpr::Lit(_, lit) => format!("{lit}"),
+            ResolvedExpr::Lit(_, lit) => self.quote_literal(lit),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
@@ -1856,7 +1878,10 @@ impl<'a> ProofInstrumentor<'a> {
         Vec<OriginatedCommand<Command>>,
         Vec<OriginatedCommand<Command>>,
     ) {
-        let mut instrumentor = Self { egraph };
+        let mut instrumentor = Self {
+            egraph,
+            literal_bindings: HashMap::default(),
+        };
         (
             instrumentor.command_header(),
             vec![instrumentor.command_tail(ExecutionOrigin::Requested)],

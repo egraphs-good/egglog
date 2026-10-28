@@ -848,6 +848,17 @@ pub trait BaseSort: Any + Send + Sync + Debug {
     fn name(&self) -> &str;
     fn register_primitives(&self, _eg: &mut EGraph) {}
     fn reconstruct_termdag(&self, _: &BaseValues, _: Value, _: &mut TermDag) -> TermId;
+    /// Format a base value as Egglog source for presentation only.
+    fn fmt_value(
+        &self,
+        values: &BaseValues,
+        value: Value,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let mut terms = TermDag::default();
+        let term = self.reconstruct_termdag(values, value, &mut terms);
+        f.write_str(&terms.to_string(term))
+    }
 
     fn to_arcsort(self) -> ArcSort
     where
@@ -883,6 +894,15 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         self.0.register_primitives(eg)
+    }
+
+    fn fmt_base_value(
+        &self,
+        values: &BaseValues,
+        value: Value,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        self.0.fmt_value(values, value, f)
     }
 
     /// Reconstruct a leaf base value in a TermDag
