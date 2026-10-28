@@ -1498,7 +1498,7 @@ mod tests {
         let r = target.get_sort_by_name("R").unwrap().clone();
         let b = target.get_sort_by_name("B").unwrap().clone();
         let g = target.get_sort_by_name("G").unwrap().clone();
-        let names: std::collections::HashMap<_, _> = [(&e, &r), (&a, &b), (&f, &g)]
+        let names: HashMap<_, _> = [(&e, &r), (&a, &b), (&f, &g)]
             .into_iter()
             .map(|(source, target)| (source.name().to_owned(), target.name().to_owned()))
             .collect();
@@ -1506,7 +1506,7 @@ mod tests {
         // own, including after the source registry has been dropped.
         let empty = source
             .type_info()
-            .resolve_builtin("egglog.core.vec.empty", &[a.clone()])
+            .resolve_builtin("egglog.core.vec.empty", std::slice::from_ref(&a))
             .unwrap()
             .primitive
             .builtin_instance()
@@ -1514,7 +1514,7 @@ mod tests {
             .clone();
         let expected_empty = target
             .type_info()
-            .resolve_builtin("egglog.core.vec.empty", &[b.clone()])
+            .resolve_builtin("egglog.core.vec.empty", std::slice::from_ref(&b))
             .unwrap()
             .primitive
             .builtin_instance()
