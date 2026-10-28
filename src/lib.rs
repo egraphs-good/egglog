@@ -3615,15 +3615,23 @@ impl EGraph {
     /// into Prove/ProveExists. Planning and actual witness failure remain at the
     /// execution boundary, just as for an ordinary Check.
     pub fn validate_condition(&self, span: Span, facts: Vec<Fact>) -> Result<(), Error> {
-        let mut compiler = self.clone();
-        let resolved = compiler.resolve_command(
+        self.clone().compile_condition(span, facts)
+    }
+
+    /// Compile an internal condition in this disposable compiler context.
+    ///
+    /// This shares [`Self::validate_condition`]'s admission and proof behavior,
+    /// but retains compiler metadata in place instead of cloning the graph.
+    /// It does not execute the condition or invoke primitive bodies/validators.
+    pub fn compile_condition(&mut self, span: Span, facts: Vec<Fact>) -> Result<(), Error> {
+        let resolved = self.resolve_command(
             Command::Check(span, facts),
             CommandPurpose::Condition,
             &mut |_| {},
             &mut |_, _| None,
         )?;
         for command in resolved.desugared {
-            compiler.compile_command(command.command, command.origin)?;
+            self.compile_command(command.command, command.origin)?;
         }
         Ok(())
     }
@@ -5008,9 +5016,11 @@ mod tests {
                 else {
                     unreachable!()
                 };
+                let rows = graph.total_size();
                 graph
-                    .validate_condition(span.clone(), facts.clone())
+                    .compile_condition(span.clone(), facts.clone())
                     .unwrap();
+                assert_eq!(graph.total_size(), rows);
                 let mut runs = 0;
                 let result = graph.check_condition_observed(span, facts, &mut |event| {
                     if let ExecutionEvent::RunStarted { origin, schedule } = event {
