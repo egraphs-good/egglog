@@ -91,7 +91,10 @@ pub struct BuiltinInstance {
 
 #[derive(Clone)]
 enum InstanceBinding {
-    Owner(Vec<NativeSortBinding>),
+    Owner {
+        owner: ArcSort,
+        sorts: Vec<NativeSortBinding>,
+    },
     Exact {
         sorts: Vec<ArcSort>,
         fixed: usize,
@@ -172,6 +175,55 @@ impl BuiltinDescription {
 }
 
 impl BuiltinInstance {
+    fn new(description: Arc<BuiltinDescription>, binding: InstanceBinding) -> Self {
+        let mut instance = Self {
+            description,
+            binding,
+            dispatch_name: String::new(),
+        };
+        instance.dispatch_name = instance.project_name(str::to_owned);
+        instance
+    }
+
+    /// Project this selected implementation's dispatch identity through a sort
+    /// renaming. No registry lookup, constraint matching or implementation runs.
+    pub fn project_name(&self, mut sort_name: impl FnMut(&str) -> String) -> String {
+        let key = &self.description.key;
+        match &self.binding {
+            InstanceBinding::Owner { owner, .. } => {
+                format!(
+                    "__egglog_instance_{}_{}_{}",
+                    key.len(),
+                    key,
+                    sort_name(owner.name())
+                )
+            }
+            InstanceBinding::Application(function) => {
+                format!(
+                    "__egglog_instance_{}_{}_{}",
+                    key.len(),
+                    key,
+                    sort_name(function.name())
+                )
+            }
+            InstanceBinding::Exact { sorts, fixed, tail } => {
+                let mut name = format!(
+                    "__egglog_signature_{}_{}_{}_{}",
+                    key.len(),
+                    key,
+                    fixed,
+                    tail
+                );
+                for sort in sorts {
+                    let sort = sort_name(sort.name());
+                    name.push_str(&format!("_{}_{}", sort.len(), sort));
+                }
+                name
+            }
+            InstanceBinding::Open => format!("__egglog_open_{}_{}", key.len(), key),
+        }
+    }
+
     /// Check typed conversions, including storage kind. Input converters cover
     /// each fixed slot followed by each repeated-tail slot.
     pub fn check_abi(
@@ -206,7 +258,7 @@ impl BuiltinInstance {
                     .map(NativeSortBinding::Exact)
                     .collect()
             }
-            InstanceBinding::Owner(sorts) => {
+            InstanceBinding::Owner { sorts, .. } => {
                 let BuiltinTyping::Signature(signature) = &self.description.typing else {
                     unreachable!()
                 };
@@ -370,7 +422,7 @@ impl TypeConstraint for InstanceConstraint {
                 InstanceBinding::Exact { sorts, .. } => {
                     constraint::assign(argument.clone(), sorts[index].clone())
                 }
-                InstanceBinding::Owner(sorts) => match &sorts[index] {
+                InstanceBinding::Owner { sorts, .. } => match &sorts[index] {
                     NativeSortBinding::Exact(sort) => {
                         constraint::assign(argument.clone(), sort.clone())
                     }
@@ -1059,25 +1111,14 @@ impl TypeInfo {
             .cloned()
             .collect::<Vec<_>>();
         self.check_native_signature(&description, &sorts)?;
-        let mut dispatch_name = format!(
-            "__egglog_signature_{}_{}_{}_{}",
-            key.len(),
-            key,
-            inputs.len(),
-            tail.len()
-        );
-        for sort in &sorts {
-            dispatch_name.push_str(&format!("_{}_{}", sort.name().len(), sort.name()));
-        }
-        Ok(BuiltinInstance {
+        Ok(BuiltinInstance::new(
             description,
-            dispatch_name,
-            binding: InstanceBinding::Exact {
+            InstanceBinding::Exact {
                 sorts,
                 fixed: inputs.len(),
                 tail: tail.len(),
             },
-        })
+        ))
     }
 
     /// Retain the existing open native predicate under its registered scheme.
@@ -1090,11 +1131,7 @@ impl TypeInfo {
         if !self.builtin_owners.contains_key(key) {
             return Err("builtin description is not registry-owned".into());
         }
-        Ok(BuiltinInstance {
-            description,
-            dispatch_name: format!("__egglog_open_{}_{}", key.len(), key),
-            binding: InstanceBinding::Open,
-        })
+        Ok(BuiltinInstance::new(description, InstanceBinding::Open))
     }
 
     pub fn instantiate_builtin(
@@ -1116,11 +1153,10 @@ impl TypeInfo {
             if self.builtin_owners.get(key).copied() != Some("UnstableFn") {
                 return Err("application description belongs to another provider".into());
             }
-            return Ok(BuiltinInstance {
+            return Ok(BuiltinInstance::new(
                 description,
-                dispatch_name: format!("__egglog_instance_{}_{}_{}", key.len(), key, native.name()),
-                binding: InstanceBinding::Application(function),
-            });
+                InstanceBinding::Application(function),
+            ));
         }
         let (family, parameters) = self
             .builtin_sorts
@@ -1216,11 +1252,13 @@ impl TypeInfo {
             .chain([&signature.output])
             .map(|pattern| resolve(pattern, self, family, parameters, native, 0))
             .collect::<Result<_, _>>()?;
-        Ok(BuiltinInstance {
+        Ok(BuiltinInstance::new(
             description,
-            dispatch_name: format!("__egglog_instance_{}_{}_{}", key.len(), key, native.name()),
-            binding: InstanceBinding::Owner(sorts),
-        })
+            InstanceBinding::Owner {
+                owner: native.clone(),
+                sorts,
+            },
+        ))
     }
 
     /// Return an existing exact registration, including its runtime contexts.
@@ -1431,5 +1469,98 @@ impl EGraph {
             &function.output(),
             Some(&value.0),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_instance_projection_retains_owner_exact_application_and_open_roots() {
+        let mut source = EGraph::default();
+        source
+            .parse_and_run_program(
+                None,
+                "(sort E) (sort A (Vec E)) (sort F (UnstableFn (A) E))",
+            )
+            .unwrap();
+        let mut target = EGraph::default();
+        target
+            .parse_and_run_program(
+                None,
+                "(sort R) (sort B (Vec R)) (sort G (UnstableFn (B) R))",
+            )
+            .unwrap();
+        let e = source.get_sort_by_name("E").unwrap().clone();
+        let a = source.get_sort_by_name("A").unwrap().clone();
+        let f = source.get_sort_by_name("F").unwrap().clone();
+        let r = target.get_sort_by_name("R").unwrap().clone();
+        let b = target.get_sort_by_name("B").unwrap().clone();
+        let g = target.get_sort_by_name("G").unwrap().clone();
+        let names: std::collections::HashMap<_, _> = [(&e, &r), (&a, &b), (&f, &g)]
+            .into_iter()
+            .map(|(source, target)| (source.name().to_owned(), target.name().to_owned()))
+            .collect();
+        // Vec.empty has no input root: the selected owner must survive on its
+        // own, including after the source registry has been dropped.
+        let empty = source
+            .type_info()
+            .resolve_builtin("egglog.core.vec.empty", &[a.clone()])
+            .unwrap()
+            .primitive
+            .builtin_instance()
+            .unwrap()
+            .clone();
+        let expected_empty = target
+            .type_info()
+            .resolve_builtin("egglog.core.vec.empty", &[b.clone()])
+            .unwrap()
+            .primitive
+            .builtin_instance()
+            .unwrap()
+            .dispatch_name
+            .clone();
+        let exact = source
+            .type_info()
+            .instantiate_builtin_signature("egglog.core.vec.of", &[], &[e], &a)
+            .unwrap();
+        let expected_exact = target
+            .type_info()
+            .instantiate_builtin_signature("egglog.core.vec.of", &[], &[r], &b)
+            .unwrap()
+            .dispatch_name;
+        let application = source
+            .type_info()
+            .instantiate_builtin("egglog.core.fn.apply", &f)
+            .unwrap();
+        let expected_application = target
+            .type_info()
+            .instantiate_builtin("egglog.core.fn.apply", &g)
+            .unwrap()
+            .dispatch_name;
+        let open = source
+            .type_info()
+            .instantiate_builtin_open("egglog.core.fn.partial")
+            .unwrap();
+        drop(source);
+        for (instance, expected) in [
+            (empty, expected_empty),
+            (exact, expected_exact),
+            (application, expected_application),
+        ] {
+            assert_eq!(instance.project_name(str::to_owned), instance.dispatch_name);
+            assert_eq!(
+                instance.project_name(|name| names
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| name.to_owned())),
+                expected
+            );
+        }
+        assert_eq!(
+            open.project_name(|_| panic!("open dispatch has no sort roots")),
+            open.dispatch_name
+        );
     }
 }
