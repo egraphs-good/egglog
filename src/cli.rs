@@ -45,10 +45,10 @@ struct Args {
     /// Splits the serialized egraph into primitives and non-primitives
     #[clap(long)]
     serialize_split_primitive_outputs: bool,
-    /// Maximum number of function nodes to render in dot/svg output
+    /// Maximum number of function nodes to render in dot/svg output (JSON output is not limited)
     #[clap(long, default_value = "40")]
     max_functions: usize,
-    /// Maximum number of calls per function to render in dot/svg output
+    /// Maximum number of calls per function to render in dot/svg output (JSON output is not limited)
     #[clap(long, default_value = "40")]
     max_calls_per_function: usize,
     /// Number of times to inline leaves
@@ -144,21 +144,30 @@ pub fn cli(mut egraph: EGraph) {
             }
 
             if args.to_json || args.to_dot || args.to_svg {
-                let serialized_output = egraph.serialize(SerializeConfig {
-                    max_functions: Some(args.max_functions),
-                    max_calls_per_function: Some(args.max_calls_per_function),
-                    ..SerializeConfig::default()
-                });
-                if !serialized_output.is_complete() {
-                    log::warn!("{}", serialized_output.omitted_description());
-                }
-                let mut serialized = serialized_output.egraph;
-                if args.serialize_split_primitive_outputs {
-                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
-                }
-                for _ in 0..args.serialize_n_inline_leaves {
-                    serialized.inline_leaves();
-                }
+                // The render limits bound what dot/svg draw; JSON always holds the whole e-graph.
+                let serialize = |render_limits: bool| {
+                    let config = if render_limits {
+                        SerializeConfig {
+                            max_functions: Some(args.max_functions),
+                            max_calls_per_function: Some(args.max_calls_per_function),
+                            ..SerializeConfig::default()
+                        }
+                    } else {
+                        SerializeConfig::default()
+                    };
+                    let serialized_output = egraph.serialize(config);
+                    if !serialized_output.is_complete() {
+                        log::warn!("{}", serialized_output.omitted_description());
+                    }
+                    let mut serialized = serialized_output.egraph;
+                    if args.serialize_split_primitive_outputs {
+                        serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
+                    }
+                    for _ in 0..args.serialize_n_inline_leaves {
+                        serialized.inline_leaves();
+                    }
+                    serialized
+                };
 
                 // if we are splitting primitive outputs, add `-split` to the end of the file name
                 let serialize_filename = if args.serialize_split_primitive_outputs {
@@ -172,16 +181,17 @@ pub fn cli(mut egraph: EGraph) {
                 } else {
                     input.clone()
                 };
+                let rendered = (args.to_dot || args.to_svg).then(|| serialize(true));
                 if args.to_dot {
                     let dot_path = serialize_filename.with_extension("dot");
-                    if let Err(e) = serialized.to_dot_file(dot_path.clone()) {
+                    if let Err(e) = rendered.as_ref().unwrap().to_dot_file(dot_path.clone()) {
                         log::error!("Failed to write dot file to {dot_path:?}: {e}");
                         std::process::exit(1)
                     }
                 }
                 if args.to_svg {
                     let svg_path = serialize_filename.with_extension("svg");
-                    if let Err(e) = serialized.to_svg_file(svg_path.clone()) {
+                    if let Err(e) = rendered.as_ref().unwrap().to_svg_file(svg_path.clone()) {
                         log::error!(
                             "Failed to write svg file to {svg_path:?}: {e}. Make sure you have the `dot` executable installed"
                         );
@@ -190,7 +200,7 @@ pub fn cli(mut egraph: EGraph) {
                 }
                 if args.to_json {
                     let json_path = serialize_filename.with_extension("json");
-                    if let Err(e) = serialized.to_json_file(json_path.clone()) {
+                    if let Err(e) = serialize(false).to_json_file(json_path.clone()) {
                         log::error!("Failed to write json file to {json_path:?}: {e}");
                         std::process::exit(1)
                     }
