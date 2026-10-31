@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Reuse persistent join indexes for fast predicates such as `subsumed = false`. Filtered indexes refresh incrementally when tables change, while seminaive timestamp bounds remain per-query filters.
 - Tree extraction materializes each reachable table once and re-relaxes only the rows whose children improved (from #956). Costs, chronological tie-breaking and extracted terms are unchanged.
 - Index construction skips constant radix digits and uses wider digits for larger inputs when they reduce the pass count, preserving row order within each key.
 - Table rebuilds only go incremental when the reverse index is warm enough to be cheaper than a full scan, and repeated sparse full scans eventually warm a cold index. Tables with more than 100 rows (previously 10,000) are eligible. `math-microbenchmark` runs about 20% faster and the eggcc benchmarks 5–25% faster.

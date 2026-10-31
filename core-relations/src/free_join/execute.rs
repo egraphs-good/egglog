@@ -47,7 +47,7 @@ use super::{
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
         materialization_is_live_in_tail, sort_plan_by_size,
     },
-    packed_cache::{OwnedAtomRows, TrieCache},
+    packed_cache::{FilteredRootCatalog, OwnedAtomRows, TrieCache, canonical_constraints},
     packed_trie::{ChildShape, TrieNode},
     plan::{JoinHeader, JoinStage, JoinStages, MatId, MatScanMode, MatSpec, Plan},
     prepared_index::{
@@ -618,14 +618,26 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
     /// [`TrieCache::shared`]) are shared through the cache; the rest are built
     /// fresh per plan so the pool can recycle them.
     fn root_node(&self, table_id: TableId, headers: &[&JoinHeader]) -> Option<Arc<OwnedAtomRows>> {
+        let build = |shared| {
+            let subset = self.build_root_subset(table_id, headers)?;
+            let filtered_catalog = if !subset.is_dense() && subset.size() > SMALL_RESIDUAL {
+                self.filtered_root_catalog(table_id, headers).map(Box::new)
+            } else {
+                None
+            };
+            let mut root = if shared {
+                OwnedAtomRows::new_shared(subset)
+            } else {
+                OwnedAtomRows::new(subset)
+            };
+            root.filtered_catalog = filtered_catalog;
+            Some(Arc::new(root))
+        };
         // Fast path: when sharing is disabled this run (small database, or no
         // root reused across plans), skip the root-signature machinery entirely
-        // and build a fresh per-plan root — matching the pre-sharing behavior at
-        // no added cost.
+        // and build a fresh per-plan root.
         let Some(trie_cache) = self.trie_cache.as_ref() else {
-            return Some(Arc::new(OwnedAtomRows::new(
-                self.build_root_subset(table_id, headers)?,
-            )));
+            return build(false);
         };
         // The base identity is the union of all fast constraints on this atom.
         let mut fast: SmallVec<[Constraint; 2]> = SmallVec::new();
@@ -637,9 +649,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
 
         if !trie_cache.shared.contains(&sig) {
             // Not reused across plans: build a fresh, unshared root.
-            return Some(Arc::new(OwnedAtomRows::new(
-                self.build_root_subset(table_id, headers)?,
-            )));
+            return build(false);
         }
 
         let header = trie_cache.header_id(&sig.1);
@@ -647,13 +657,12 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         if let Some(node) = trie_cache.roots.get(&key) {
             return (!node.subset.is_empty()).then(|| node.clone());
         }
-        let subset = self.build_root_subset(table_id, headers)?;
+        let root = build(true)?;
         let node = match trie_cache.roots.entry(key) {
             Entry::Occupied(o) => o.get().clone(),
             Entry::Vacant(v) => {
-                let node = Arc::new(OwnedAtomRows::new_shared(subset));
-                v.insert(node.clone());
-                node
+                v.insert(root.clone());
+                root
             }
         };
         (!node.subset.is_empty()).then_some(node)
@@ -673,6 +682,49 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             }
         }
         Some(subset)
+    }
+
+    /// Separate reusable fast predicates from dense header ranges. The latter
+    /// often change every seminaive round, so retaining them in catalog keys
+    /// would repeatedly build indexes and accumulate entries indefinitely.
+    fn filtered_root_catalog(
+        &self,
+        table_id: TableId,
+        headers: &[&JoinHeader],
+    ) -> Option<FilteredRootCatalog> {
+        let info = &self.db.tables[table_id];
+        let Subset::Dense(whole) = info.table.all() else {
+            return None;
+        };
+        let mut range = whole;
+        let mut constraints = SmallVec::<[Constraint; 2]>::new();
+        for constraint in headers.iter().flat_map(|h| h.constraints.iter()) {
+            if let Some(Subset::Dense(dense)) = info.table.fast_subset(constraint) {
+                range.start = range.start.max(dense.start);
+                range.end = range.end.min(dense.end).max(range.start);
+                continue;
+            }
+            let cacheable = match constraint {
+                Constraint::Eq { l_col, r_col } => columns_are_cacheable(info, &[*l_col, *r_col]),
+                Constraint::EqConst { col, .. }
+                | Constraint::LtConst { col, .. }
+                | Constraint::GtConst { col, .. }
+                | Constraint::LeConst { col, .. }
+                | Constraint::GeConst { col, .. } => columns_are_cacheable(info, &[*col]),
+            };
+            if !cacheable {
+                return None;
+            }
+            constraints.push(constraint.clone());
+        }
+        // Keep small timestamp deltas on the dynamic path, as for dense roots.
+        if constraints.is_empty() || range.size() <= whole.size() / 2 {
+            return None;
+        }
+        Some(FilteredRootCatalog {
+            constraints: canonical_constraints(&constraints),
+            intersect_outer: (range != whole).then_some(range),
+        })
     }
 
     /// Build a packed index for one column of `subset` after applying the slow
@@ -921,28 +973,32 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             };
         }
         let shared_child_shape = info.shared_child_shape();
-        // Only a dense root can use a table-wide catalog. Residual packed
+        // Dense roots use the whole-table catalog; sparse roots can use a
+        // catalog restricted to their fast predicates. Residual packed
         // cursors already select their continuation index, so do not repeat
         // whole-table metadata work for them (including tiny cached groups).
-        let catalog_intersection = match source.kind() {
-            AtomRowsKind::Owned(root) if constraints.is_empty() || !root.is_shared() => {
-                if let Subset::Dense(range) = &root.subset
-                    && columns_are_cacheable(info, &cols)
-                {
+        let catalog = match source.kind() {
+            AtomRowsKind::Owned(root)
+                if (constraints.is_empty() || !root.is_shared())
+                    && columns_are_cacheable(info, &cols) =>
+            {
+                if let Subset::Dense(range) = &root.subset {
                     let whole_table = info.table.all();
                     (whole_table.size() / 2 < source.size()).then(|| {
                         let needs_intersect = !(whole_table.is_dense()
                             && root.subset.bounds() == whole_table.bounds());
-                        needs_intersect.then_some(*range)
+                        (&[][..], needs_intersect.then_some(*range))
                     })
                 } else {
-                    None
+                    root.filtered_catalog
+                        .as_ref()
+                        .map(|catalog| (catalog.constraints.as_slice(), catalog.intersect_outer))
                 }
             }
             _ => None,
         };
 
-        let ix = if let Some(intersect_outer) = catalog_intersection {
+        let ix = if let Some((fast_constraints, intersect_outer)) = catalog {
             // Below a shared root, the catalog key positions identify the same
             // rows for every plan, so the continuation cache is shared too. A
             // terminal probe never continues, so it skips the lookup.
@@ -968,7 +1024,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                 check_live: info.table.has_stale_rows(),
             };
             if cols.len() == 1 {
-                let index = prepared.column_index(info, cols[0]);
+                let index = prepared.column_index(info, cols[0], fast_constraints);
                 if let Some(continuations) = continuations {
                     continuations.prepare(continuation_shape, index.shard_count(), |shard| {
                         index.shard_len(shard)
@@ -982,7 +1038,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
                     filter,
                 }
             } else {
-                let index = prepared.tuple_index(info, cols.as_slice());
+                let index = prepared.tuple_index(info, cols.as_slice(), fast_constraints);
                 if let Some(continuations) = continuations {
                     continuations.prepare(continuation_shape, index.shard_count(), |shard| {
                         index.shard_len(shard)
