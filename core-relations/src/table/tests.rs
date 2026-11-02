@@ -29,6 +29,209 @@ fn parallel_insert(table: &mut SortedWritesTable, state: &crate::ExecutionState<
     )
 }
 
+fn compaction_test_table() -> SortedWritesTable {
+    let mut table = SortedWritesTable::new(
+        2,
+        4,
+        ColumnId::new(3),
+        vec![],
+        Box::new(|_, old, new, out| {
+            out.extend_from_slice(new);
+            old != new
+        }),
+    );
+    table.hash = ShardedHashTable::with_shards(16);
+    table.pending_state = std::sync::Arc::new(super::PendingState::new(table.hash.shard_data()));
+    table
+}
+
+fn assert_parallel_compaction_matches_serial(table: SortedWritesTable) {
+    let mut expected = dump_subset(&table, table.all().as_ref())
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+    expected.sort();
+
+    let mut serial = table.clone();
+    serial.rehash();
+    let mut parallel = table;
+    parallel.parallel_rehash();
+
+    assert_eq!(
+        dump_subset(&parallel, parallel.all().as_ref()),
+        dump_subset(&serial, serial.all().as_ref()),
+        "parallel compaction must preserve the original live-row order"
+    );
+    assert_eq!(parallel.offsets, serial.offsets);
+    assert_eq!(parallel.version(), serial.version());
+    for compacted in [&serial, &parallel] {
+        assert_eq!(compacted.data.stale_rows, 0);
+        assert_eq!(compacted.data.data.len(), expected.len());
+        let mut actual = dump_subset(compacted, compacted.all().as_ref())
+            .into_iter()
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        actual.sort();
+        assert_eq!(actual, expected);
+        for row in &expected {
+            assert_eq!(&*compacted.get_row(&row[..2]).unwrap().vals, row);
+        }
+        for (timestamp, _) in &compacted.offsets {
+            let (start, end) = compacted.binary_search_sort_val(*timestamp).unwrap();
+            assert!(start < end);
+            for row in start.index()..end.index() {
+                assert_eq!(
+                    compacted.data.data.get_row(RowId::from_usize(row))[3],
+                    *timestamp
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn parallel_compaction_matches_serial_with_dominant_final_timestamp() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        for (timestamp, start, count) in [(3, 0, 5), (79, 3, 17), (1_000_003, 16, 4097)] {
+            let mut buffer = table.new_buffer();
+            for key in start..start + count {
+                buffer.stage_insert(&[v(key), v(11), v(timestamp + key), v(timestamp)]);
+            }
+            drop(buffer);
+            // Keep obsolete rows until the explicit compaction below.
+            assert!(table.do_insert(&mut e));
+        }
+        assert!(table.data.stale_rows > 0);
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_handles_a_single_timestamp() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        for (count, value) in [(64, 10), (32, 20)] {
+            let mut buffer = table.new_buffer();
+            for key in 0..count {
+                buffer.stage_insert(&[v(key), v(17), v(value), v(7_000_001)]);
+            }
+            drop(buffer);
+            assert!(table.do_insert(&mut e));
+        }
+        assert_eq!(table.offsets.len(), 1);
+        assert_eq!(table.data.stale_rows, 32);
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_removes_empty_timestamp_ranges_and_handles_empty_result() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        for (timestamp, keys) in [(0, vec![1, 2]), (57, vec![3, 4]), (2_000_011, vec![1, 5])] {
+            let mut buffer = table.new_buffer();
+            for key in keys {
+                buffer.stage_insert(&[v(key), v(13), v(key), v(timestamp)]);
+            }
+            drop(buffer);
+            assert!(table.do_insert(&mut e));
+        }
+        for key in [2, 3, 4] {
+            table.new_buffer().stage_remove(&[v(key), v(13)]);
+        }
+        table.do_delete();
+        assert_eq!(table.offsets.len(), 3);
+        assert_eq!(table.len(), 2);
+        assert_parallel_compaction_matches_serial(table.clone());
+
+        for key in [1, 5] {
+            table.new_buffer().stage_remove(&[v(key), v(13)]);
+        }
+        table.do_delete();
+        assert_eq!(table.len(), 0);
+        assert!(!table.offsets.is_empty());
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_preserves_collisions_and_sparse_shards() {
+    ThreadPool::new(4).install(|| {
+        empty_execution_state!(e);
+        let mut table = compaction_test_table();
+        let left = [Value::new(70_759_468), Value::new(2_418_062_243)];
+        let right = [Value::new(3_427_223_041), Value::new(1_840_803_043)];
+        assert_eq!(
+            shard_hash(table.hash.shard_data(), &left, 2),
+            shard_hash(table.hash.shard_data(), &right, 2)
+        );
+        for (key, value, timestamp) in [(left, 10, 7), (right, 20, 7), (left, 30, 89)] {
+            table
+                .new_buffer()
+                .stage_insert(&[key[0], key[1], v(value), v(timestamp)]);
+            assert!(table.do_insert(&mut e));
+        }
+        assert_eq!(
+            table
+                .hash
+                .mut_shards()
+                .iter()
+                .filter(|s| !s.is_empty())
+                .count(),
+            1
+        );
+        assert_parallel_compaction_matches_serial(table);
+    });
+}
+
+#[test]
+fn parallel_compaction_preserves_many_sparse_timestamps_and_rank_boundaries() {
+    for threads in [1, 2, 3, 8] {
+        ThreadPool::new(threads).install(|| {
+            // Every row has its own widely spaced timestamp. This creates more
+            // timestamp ranges than either rows per rank block or hash shards.
+            let original: Vec<_> = (0..8193)
+                .map(|n| vec![v(n + 1), v(71), v(n * 7), v(n * 100_003)])
+                .collect();
+            let mut table = fill_table(original.clone(), 2, ColumnId::new(3), |_, new| {
+                Some(new.to_vec())
+            });
+            let keep: Vec<_> = (0..original.len())
+                .map(|old| {
+                    // Include completely stale blocks, bit 63, and a final
+                    // one-row partial block, while removing the first range.
+                    old > 0 && old / 64 % 3 != 1 && old % 3 != 0
+                })
+                .collect();
+            for (old, &keep_row) in keep.iter().enumerate() {
+                if !keep_row {
+                    table.data.set_stale(RowId::from_usize(old));
+                }
+            }
+            for shard in table.hash.mut_shards() {
+                shard.retain(|entry| keep[entry.row.index()]);
+            }
+            assert_parallel_compaction_matches_serial(table.clone());
+            table.parallel_rehash();
+            // Repeat on the compacted table to cover nonstale data, then the
+            // empty input after removing all rows in one operation.
+            assert_parallel_compaction_matches_serial(table.clone());
+            for old in 0..table.data.data.len() {
+                table.data.set_stale(RowId::from_usize(old));
+            }
+            for shard in table.hash.mut_shards() {
+                shard.clear();
+            }
+            table.parallel_rehash();
+            assert_parallel_compaction_matches_serial(table);
+        });
+    }
+}
+
 #[test]
 fn compact_hash_preserves_bucket_bits_and_exact_h2_tag() {
     const LOW_MASK: u64 = (1 << 25) - 1;
@@ -153,6 +356,72 @@ fn same_shard_compact_collision_survives_table_lifecycle() {
     table.merge(&mut e);
     assert_eq!(table.get_row(&left_key).unwrap().vals[2], v(30));
     assert_eq!(table.get_row(&right_key).unwrap().vals[2], v(40));
+}
+
+#[test]
+fn serial_compaction_preserves_rows_and_timestamp_offsets_across_rank_blocks() {
+    for pattern in 0..3 {
+        let original: Vec<_> = (0..260)
+            .map(|n| vec![v(n + 1), v(n * 7), v(n / 32)])
+            .collect();
+        let keep: Vec<_> = (0..original.len())
+            .map(|old| match pattern {
+                0 => true,
+                1 => false,
+                // Leave a full 64-row block and two timestamp groups empty,
+                // and retain rows on both sides of rank-block boundaries.
+                _ => old / 64 != 1 && (old % 3 == 1 || old % 64 == 0 || old % 64 == 63),
+            })
+            .collect();
+        let mut table = fill_table(original.clone(), 1, ColumnId::new(2), |_, new| {
+            Some(new.to_vec())
+        });
+        // Stage the state immediately before compaction directly, so automatic
+        // threshold checks cannot compact the fixture before its block gaps exist.
+        for (old, &keep_row) in keep.iter().enumerate() {
+            if !keep_row {
+                table.data.set_stale(RowId::from_usize(old));
+            }
+        }
+        for shard in table.hash.mut_shards() {
+            shard.retain(|entry| keep[entry.row.index()]);
+        }
+        let expected: Vec<_> = original
+            .iter()
+            .zip(&keep)
+            .filter(|(_, keep_row)| **keep_row)
+            .map(|(row, _)| row.clone())
+            .enumerate()
+            .map(|(new, row)| (RowId::from_usize(new), row))
+            .collect();
+        let mut expected_offsets = Vec::new();
+        for (new, row) in &expected {
+            if expected_offsets
+                .last()
+                .is_none_or(|(val, _)| *val != row[2])
+            {
+                expected_offsets.push((row[2], *new));
+            }
+        }
+        // A second compaction also checks the no-stale case after remapping.
+        for _ in 0..2 {
+            table.rehash();
+            assert_eq!(table.data.stale_rows, 0);
+            assert_eq!(table.data.data.len(), expected.len());
+            assert_eq!(dump_subset(&table, table.all().as_ref()), expected);
+            assert_eq!(table.offsets, expected_offsets);
+            for (old, row) in original.iter().enumerate() {
+                if keep[old] {
+                    assert_eq!(
+                        table.get_row(&row[..1]).unwrap().vals.as_slice(),
+                        row.as_slice()
+                    );
+                } else {
+                    assert!(table.get_row(&row[..1]).is_none());
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -566,4 +835,39 @@ fn shard_math() {
 
     // Picking low numbers should all get shard 0.
     assert!((0..100_000).all(|x| table.shard_data().shard_id(x as u64) == ShardId::new(0)));
+}
+
+#[test]
+fn parallel_compaction_matches_serial_at_partial_rank_block_boundaries() {
+    ThreadPool::new(4).install(|| {
+        for length in [1, 2, 63, 64, 65, 127, 128, 129, 255, 256, 257] {
+            let original: Vec<_> = (0..length)
+                .map(|old| vec![v(old + 1), v(17), v(old * 11), v(old / 3)])
+                .collect();
+            let table = fill_table(original, 2, ColumnId::new(3), |_, new| Some(new.to_vec()));
+            for pattern in 0..5 {
+                let mut table = table.clone();
+                let keep: Vec<_> = (0..length)
+                    .map(|old| match pattern {
+                        0 => true,
+                        1 => false,
+                        2 => old == 0,
+                        3 => old + 1 == length,
+                        // Leave a fully empty rank block and keep rows at both
+                        // sides of the neighboring block boundaries.
+                        _ => old / 64 != 1 && (old % 64 == 0 || old % 64 == 63),
+                    })
+                    .collect();
+                for (old, &keep_row) in keep.iter().enumerate() {
+                    if !keep_row {
+                        table.data.set_stale(RowId::from_usize(old));
+                    }
+                }
+                for shard in table.hash.mut_shards() {
+                    shard.retain(|entry| keep[entry.row.index()]);
+                }
+                assert_parallel_compaction_matches_serial(table);
+            }
+        }
+    });
 }
