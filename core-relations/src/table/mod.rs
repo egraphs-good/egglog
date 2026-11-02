@@ -1133,11 +1133,29 @@ impl SortedWritesTable {
             self.rehash();
         }
     }
+    /// Remove stale rows while preserving the order of the live rows.
+    ///
+    /// A live row's new ID is its rank: the number of live rows strictly before
+    /// it in the old buffer. We compute this mapping in 64-row blocks, storing
+    /// `(live, base)` in `ranks[block]`. Bit `i` of `live` is set exactly when old
+    /// row `block * 64 + i` is live; `base` is the total number of live rows in
+    /// earlier blocks. Thus a row's rank is `base` plus the population count of
+    /// the bits below its bit. The same formula maps old timestamp boundaries
+    /// to new boundaries, even when the row at a boundary is stale.
+    ///
+    /// The passes below first build the bitmaps in parallel, then compute block
+    /// bases and remap timestamp boundaries serially. Next, workers copy live
+    /// rows into scratch in order within each block. A block owns the output
+    /// range `[base, base + live.count_ones())`, so writes cannot overlap and
+    /// global row order is preserved regardless of which worker finishes first.
+    /// Finally, workers remap hash-entry row IDs by shard using the same ranks;
+    /// keys, hashes, and bucket positions stay unchanged. Each parallel pass
+    /// joins its workers before the next pass begins. We then swap in scratch
+    /// as the new row buffer and reset the stale-row count.
     fn parallel_rehash(&mut self) {
         self.generation = self.generation.inc();
-        // Compact in row order, so both reads and writes are sequential within
-        // each worker's range. The bitmap also gives the old-to-new row mapping
-        // without hashing keys, probing buckets, or histogramming timestamps.
+        // 1. Scan the old rows in parallel. Unused bits in the final, partial
+        // block stay zero so they contribute neither ranks nor output rows.
         let data = &self.data.data;
         let mut ranks = vec![(0u64, RowId::new(0)); data.len().div_ceil(64)];
         parallel::for_each_mut(&mut ranks, |block, (live, _)| {
@@ -1150,6 +1168,8 @@ impl SortedWritesTable {
             *live = bitmap;
         });
 
+        // 2. Take an exclusive prefix sum of the block populations. This gives
+        // each block its output base and computes the total output size.
         let mut live_rows = 0;
         for (live, base) in &mut ranks {
             *base = RowId::from_usize(live_rows);
@@ -1157,10 +1177,11 @@ impl SortedWritesTable {
         }
         debug_assert_eq!(live_rows, data.len() - self.data.stale_rows);
 
-        // The number of live rows preceding any old boundary is its new
-        // boundary. Empty timestamp ranges vanish. This work is linear in the
-        // number of distinct timestamps, independent of the number of shards
-        // and of the numeric timestamp range.
+        // 3. Map each old timestamp range [start, end) to
+        // [rank_before(start), rank_before(end)). Equal ranks mean the range
+        // contains no live rows, so omit it. This work is linear in the number
+        // of distinct timestamps, independent of the number of shards and of
+        // the numeric timestamp range.
         let rank_before = |old: usize| {
             if old == data.len() {
                 return live_rows;
@@ -1184,6 +1205,9 @@ impl SortedWritesTable {
         }
         self.offsets.truncate(write);
 
+        // 4. Copy from the unchanged source into the disjoint output ranges.
+        // Visiting the lowest remaining set bit emits live rows in old order
+        // without testing stale rows again.
         self.data.scratch.clear();
         self.data.scratch.reserve(live_rows);
         let scratch_ptr = self.data.scratch.raw_rows() as usize;
@@ -1212,7 +1236,9 @@ impl SortedWritesTable {
         // SAFETY: all live_rows rows were initialized by the joined workers.
         unsafe { self.data.scratch.set_len(live_rows) };
 
-        // Existing key hashes and buckets remain valid. Only row IDs change.
+        // 5. Remap each hash entry to the position where its row was copied.
+        // Shards can be updated independently; keys, hashes, and buckets are
+        // unchanged, so this needs no hashing or probing.
         parallel::for_each_mut(self.hash.mut_shards(), |_, shard| {
             for entry in shard.iter_mut() {
                 let old = entry.row.index();
