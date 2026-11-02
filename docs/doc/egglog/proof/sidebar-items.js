@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Justification"],"struct":["Proof","ProofId","ProofStore","Proposition"]};
