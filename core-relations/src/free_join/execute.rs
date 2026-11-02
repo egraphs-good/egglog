@@ -45,7 +45,7 @@ use super::{
     join_tail::{
         BindingInfo, BindingSet, BorrowedLocalState, InstrOrder, LeafScans, LocalState,
         MatchCounter, RetiredLocalStates, SubsetClonePlan, atom_tail_use, estimate_size,
-        materialization_is_live_in_tail, sort_plan_by_size,
+        is_reorder_barrier, materialization_is_live_in_tail, select_next_stage,
     },
     packed_cache::{OwnedAtomRows, TrieCache},
     packed_trie::{ChildShape, TrieNode},
@@ -1260,7 +1260,7 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         let mut leaf_scans: LeafScans = smallvec::smallvec![false; stages.instrs.len()];
-        sort_plan_by_size(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
+        select_next_stage(&mut order, &mut leaf_scans, 0, &stages.instrs, binding_info);
         let all_stages = prepared.all_stage_mask::<M>();
         debug_assert!(
             all_stages.is_some()
@@ -1448,11 +1448,22 @@ impl<'a, 'state, 'exec> JoinState<'a, 'state, 'exec> {
             // amortize a handoff into a wide join tail.
             chunk_size = chunk_size.max(free_join_fork_min_frames());
         }
-        if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
-            // Re-evaluate the remaining suffix after observing the residuals
-            // produced by earlier stages. Packed child families make the
-            // resulting atom-local successor choice safe to cache again.
-            sort_plan_by_size(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
+        // For very small residuals, keep the existing schedule instead of
+        // paying for another candidate scan.
+        if cur_size > 1
+            && cur > 0
+            && cur < instr_order.len() - 1
+            && !is_reorder_barrier(&stages.instrs[instr_order.get(cur)])
+            && !is_reorder_barrier(&stages.instrs[instr_order.get(cur + 1)])
+        {
+            // A barrier or the sole stage before one has no alternative.
+            // Leaving its order unchanged also preserves the leaf flags.
+            // Select only the next stage from fresh residual sizes.
+            // Leave later choices until their inputs exist.
+            // Keep cur=0 fixed: top-level partitions describe that first
+            // stage's scan, so changing it would invalidate their boundaries.
+            // Packed child families support each new successor choice.
+            select_next_stage(instr_order, leaf_scans, cur, &stages.instrs, binding_info);
             cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 
