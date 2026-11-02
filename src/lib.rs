@@ -331,6 +331,7 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    extractor_cache: extract::ExtractorCache,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -428,6 +429,7 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            extractor_cache: Default::default(),
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();

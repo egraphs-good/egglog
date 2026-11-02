@@ -20,7 +20,7 @@ use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, ExecutionState, ExternalContext, ExternalFunction,
     ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TableIdentity,
-    TaggedRowBuffer, Value, WrappedTable,
+    TableVersion, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ThreadPool;
@@ -482,6 +482,14 @@ impl EGraph {
 
     pub fn table_size(&self, table: FunctionId) -> usize {
         self.db.get_table(self.funcs[table].table).len()
+    }
+
+    /// Each table's version and row count, in table-id order.
+    pub fn table_versions(&self) -> Vec<(TableVersion, usize)> {
+        (0..self.db.next_table_id().index())
+            .map(|i| self.db.get_table(TableId::from_usize(i)))
+            .map(|table| (table.version(), table.len()))
+            .collect()
     }
 
     /// Remove every row from the given function's backing table.

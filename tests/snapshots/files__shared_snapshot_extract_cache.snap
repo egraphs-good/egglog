@@ -1,0 +1,15 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(extraction-costs 1)
+(extraction-costs 2)
+(extraction-costs 1)
+(extraction-costs 2)
+(extraction-costs 2)
+((DA 1)
+ (DB 0)
+ (DC 1)
+ (SA 1)
+ (SB 1)
+ (SC 1))
