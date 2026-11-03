@@ -1,6 +1,6 @@
 use clap::Parser;
 use egraph_comparison::{Database, compare};
-use std::{fs::File, io::BufReader, path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(about = "Compare two serialized e-graphs modulo constructor bisimulation")]
@@ -17,7 +17,9 @@ struct Args {
 
 fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     let read = |path: &PathBuf| -> Result<Database, Box<dyn std::error::Error>> {
-        Ok(serde_json::from_reader(BufReader::new(File::open(path)?))?)
+        // Parse each byte slice and release it before reading the next input.
+        let bytes = std::fs::read(path)?;
+        Ok(serde_json::from_slice(&bytes)?)
     };
     let result = compare(&read(&args.left)?, &read(&args.right)?)?;
     serde_json::to_writer_pretty(std::io::stdout().lock(), &result)?;
