@@ -70,6 +70,8 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
 }
 
 const PROOF_UNSUPPORTED_FILES: &[&str] = &[
+    // Mirrors tests/files.rs: too slow in proof modes; times out under CodSpeed instrumentation.
+    "eggcc-2mm.egg",
     "math-microbenchmark.egg",
     "rectangle.egg",
     "subsume.egg",
