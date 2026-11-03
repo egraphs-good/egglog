@@ -36,6 +36,9 @@ struct Args {
     /// Serializes the egraph for each egglog file as JSON
     #[clap(long)]
     to_json: bool,
+    /// Write a complete database for egraph-comparison to INPUT.comparison.json
+    #[clap(long)]
+    to_comparison_json: bool,
     /// Serializes the egraph for each egglog file as a dot file
     #[clap(long)]
     to_dot: bool,
@@ -141,6 +144,22 @@ pub fn cli(mut egraph: EGraph) {
             ) {
                 Ok(None) => {}
                 _ => std::process::exit(1),
+            }
+
+            if args.to_comparison_json {
+                let path = input.with_extension("comparison.json");
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    let database = egraph.serialize_for_comparison()?;
+                    let file = std::fs::File::create(&path)?;
+                    let mut writer = std::io::BufWriter::new(file);
+                    serde_json::to_writer_pretty(&mut writer, &database)?;
+                    writer.flush()?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    log::error!("Failed to export comparison database to {path:?}: {error}");
+                    std::process::exit(1);
+                }
             }
 
             if args.to_json || args.to_dot || args.to_svg {
