@@ -19,7 +19,7 @@ pub struct Comparison {
 
 // Intern complete labels jointly across the inputs. Neither names nor schemas
 // are copied per node or per refinement round; hash collisions still use Eq.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub(crate) enum Label<'a> {
     Literal(&'a str),
     Call(&'a str, &'a Function, bool),
