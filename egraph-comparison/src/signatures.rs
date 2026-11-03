@@ -13,7 +13,7 @@ struct Entry {
     block: BlockId,
 }
 
-/// Per-round interning with one flat key arena. Table entries retain their hash
+/// Per-batch interning with one flat key arena. Table entries retain their hash
 /// so growth never re-hashes long signatures. Collisions compare complete keys.
 #[derive(Default)]
 pub(crate) struct Signatures {
@@ -23,6 +23,18 @@ pub(crate) struct Signatures {
 }
 
 impl Signatures {
+    /// Reuse allocations after processing a block; no signature survives a split.
+    pub fn clear(&mut self) {
+        // HashTable::clear touches its capacity. Release an oversized table so
+        // a large split cannot make every later tiny batch cost O(large split).
+        if self.table.capacity() > 4 * self.table.len().max(1) {
+            self.table = HashTable::new();
+        } else {
+            self.table.clear();
+        }
+        self.words.clear();
+    }
+
     pub fn intern(&mut self, previous: BlockId, nodes: &[SmallVec<[usize; 3]>]) -> BlockId {
         self.scratch.clear();
         self.scratch.push(previous.index());
