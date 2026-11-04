@@ -68,6 +68,53 @@ fn table_rows(db: &Database, table: TableId) -> Vec<Vec<Value>> {
 }
 
 #[test]
+fn mutation_notifications_survive_snapshot_reset() {
+    let mut db = Database::new();
+    let table = add_set_table(&mut db, 1);
+    let mut snapshot = db.clone();
+    db.with_execution_state(None, |state| {
+        state.stage_insert(table, &[v(1)]);
+        // Snapshots share the notification list. This consumes the first
+        // notification while the original mutation buffer is still alive.
+        snapshot.merge_all();
+        state.stage_insert(table, &[v(2)]);
+    });
+    db.merge_all();
+    assert_eq!(table_rows(&db, table), vec![vec![v(1)], vec![v(2)]]);
+}
+
+#[test]
+fn mutation_notifications_cover_tables_clones_and_later_rounds() {
+    run_serial_and_parallel(|| {
+        let mut db = Database::new();
+        let tables = (0..70)
+            .map(|_| add_set_table(&mut db, 1))
+            .collect::<Vec<_>>();
+        for round in 0..3 {
+            db.with_execution_state(None, |state| {
+                for (index, table) in tables.iter().copied().enumerate() {
+                    if round > 0 {
+                        state.stage_remove(table, &[v((round - 1) * 100 + index)]);
+                    }
+                    state.stage_insert(table, &[v(round * 100 + index)]);
+                    state.stage_insert(table, &[v(round * 100 + index)]);
+                }
+                let mut cloned = state.clone();
+                cloned.stage_insert(tables[0], &[v(10_000 + round)]);
+            });
+            db.merge_all();
+            for (index, table) in tables.iter().copied().enumerate() {
+                let mut expected = vec![vec![v(round * 100 + index)]];
+                if index == 0 {
+                    expected.extend((0..=round).map(|r| vec![v(10_000 + r)]));
+                }
+                assert_eq!(table_rows(&db, table), expected);
+            }
+        }
+    });
+}
+
+#[test]
 fn reservable_counter_recycles_execution_state_tails() {
     let mut db = Database::new();
     let counter = db.add_reservable_counter(4);
