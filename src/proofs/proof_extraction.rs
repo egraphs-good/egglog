@@ -106,6 +106,7 @@ impl ProofInstrumentor<'_> {
             proof_term_id,
             &self.egraph.proof_check_program,
             container_normalizers,
+            self.egraph.type_info.mutable_bindings.clone(),
         );
 
         // Remove globals from the proof

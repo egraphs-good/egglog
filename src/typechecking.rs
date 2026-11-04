@@ -234,6 +234,13 @@ pub struct TypeInfo {
     pub(crate) builtin_errors: Vec<String>,
     func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
+    // Actual functions introduced by native global lowering, distinct from
+    // frontend logical globals that can share an ordinary callable's spelling.
+    pub(crate) native_global_functions: HashSet<String>,
+    // Explicit mutable environment slots. Their reads are not lexical/global
+    // variable resolution, and ordinary function lookups keep their policy.
+    pub(crate) mutable_bindings: HashSet<String>,
+    pub(crate) authoring_binding_storage: HashMap<String, String>,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
     /// Function declarations hidden from user-facing table listings.
@@ -585,6 +592,9 @@ impl EGraph {
                 // If this is a let binding, add it to global_sorts
                 // This preserves bahavior for lets after desugaring
                 if resolved.internal_let {
+                    self.type_info
+                        .native_global_functions
+                        .insert(fdecl.name.clone());
                     let output_sort = self
                         .type_info
                         .get_sort_by_name(&fdecl.schema.output)
@@ -1286,7 +1296,18 @@ impl TypeInfo {
     }
 
     fn check_lookup_expr(&self, expr: &ResolvedExpr) -> Result<(), TypeError> {
-        if let Some(span) = self.expr_has_function_lookup(expr) {
+        if let Some(span) = self.expr_has_function_lookup(expr).or_else(|| {
+            expr.find(&mut |expr| match expr {
+                ResolvedExpr::Call(span, ResolvedCall::Func(function), args)
+                    if function.subtype == FunctionSubtype::Custom
+                        && args.is_empty()
+                        && self.mutable_bindings.contains(&function.name) =>
+                {
+                    Some(span.clone())
+                }
+                _ => None,
+            })
+        }) {
             return Err(TypeError::LookupInRuleDisallowed(
                 "function".to_string(),
                 span,
@@ -1374,7 +1395,7 @@ impl TypeInfo {
         Ok(annotated_actions)
     }
 
-    fn typecheck_standalone_expr(
+    pub(crate) fn typecheck_standalone_expr(
         &self,
         symbol_gen: &mut SymbolGen,
         expr: &Expr,
@@ -1554,7 +1575,8 @@ impl TypeInfo {
         expr.find(&mut |e| {
             if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e
                 && func_type.subtype == FunctionSubtype::Custom
-                && !self.is_global(&func_type.name)
+                && !self.native_global_functions.contains(&func_type.name)
+                && !self.mutable_bindings.contains(&func_type.name)
             {
                 return Some(span.clone());
             }

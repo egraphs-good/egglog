@@ -15,7 +15,7 @@ impl ProofStore {
     /// then replaces all occurrences of those globals in the proof's term dag.
     pub fn remove_globals(&mut self, prog: &[ResolvedNCommand]) -> Result<(), ProofCheckError> {
         // Gather all globals and their values as terms
-        let globals = gather_globals(prog, &mut self.term_dag)?;
+        let globals = gather_globals(prog, &mut self.term_dag, &self.mutable_bindings)?;
 
         // Replace all global function calls (nullary functions) in the term dag
         // with their computed values

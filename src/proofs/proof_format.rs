@@ -3,7 +3,7 @@ use crate::{
     ast::{ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::{proof_checker::gather_globals, proof_encoding_helpers::EncodingNames},
     typechecking::PrimitiveValidator,
-    util::{HEntry, HashMap, IndexSet, SymbolGen},
+    util::{HEntry, HashMap, HashSet, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
 use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
@@ -40,10 +40,17 @@ pub(crate) fn proof_store_from_term(
     proof_term: TermId,
     prog: &Vec<ResolvedNCommand>,
     container_normalizers: HashMap<String, PrimitiveValidator>,
+    mutable_bindings: HashSet<String>,
 ) -> (ProofStore, ProofId) {
     let (raw_store, raw_proof_id) =
         RawProofStore::from_extracted(encoding_names, term_dag, proof_term);
-    ProofStore::from_raw(prog, raw_store, raw_proof_id, container_normalizers)
+    ProofStore::from_raw(
+        prog,
+        raw_store,
+        raw_proof_id,
+        container_normalizers,
+        mutable_bindings,
+    )
 }
 
 /// Justifies a single grounded equality t1 = t2.
@@ -91,6 +98,7 @@ pub struct ProofStore {
     /// Container constructor head -> its validator (the container's term
     /// normalizer), used by [`ProofStore::normalize_container`].
     container_normalizers: HashMap<String, PrimitiveValidator>,
+    pub(super) mutable_bindings: HashSet<String>,
 }
 
 impl fmt::Debug for ProofStore {
@@ -405,14 +413,16 @@ impl ProofStore {
         raw_store: RawProofStore,
         raw_proof_id: RawProofId,
         container_normalizers: HashMap<String, PrimitiveValidator>,
+        mutable_bindings: HashSet<String>,
     ) -> (ProofStore, ProofId) {
         let mut store = ProofStore {
             term_dag: raw_store.term_dag.clone(),
             proof_id: HashMap::default(),
             id_to_proof: DenseIdMap::new(),
             container_normalizers,
+            mutable_bindings,
         };
-        let globals = gather_globals(prog, &mut store.term_dag)
+        let globals = gather_globals(prog, &mut store.term_dag, &store.mutable_bindings)
             .unwrap_or_else(|_| panic!("failed to gather globals from program"));
 
         let proof_id = store.convert_raw_proof(prog, &globals, &raw_store, raw_proof_id);

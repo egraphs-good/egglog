@@ -52,20 +52,53 @@ pub(crate) struct ActionContext {
     pub var_bindings: HashMap<String, TermId>,
     /// Propositions (equalities) implied by the actions
     pub propositions: HashSet<Proposition>,
+    /// Current values of explicitly declared mutable slots, distinct from vars.
+    pub slot_values: HashMap<String, TermId>,
 }
 
-/// Gathers all global CoreActions from a program.
-/// This extracts all actions that occur at the top level, filtering out NormRule and other commands.
-pub(crate) fn gather_global_actions(
+/// Replay global actions and completed scoped prefixes in program order.
+/// Scope-local variables do not escape, while mutable slot writes do.
+fn gather_global_context(
     prog: &[ResolvedNCommand],
-) -> impl Iterator<Item = &GenericAction<ResolvedCall, crate::ast::ResolvedVar>> {
-    prog.iter().filter_map(|cmd| {
-        if let GenericNCommand::CoreAction(action) = cmd {
-            Some(action)
-        } else {
-            None
+    term_dag: &mut TermDag,
+    mutable_bindings: &HashSet<String>,
+) -> Result<ActionContext, ProofCheckError> {
+    let mut globals = ActionContext {
+        var_bindings: HashMap::default(),
+        propositions: HashSet::default(),
+        slot_values: HashMap::default(),
+    };
+    for command in prog {
+        let mut scoped = command;
+        while let GenericNCommand::Fail(_, inner) = scoped {
+            scoped = inner;
         }
-    })
+        let (actions, retain_failed_prefix) = match (command, scoped) {
+            (GenericNCommand::CoreAction(action), _) => (vec![action], false),
+            (_, GenericNCommand::ActionScope(_, actions)) => (actions.0.iter().collect(), true),
+            _ => continue,
+        };
+        let bindings = if retain_failed_prefix {
+            globals.var_bindings.clone()
+        } else {
+            std::mem::take(&mut globals.var_bindings)
+        };
+        let context = process_actions(
+            "global_actions",
+            bindings,
+            &actions,
+            term_dag,
+            retain_failed_prefix,
+            mutable_bindings,
+            globals.slot_values,
+        )?;
+        globals.propositions.extend(context.propositions);
+        globals.slot_values = context.slot_values;
+        if !retain_failed_prefix {
+            globals.var_bindings = context.var_bindings;
+        }
+    }
+    Ok(globals)
 }
 
 /// Run a merge function and return the resulting term, as well as a set of propositions learned.
@@ -90,8 +123,14 @@ pub(crate) fn run_merge(
                 })
             })?;
             let mut propositions = HashSet::default();
-            let term =
-                eval_expr_with_subst("merge_function", expr, term_dag, &subst, &mut propositions)?;
+            let term = eval_expr_with_subst(
+                "merge_function",
+                expr,
+                term_dag,
+                &subst,
+                None,
+                &mut propositions,
+            )?;
             return Ok((term, propositions));
         }
     }
@@ -109,13 +148,16 @@ pub(crate) fn run_merge(
 ///    - Reflexive equalities from set statements
 ///
 /// Scope reconstruction retains completed subexpressions and stops at the first
-/// Panic or failed primitive validator. Ordinary rule checking propagates errors.
+/// Panic, failed primitive validator, or unset binding read. Ordinary rule
+/// checking propagates errors.
 pub(crate) fn process_actions(
     rule_name: &str,
     mut bindings: HashMap<String, TermId>,
     actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
     term_dag: &mut TermDag,
     retain_failed_prefix: bool,
+    mutable_bindings: &HashSet<String>,
+    mut slot_values: HashMap<String, TermId>,
 ) -> Result<ActionContext, ProofCheckError> {
     let mut propositions = HashSet::default();
 
@@ -125,6 +167,7 @@ pub(crate) fn process_actions(
             break;
         }
         let result: Result<(), ProofCheckError> = (|| {
+            let slots = Some((mutable_bindings, &slot_values));
             match action {
                 GenericAction::Let(_, var, expr) => {
                     // Evaluate the expression and collect propositions
@@ -133,6 +176,7 @@ pub(crate) fn process_actions(
                         expr,
                         term_dag,
                         &bindings,
+                        slots,
                         &mut propositions,
                     )?;
                     bindings.insert(var.name.clone(), term_id);
@@ -144,6 +188,7 @@ pub(crate) fn process_actions(
                         lhs_expr,
                         term_dag,
                         &bindings,
+                        slots,
                         &mut propositions,
                     )?;
                     let rhs_term = eval_expr_with_subst(
@@ -151,6 +196,7 @@ pub(crate) fn process_actions(
                         rhs_expr,
                         term_dag,
                         &bindings,
+                        slots,
                         &mut propositions,
                     )?;
                     // Store both directions of the equality
@@ -163,17 +209,31 @@ pub(crate) fn process_actions(
                     all_args.push(rhs.clone());
                     let call_expr =
                         ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
-                    eval_expr_with_subst(
+                    let term = eval_expr_with_subst(
                         rule_name,
                         &call_expr,
                         term_dag,
                         &bindings,
+                        slots,
                         &mut propositions,
                     )?;
+                    if mutable_bindings.contains(func.name()) {
+                        let Term::App(_, args) = term_dag.get(term) else {
+                            unreachable!("Set records a function term")
+                        };
+                        slot_values.insert(func.name().to_owned(), *args.last().unwrap());
+                    }
                 }
                 GenericAction::Expr(_, expr) => {
                     // Expr creates reflexive equality for its result
-                    eval_expr_with_subst(rule_name, expr, term_dag, &bindings, &mut propositions)?;
+                    eval_expr_with_subst(
+                        rule_name,
+                        expr,
+                        term_dag,
+                        &bindings,
+                        slots,
+                        &mut propositions,
+                    )?;
                 }
                 GenericAction::Panic(_, _) => {
                     // Panics do not create propositions
@@ -187,6 +247,7 @@ pub(crate) fn process_actions(
                             arg,
                             term_dag,
                             &bindings,
+                            slots,
                             &mut propositions,
                         )?;
                     }
@@ -199,6 +260,7 @@ pub(crate) fn process_actions(
                 && matches!(
                     &*error.0,
                     ProofCheckErrorKind::PrimitiveValidatorFailed { .. }
+                        | ProofCheckErrorKind::UninitializedBinding { .. }
                 )
             {
                 break;
@@ -210,6 +272,7 @@ pub(crate) fn process_actions(
     Ok(ActionContext {
         var_bindings: bindings,
         propositions,
+        slot_values,
     })
 }
 
@@ -220,6 +283,7 @@ fn eval_expr_with_subst(
     expr: &ResolvedExpr,
     dag: &mut TermDag,
     subst: &HashMap<String, TermId>,
+    slots: Option<(&HashSet<String>, &HashMap<String, TermId>)>,
     propositions: &mut HashSet<Proposition>,
 ) -> Result<TermId, ProofCheckError> {
     let term_id = match expr {
@@ -232,10 +296,23 @@ fn eval_expr_with_subst(
             })
         })?,
         ResolvedExpr::Call(_, head, args) => match head {
-            ResolvedCall::Func(_func_type) => {
+            ResolvedCall::Func(func_type) => {
+                if args.is_empty()
+                    && let Some((names, values)) = slots
+                    && names.contains(&func_type.name)
+                {
+                    let value = values.get(&func_type.name).copied().ok_or_else(|| {
+                        ProofCheckError::from(ProofCheckErrorKind::UninitializedBinding {
+                            name: func_type.name.clone(),
+                        })
+                    })?;
+                    add_subterm_reflexive_equalities(value, dag, propositions);
+                    return Ok(value);
+                }
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    let arg_term = eval_expr_with_subst(rule_name, arg, dag, subst, propositions)?;
+                    let arg_term =
+                        eval_expr_with_subst(rule_name, arg, dag, subst, slots, propositions)?;
                     arg_terms.push(arg_term);
                 }
                 dag.app(head.name().to_string(), arg_terms)
@@ -244,7 +321,8 @@ fn eval_expr_with_subst(
                 // run validator, throwing error if it fails
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    let arg_term = eval_expr_with_subst(rule_name, arg, dag, subst, propositions)?;
+                    let arg_term =
+                        eval_expr_with_subst(rule_name, arg, dag, subst, slots, propositions)?;
                     arg_terms.push(arg_term);
                 }
                 // checked by earlier code showing this program supports proofs
@@ -310,15 +388,9 @@ fn add_subterm_reflexive_equalities_helper(
 pub(crate) fn gather_globals(
     prog: &[ResolvedNCommand],
     term_dag: &mut TermDag,
+    mutable_bindings: &HashSet<String>,
 ) -> Result<HashMap<String, TermId>, ProofCheckError> {
-    let actions: Vec<_> = gather_global_actions(prog).collect();
-    let ctx = process_actions(
-        "global_action",
-        HashMap::default(),
-        &actions,
-        term_dag,
-        false,
-    )?;
+    let ctx = gather_global_context(prog, term_dag, mutable_bindings)?;
     Ok(ctx.var_bindings)
 }
 
@@ -344,6 +416,8 @@ impl From<ProofCheckErrorKind> for ProofCheckError {
 /// The kinds of errors that can occur during proof checking
 #[derive(Debug, Clone, Error)]
 pub enum ProofCheckErrorKind {
+    #[error("mutable binding {name} has no initialized value")]
+    UninitializedBinding { name: String },
     /// The proof claims terms are equal but they don't match the actual terms
     #[error(
         "Proof {proof_id} claims to prove {expected_lhs:?} = {expected_rhs:?}, but actually proves {actual_lhs:?} = {actual_rhs:?}"
@@ -581,7 +655,11 @@ pub(crate) struct ProofCheckContext {
 impl ProofCheckContext {
     /// Create a new proof check context by analyzing the program.
     /// This gathers all equalities established by global actions (unions and sets).
-    fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Result<Self, ProofCheckError> {
+    fn new(
+        prog: &[ResolvedNCommand],
+        term_dag: &mut TermDag,
+        mutable_bindings: &HashSet<String>,
+    ) -> Result<Self, ProofCheckError> {
         // Check for duplicate rule names
         let mut seen_rule_names: HashSet<&str> = HashSet::default();
         for cmd in prog {
@@ -595,44 +673,12 @@ impl ProofCheckContext {
             }
         }
 
-        let mut global_bindings = HashMap::default();
-        let mut global_equalities = HashSet::default();
-        for command in prog {
-            let mut scoped = command;
-            while let GenericNCommand::Fail(_, inner) = scoped {
-                scoped = inner;
-            }
-            match (command, scoped) {
-                (GenericNCommand::CoreAction(action), _) => {
-                    let context = process_actions(
-                        "global_actions",
-                        global_bindings,
-                        &[action],
-                        term_dag,
-                        false,
-                    )?;
-                    global_equalities.extend(context.propositions);
-                    global_bindings = context.var_bindings;
-                }
-                (_, GenericNCommand::ActionScope(_, actions)) => {
-                    let actions: Vec<_> = actions.0.iter().collect();
-                    let context = process_actions(
-                        "scoped_actions",
-                        global_bindings.clone(),
-                        &actions,
-                        term_dag,
-                        true,
-                    )?;
-                    global_equalities.extend(context.propositions);
-                }
-                _ => {}
-            }
-        }
+        let globals = gather_global_context(prog, term_dag, mutable_bindings)?;
 
         Ok(ProofCheckContext {
-            global_equalities,
+            global_equalities: globals.propositions,
             checked_proofs: HashMap::default(),
-            global_bindings,
+            global_bindings: globals.var_bindings,
         })
     }
 
@@ -662,7 +708,7 @@ impl ProofStore {
         proof_id: ProofId,
         program: &[ResolvedNCommand],
     ) -> Result<Proposition, ProofCheckError> {
-        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag)?;
+        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag, &self.mutable_bindings)?;
         self.check_proof_with_context(proof_id, program, &mut ctx)
     }
 
@@ -1101,6 +1147,7 @@ impl ProofStore {
                     expr,
                     &mut self.term_dag,
                     subst,
+                    None,
                     &mut HashSet::default(),
                 )?;
                 Ok(Some(term))
@@ -1335,8 +1382,15 @@ impl ProofStore {
         let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
             rule.head.0.iter().collect();
         let bindings = subst_with_globals.clone();
-        let action_ctx =
-            process_actions(rule_name, bindings, &action_refs, &mut self.term_dag, false)?;
+        let action_ctx = process_actions(
+            rule_name,
+            bindings,
+            &action_refs,
+            &mut self.term_dag,
+            false,
+            &self.mutable_bindings,
+            HashMap::default(),
+        )?;
 
         // Check if the claimed equality is in the propositions
         if action_ctx.propositions.contains(claimed) {
@@ -1481,7 +1535,8 @@ mod tests {
                 let two = terms.lit(Literal::Int(2));
                 let lhs = terms.app("N".into(), vec![one]);
                 let rhs = terms.app("N".into(), vec![two]);
-                let context = ProofCheckContext::new(&resolved, &mut terms).unwrap();
+                let context =
+                    ProofCheckContext::new(&resolved, &mut terms, &HashSet::default()).unwrap();
                 assert!(!context.in_globals(lhs, lhs));
                 assert!(!context.in_globals(lhs, rhs));
             }

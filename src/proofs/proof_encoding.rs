@@ -748,6 +748,18 @@ impl<'a> ProofInstrumentor<'a> {
                 }
             }
 
+            // A slot view certifies that its current row exists. Congruence
+            // relates the old row to the rebuilt row; take its reflexive
+            // consequence so query premises keep the function-fact invariant.
+            if self.egraph.type_info.mutable_bindings.contains(&fdecl.name) {
+                let reflexive = self.fresh_var();
+                proof_code_parts.push(format!(
+                    "(let {reflexive} ({eq_trans_constructor}
+                        ({sym_constructor} {current_proof}) {current_proof}))"
+                ));
+                current_proof = reflexive;
+            }
+
             (proof_code_parts.join("\n"), current_proof)
         } else {
             ("".to_string(), "()".to_string())
@@ -1353,9 +1365,29 @@ impl<'a> ProofInstrumentor<'a> {
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
+                            if self
+                                .egraph
+                                .type_info
+                                .mutable_bindings
+                                .contains(&func_type.name)
+                            {
+                                let (current, arity) = self
+                                    .egraph
+                                    .proof_state
+                                    .merge_current
+                                    .get(&func_type.name)
+                                    .expect("mutable binding has merge-current storage");
+                                assert_eq!(*arity, 0);
+                                return format!("({current})");
+                            }
                             // Globals are desugared to no-arg functions (in non-proof mode)
                             // They're allowed, in proof mode they are constructors.
-                            if self.egraph.type_info.is_global(&func_type.name) {
+                            if self
+                                .egraph
+                                .type_info
+                                .native_global_functions
+                                .contains(&func_type.name)
+                            {
                                 return format!("({} {})", func_type.name, ListDisplay(&args, " "));
                             }
                             panic!(

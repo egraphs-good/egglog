@@ -16,7 +16,7 @@ impl Names {
         }
     }
 
-    fn track_global_alias(&mut self, name: &str, span: &Span) {
+    pub(crate) fn track_global_alias(&mut self, name: &str, span: &Span) {
         if let Some(stripped) = name.strip_prefix(GLOBAL_NAME_PREFIX) {
             self.global_aliases
                 .insert(stripped.to_owned(), (name.to_owned(), span.clone()));

@@ -2018,6 +2018,181 @@ impl EGraph {
         result
     }
 
+    /// Declare a typed mutable environment slot without assigning its value.
+    ///
+    /// Slot reads use ordinary function-call syntax, independently of lexical
+    /// variables. Only these explicitly registered slots may be read in encoded
+    /// actions; ordinary function lookup restrictions are unchanged. Writes use
+    /// Set and replace the prior value. Compilation registers only metadata on
+    /// the supplied compiler graph, never a value.
+    pub fn declare_mutable_binding(
+        &mut self,
+        span: Span,
+        name: String,
+        sort: String,
+        execute: bool,
+    ) -> Result<(), Error> {
+        let types = self.authoring_type_info();
+        let output = types
+            .get_sort_by_name(&sort)
+            .ok_or_else(|| Error::BackendError(format!("unknown mutable binding sort {sort}")))?;
+        if let Some(existing) = types.get_func_type(&name) {
+            if types.mutable_bindings.contains(&name)
+                && existing.input.is_empty()
+                && existing.output.name() == output.name()
+            {
+                return Ok(());
+            }
+            return Err(Error::BackendError(format!(
+                "mutable binding name or sort conflicts: {name}"
+            )));
+        }
+        let command = Command::Function {
+            span: span.clone(),
+            name: name.clone(),
+            table_name: Some(ast::TableName::Internal(name.clone())),
+            schema: ast::Schema::new(vec![], sort),
+            merge: Some(Expr::Var(span, "new".into())),
+            hidden: true,
+            let_binding: false,
+            term_constructor: None,
+            unextractable: true,
+        };
+        self.type_info.mutable_bindings.insert(name.clone());
+        if let Some(original) = self.proof_state.original_typechecking.as_mut() {
+            original.type_info.mutable_bindings.insert(name.clone());
+        }
+        // Instrumentation builds the slot's rebuild rules at declaration time.
+        let result = if execute {
+            self.run_program(vec![command]).map(|_| ())
+        } else {
+            self.compile_program_observed(vec![command], &mut |_, _| {})
+                .map(|_| ())
+        };
+        if let Err(error) = result {
+            self.type_info.mutable_bindings.remove(&name);
+            if let Some(original) = self.proof_state.original_typechecking.as_mut() {
+                original.type_info.mutable_bindings.remove(&name);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Register private, unset storage for a frontend's logical global metadata.
+    /// Resolved-command observers retain logical variables; only the disposable
+    /// native compilation copy uses this storage. No value is initialized.
+    pub fn register_authoring_binding(
+        &mut self,
+        span: Span,
+        name: String,
+        sort: String,
+    ) -> Result<(), Error> {
+        let types = self.authoring_type_info();
+        if types
+            .global_sorts
+            .get(&name)
+            .is_none_or(|old| old.name() != sort)
+        {
+            return Err(Error::BackendError(format!(
+                "authoring binding sort conflicts: {name}"
+            )));
+        }
+        if types.authoring_binding_storage.contains_key(&name) {
+            return Ok(());
+        }
+        let storage = self.parser.symbol_gen.fresh("authoring_binding");
+        self.declare_mutable_binding(span.clone(), storage.clone(), sort, true)?;
+        self.names.track_global_alias(&name, &span);
+        self.type_info
+            .authoring_binding_storage
+            .insert(name.clone(), storage.clone());
+        if let Some(original) = self.proof_state.original_typechecking.as_mut() {
+            original.names.track_global_alias(&name, &span);
+            original
+                .type_info
+                .authoring_binding_storage
+                .insert(name, storage);
+        }
+        Ok(())
+    }
+
+    // Logical globals exported by frontends need independent callable storage.
+    // Capture head reads in the query before the ordinary/proof global passes;
+    // all other global variables continue through the existing native lowering.
+    fn lower_authoring_bindings(&mut self, command: ResolvedNCommand) -> ResolvedNCommand {
+        let types = self.authoring_type_info();
+        let storage: HashMap<_, _> = types
+            .authoring_binding_storage
+            .iter()
+            .map(|(name, storage)| {
+                (
+                    name.clone(),
+                    types
+                        .get_func_type(storage)
+                        .expect("registered authoring slot")
+                        .clone(),
+                )
+            })
+            .collect();
+        if storage.is_empty() {
+            return command;
+        }
+        let replace = |expr: ResolvedExpr| {
+            if let Some(var) = expr.get_global_var()
+                && let Some(function) = storage.get(&var.name)
+            {
+                ResolvedExpr::Call(expr.span(), ResolvedCall::Func(function.clone()), vec![])
+            } else {
+                expr
+            }
+        };
+        match command {
+            ResolvedNCommand::Fail(span, child) => {
+                ResolvedNCommand::Fail(span, Box::new(self.lower_authoring_bindings(*child)))
+            }
+            ResolvedNCommand::NormRule { mut rule } => {
+                let mut captures = HashMap::default();
+                let mut facts = vec![];
+                rule.head = rule.head.visit_exprs(&mut |expr| {
+                    if let Some(var) = expr.get_global_var()
+                        && storage.contains_key(&var.name)
+                    {
+                        captures
+                            .entry(var.name.clone())
+                            .or_insert_with(|| {
+                                let local = ResolvedExpr::Var(
+                                    expr.span(),
+                                    ResolvedVar {
+                                        name: self.parser.symbol_gen.fresh(&var.name),
+                                        sort: var.sort.clone(),
+                                        is_global_ref: false,
+                                    },
+                                );
+                                facts.push(ResolvedFact::Eq(
+                                    expr.span(),
+                                    replace(expr.clone()),
+                                    local.clone(),
+                                ));
+                                local
+                            })
+                            .clone()
+                    } else {
+                        expr
+                    }
+                });
+                rule.body = rule
+                    .body
+                    .into_iter()
+                    .map(|fact| fact.visit_exprs(&mut |expr| replace(expr)))
+                    .chain(facts)
+                    .collect();
+                ResolvedNCommand::NormRule { rule }
+            }
+            command => command.visit_exprs(&mut |expr| replace(expr)),
+        }
+    }
+
     /// Get the list of all functions in the e-graph.
     pub fn get_function_names(&self) -> Vec<String> {
         self.functions.keys().cloned().collect()
@@ -2203,6 +2378,40 @@ impl EGraph {
         output_sort: ArcSort,
         context: Context,
     ) -> Result<ResolvedExpr, TypeError> {
+        let resolved =
+            self.resolve_expr_with_bindings_and_output(expr, bindings, output_sort, context)?;
+        let storage = &self.authoring_type_info().authoring_binding_storage;
+        let resolved = resolved.visit_exprs(&mut |expr| {
+            if let Some(var) = expr.get_global_var()
+                && let Some(name) = storage.get(&var.name)
+            {
+                ResolvedExpr::Call(
+                    expr.span(),
+                    ResolvedCall::Func(
+                        self.authoring_type_info()
+                            .get_func_type(name)
+                            .unwrap()
+                            .clone(),
+                    ),
+                    vec![],
+                )
+            } else {
+                expr
+            }
+        });
+        Ok(remove_globals::remove_globals_expr(resolved))
+    }
+
+    /// Resolve an authoring expression while retaining logical global variables.
+    /// Local bindings, expected output types, and primitive contexts use the same
+    /// solver as execution; private storage names remain a later compiler step.
+    pub fn resolve_expr_with_bindings_and_output(
+        &mut self,
+        expr: &Expr,
+        bindings: &[(String, Span, ArcSort)],
+        output_sort: ArcSort,
+        context: Context,
+    ) -> Result<ResolvedExpr, TypeError> {
         let mut binding_map = IndexMap::default();
         binding_map.reserve(bindings.len());
         for (name, span, sort) in bindings {
@@ -2213,14 +2422,19 @@ impl EGraph {
                 return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
             }
         }
-        let resolved = self.type_info.typecheck_expr_with_output(
-            &mut self.parser.symbol_gen,
+        let compiler = if let Some(original) = self.proof_state.original_typechecking.as_deref_mut()
+        {
+            original
+        } else {
+            self
+        };
+        compiler.type_info.typecheck_expr_with_output(
+            &mut compiler.parser.symbol_gen,
             expr,
             &binding_map,
             output_sort,
             context,
-        )?;
-        Ok(remove_globals::remove_globals_expr(resolved))
+        )
     }
 
     /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
@@ -2840,6 +3054,53 @@ impl EGraph {
         Ok(typechecked)
     }
 
+    /// Resolve a binding initializer for an authoring frontend without choosing
+    /// runtime storage or removing global references. Callable and global names
+    /// occupy independent namespaces here. Rebinding preserves the resolved sort.
+    pub fn resolve_binding_initializer(
+        &mut self,
+        span: Span,
+        name: String,
+        initializer: Expr,
+    ) -> Result<ResolvedNCommand, Error> {
+        let compiler = if self.proof_state.original_typechecking.is_some() {
+            self.proof_state
+                .original_typechecking
+                .as_deref_mut()
+                .unwrap()
+        } else {
+            self
+        };
+        compiler.ensure_global_name_prefix(&span, &name)?;
+        let initializer = compiler.type_info.typecheck_standalone_expr(
+            &mut compiler.parser.symbol_gen,
+            &initializer,
+            &Default::default(),
+            Context::Full,
+        )?;
+        let sort = initializer.output_type();
+        if let Some(previous) = compiler.type_info.global_sorts.get(&name)
+            && previous.name() != sort.name()
+        {
+            return Err(Error::BackendError(format!(
+                "binding sort conflicts: {name}"
+            )));
+        }
+        compiler
+            .type_info
+            .global_sorts
+            .insert(name.clone(), sort.clone());
+        Ok(ResolvedNCommand::CoreAction(ResolvedAction::Let(
+            span,
+            ResolvedVar {
+                name,
+                sort,
+                is_global_ref: true,
+            },
+            initializer,
+        )))
+    }
+
     /// Shared compiler phase before global removal and proof instrumentation.
     fn desugar_and_typecheck_command(
         &mut self,
@@ -2892,6 +3153,10 @@ impl EGraph {
         observer(ExecutionEvent::CommandResolved {
             commands: &typechecked,
         });
+        let typechecked: Vec<_> = typechecked
+            .into_iter()
+            .map(|(command, origin)| (self.lower_authoring_bindings(command), origin))
+            .collect();
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_ref() {
             for (command, _) in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
@@ -5619,6 +5884,334 @@ mod tests {
             graph
                 .parse_and_run_program(None, "(check (= (N 8) (N 9)))")
                 .unwrap();
+        }
+    }
+
+    #[test]
+    fn mutable_binding_storage_replaces_and_reads_in_every_mode() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(datatype E (N i64)) (function copy () E :merge new)
+                 (function scalar-copy () i64 :merge new)
+                 (function ordinary () E :merge new) (set (ordinary) (N 8))",
+                )
+                .unwrap();
+            for (name, sort) in [("slot-e", "E"), ("slot-i", "i64"), ("unset", "E")] {
+                graph
+                    .declare_mutable_binding(span!(), name.into(), sort.into(), true)
+                    .unwrap();
+                assert!(
+                    !graph.authoring_type_info().is_global(name),
+                    "slot names are not lexical variables"
+                );
+            }
+            let missing = graph
+                .clone()
+                .parse_and_run_program(None, "(set (copy) (unset))")
+                .unwrap_err();
+            assert!(
+                missing.to_string().contains("lookup"),
+                "mode {mode}: {missing}"
+            );
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(fail (check (unset)))
+                 (set (slot-e) (N 1)) (set (slot-i) 7)
+                 (check (= (slot-e) (N 1))) (check (= (slot-i) 7))
+                 (set (slot-e) (N 2)) (set (slot-i) 9)
+                 (check (= (slot-e) (N 2))) (check (= (slot-i) 9))
+                 (fail (check (= (N 1) (N 2))))
+                 (fail (check (= (slot-e) (N 1))))
+                 (set (slot-i) (+ (slot-i) 1)) (check (= (slot-i) 10))
+                 (set (copy) (slot-e)) (set (scalar-copy) (+ (slot-i) 1))
+                 (check (= (copy) (N 2))) (check (= (scalar-copy) 11))",
+                )
+                .unwrap();
+            let ordinary = graph.parse_and_run_program(None, "(set (copy) (ordinary))");
+            if mode == 0 {
+                ordinary.unwrap();
+            } else {
+                assert!(
+                    ordinary
+                        .unwrap_err()
+                        .to_string()
+                        .contains("function lookup")
+                );
+            }
+            let mut cloned = graph.clone();
+            cloned
+                .declare_mutable_binding(span!(), "slot-e".into(), "E".into(), true)
+                .unwrap();
+            cloned
+                .parse_and_run_program(None, "(set (copy) (slot-e)) (check (= (copy) (N 2)))")
+                .unwrap();
+            assert!(
+                cloned
+                    .declare_mutable_binding(span!(), "slot-e".into(), "i64".into(), true)
+                    .is_err()
+            );
+            graph.parse_and_run_program(None, "(push)").unwrap();
+            graph
+                .declare_mutable_binding(span!(), "scoped-slot".into(), "i64".into(), true)
+                .unwrap();
+            graph.parse_and_run_program(None, "(pop)").unwrap();
+            assert!(
+                !graph
+                    .authoring_type_info()
+                    .mutable_bindings
+                    .contains("scoped-slot")
+            );
+        }
+    }
+
+    #[test]
+    fn mutable_binding_failed_scope_replay_retains_completed_prefix() {
+        let mut graph = EGraph::new_with_proofs().with_proof_testing();
+        graph
+            .parse_and_run_program(None, "(datatype E (N i64)) (function copy () E :merge new)")
+            .unwrap();
+        for name in ["slot-e", "unset"] {
+            graph
+                .declare_mutable_binding(span!(), name.into(), "E".into(), true)
+                .unwrap();
+        }
+        graph
+            .parse_and_run_program(
+                None,
+                "(fail (action-scope ((set (slot-e) (N 1))
+                    (set (copy) (unset)) (set (slot-e) (N 2)))))
+                 (check (= (slot-e) (N 1)))
+                 (check (= (N 1) (N 1)))",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn mutable_binding_scoped_values_feed_native_global_proofs() {
+        for testing in [false, true] {
+            let mut graph = EGraph::new_with_proofs();
+            if testing {
+                graph = graph.with_proof_testing();
+            }
+            graph
+                .parse_and_run_program(None, "(datatype E (N i64))")
+                .unwrap();
+            graph
+                .declare_mutable_binding(span!(), "slot-e".into(), "E".into(), true)
+                .unwrap();
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(action-scope ((set (slot-e) (N 1))))
+                     (let $saved (slot-e))
+                     (action-scope ((set (slot-e) (N 2))))
+                     (prove (= $saved (N 1)))",
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn mutable_binding_rule_heads_require_query_capture() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(None, "(datatype E (N i64)) (function copy () E :merge new)")
+                .unwrap();
+            graph
+                .declare_mutable_binding(span!(), "slot-e".into(), "E".into(), true)
+                .unwrap();
+            graph
+                .parse_and_run_program(None, "(set (slot-e) (N 1))")
+                .unwrap();
+            assert!(matches!(
+                graph
+                    .parse_and_run_program(None, "(rule () ((set (copy) (slot-e))))")
+                    .unwrap_err(),
+                Error::TypeError(TypeError::LookupInRuleDisallowed(..))
+            ));
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(rule ((= saved (slot-e))) ((set (copy) saved)))
+                     (run 1) (check (= (copy) (N 1)))",
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn mutable_binding_rebuilt_rows_have_reflexive_existence_proofs() {
+        for testing in [false, true] {
+            let mut graph = EGraph::new_with_proofs();
+            if testing {
+                graph = graph.with_proof_testing();
+            }
+            graph
+                .parse_and_run_program(None, "(datatype E (N i64)) (N 1)")
+                .unwrap();
+            graph
+                .declare_mutable_binding(span!(), "slot-e".into(), "E".into(), true)
+                .unwrap();
+            graph
+                .parse_and_run_program(
+                    None,
+                    "(set (slot-e) (N 2)) (union (N 1) (N 2))
+                     (prove (= (slot-e) (N 1)))",
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn binding_initializer_resolution_has_no_storage_namespace() {
+        for mode in 0..4 {
+            let mut graph = match mode {
+                0 => EGraph::default(),
+                1 => EGraph::new_with_term_encoding(),
+                2 => EGraph::new_with_proofs(),
+                _ => EGraph::new_with_proofs().with_proof_testing(),
+            };
+            graph
+                .parse_and_run_program(None, "(function $same () bool :merge new)")
+                .unwrap();
+            for value in [1, 2] {
+                let resolved = graph
+                    .resolve_binding_initializer(
+                        span!(),
+                        "$same".into(),
+                        Expr::Lit(span!(), Literal::Int(value)),
+                    )
+                    .unwrap();
+                assert!(
+                    matches!(resolved, ResolvedNCommand::CoreAction(ResolvedAction::Let(_, var, _))
+                    if var.is_global_ref && var.name == "$same" && var.sort.name() == "i64")
+                );
+            }
+            assert_eq!(
+                graph
+                    .authoring_type_info()
+                    .get_func_type("$same")
+                    .unwrap()
+                    .output
+                    .name(),
+                "bool"
+            );
+            let call = graph.parser.get_expr_from_string(None, "($same)").unwrap();
+            let resolved_call = graph
+                .authoring_type_info()
+                .typecheck_standalone_expr(
+                    &mut SymbolGen::new("test".into()),
+                    &call,
+                    &Default::default(),
+                    Context::Full,
+                )
+                .unwrap();
+            assert!(
+                graph
+                    .authoring_type_info()
+                    .expr_has_function_lookup(&resolved_call)
+                    .is_some()
+            );
+            assert!(
+                graph
+                    .resolve_binding_initializer(
+                        span!(),
+                        "$same".into(),
+                        Expr::Lit(span!(), Literal::Bool(true)),
+                    )
+                    .is_err()
+            );
+            graph
+                .resolve_binding_initializer(
+                    span!(),
+                    "$new".into(),
+                    Expr::Var(span!(), "$same".into()),
+                )
+                .unwrap();
+            assert!(graph.authoring_type_info().get_func_type("$new").is_none());
+            assert_eq!(
+                graph
+                    .authoring_type_info()
+                    .get_global_sort("$new")
+                    .unwrap()
+                    .name(),
+                "i64"
+            );
+            graph
+                .register_authoring_binding(span!(), "$same".into(), "i64".into())
+                .unwrap();
+            graph
+                .register_authoring_binding(span!(), "$new".into(), "i64".into())
+                .unwrap();
+            let expression = Expr::Var(span!(), "$same".into());
+            let logical = graph
+                .resolve_expr_with_bindings_and_output(
+                    &expression,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            assert!(
+                logical
+                    .get_global_var()
+                    .is_some_and(|var| var.name == "$same")
+            );
+            let executable = graph
+                .typecheck_expr_with_bindings_and_output(
+                    &expression,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            assert!(
+                matches!(executable, ResolvedExpr::Call(_, ResolvedCall::Func(function), _)
+                if function.name != "$same"
+                    && graph.authoring_type_info().mutable_bindings.contains(&function.name))
+            );
+            assert!(
+                graph
+                    .clone()
+                    .parse_and_run_program(None, "(check (= same 1))")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("conflicts with global")
+            );
+            let rule = graph
+                .parser
+                .get_program_from_string(None, "(rule () ((+ $same 1)))")
+                .unwrap();
+            let mut saw_logical = false;
+            graph
+                .run_program_observed(rule, &mut |_, _, _| {}, &mut |_, event| {
+                    if let ExecutionEvent::CommandResolved { commands } = event {
+                        for (command, _) in commands {
+                            command.clone().visit_exprs(&mut |expr| {
+                                saw_logical |=
+                                    expr.get_global_var().is_some_and(|var| var.name == "$same");
+                                expr
+                            });
+                        }
+                    }
+                })
+                .unwrap();
+            assert!(saw_logical);
         }
     }
 
