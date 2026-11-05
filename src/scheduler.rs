@@ -506,7 +506,7 @@ impl SchedulerRuleInfo {
         // Step 1: rebuild the query with the same evaluation mode and planner
         // options as the ordinary compiled rule.
         let mut qrule = egraph.backend.new_rule(name, rule.seminaive);
-        qrule.set_no_decomp(rule.no_decomp);
+        qrule.set_no_decomp(egraph.no_decomp || rule.no_decomp);
         let mut qrule_builder = BackendRule::new(
             qrule,
             &egraph.functions,
