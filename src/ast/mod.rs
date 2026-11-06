@@ -1532,6 +1532,23 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    fn visit_exprs(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
+    ) -> Self {
+        Self {
+            span: self.span,
+            lhs: self.lhs.visit_exprs(f),
+            rhs: self.rhs.visit_exprs(f),
+            conditions: self
+                .conditions
+                .into_iter()
+                .map(|fact| fact.visit_exprs(f))
+                .collect(),
+            name: self.name,
+        }
+    }
+
     /// Remaps every head and leaf symbol in the rewrite, including the optional conditions.
     pub fn map_symbols<Head2, Leaf2>(
         self,
@@ -1850,35 +1867,12 @@ where
             GenericCommand::Rule { rule } => GenericCommand::Rule {
                 rule: rule.visit_exprs(f),
             },
-            GenericCommand::Rewrite(name, rewrite, subsume) => GenericCommand::Rewrite(
-                name,
-                GenericRewrite {
-                    span: rewrite.span,
-                    lhs: rewrite.lhs.visit_exprs(f),
-                    rhs: rewrite.rhs.visit_exprs(f),
-                    conditions: rewrite
-                        .conditions
-                        .into_iter()
-                        .map(|fact| fact.visit_exprs(f))
-                        .collect(),
-                    name: rewrite.name,
-                },
-                subsume,
-            ),
-            GenericCommand::BiRewrite(name, rewrite) => GenericCommand::BiRewrite(
-                name,
-                GenericRewrite {
-                    span: rewrite.span,
-                    lhs: rewrite.lhs.visit_exprs(f),
-                    rhs: rewrite.rhs.visit_exprs(f),
-                    conditions: rewrite
-                        .conditions
-                        .into_iter()
-                        .map(|fact| fact.visit_exprs(f))
-                        .collect(),
-                    name: rewrite.name,
-                },
-            ),
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                GenericCommand::Rewrite(name, rewrite.visit_exprs(f), subsume)
+            }
+            GenericCommand::BiRewrite(name, rewrite) => {
+                GenericCommand::BiRewrite(name, rewrite.visit_exprs(f))
+            }
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
             GenericCommand::Extract(span, expr1, expr2) => {
                 GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
