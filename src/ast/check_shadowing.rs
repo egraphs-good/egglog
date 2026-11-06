@@ -103,35 +103,17 @@ impl Names {
     fn check_shadowing_query(&mut self, query: &[ResolvedFact]) -> Result<(), Error> {
         // we want to allow names in queries to shadow each other, so we first collect
         // all of the variable names, and then we check each of those names once
-        fn collect_expr_names(expr: &ResolvedExpr, out: &mut HashMap<String, Span>) {
-            match expr {
-                ResolvedExpr::Lit(..) => {}
-                ResolvedExpr::Var(span, name) => {
-                    out.entry(name.name.clone()).or_insert_with(|| span.clone());
-                }
-                ResolvedExpr::Call(_span, _func, args) => {
-                    args.iter().for_each(|e| collect_expr_names(e, out));
-                }
-            }
-        }
-
         let mut collected = HashMap::default();
-
-        for fact in query {
-            match fact {
-                ResolvedFact::Eq(_span, e1, e2) => {
-                    collect_expr_names(e1, &mut collected);
-                    collect_expr_names(e2, &mut collected);
-                }
-                ResolvedFact::Fact(e) => collect_expr_names(e, &mut collected),
-            }
-        }
-
-        for (name, span) in collected {
-            self.check_pattern_name(&name, &span)?;
-        }
-
-        Ok(())
+        query.iter().for_each(|fact| {
+            fact.visit_vars(&mut |span, name| {
+                collected
+                    .entry(name.name.clone())
+                    .or_insert_with(|| span.clone());
+            });
+        });
+        collected
+            .into_iter()
+            .try_for_each(|(name, span)| self.check_pattern_name(&name, &span))
     }
 
     fn check_shadowing_action(&mut self, action: &ResolvedAction) -> Result<(), Error> {

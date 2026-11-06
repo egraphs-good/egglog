@@ -73,24 +73,15 @@ impl Display for Span {
                 let (end_line, end_col) = span
                     .file
                     .get_location((span.j.saturating_sub(1)).max(span.i));
-                let quote = self.string();
-                match (&span.file.name, start_line == end_line) {
-                    (Some(filename), true) => write!(
-                        f,
-                        "In {start_line}:{start_col}-{end_col} of {filename}: {quote}"
-                    ),
-                    (Some(filename), false) => write!(
-                        f,
-                        "In {start_line}:{start_col}-{end_line}:{end_col} of {filename}: {quote}"
-                    ),
-                    (None, false) => write!(
-                        f,
-                        "In {start_line}:{start_col}-{end_line}:{end_col}: {quote}"
-                    ),
-                    (None, true) => {
-                        write!(f, "In {start_line}:{start_col}-{end_col}: {quote}")
-                    }
+                write!(f, "In {start_line}:{start_col}-")?;
+                if start_line != end_line {
+                    write!(f, "{end_line}:")?;
                 }
+                write!(f, "{end_col}")?;
+                if let Some(filename) = &span.file.name {
+                    write!(f, " of {filename}")?;
+                }
+                write!(f, ": {}", self.string())
             }
         }
     }

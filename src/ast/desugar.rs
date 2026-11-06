@@ -23,16 +23,12 @@ pub(crate) fn desugar_command(
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
-            fdecl.term_constructor = term_constructor;
-            // Functions with term_constructor are view tables that should be
-            // extractable unless explicitly marked unextractable
-            if fdecl.term_constructor.is_some() {
+            // A function is unextractable unless it is a term constructor's view
+            // table, which keeps the flag it was declared with.
+            if term_constructor.is_some() {
                 fdecl.unextractable = unextractable;
-            } else if unextractable {
-                fdecl.unextractable = true;
             }
-            // For regular functions without term_constructor, keep the default
-            // unextractable=true from FunctionDecl::function()
+            fdecl.term_constructor = term_constructor;
             vec![NCommand::Function(fdecl)]
         }
         Command::Constructor {
@@ -49,7 +45,7 @@ pub(crate) fn desugar_command(
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
-            std::iter::once(NCommand::Function(fdecl)).collect()
+            vec![NCommand::Function(fdecl)]
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
         Command::Datatype {
@@ -59,65 +55,51 @@ pub(crate) fn desugar_command(
         } => desugar_datatype(span, name, variants),
         Command::Datatypes { span: _, datatypes } => {
             // first declare all the datatypes as sorts, then add all explicit sorts which could refer to the datatypes, and finally add all the variants as functions
-            let mut res = vec![];
-            for datatype in datatypes.iter() {
-                let span = datatype.0.clone();
-                let name = datatype.1.clone();
-                if let Subdatatypes::Variants(..) = datatype.2 {
-                    res.push(NCommand::Sort {
+            let mut variant_sets = vec![];
+            let mut new_sorts = vec![];
+            for (span, name, subdatatypes) in datatypes {
+                match subdatatypes {
+                    Subdatatypes::Variants(variants) => variant_sets.push((span, name, variants)),
+                    Subdatatypes::NewSort(sort, args) => new_sorts.push((span, name, sort, args)),
+                }
+            }
+            let mut res: Vec<_> = variant_sets
+                .iter()
+                .map(|(span, name, _)| plain_sort(span.clone(), name.clone(), true))
+                .collect();
+            res.extend(
+                new_sorts
+                    .into_iter()
+                    .map(|(span, name, sort, args)| NCommand::Sort {
                         span,
                         name,
-                        presort_and_args: None,
+                        presort_and_args: Some((sort, args)),
                         uf: None,
                         proof_func: None,
                         container_rebuild: None,
                         proof_constructors: None,
                         unionable: true,
-                    });
-                }
-            }
-            let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
-                .into_iter()
-                .partition(|datatype| matches!(datatype.2, Subdatatypes::Variants(..)));
-
-            for sort in sorts {
-                let span = sort.0.clone();
-                let name = sort.1;
-                let Subdatatypes::NewSort(sort, args) = sort.2 else {
-                    unreachable!()
-                };
-                res.push(NCommand::Sort {
-                    span,
-                    name,
-                    presort_and_args: Some((sort, args)),
-                    uf: None,
-                    proof_func: None,
-                    container_rebuild: None,
-                    proof_constructors: None,
-                    unionable: true,
-                });
-            }
-
-            for variants in variants_vec {
-                let datatype = variants.1;
-                let Subdatatypes::Variants(variants) = variants.2 else {
-                    unreachable!();
-                };
-                for variant in variants {
-                    res.push(NCommand::Function(FunctionDecl::constructor(
-                        variant.span,
-                        variant.name,
-                        Schema {
-                            input: variant.types,
-                            output: datatype.clone(),
-                        },
-                        variant.cost,
-                        false,
-                        false,
-                    )));
-                }
-            }
-
+                    }),
+            );
+            res.extend(
+                variant_sets
+                    .into_iter()
+                    .flat_map(|(_, datatype, variants)| {
+                        variants.into_iter().map(move |variant| {
+                            NCommand::Function(FunctionDecl::constructor(
+                                variant.span,
+                                variant.name,
+                                Schema {
+                                    input: variant.types,
+                                    output: datatype.clone(),
+                                },
+                                variant.cost,
+                                false,
+                                false,
+                            ))
+                        })
+                    }),
+            );
             res
         }
         Command::Rewrite(ruleset, mut rewrite, subsume) => {
@@ -159,16 +141,14 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::RunSchedule(sched) => {
-            vec![NCommand::RunSchedule(sched.clone())]
-        }
+        Command::RunSchedule(sched) => vec![NCommand::RunSchedule(sched)],
         Command::PrintOverallStatistics(span, file) => {
-            vec![NCommand::PrintOverallStatistics(span, file.clone())]
+            vec![NCommand::PrintOverallStatistics(span, file)]
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => {
             if proof_testing {
-                desugar_prove(parser, span.clone(), facts.clone())
+                desugar_prove(parser, span, facts)
             } else {
                 vec![NCommand::Check(span, facts)]
             }
@@ -177,19 +157,13 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintFunction(span, symbol, size, file, mode)]
         }
         Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
-        Command::Output { span, file, exprs } => {
-            vec![NCommand::Output { span, file, exprs }]
-        }
-        Command::Push(num) => {
-            vec![NCommand::Push(num)]
-        }
-        Command::Pop(span, num) => {
-            vec![NCommand::Pop(span, num)]
-        }
+        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
+        Command::Push(num) => vec![NCommand::Push(num)],
+        Command::Pop(span, num) => vec![NCommand::Pop(span, num)],
         Command::Fail(span, cmd) => {
             if let Command::Include(..) = *cmd {
                 return Err(Error::DesugarError(
-                    span.clone(),
+                    span,
                     "include is not allowed inside (fail ...)".to_string(),
                 ));
             }
@@ -197,16 +171,14 @@ pub(crate) fn desugar_command(
 
             let Some(last) = desugared.pop() else {
                 return Err(Error::DesugarError(
-                    span.clone(),
+                    span,
                     "the command inside (fail ...) expands to no commands".to_string(),
                 ));
             };
             desugared.push(NCommand::Fail(span, Box::new(last)));
             return Ok(desugared);
         }
-        Command::Input { span, name, file } => {
-            vec![NCommand::Input { span, name, file }]
-        }
+        Command::Input { span, name, file } => vec![NCommand::Input { span, name, file }],
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
@@ -269,16 +241,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
     let ruleset = parser.symbol_gen.fresh("exists");
     let name = parser.symbol_gen.fresh("prove_exists_rule");
     vec![
-        NCommand::Sort {
-            span: span.clone(),
-            name: fresh_sort.clone(),
-            presort_and_args: None,
-            uf: None,
-            proof_func: None,
-            container_rebuild: None,
-            proof_constructors: None,
-            unionable: false,
-        },
+        plain_sort(span.clone(), fresh_sort.clone(), false),
         NCommand::Function(FunctionDecl::constructor(
             span.clone(),
             constructor_name.clone(),
@@ -320,32 +283,36 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
     ]
 }
 
-fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort {
-        span: span.clone(),
-        name: name.clone(),
+/// A sort with no presort, union-find, proof or container annotation.
+fn plain_sort(span: Span, name: String, unionable: bool) -> NCommand {
+    NCommand::Sort {
+        span,
+        name,
         presort_and_args: None,
         uf: None,
         proof_func: None,
         container_rebuild: None,
         proof_constructors: None,
-        unionable: true,
-    }]
-    .into_iter()
-    .chain(variants.into_iter().map(|variant| {
-        NCommand::Function(FunctionDecl::constructor(
-            variant.span,
-            variant.name,
-            Schema {
-                input: variant.types,
-                output: name.clone(),
-            },
-            variant.cost,
-            variant.unextractable,
-            false,
-        ))
-    }))
-    .collect()
+        unionable,
+    }
+}
+
+fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
+    std::iter::once(plain_sort(span, name.clone(), true))
+        .chain(variants.into_iter().map(|variant| {
+            NCommand::Function(FunctionDecl::constructor(
+                variant.span,
+                variant.name,
+                Schema {
+                    input: variant.types,
+                    output: name.clone(),
+                },
+                variant.cost,
+                variant.unextractable,
+                false,
+            ))
+        }))
+        .collect()
 }
 
 fn desugar_rewrite(
@@ -355,10 +322,13 @@ fn desugar_rewrite(
     subsume: bool,
     parser: &mut Parser,
 ) -> Result<NCommand, Error> {
-    let span = rewrite.span;
-    let lhs = rewrite.lhs;
-    let rhs = rewrite.rhs;
-    let conditions = rewrite.conditions;
+    let Rewrite {
+        span,
+        lhs,
+        rhs,
+        conditions,
+        ..
+    } = rewrite;
     let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
@@ -366,26 +336,19 @@ fn desugar_rewrite(
         rhs,
     ));
     if subsume {
-        match &lhs {
-            Expr::Call(_, f, args) => {
-                head.0.push(Action::Change(
-                    span.clone(),
-                    Change::Subsume,
-                    f.clone(),
-                    args.to_vec(),
-                ));
-            }
-            _ => {
-                return Err(Error::DesugarError(
-                    lhs.span(),
-                    "subsumed rewrite must have a function call on the lhs".to_string(),
-                ));
-            }
-        }
+        let Expr::Call(_, f, args) = &lhs else {
+            return Err(Error::DesugarError(
+                lhs.span(),
+                "subsumed rewrite must have a function call on the lhs".to_string(),
+            ));
+        };
+        head.0.push(Action::Change(
+            span.clone(),
+            Change::Subsume,
+            f.clone(),
+            args.clone(),
+        ));
     }
-    // make two rules- one to insert the rhs, and one to union
-    // this way, the union rule can only be fired once,
-    // which helps proofs not add too much info
     Ok(NCommand::NormRule {
         rule: Rule {
             span: span.clone(),
@@ -433,16 +396,7 @@ fn desugar_relation(
     let dashes_removed = name.replace('-', "");
     let fresh_sort = parser.symbol_gen.fresh(&format!("{dashes_removed}Sort"));
     vec![
-        NCommand::Sort {
-            span: span.clone(),
-            name: fresh_sort.clone(),
-            presort_and_args: None,
-            uf: None,
-            proof_func: None,
-            container_rebuild: None,
-            proof_constructors: None,
-            unionable: false,
-        },
+        plain_sort(span.clone(), fresh_sort.clone(), false),
         NCommand::Function(FunctionDecl::constructor(
             span,
             name,

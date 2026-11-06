@@ -46,18 +46,13 @@ impl CommandMacroRegistry {
         symbol_gen: &mut SymbolGen,
         type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
-        // Start with the original command
-        let mut commands = vec![command];
-
-        // Apply each macro in sequence to all commands
-        for macro_impl in &self.macros {
-            let mut next_commands = Vec::new();
-            for cmd in commands {
-                next_commands.extend(macro_impl.transform(cmd, symbol_gen, type_info)?);
-            }
-            commands = next_commands;
-        }
-
-        Ok(commands)
+        self.macros
+            .iter()
+            .try_fold(vec![command], |commands, macro_impl| {
+                commands.into_iter().try_fold(Vec::new(), |mut next, cmd| {
+                    next.extend(macro_impl.transform(cmd, symbol_gen, type_info)?);
+                    Ok(next)
+                })
+            })
     }
 }

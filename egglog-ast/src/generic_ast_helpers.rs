@@ -30,36 +30,20 @@ macro_rules! impl_from {
 
 pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 
-impl<Head: Display, Leaf: Display> Display for GenericRule<Head, Leaf>
+impl<Head, Leaf> Display for GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let indent = " ".repeat(7);
-        write!(f, "(rule (")?;
-        for (i, fact) in self.body.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{indent}")?;
-            }
-
-            if i != self.body.len() - 1 {
-                writeln!(f, "{fact}")?;
-            } else {
-                write!(f, "{fact}")?;
-            }
-        }
-        write!(f, ")\n      (")?;
-        for (i, action) in self.head.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{indent}")?;
-            }
-            if i != self.head.0.len() - 1 {
-                writeln!(f, "{action}")?;
-            } else {
-                write!(f, "{action}")?;
-            }
-        }
+        const SEPARATOR: &str = "\n       ";
+        let indent = &SEPARATOR[1..];
+        write!(
+            f,
+            "(rule ({})\n      ({}",
+            ListDisplay(&self.body, SEPARATOR),
+            ListDisplay(&self.head.0, SEPARATOR)
+        )?;
         let ruleset = if !self.ruleset.is_empty() {
             format!(":ruleset {}", &self.ruleset)
         } else {
@@ -102,8 +86,7 @@ impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
     }
 }
 
-// Implement Display for GenericAction
-impl<Head: Display, Leaf: Display> Display for GenericAction<Head, Leaf>
+impl<Head, Leaf> Display for GenericAction<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
@@ -115,16 +98,7 @@ where
                 if args.is_empty() {
                     write!(f, "(set ({lhs}) {rhs})")
                 } else {
-                    write!(
-                        f,
-                        "(set ({} {}) {})",
-                        lhs,
-                        args.iter()
-                            .map(|a| format!("{a}"))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        rhs
-                    )
+                    write!(f, "(set ({lhs} {}) {rhs})", ListDisplay(args, " "))
                 }
             }
             GenericAction::Union(_, lhs, rhs) => write!(f, "(union {lhs} {rhs})"),
@@ -136,16 +110,7 @@ where
                 if args.is_empty() {
                     write!(f, "({change_str} ({lhs}))")
                 } else {
-                    write!(
-                        f,
-                        "({} ({} {}))",
-                        change_str,
-                        lhs,
-                        args.iter()
-                            .map(|a| format!("{a}"))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
+                    write!(f, "({change_str} ({lhs} {}))", ListDisplay(args, " "))
                 }
             }
             GenericAction::Panic(_, msg) => {
@@ -194,18 +159,13 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self {
-            span: self.span,
             head: self.head.visit_exprs(f),
             body: self
                 .body
                 .into_iter()
                 .map(|bexpr| bexpr.visit_exprs(f))
                 .collect(),
-            name: self.name,
-            ruleset: self.ruleset,
-            eval_mode: self.eval_mode,
-            no_decomp: self.no_decomp,
-            include_subsumed: self.include_subsumed,
+            ..self
         }
     }
 
@@ -215,14 +175,8 @@ where
         f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
     ) -> Self {
         Self {
-            span: self.span,
             head: self.head.visit_actions(f),
-            body: self.body,
-            name: self.name,
-            ruleset: self.ruleset,
-            eval_mode: self.eval_mode,
-            no_decomp: self.no_decomp,
-            include_subsumed: self.include_subsumed,
+            ..self
         }
     }
 
@@ -442,28 +396,13 @@ where
             }
             GenericAction::Set(span, lhs, args, rhs) => {
                 let args = args
-                    .into_iter()
+                    .iter()
                     .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Set(span, lhs.clone(), args, rhs)
+                GenericAction::Set(span, lhs, args, rhs)
             }
-            GenericAction::Change(span, change, lhs, args) => {
-                let args = args
-                    .into_iter()
-                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
-                    .collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
-            }
-            GenericAction::Union(span, lhs, rhs) => {
-                let lhs = lhs.subst_leaf(&mut fvar_expr!());
-                let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Union(span, lhs, rhs)
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => {
-                GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
-            }
+            action => action.map_exprs(&mut |e| e.subst_leaf(&mut fvar_expr!())),
         }
     }
 
@@ -482,10 +421,10 @@ where
                 GenericAction::Let(span, leaf(lhs), rhs.map_symbols(head, leaf))
             }
             GenericAction::Set(span, head_sym, args, rhs) => {
-                let mut mapped_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    mapped_args.push(arg.map_symbols(head, leaf));
-                }
+                let mapped_args = args
+                    .into_iter()
+                    .map(|arg| arg.map_symbols(head, leaf))
+                    .collect();
                 GenericAction::Set(
                     span,
                     head(head_sym),
@@ -494,10 +433,10 @@ where
                 )
             }
             GenericAction::Change(span, change, head_sym, args) => {
-                let mut mapped_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    mapped_args.push(arg.map_symbols(head, leaf));
-                }
+                let mapped_args = args
+                    .into_iter()
+                    .map(|arg| arg.map_symbols(head, leaf))
+                    .collect();
                 GenericAction::Change(span, change, head(head_sym), mapped_args)
             }
             GenericAction::Union(span, lhs, rhs) => GenericAction::Union(
@@ -536,16 +475,22 @@ where
         }
     }
 
+    /// Rebuilds the fact, applying `f` to each of its expressions in order.
+    fn map<Head2, Leaf2>(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
+    ) -> GenericFact<Head2, Leaf2> {
+        match self {
+            GenericFact::Eq(span, e1, e2) => GenericFact::Eq(span, f(e1), f(e2)),
+            GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
+        }
+    }
+
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> GenericFact<Head, Leaf> {
-        match self {
-            GenericFact::Eq(span, e1, e2) => {
-                GenericFact::Eq(span, e1.visit_exprs(f), e2.visit_exprs(f))
-            }
-            GenericFact::Fact(expr) => GenericFact::Fact(expr.visit_exprs(f)),
-        }
+        self.map(&mut |e| e.visit_exprs(f))
     }
 
     pub fn map_exprs<Head2, Leaf2>(
@@ -582,12 +527,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        match self {
-            GenericFact::Eq(span, e1, e2) => {
-                GenericFact::Eq(span, e1.map_symbols(head, leaf), e2.map_symbols(head, leaf))
-            }
-            GenericFact::Fact(expr) => GenericFact::Fact(expr.map_symbols(head, leaf)),
-        }
+        self.map(&mut |e| e.map_symbols(head, leaf))
     }
 
     /// Converts all heads and leaves to strings.
@@ -609,9 +549,9 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
 
     pub fn span(&self) -> Span {
         match self {
-            GenericExpr::Lit(span, _) => span.clone(),
-            GenericExpr::Var(span, _) => span.clone(),
-            GenericExpr::Call(span, _, _) => span.clone(),
+            GenericExpr::Lit(span, _)
+            | GenericExpr::Var(span, _)
+            | GenericExpr::Call(span, _, _) => span.clone(),
         }
     }
 
@@ -660,27 +600,14 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
     /// Search for the first node matching a predicate, returning early once found.
     /// Traverses the tree in pre-order (top-down).
     pub fn find<Out>(&self, f: &mut impl FnMut(&Self) -> Option<Out>) -> Option<Out> {
-        // Check current node first
-        if let Some(result) = f(self) {
-            return Some(result);
-        }
-
-        // Then check children
-        for child in self.children().iter() {
-            if let Some(result) = child.find(f) {
-                return Some(result);
-            }
-        }
-
-        None
+        f(self).or_else(|| self.children().iter().find_map(|child| child.find(f)))
     }
 
     /// Applys `f` to all sub-expressions (including `self`)
     /// bottom-up, collecting the results.
     pub fn visit_exprs(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
-            GenericExpr::Lit(..) => f(self),
-            GenericExpr::Var(..) => f(self),
+            GenericExpr::Lit(..) | GenericExpr::Var(..) => f(self),
             GenericExpr::Call(span, op, children) => {
                 let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
                 f(GenericExpr::Call(span, op, children))
@@ -724,10 +651,10 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
             GenericExpr::Lit(span, lit) => GenericExpr::Lit(span, lit),
             GenericExpr::Var(span, var) => GenericExpr::Var(span, leaf(var)),
             GenericExpr::Call(span, op, children) => {
-                let mut mapped_children = Vec::with_capacity(children.len());
-                for child in children {
-                    mapped_children.push(child.map_symbols(head, leaf));
-                }
+                let mapped_children = children
+                    .into_iter()
+                    .map(|child| child.map_symbols(head, leaf))
+                    .collect();
                 GenericExpr::Call(span, head(op), mapped_children)
             }
         }

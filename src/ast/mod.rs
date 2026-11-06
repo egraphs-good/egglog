@@ -5,7 +5,7 @@ mod parse;
 pub mod proof_global_remover;
 pub mod remove_globals;
 
-use std::cmp::max;
+use std::cell::Cell;
 
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
@@ -252,7 +252,7 @@ where
         }
     }
 
-    /// Applies `f` to
+    /// Applies `f` to every query in the command.
     pub fn visit_queries(
         self,
         f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
@@ -293,38 +293,24 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericNCommand::Sort {
-                span,
-                name,
-                presort_and_args,
-                uf,
-                proof_func,
-                container_rebuild,
-                proof_constructors,
-                unionable,
-            } => GenericNCommand::Sort {
-                span,
-                name,
-                presort_and_args,
-                uf,
-                proof_func,
-                container_rebuild,
-                proof_constructors,
-                unionable,
-            },
+            // None of these carries a Head/Leaf expression; UserDefined and presort arguments hold plain Exprs.
+            GenericNCommand::Sort { .. }
+            | GenericNCommand::AddRuleset(..)
+            | GenericNCommand::UnstableCombinedRuleset(..)
+            | GenericNCommand::PrintOverallStatistics(..)
+            | GenericNCommand::PrintFunction(..)
+            | GenericNCommand::ProveExists(..)
+            | GenericNCommand::PrintSize(..)
+            | GenericNCommand::Push(..)
+            | GenericNCommand::Pop(..)
+            | GenericNCommand::Input { .. }
+            | GenericNCommand::UserDefined(..) => self,
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
-            GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
-            GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
-                GenericNCommand::UnstableCombinedRuleset(span, name, rulesets)
-            }
             GenericNCommand::NormRule { rule } => GenericNCommand::NormRule {
                 rule: rule.visit_exprs(f),
             },
             GenericNCommand::RunSchedule(schedule) => {
                 GenericNCommand::RunSchedule(schedule.visit_exprs(f))
-            }
-            GenericNCommand::PrintOverallStatistics(span, file) => {
-                GenericNCommand::PrintOverallStatistics(span, file)
             }
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
@@ -336,29 +322,13 @@ where
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
-            GenericNCommand::PrintFunction(span, name, n, file, mode) => {
-                GenericNCommand::PrintFunction(span, name, n, file, mode)
-            }
-            GenericNCommand::ProveExists(span, constructor) => {
-                GenericNCommand::ProveExists(span, constructor)
-            }
-            GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
                 span,
                 file,
                 exprs: exprs.into_iter().map(f).collect(),
             },
-            GenericNCommand::Push(n) => GenericNCommand::Push(n),
-            GenericNCommand::Pop(span, n) => GenericNCommand::Pop(span, n),
             GenericNCommand::Fail(span, cmd) => {
                 GenericNCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
-            }
-            GenericNCommand::Input { span, name, file } => {
-                GenericNCommand::Input { span, name, file }
-            }
-            GenericNCommand::UserDefined(span, name, exprs) => {
-                // We can't map `f` over UserDefined because UserDefined always assumes plain `Expr`s
-                GenericNCommand::UserDefined(span, name, exprs)
             }
         }
     }
@@ -391,33 +361,35 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Rebuilds the schedule, applying `f` to every run configuration.
+    fn map_runs<Head2, Leaf2>(
+        self,
+        f: &mut impl FnMut(GenericRunConfig<Head, Leaf>) -> GenericRunConfig<Head2, Leaf2>,
+    ) -> GenericSchedule<Head2, Leaf2> {
+        match self {
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.map_runs(f)))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.map_runs(f)))
+            }
+            GenericSchedule::Run(span, config) => GenericSchedule::Run(span, f(config)),
+            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
+                span,
+                scheds.into_iter().map(|sched| sched.map_runs(f)).collect(),
+            ),
+        }
+    }
+
     /// Applies `f` to all the queries in the schedule.
     pub fn visit_queries(
         self,
         f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
     ) -> Self {
-        match self {
-            GenericSchedule::Saturate(span, generic_schedule) => {
-                GenericSchedule::Saturate(span, Box::new(generic_schedule.visit_queries(f)))
-            }
-            GenericSchedule::Repeat(span, iters, generic_schedule) => {
-                GenericSchedule::Repeat(span, iters, Box::new(generic_schedule.visit_queries(f)))
-            }
-            GenericSchedule::Run(span, run_config) => GenericSchedule::Run(
-                span,
-                GenericRunConfig {
-                    ruleset: run_config.ruleset,
-                    until: run_config.until.map(f),
-                },
-            ),
-            GenericSchedule::Sequence(span, generic_schedules) => GenericSchedule::Sequence(
-                span,
-                generic_schedules
-                    .into_iter()
-                    .map(|schedule| schedule.visit_queries(f))
-                    .collect(),
-            ),
-        }
+        self.map_runs(&mut |config| GenericRunConfig {
+            ruleset: config.ruleset,
+            until: config.until.map(&mut *f),
+        })
     }
 
     /// Recursively flattens nested `Sequence` nodes into a single level.
@@ -441,10 +413,9 @@ where
                     }
                 }
 
-                match flattened.len() {
-                    0 => GenericSchedule::Sequence(span, flattened),
-                    1 => flattened.into_iter().next().unwrap(),
-                    _ => GenericSchedule::Sequence(span, flattened),
+                match <[_; 1]>::try_from(flattened) {
+                    Ok([only]) => only,
+                    Err(flattened) => GenericSchedule::Sequence(span, flattened),
                 }
             }
         }
@@ -454,19 +425,23 @@ where
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
-        match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.visit_exprs(f)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.visit_exprs(f)))
-            }
-            GenericSchedule::Run(span, config) => GenericSchedule::Run(span, config.visit_exprs(f)),
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
-            ),
-        }
+        self.visit_queries(&mut |facts| facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
+    }
+
+    /// Maps ruleset names through `string` and head and leaf symbols through `head` and `leaf`.
+    /// The result is flattened with `flatten_sequences`, which is idempotent, so both public maps flatten.
+    fn map_names<Head2, Leaf2>(
+        self,
+        string: &mut impl FnMut(String) -> String,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericSchedule<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        self.map_runs(&mut |config| config.map_names(string, head, leaf))
+            .flatten_sequences()
     }
 
     /// Remaps every head and leaf symbol in the schedule using the supplied closures.
@@ -479,24 +454,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.map_symbols(head, leaf)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.map_symbols(head, leaf)))
-            }
-            GenericSchedule::Run(span, config) => {
-                GenericSchedule::Run(span, config.map_symbols(head, leaf))
-            }
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds
-                    .into_iter()
-                    .map(|sched| sched.map_symbols(head, leaf))
-                    .collect(),
-            ),
-        }
+        self.map_names(&mut |s| s, head, leaf)
     }
 
     /// Applies `fun` to every string-valued symbol contained in the schedule,
@@ -505,26 +463,7 @@ where
         self,
         fun: &mut impl FnMut(String) -> String,
     ) -> GenericSchedule<Head, Leaf> {
-        let mapped = match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.map_string_symbols(fun)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.map_string_symbols(fun)))
-            }
-            GenericSchedule::Run(span, config) => {
-                GenericSchedule::Run(span, config.map_string_symbols(fun))
-            }
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds
-                    .into_iter()
-                    .map(|sched| sched.map_string_symbols(fun))
-                    .collect(),
-            ),
-        };
-
-        mapped.flatten_sequences()
+        self.map_names(fun, &mut |h| h, &mut |l| l)
     }
 
     /// Converts all heads and leaves to strings.
@@ -1248,15 +1187,25 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub fn visit_exprs(
+    /// Maps the ruleset through `string` and the symbols of the `until` facts through `head` and `leaf`.
+    fn map_names<Head2, Leaf2>(
         self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        Self {
-            ruleset: self.ruleset,
-            until: self
-                .until
-                .map(|until| until.into_iter().map(|fact| fact.visit_exprs(f)).collect()),
+        string: &mut impl FnMut(String) -> String,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericRunConfig<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        GenericRunConfig {
+            ruleset: string(self.ruleset),
+            until: self.until.map(|facts| {
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect()
+            }),
         }
     }
 
@@ -1270,15 +1219,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        GenericRunConfig {
-            ruleset: self.ruleset,
-            until: self.until.map(|facts| {
-                facts
-                    .into_iter()
-                    .map(|fact| fact.map_symbols(head, leaf))
-                    .collect()
-            }),
-        }
+        self.map_names(&mut |s| s, head, leaf)
     }
 
     /// Applies `fun` to string-valued symbols within the run configuration.
@@ -1286,10 +1227,7 @@ where
         self,
         fun: &mut impl FnMut(String) -> String,
     ) -> GenericRunConfig<Head, Leaf> {
-        GenericRunConfig {
-            ruleset: fun(self.ruleset),
-            until: self.until,
-        }
+        self.map_names(fun, &mut |h| h, &mut |l| l)
     }
 
     pub fn make_unresolved(self) -> GenericRunConfig<String, String> {
@@ -1299,11 +1237,7 @@ where
     }
 }
 
-impl<Head: Display, Leaf: Display> Display for GenericRunConfig<Head, Leaf>
-where
-    Head: Display,
-    Leaf: Display,
-{
+impl<Head: Display, Leaf: Display> Display for GenericRunConfig<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "(run")?;
         if !self.ruleset.is_empty() {
@@ -1466,16 +1400,8 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> GenericFunctionDecl<Head, Leaf> {
         GenericFunctionDecl {
-            name: self.name,
-            subtype: self.subtype,
-            schema: self.schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
-            cost: self.cost,
-            unextractable: self.unextractable,
-            internal_hidden: self.internal_hidden,
-            internal_let: self.internal_let,
-            span: self.span,
-            term_constructor: self.term_constructor,
+            ..self
         }
     }
 }
@@ -1586,6 +1512,23 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    fn visit_exprs(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
+    ) -> Self {
+        Self {
+            span: self.span,
+            lhs: self.lhs.visit_exprs(f),
+            rhs: self.rhs.visit_exprs(f),
+            conditions: self
+                .conditions
+                .into_iter()
+                .map(|fact| fact.visit_exprs(f))
+                .collect(),
+            name: self.name,
+        }
+    }
+
     /// Remaps every head and leaf symbol in the rewrite, including the optional conditions.
     pub fn map_symbols<Head2, Leaf2>(
         self,
@@ -1675,20 +1618,33 @@ where
     }
 }
 
+impl Variant {
+    /// Maps the variant's name and argument types through `string`.
+    fn map_names(self, string: &mut impl FnMut(String) -> String) -> Variant {
+        Variant {
+            name: string(self.name),
+            types: self.types.into_iter().map(&mut *string).collect(),
+            ..self
+        }
+    }
+}
+
 impl<Head, Leaf> GenericCommand<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    /// The current egglog AST has strings even when resolved.
-    /// We map over those strings with this function, used by sanitize_internal_symbols.
-    pub fn map_string_symbols(
+    /// Maps every `String` name in the command through `string` and every head and leaf symbol
+    /// through `head` and `leaf`. A schedule is flattened, as `GenericSchedule::map_names` does.
+    fn map_names<Head2, Leaf2>(
         self,
-        fun: &mut impl FnMut(String) -> String,
-    ) -> GenericCommand<Head, Leaf>
+        string: &mut impl FnMut(String) -> String,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericCommand<Head2, Leaf2>
     where
-        Head: Clone + Display,
-        Leaf: Clone + PartialEq + Eq + Display + Hash,
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
             GenericCommand::Sort {
@@ -1702,10 +1658,10 @@ where
                 unionable,
             } => GenericCommand::Sort {
                 span,
-                name: fun(name),
+                name: string(name),
                 presort_and_args,
-                uf: uf.map(|(ctor, index)| (fun(ctor), index.map(&mut *fun))),
-                proof_func: proof_func.map(&mut *fun),
+                uf: uf.map(|(ctor, index)| (string(ctor), index.map(&mut *string))),
+                proof_func: proof_func.map(&mut *string),
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -1716,16 +1672,10 @@ where
                 variants,
             } => GenericCommand::Datatype {
                 span,
-                name: fun(name),
+                name: string(name),
                 variants: variants
                     .into_iter()
-                    .map(|variant| Variant {
-                        span: variant.span,
-                        name: fun(variant.name),
-                        types: variant.types.into_iter().map(&mut *fun).collect(),
-                        cost: variant.cost,
-                        unextractable: variant.unextractable,
-                    })
+                    .map(|variant| variant.map_names(string))
                     .collect(),
             },
             GenericCommand::Datatypes { span, datatypes } => GenericCommand::Datatypes {
@@ -1733,28 +1683,16 @@ where
                 datatypes: datatypes
                     .into_iter()
                     .map(|(span, name, variants)| {
-                        let new_name = fun(name);
+                        let new_name = string(name);
                         let new_variants = match variants {
                             Subdatatypes::Variants(variants) => Subdatatypes::Variants(
                                 variants
                                     .into_iter()
-                                    .map(|variant| Variant {
-                                        span: variant.span,
-                                        name: fun(variant.name),
-                                        // Redundant closure helps with type inference here
-                                        #[allow(clippy::redundant_closure)]
-                                        types: variant
-                                            .types
-                                            .into_iter()
-                                            .map(|ty| fun(ty))
-                                            .collect(),
-                                        cost: variant.cost,
-                                        unextractable: variant.unextractable,
-                                    })
+                                    .map(|variant| variant.map_names(string))
                                     .collect(),
                             ),
-                            Subdatatypes::NewSort(head, args) => {
-                                Subdatatypes::NewSort(fun(head), args)
+                            Subdatatypes::NewSort(sort, args) => {
+                                Subdatatypes::NewSort(string(sort), args)
                             }
                         };
                         (span, new_name, new_variants)
@@ -1772,21 +1710,21 @@ where
                 term_constructor,
             } => GenericCommand::Constructor {
                 span,
-                name: fun(name),
+                name: string(name),
                 schema: Schema {
-                    input: schema.input.into_iter().map(&mut *fun).collect(),
-                    output: fun(schema.output),
+                    input: schema.input.into_iter().map(&mut *string).collect(),
+                    output: string(schema.output),
                 },
                 cost,
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor: term_constructor.map(&mut *fun),
+                term_constructor: term_constructor.map(&mut *string),
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
-                name: fun(name),
-                inputs: inputs.into_iter().map(&mut *fun).collect(),
+                name: string(name),
+                inputs: inputs.into_iter().map(&mut *string).collect(),
             },
             GenericCommand::Function {
                 span,
@@ -1799,81 +1737,116 @@ where
                 unextractable,
             } => GenericCommand::Function {
                 span,
-                name: fun(name),
+                name: string(name),
                 schema: Schema {
-                    input: schema.input.into_iter().map(&mut *fun).collect(),
-                    output: fun(schema.output),
+                    input: schema.input.into_iter().map(&mut *string).collect(),
+                    output: string(schema.output),
                 },
-                merge,
+                merge: merge.map(|expr| expr.map_symbols(head, leaf)),
                 hidden,
                 let_binding,
-                term_constructor: term_constructor.map(&mut *fun),
+                term_constructor: term_constructor.map(&mut *string),
                 unextractable,
             },
-            GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, fun(name)),
+            GenericCommand::AddRuleset(span, name) => {
+                GenericCommand::AddRuleset(span, string(name))
+            }
             GenericCommand::UnstableCombinedRuleset(span, name, others) => {
                 GenericCommand::UnstableCombinedRuleset(
                     span,
-                    fun(name),
-                    others.into_iter().map(&mut *fun).collect(),
+                    string(name),
+                    others.into_iter().map(&mut *string).collect(),
                 )
             }
             GenericCommand::Rule { rule } => {
-                let rule = GenericRule {
-                    span: rule.span,
-                    name: fun(rule.name),
-                    ruleset: fun(rule.ruleset),
-                    head: rule.head,
-                    body: rule.body,
-                    eval_mode: rule.eval_mode,
-                    no_decomp: rule.no_decomp,
-                    include_subsumed: rule.include_subsumed,
-                };
-                GenericCommand::Rule { rule }
+                let rule = rule.map_symbols(head, leaf);
+                GenericCommand::Rule {
+                    rule: GenericRule {
+                        name: string(rule.name),
+                        ruleset: string(rule.ruleset),
+                        ..rule
+                    },
+                }
             }
             GenericCommand::Rewrite(name, rewrite, subsume) => {
-                GenericCommand::Rewrite(fun(name), rewrite, subsume)
+                GenericCommand::Rewrite(string(name), rewrite.map_symbols(head, leaf), subsume)
             }
             GenericCommand::BiRewrite(name, rewrite) => {
-                GenericCommand::BiRewrite(fun(name), rewrite)
+                GenericCommand::BiRewrite(string(name), rewrite.map_symbols(head, leaf))
             }
-            GenericCommand::Action(action) => GenericCommand::Action(action),
-            GenericCommand::Extract(span, expr, variants) => {
-                GenericCommand::Extract(span, expr, variants)
+            GenericCommand::Action(action) => {
+                GenericCommand::Action(action.map_symbols(head, leaf))
             }
+            GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
+                span,
+                expr.map_symbols(head, leaf),
+                variants.map_symbols(head, leaf),
+            ),
             GenericCommand::RunSchedule(schedule) => {
-                GenericCommand::RunSchedule(schedule.map_string_symbols(fun))
+                GenericCommand::RunSchedule(schedule.map_names(string, head, leaf))
             }
             GenericCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span, file)
             }
-            GenericCommand::Check(span, facts) => GenericCommand::Check(span, facts),
-            GenericCommand::Prove(span, facts) => GenericCommand::Prove(span, facts),
+            GenericCommand::Check(span, facts) => GenericCommand::Check(
+                span,
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect(),
+            ),
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(
+                span,
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect(),
+            ),
             GenericCommand::ProveExists(span, constructor) => {
-                GenericCommand::ProveExists(span, constructor)
+                GenericCommand::ProveExists(span, head(constructor))
             }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
-                GenericCommand::PrintFunction(span, fun(name), n, file, mode)
+                GenericCommand::PrintFunction(span, string(name), n, file, mode)
             }
-            GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name.map(fun)),
+            GenericCommand::PrintSize(span, name) => {
+                GenericCommand::PrintSize(span, name.map(string))
+            }
             GenericCommand::Input { span, name, file } => GenericCommand::Input {
                 span,
-                name: fun(name),
+                name: string(name),
                 file,
             },
-            GenericCommand::Output { span, file, exprs } => {
-                GenericCommand::Output { span, file, exprs }
-            }
+            GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
+                span,
+                file,
+                exprs: exprs
+                    .into_iter()
+                    .map(|expr| expr.map_symbols(head, leaf))
+                    .collect(),
+            },
             GenericCommand::Push(n) => GenericCommand::Push(n),
             GenericCommand::Pop(span, n) => GenericCommand::Pop(span, n),
             GenericCommand::Fail(span, cmd) => {
-                GenericCommand::Fail(span, Box::new(cmd.map_string_symbols(fun)))
+                GenericCommand::Fail(span, Box::new(cmd.map_names(string, head, leaf)))
             }
             GenericCommand::Include(span, file) => GenericCommand::Include(span, file),
             GenericCommand::UserDefined(span, name, exprs) => {
                 GenericCommand::UserDefined(span, name, exprs)
             }
         }
+    }
+
+    /// The current egglog AST has strings even when resolved.
+    /// We map over those strings with this function, used by sanitize_internal_symbols.
+    pub fn map_string_symbols(
+        self,
+        fun: &mut impl FnMut(String) -> String,
+    ) -> GenericCommand<Head, Leaf>
+    where
+        Head: Clone + Display,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+    {
+        self.map_names(fun, &mut |h| h, &mut |l| l)
     }
 
     /// Applies `f` to all expressions in the command, bottom-up.
@@ -1904,35 +1877,12 @@ where
             GenericCommand::Rule { rule } => GenericCommand::Rule {
                 rule: rule.visit_exprs(f),
             },
-            GenericCommand::Rewrite(name, rewrite, subsume) => GenericCommand::Rewrite(
-                name,
-                GenericRewrite {
-                    span: rewrite.span,
-                    lhs: rewrite.lhs.visit_exprs(f),
-                    rhs: rewrite.rhs.visit_exprs(f),
-                    conditions: rewrite
-                        .conditions
-                        .into_iter()
-                        .map(|fact| fact.visit_exprs(f))
-                        .collect(),
-                    name: rewrite.name,
-                },
-                subsume,
-            ),
-            GenericCommand::BiRewrite(name, rewrite) => GenericCommand::BiRewrite(
-                name,
-                GenericRewrite {
-                    span: rewrite.span,
-                    lhs: rewrite.lhs.visit_exprs(f),
-                    rhs: rewrite.rhs.visit_exprs(f),
-                    conditions: rewrite
-                        .conditions
-                        .into_iter()
-                        .map(|fact| fact.visit_exprs(f))
-                        .collect(),
-                    name: rewrite.name,
-                },
-            ),
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                GenericCommand::Rewrite(name, rewrite.visit_exprs(f), subsume)
+            }
+            GenericCommand::BiRewrite(name, rewrite) => {
+                GenericCommand::BiRewrite(name, rewrite.visit_exprs(f))
+            }
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
             GenericCommand::Extract(span, expr1, expr2) => {
                 GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
@@ -1971,148 +1921,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        match self {
-            GenericCommand::Sort {
-                span,
-                name,
-                presort_and_args,
-                uf,
-                proof_func,
-                container_rebuild,
-                proof_constructors,
-                unionable,
-            } => GenericCommand::Sort {
-                span,
-                name,
-                presort_and_args,
-                uf,
-                proof_func,
-                container_rebuild,
-                proof_constructors,
-                unionable,
-            },
-            GenericCommand::Datatype {
-                span,
-                name,
-                variants,
-            } => GenericCommand::Datatype {
-                span,
-                name,
-                variants,
-            },
-            GenericCommand::Datatypes { span, datatypes } => {
-                GenericCommand::Datatypes { span, datatypes }
-            }
-            GenericCommand::Constructor {
-                span,
-                name,
-                schema,
-                cost,
-                unextractable,
-                hidden,
-                let_binding,
-                term_constructor,
-            } => GenericCommand::Constructor {
-                span,
-                name,
-                schema,
-                cost,
-                unextractable,
-                hidden,
-                let_binding,
-                term_constructor,
-            },
-            GenericCommand::Relation { span, name, inputs } => {
-                GenericCommand::Relation { span, name, inputs }
-            }
-            GenericCommand::Function {
-                span,
-                name,
-                schema,
-                merge,
-                hidden,
-                let_binding,
-                term_constructor,
-                unextractable,
-            } => GenericCommand::Function {
-                span,
-                name,
-                schema,
-                merge: merge.map(|expr| expr.map_symbols(head, leaf)),
-                hidden,
-                let_binding,
-                term_constructor,
-                unextractable,
-            },
-            GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),
-            GenericCommand::UnstableCombinedRuleset(span, name, others) => {
-                GenericCommand::UnstableCombinedRuleset(span, name, others)
-            }
-            GenericCommand::Rule { rule } => GenericCommand::Rule {
-                rule: rule.map_symbols(head, leaf),
-            },
-            GenericCommand::Rewrite(name, rewrite, subsume) => {
-                GenericCommand::Rewrite(name, rewrite.map_symbols(head, leaf), subsume)
-            }
-            GenericCommand::BiRewrite(name, rewrite) => {
-                GenericCommand::BiRewrite(name, rewrite.map_symbols(head, leaf))
-            }
-            GenericCommand::Action(action) => {
-                GenericCommand::Action(action.map_symbols(head, leaf))
-            }
-            GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
-                span,
-                expr.map_symbols(head, leaf),
-                variants.map_symbols(head, leaf),
-            ),
-            GenericCommand::RunSchedule(schedule) => {
-                GenericCommand::RunSchedule(schedule.map_symbols(head, leaf))
-            }
-            GenericCommand::PrintOverallStatistics(span, file) => {
-                GenericCommand::PrintOverallStatistics(span, file)
-            }
-            GenericCommand::Check(span, facts) => GenericCommand::Check(
-                span,
-                facts
-                    .into_iter()
-                    .map(|fact| fact.map_symbols(head, leaf))
-                    .collect(),
-            ),
-            GenericCommand::Prove(span, facts) => GenericCommand::Prove(
-                span,
-                facts
-                    .into_iter()
-                    .map(|fact| fact.map_symbols(head, leaf))
-                    .collect(),
-            ),
-            GenericCommand::ProveExists(span, constructor) => {
-                GenericCommand::ProveExists(span, head(constructor))
-            }
-            GenericCommand::PrintFunction(span, name, n, file, mode) => {
-                GenericCommand::PrintFunction(span, name, n, file, mode)
-            }
-            GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name),
-            GenericCommand::Input { span, name, file } => {
-                GenericCommand::Input { span, name, file }
-            }
-            GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
-                span,
-                file,
-                exprs: exprs
-                    .into_iter()
-                    .map(|expr| expr.map_symbols(head, leaf))
-                    .collect(),
-            },
-            GenericCommand::Push(n) => GenericCommand::Push(n),
-            GenericCommand::Pop(span, n) => GenericCommand::Pop(span, n),
-            GenericCommand::Fail(span, cmd) => {
-                GenericCommand::Fail(span, Box::new(cmd.map_symbols(head, leaf)))
-            }
-            GenericCommand::Include(span, file) => GenericCommand::Include(span, file),
-            GenericCommand::UserDefined(span, name, exprs) => {
-                GenericCommand::UserDefined(span, name, exprs)
-            }
-        }
+        self.map_names(&mut |s| s, head, leaf)
     }
 
     /// Makes the command unresolved by converting all Head and Leaf types to String.
@@ -2141,35 +1950,16 @@ where
 
 /// Computes the maximum number of underscores in any symbol name in the program.
 pub fn get_max_underscores(program: &[GenericCommand<String, String>]) -> usize {
-    // now count the max number of underscores in any name
-    let mut max_underscores = 0;
-    let mut max_underscores2 = 0;
+    let most = Cell::new(0);
+    let tally = |s: String| {
+        most.set(most.get().max(s.matches(INTERNAL_SYMBOL_PREFIX).count()));
+        s
+    };
+    let (mut string, mut head, mut leaf) = (tally, tally, tally);
     for cmd in program {
-        cmd.clone().map_symbols(
-            &mut |h: String| {
-                let count = h.matches(INTERNAL_SYMBOL_PREFIX).count();
-                if count > max_underscores {
-                    max_underscores = count;
-                }
-                h
-            },
-            &mut |l: String| {
-                let count = l.matches(INTERNAL_SYMBOL_PREFIX).count();
-                if count > max_underscores2 {
-                    max_underscores2 = count;
-                }
-                l
-            },
-        );
-        cmd.clone().map_string_symbols(&mut |s: String| {
-            let count = s.matches(INTERNAL_SYMBOL_PREFIX).count();
-            if count > max_underscores {
-                max_underscores = count;
-            }
-            s
-        });
+        cmd.clone().map_names(&mut string, &mut head, &mut leaf);
     }
-    max(max_underscores, max_underscores2)
+    most.get()
 }
 
 /// Replaces all identifiers containing the internal symbol prefix with the given replacement string.
@@ -2177,15 +1967,11 @@ pub fn replace_internal_symbol_with(
     program: &[GenericCommand<String, String>],
     replacement: &str,
 ) -> Vec<GenericCommand<String, String>> {
+    let rename = |s: String| s.replace(INTERNAL_SYMBOL_PREFIX, replacement);
+    let (mut string, mut head, mut leaf) = (rename, rename, rename);
     program
         .iter()
-        .map(|cmd| {
-            let cmd = cmd.clone().map_symbols(
-                &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, replacement),
-                &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, replacement),
-            );
-            cmd.map_string_symbols(&mut |s: String| s.replace(INTERNAL_SYMBOL_PREFIX, replacement))
-        })
+        .map(|cmd| cmd.clone().map_names(&mut string, &mut head, &mut leaf))
         .collect()
 }
 
