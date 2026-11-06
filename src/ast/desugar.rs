@@ -23,16 +23,12 @@ pub(crate) fn desugar_command(
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
-            fdecl.term_constructor = term_constructor;
-            // Functions with term_constructor are view tables that should be
-            // extractable unless explicitly marked unextractable
-            if fdecl.term_constructor.is_some() {
+            // A function is unextractable unless it is a term constructor's view
+            // table, which keeps the flag it was declared with.
+            if term_constructor.is_some() {
                 fdecl.unextractable = unextractable;
-            } else if unextractable {
-                fdecl.unextractable = true;
             }
-            // For regular functions without term_constructor, keep the default
-            // unextractable=true from FunctionDecl::function()
+            fdecl.term_constructor = term_constructor;
             vec![NCommand::Function(fdecl)]
         }
         Command::Constructor {
@@ -49,7 +45,7 @@ pub(crate) fn desugar_command(
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
-            std::iter::once(NCommand::Function(fdecl)).collect()
+            vec![NCommand::Function(fdecl)]
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
         Command::Datatype {
