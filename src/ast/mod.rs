@@ -424,19 +424,7 @@ where
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
-        match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.visit_exprs(f)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.visit_exprs(f)))
-            }
-            GenericSchedule::Run(span, config) => GenericSchedule::Run(span, config.visit_exprs(f)),
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
-            ),
-        }
+        self.visit_queries(&mut |facts| facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
     }
 
     /// Remaps every head and leaf symbol in the schedule using the supplied closures.
@@ -1218,18 +1206,6 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub fn visit_exprs(
-        self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        Self {
-            ruleset: self.ruleset,
-            until: self
-                .until
-                .map(|until| until.into_iter().map(|fact| fact.visit_exprs(f)).collect()),
-        }
-    }
-
     /// Remaps every head and leaf symbol in the run configuration.
     pub fn map_symbols<Head2, Leaf2>(
         self,
