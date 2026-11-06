@@ -361,33 +361,35 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Rebuilds the schedule, applying `f` to every run configuration.
+    fn map_runs<Head2, Leaf2>(
+        self,
+        f: &mut impl FnMut(GenericRunConfig<Head, Leaf>) -> GenericRunConfig<Head2, Leaf2>,
+    ) -> GenericSchedule<Head2, Leaf2> {
+        match self {
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.map_runs(f)))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.map_runs(f)))
+            }
+            GenericSchedule::Run(span, config) => GenericSchedule::Run(span, f(config)),
+            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
+                span,
+                scheds.into_iter().map(|sched| sched.map_runs(f)).collect(),
+            ),
+        }
+    }
+
     /// Applies `f` to all the queries in the schedule.
     pub fn visit_queries(
         self,
         f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
     ) -> Self {
-        match self {
-            GenericSchedule::Saturate(span, generic_schedule) => {
-                GenericSchedule::Saturate(span, Box::new(generic_schedule.visit_queries(f)))
-            }
-            GenericSchedule::Repeat(span, iters, generic_schedule) => {
-                GenericSchedule::Repeat(span, iters, Box::new(generic_schedule.visit_queries(f)))
-            }
-            GenericSchedule::Run(span, run_config) => GenericSchedule::Run(
-                span,
-                GenericRunConfig {
-                    ruleset: run_config.ruleset,
-                    until: run_config.until.map(f),
-                },
-            ),
-            GenericSchedule::Sequence(span, generic_schedules) => GenericSchedule::Sequence(
-                span,
-                generic_schedules
-                    .into_iter()
-                    .map(|schedule| schedule.visit_queries(f))
-                    .collect(),
-            ),
-        }
+        self.map_runs(&mut |config| GenericRunConfig {
+            ruleset: config.ruleset,
+            until: config.until.map(&mut *f),
+        })
     }
 
     /// Recursively flattens nested `Sequence` nodes into a single level.
@@ -427,6 +429,22 @@ where
         self.visit_queries(&mut |facts| facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
     }
 
+    /// Maps ruleset names through `string` and head and leaf symbols through `head` and `leaf`.
+    /// The result is flattened with `flatten_sequences`, which is idempotent, so both public maps flatten.
+    fn map_names<Head2, Leaf2>(
+        self,
+        string: &mut impl FnMut(String) -> String,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericSchedule<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        self.map_runs(&mut |config| config.map_names(string, head, leaf))
+            .flatten_sequences()
+    }
+
     /// Remaps every head and leaf symbol in the schedule using the supplied closures.
     pub fn map_symbols<Head2, Leaf2>(
         self,
@@ -437,24 +455,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.map_symbols(head, leaf)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.map_symbols(head, leaf)))
-            }
-            GenericSchedule::Run(span, config) => {
-                GenericSchedule::Run(span, config.map_symbols(head, leaf))
-            }
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds
-                    .into_iter()
-                    .map(|sched| sched.map_symbols(head, leaf))
-                    .collect(),
-            ),
-        }
+        self.map_names(&mut |s| s, head, leaf)
     }
 
     /// Applies `fun` to every string-valued symbol contained in the schedule,
@@ -463,26 +464,7 @@ where
         self,
         fun: &mut impl FnMut(String) -> String,
     ) -> GenericSchedule<Head, Leaf> {
-        let mapped = match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.map_string_symbols(fun)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.map_string_symbols(fun)))
-            }
-            GenericSchedule::Run(span, config) => {
-                GenericSchedule::Run(span, config.map_string_symbols(fun))
-            }
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds
-                    .into_iter()
-                    .map(|sched| sched.map_string_symbols(fun))
-                    .collect(),
-            ),
-        };
-
-        mapped.flatten_sequences()
+        self.map_names(fun, &mut |h| h, &mut |l| l)
     }
 
     /// Converts all heads and leaves to strings.
@@ -1206,6 +1188,28 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Maps the ruleset through `string` and the symbols of the `until` facts through `head` and `leaf`.
+    fn map_names<Head2, Leaf2>(
+        self,
+        string: &mut impl FnMut(String) -> String,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericRunConfig<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        GenericRunConfig {
+            ruleset: string(self.ruleset),
+            until: self.until.map(|facts| {
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect()
+            }),
+        }
+    }
+
     /// Remaps every head and leaf symbol in the run configuration.
     pub fn map_symbols<Head2, Leaf2>(
         self,
@@ -1216,15 +1220,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        GenericRunConfig {
-            ruleset: self.ruleset,
-            until: self.until.map(|facts| {
-                facts
-                    .into_iter()
-                    .map(|fact| fact.map_symbols(head, leaf))
-                    .collect()
-            }),
-        }
+        self.map_names(&mut |s| s, head, leaf)
     }
 
     /// Applies `fun` to string-valued symbols within the run configuration.
@@ -1232,10 +1228,7 @@ where
         self,
         fun: &mut impl FnMut(String) -> String,
     ) -> GenericRunConfig<Head, Leaf> {
-        GenericRunConfig {
-            ruleset: fun(self.ruleset),
-            until: self.until,
-        }
+        self.map_names(fun, &mut |h| h, &mut |l| l)
     }
 
     pub fn make_unresolved(self) -> GenericRunConfig<String, String> {
