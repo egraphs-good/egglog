@@ -55,56 +55,51 @@ pub(crate) fn desugar_command(
         } => desugar_datatype(span, name, variants),
         Command::Datatypes { span: _, datatypes } => {
             // first declare all the datatypes as sorts, then add all explicit sorts which could refer to the datatypes, and finally add all the variants as functions
-            let mut res = vec![];
-            for datatype in datatypes.iter() {
-                let span = datatype.0.clone();
-                let name = datatype.1.clone();
-                if let Subdatatypes::Variants(..) = datatype.2 {
-                    res.push(plain_sort(span, name, true));
+            let mut variant_sets = vec![];
+            let mut new_sorts = vec![];
+            for (span, name, subdatatypes) in datatypes {
+                match subdatatypes {
+                    Subdatatypes::Variants(variants) => variant_sets.push((span, name, variants)),
+                    Subdatatypes::NewSort(sort, args) => new_sorts.push((span, name, sort, args)),
                 }
             }
-            let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
-                .into_iter()
-                .partition(|datatype| matches!(datatype.2, Subdatatypes::Variants(..)));
-
-            for sort in sorts {
-                let span = sort.0.clone();
-                let name = sort.1;
-                let Subdatatypes::NewSort(sort, args) = sort.2 else {
-                    unreachable!()
-                };
-                res.push(NCommand::Sort {
-                    span,
-                    name,
-                    presort_and_args: Some((sort, args)),
-                    uf: None,
-                    proof_func: None,
-                    container_rebuild: None,
-                    proof_constructors: None,
-                    unionable: true,
-                });
-            }
-
-            for variants in variants_vec {
-                let datatype = variants.1;
-                let Subdatatypes::Variants(variants) = variants.2 else {
-                    unreachable!();
-                };
-                for variant in variants {
-                    res.push(NCommand::Function(FunctionDecl::constructor(
-                        variant.span,
-                        variant.name,
-                        Schema {
-                            input: variant.types,
-                            output: datatype.clone(),
-                        },
-                        variant.cost,
-                        false,
-                        false,
-                    )));
-                }
-            }
-
+            let mut res: Vec<_> = variant_sets
+                .iter()
+                .map(|(span, name, _)| plain_sort(span.clone(), name.clone(), true))
+                .collect();
+            res.extend(
+                new_sorts
+                    .into_iter()
+                    .map(|(span, name, sort, args)| NCommand::Sort {
+                        span,
+                        name,
+                        presort_and_args: Some((sort, args)),
+                        uf: None,
+                        proof_func: None,
+                        container_rebuild: None,
+                        proof_constructors: None,
+                        unionable: true,
+                    }),
+            );
+            res.extend(
+                variant_sets
+                    .into_iter()
+                    .flat_map(|(_, datatype, variants)| {
+                        variants.into_iter().map(move |variant| {
+                            NCommand::Function(FunctionDecl::constructor(
+                                variant.span,
+                                variant.name,
+                                Schema {
+                                    input: variant.types,
+                                    output: datatype.clone(),
+                                },
+                                variant.cost,
+                                false,
+                                false,
+                            ))
+                        })
+                    }),
+            );
             res
         }
         Command::Rewrite(ruleset, mut rewrite, subsume) => {
