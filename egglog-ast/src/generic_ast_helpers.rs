@@ -442,28 +442,13 @@ where
             }
             GenericAction::Set(span, lhs, args, rhs) => {
                 let args = args
-                    .into_iter()
+                    .iter()
                     .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Set(span, lhs.clone(), args, rhs)
+                GenericAction::Set(span, lhs, args, rhs)
             }
-            GenericAction::Change(span, change, lhs, args) => {
-                let args = args
-                    .into_iter()
-                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
-                    .collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
-            }
-            GenericAction::Union(span, lhs, rhs) => {
-                let lhs = lhs.subst_leaf(&mut fvar_expr!());
-                let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Union(span, lhs, rhs)
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => {
-                GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
-            }
+            action => action.map_exprs(&mut |e| e.subst_leaf(&mut fvar_expr!())),
         }
     }
 
@@ -482,10 +467,10 @@ where
                 GenericAction::Let(span, leaf(lhs), rhs.map_symbols(head, leaf))
             }
             GenericAction::Set(span, head_sym, args, rhs) => {
-                let mut mapped_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    mapped_args.push(arg.map_symbols(head, leaf));
-                }
+                let mapped_args = args
+                    .into_iter()
+                    .map(|arg| arg.map_symbols(head, leaf))
+                    .collect();
                 GenericAction::Set(
                     span,
                     head(head_sym),
@@ -494,10 +479,10 @@ where
                 )
             }
             GenericAction::Change(span, change, head_sym, args) => {
-                let mut mapped_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    mapped_args.push(arg.map_symbols(head, leaf));
-                }
+                let mapped_args = args
+                    .into_iter()
+                    .map(|arg| arg.map_symbols(head, leaf))
+                    .collect();
                 GenericAction::Change(span, change, head(head_sym), mapped_args)
             }
             GenericAction::Union(span, lhs, rhs) => GenericAction::Union(
@@ -536,16 +521,22 @@ where
         }
     }
 
+    /// Rebuilds the fact, applying `f` to each of its expressions in order.
+    fn map<Head2, Leaf2>(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
+    ) -> GenericFact<Head2, Leaf2> {
+        match self {
+            GenericFact::Eq(span, e1, e2) => GenericFact::Eq(span, f(e1), f(e2)),
+            GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
+        }
+    }
+
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> GenericFact<Head, Leaf> {
-        match self {
-            GenericFact::Eq(span, e1, e2) => {
-                GenericFact::Eq(span, e1.visit_exprs(f), e2.visit_exprs(f))
-            }
-            GenericFact::Fact(expr) => GenericFact::Fact(expr.visit_exprs(f)),
-        }
+        self.map(&mut |e| e.visit_exprs(f))
     }
 
     pub fn map_exprs<Head2, Leaf2>(
@@ -582,12 +573,7 @@ where
         Head2: Clone + Display,
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
-        match self {
-            GenericFact::Eq(span, e1, e2) => {
-                GenericFact::Eq(span, e1.map_symbols(head, leaf), e2.map_symbols(head, leaf))
-            }
-            GenericFact::Fact(expr) => GenericFact::Fact(expr.map_symbols(head, leaf)),
-        }
+        self.map(&mut |e| e.map_symbols(head, leaf))
     }
 
     /// Converts all heads and leaves to strings.
@@ -609,9 +595,9 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
 
     pub fn span(&self) -> Span {
         match self {
-            GenericExpr::Lit(span, _) => span.clone(),
-            GenericExpr::Var(span, _) => span.clone(),
-            GenericExpr::Call(span, _, _) => span.clone(),
+            GenericExpr::Lit(span, _)
+            | GenericExpr::Var(span, _)
+            | GenericExpr::Call(span, _, _) => span.clone(),
         }
     }
 
@@ -724,10 +710,10 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
             GenericExpr::Lit(span, lit) => GenericExpr::Lit(span, lit),
             GenericExpr::Var(span, var) => GenericExpr::Var(span, leaf(var)),
             GenericExpr::Call(span, op, children) => {
-                let mut mapped_children = Vec::with_capacity(children.len());
-                for child in children {
-                    mapped_children.push(child.map_symbols(head, leaf));
-                }
+                let mapped_children = children
+                    .into_iter()
+                    .map(|child| child.map_symbols(head, leaf))
+                    .collect();
                 GenericExpr::Call(span, head(op), mapped_children)
             }
         }
