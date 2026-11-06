@@ -30,36 +30,20 @@ macro_rules! impl_from {
 
 pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 
-impl<Head: Display, Leaf: Display> Display for GenericRule<Head, Leaf>
+impl<Head, Leaf> Display for GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let indent = " ".repeat(7);
-        write!(f, "(rule (")?;
-        for (i, fact) in self.body.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{indent}")?;
-            }
-
-            if i != self.body.len() - 1 {
-                writeln!(f, "{fact}")?;
-            } else {
-                write!(f, "{fact}")?;
-            }
-        }
-        write!(f, ")\n      (")?;
-        for (i, action) in self.head.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{indent}")?;
-            }
-            if i != self.head.0.len() - 1 {
-                writeln!(f, "{action}")?;
-            } else {
-                write!(f, "{action}")?;
-            }
-        }
+        const SEPARATOR: &str = "\n       ";
+        let indent = &SEPARATOR[1..];
+        write!(
+            f,
+            "(rule ({})\n      ({}",
+            ListDisplay(&self.body, SEPARATOR),
+            ListDisplay(&self.head.0, SEPARATOR)
+        )?;
         let ruleset = if !self.ruleset.is_empty() {
             format!(":ruleset {}", &self.ruleset)
         } else {
@@ -102,8 +86,7 @@ impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
     }
 }
 
-// Implement Display for GenericAction
-impl<Head: Display, Leaf: Display> Display for GenericAction<Head, Leaf>
+impl<Head, Leaf> Display for GenericAction<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
@@ -115,16 +98,7 @@ where
                 if args.is_empty() {
                     write!(f, "(set ({lhs}) {rhs})")
                 } else {
-                    write!(
-                        f,
-                        "(set ({} {}) {})",
-                        lhs,
-                        args.iter()
-                            .map(|a| format!("{a}"))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        rhs
-                    )
+                    write!(f, "(set ({lhs} {}) {rhs})", ListDisplay(args, " "))
                 }
             }
             GenericAction::Union(_, lhs, rhs) => write!(f, "(union {lhs} {rhs})"),
@@ -136,16 +110,7 @@ where
                 if args.is_empty() {
                     write!(f, "({change_str} ({lhs}))")
                 } else {
-                    write!(
-                        f,
-                        "({} ({} {}))",
-                        change_str,
-                        lhs,
-                        args.iter()
-                            .map(|a| format!("{a}"))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
+                    write!(f, "({change_str} ({lhs} {}))", ListDisplay(args, " "))
                 }
             }
             GenericAction::Panic(_, msg) => {
