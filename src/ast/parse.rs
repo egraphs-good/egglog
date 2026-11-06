@@ -52,9 +52,7 @@ pub enum Sexp<'a> {
 impl<'a> Sexp<'a> {
     pub fn span(&self) -> Span {
         match self {
-            Sexp::Literal(_, span) => span.clone(),
-            Sexp::Atom(_, span) => span.clone(),
-            Sexp::List(_, span) => span.clone(),
+            Sexp::Literal(_, span) | Sexp::Atom(_, span) | Sexp::List(_, span) => span.clone(),
         }
     }
 
@@ -1233,10 +1231,9 @@ fn sexp<'a>(ctx: &mut SexpParser<'a>) -> Result<Sexp<'a>, ParseError> {
                 continue;
             }
             Token::Close => {
-                if stack.is_empty() {
+                let Some((mut list_span, list)) = stack.pop() else {
                     return error!(s(span), "unexpected `)`");
-                }
-                let (mut list_span, list) = stack.pop().unwrap();
+                };
                 list_span.j = span.j;
                 Sexp::List(list, s(list_span))
             }
@@ -1269,10 +1266,9 @@ fn sexp<'a>(ctx: &mut SexpParser<'a>) -> Result<Sexp<'a>, ParseError> {
             }
         };
 
-        if stack.is_empty() {
-            return Ok(sexp);
-        } else {
-            stack.last_mut().unwrap().1.push(sexp);
+        match stack.last_mut() {
+            None => return Ok(sexp),
+            Some((_, list)) => list.push(sexp),
         }
     }
 }
