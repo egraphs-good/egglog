@@ -64,16 +64,7 @@ pub(crate) fn desugar_command(
                 let span = datatype.0.clone();
                 let name = datatype.1.clone();
                 if let Subdatatypes::Variants(..) = datatype.2 {
-                    res.push(NCommand::Sort {
-                        span,
-                        name,
-                        presort_and_args: None,
-                        uf: None,
-                        proof_func: None,
-                        container_rebuild: None,
-                        proof_constructors: None,
-                        unionable: true,
-                    });
+                    res.push(plain_sort(span, name, true));
                 }
             }
             let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
@@ -269,16 +260,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
     let ruleset = parser.symbol_gen.fresh("exists");
     let name = parser.symbol_gen.fresh("prove_exists_rule");
     vec![
-        NCommand::Sort {
-            span: span.clone(),
-            name: fresh_sort.clone(),
-            presort_and_args: None,
-            uf: None,
-            proof_func: None,
-            container_rebuild: None,
-            proof_constructors: None,
-            unionable: false,
-        },
+        plain_sort(span.clone(), fresh_sort.clone(), false),
         NCommand::Function(FunctionDecl::constructor(
             span.clone(),
             constructor_name.clone(),
@@ -320,32 +302,36 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
     ]
 }
 
-fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort {
-        span: span.clone(),
-        name: name.clone(),
+/// A sort with no presort, union-find, proof or container annotation.
+fn plain_sort(span: Span, name: String, unionable: bool) -> NCommand {
+    NCommand::Sort {
+        span,
+        name,
         presort_and_args: None,
         uf: None,
         proof_func: None,
         container_rebuild: None,
         proof_constructors: None,
-        unionable: true,
-    }]
-    .into_iter()
-    .chain(variants.into_iter().map(|variant| {
-        NCommand::Function(FunctionDecl::constructor(
-            variant.span,
-            variant.name,
-            Schema {
-                input: variant.types,
-                output: name.clone(),
-            },
-            variant.cost,
-            variant.unextractable,
-            false,
-        ))
-    }))
-    .collect()
+        unionable,
+    }
+}
+
+fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
+    std::iter::once(plain_sort(span, name.clone(), true))
+        .chain(variants.into_iter().map(|variant| {
+            NCommand::Function(FunctionDecl::constructor(
+                variant.span,
+                variant.name,
+                Schema {
+                    input: variant.types,
+                    output: name.clone(),
+                },
+                variant.cost,
+                variant.unextractable,
+                false,
+            ))
+        }))
+        .collect()
 }
 
 fn desugar_rewrite(
@@ -433,16 +419,7 @@ fn desugar_relation(
     let dashes_removed = name.replace('-', "");
     let fresh_sort = parser.symbol_gen.fresh(&format!("{dashes_removed}Sort"));
     vec![
-        NCommand::Sort {
-            span: span.clone(),
-            name: fresh_sort.clone(),
-            presort_and_args: None,
-            uf: None,
-            proof_func: None,
-            container_rebuild: None,
-            proof_constructors: None,
-            unionable: false,
-        },
+        plain_sort(span.clone(), fresh_sort.clone(), false),
         NCommand::Function(FunctionDecl::constructor(
             span,
             name,
