@@ -912,21 +912,18 @@ impl Parser {
                 }
                 _ => return error!(span, "usage: (set (<table name> <expr>*) <expr>)"),
             },
-            "delete" => match tail {
+            "delete" | "subsume" => match tail {
                 [call] => {
+                    let change = if head == "delete" {
+                        Change::Delete
+                    } else {
+                        Change::Subsume
+                    };
                     let (func, args, _) = call.expect_call("table lookup")?;
                     let args = map_fallible(args, self, Self::parse_expr)?;
-                    vec![Action::Change(span, Change::Delete, func.to_owned(), args)]
+                    vec![Action::Change(span, change, func.to_owned(), args)]
                 }
-                _ => return error!(span, "usage: (delete (<table name> <expr>*))"),
-            },
-            "subsume" => match tail {
-                [call] => {
-                    let (func, args, _) = call.expect_call("table lookup")?;
-                    let args = map_fallible(args, self, Self::parse_expr)?;
-                    vec![Action::Change(span, Change::Subsume, func.to_owned(), args)]
-                }
-                _ => return error!(span, "usage: (subsume (<table name> <expr>*))"),
+                _ => return error!(span, "usage: ({head} (<table name> <expr>*))"),
             },
             "union" => match tail {
                 [e1, e2] => vec![Action::Union(
