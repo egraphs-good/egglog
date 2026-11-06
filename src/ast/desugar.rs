@@ -146,16 +146,14 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::RunSchedule(sched) => {
-            vec![NCommand::RunSchedule(sched.clone())]
-        }
+        Command::RunSchedule(sched) => vec![NCommand::RunSchedule(sched)],
         Command::PrintOverallStatistics(span, file) => {
-            vec![NCommand::PrintOverallStatistics(span, file.clone())]
+            vec![NCommand::PrintOverallStatistics(span, file)]
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => {
             if proof_testing {
-                desugar_prove(parser, span.clone(), facts.clone())
+                desugar_prove(parser, span, facts)
             } else {
                 vec![NCommand::Check(span, facts)]
             }
@@ -164,19 +162,13 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintFunction(span, symbol, size, file, mode)]
         }
         Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
-        Command::Output { span, file, exprs } => {
-            vec![NCommand::Output { span, file, exprs }]
-        }
-        Command::Push(num) => {
-            vec![NCommand::Push(num)]
-        }
-        Command::Pop(span, num) => {
-            vec![NCommand::Pop(span, num)]
-        }
+        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
+        Command::Push(num) => vec![NCommand::Push(num)],
+        Command::Pop(span, num) => vec![NCommand::Pop(span, num)],
         Command::Fail(span, cmd) => {
             if let Command::Include(..) = *cmd {
                 return Err(Error::DesugarError(
-                    span.clone(),
+                    span,
                     "include is not allowed inside (fail ...)".to_string(),
                 ));
             }
@@ -184,16 +176,14 @@ pub(crate) fn desugar_command(
 
             let Some(last) = desugared.pop() else {
                 return Err(Error::DesugarError(
-                    span.clone(),
+                    span,
                     "the command inside (fail ...) expands to no commands".to_string(),
                 ));
             };
             desugared.push(NCommand::Fail(span, Box::new(last)));
             return Ok(desugared);
         }
-        Command::Input { span, name, file } => {
-            vec![NCommand::Input { span, name, file }]
-        }
+        Command::Input { span, name, file } => vec![NCommand::Input { span, name, file }],
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
