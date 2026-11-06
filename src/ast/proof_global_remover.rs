@@ -2,13 +2,10 @@
 //! them into constructors, making proof generation easier.
 //! Does not support primitive-valued globals.
 
-use crate::ast::{
-    FunctionSubtype, GenericNCommand, ResolvedAction, ResolvedActions, ResolvedExprExt,
-    ResolvedFunctionDecl, ResolvedNCommand, Schema,
-};
+use crate::ast::remove_globals::{fail_last, global_call, global_decl, replace_global_vars};
+use crate::ast::{FunctionSubtype, GenericNCommand, ResolvedExprExt, ResolvedNCommand};
 use crate::*;
-use crate::{core::ResolvedCall, typechecking::FuncType};
-use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericRule};
+use egglog_ast::generic_ast::{GenericAction, GenericRule};
 
 /// Removes all globals from a program.
 /// No top level lets are allowed after this pass,
@@ -32,112 +29,44 @@ pub(crate) fn remove_globals(
     prog.into_iter().flat_map(remove_globals_cmd).collect()
 }
 
-fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
-    assert!(
-        var.is_global_ref,
-        "resolved_var_to_call called on non-global var"
-    );
-    ResolvedCall::Func(Arc::new(FuncType {
-        name: var.name.clone(),
-        subtype: FunctionSubtype::Constructor,
-        input: vec![],
-        output: var.sort.clone(),
-    }))
-}
-
-/// TODO (yz) it would be better to implement replace_global_var
-/// as a function from ResolvedVar to ResolvedExpr
-/// and use it as an argument to `subst` instead of `visit_expr`,
-/// but we have not implemented `subst` for command.
-fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
-    match expr.get_global_var() {
-        Some(resolved_var) => {
-            GenericExpr::Call(expr.span(), resolved_var_to_call(&resolved_var), vec![])
-        }
-        None => expr,
-    }
-}
-
-fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
-    expr.visit_exprs(&mut replace_global_vars)
-}
-
-fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
-    action.visit_exprs(&mut replace_global_vars)
-}
-
 fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
+    let mut replace = replace_global_vars(FunctionSubtype::Constructor);
     match cmd {
-        GenericNCommand::CoreAction(action) => match action {
-            GenericAction::Let(span, name, expr) => {
-                let ty = expr.output_type();
-                if !ty.is_eq_sort() {
-                    panic!("Global variable {} has non-eq sort {}", name, ty.name());
-                }
-
-                let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
-                    name: name.name.clone(),
-                    subtype: FunctionSubtype::Constructor,
-                    input: vec![],
-                    output: ty.clone(),
-                }));
-                let func_decl = ResolvedFunctionDecl {
-                    name: name.name,
-                    subtype: FunctionSubtype::Constructor,
-                    schema: Schema {
-                        input: vec![],
-                        output: ty.name().to_owned(),
-                    },
-                    merge: None,
-                    cost: None,
-                    unextractable: true,
-                    internal_hidden: false,
-                    internal_let: true,
-                    span: span.clone(),
-                    term_constructor: None,
-                };
-                vec![
-                    GenericNCommand::Function(func_decl),
-                    GenericNCommand::CoreAction(GenericAction::Union(
-                        span.clone(),
-                        ResolvedExpr::Call(span.clone(), resolved_call, vec![]),
-                        remove_globals_expr(expr),
-                    )),
-                ]
+        GenericNCommand::CoreAction(GenericAction::Let(span, name, expr)) => {
+            let ty = expr.output_type();
+            if !ty.is_eq_sort() {
+                panic!("Global variable {} has non-eq sort {}", name, ty.name());
             }
-            _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
-        },
-        GenericNCommand::NormRule { rule } => {
-            let new_rule = GenericRule {
-                span: rule.span,
+            vec![
+                GenericNCommand::Function(global_decl(
+                    span.clone(),
+                    name.name.clone(),
+                    FunctionSubtype::Constructor,
+                    &ty,
+                )),
+                GenericNCommand::CoreAction(GenericAction::Union(
+                    span.clone(),
+                    ResolvedExpr::Call(
+                        span,
+                        global_call(name.name, FunctionSubtype::Constructor, ty),
+                        vec![],
+                    ),
+                    expr.visit_exprs(&mut replace),
+                )),
+            ]
+        }
+        GenericNCommand::NormRule { rule } => vec![GenericNCommand::NormRule {
+            rule: GenericRule {
                 body: rule
                     .body
-                    .iter()
-                    .map(|fact| fact.clone().visit_exprs(&mut replace_global_vars))
+                    .into_iter()
+                    .map(|fact| fact.visit_exprs(&mut replace))
                     .collect(),
-                head: ResolvedActions::new(
-                    rule.head
-                        .iter()
-                        .map(|action| action.clone().visit_exprs(&mut replace_global_vars))
-                        .collect(),
-                ),
-                name: rule.name.clone(),
-                ruleset: rule.ruleset.clone(),
-                eval_mode: rule.eval_mode,
-                no_decomp: rule.no_decomp,
-                include_subsumed: rule.include_subsumed,
-            };
-            vec![GenericNCommand::NormRule { rule: new_rule }]
-        }
-        GenericNCommand::Fail(span, cmd) => {
-            let mut removed = remove_globals_cmd(*cmd);
-            let last = removed
-                .pop()
-                .expect("remove_globals_cmd returned empty result");
-            let boxed_last = Box::new(last);
-            removed.push(GenericNCommand::Fail(span, boxed_last));
-            removed
-        }
-        _ => vec![cmd.visit_exprs(&mut replace_global_vars)],
+                head: rule.head.visit_exprs(&mut replace),
+                ..rule
+            },
+        }],
+        GenericNCommand::Fail(span, cmd) => fail_last(span, remove_globals_cmd(*cmd)),
+        cmd => vec![cmd.visit_exprs(&mut replace)],
     }
 }

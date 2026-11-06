@@ -52,80 +52,93 @@ pub(crate) fn remove_globals(
         .collect()
 }
 
-fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
-    assert!(
-        var.is_global_ref,
-        "resolved_var_to_call called on non-global var"
-    );
+/// The nullary function of `subtype` that the global `name` of sort `output` becomes.
+pub(crate) fn global_call(name: String, subtype: FunctionSubtype, output: ArcSort) -> ResolvedCall {
     ResolvedCall::Func(Arc::new(FuncType {
-        name: var.name.clone(),
-        subtype: FunctionSubtype::Custom,
+        name,
+        subtype,
         input: vec![],
-        output: var.sort.clone(),
+        output,
     }))
 }
 
+/// The declaration of the function [`global_call`] calls.
+pub(crate) fn global_decl(
+    span: Span,
+    name: String,
+    subtype: FunctionSubtype,
+    output: &ArcSort,
+) -> ResolvedFunctionDecl {
+    ResolvedFunctionDecl {
+        name,
+        subtype,
+        schema: Schema {
+            input: vec![],
+            output: output.name().to_owned(),
+        },
+        merge: None,
+        cost: None,
+        unextractable: true,
+        internal_hidden: false,
+        internal_let: true,
+        span,
+        term_constructor: None,
+    }
+}
+
+/// Replaces each reference to a global with a call to the function of `subtype` it became.
+///
 /// TODO (yz) it would be better to implement replace_global_var
 /// as a function from ResolvedVar to ResolvedExpr
 /// and use it as an argument to `subst` instead of `visit_expr`,
 /// but we have not implemented `subst` for command.
-fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
-    match expr.get_global_var() {
-        Some(resolved_var) => {
-            GenericExpr::Call(expr.span(), resolved_var_to_call(&resolved_var), vec![])
-        }
+pub(crate) fn replace_global_vars(
+    subtype: FunctionSubtype,
+) -> impl FnMut(ResolvedExpr) -> ResolvedExpr {
+    move |expr| match expr.get_global_var() {
+        Some(var) => GenericExpr::Call(
+            expr.span(),
+            global_call(var.name, subtype, var.sort),
+            vec![],
+        ),
         None => expr,
     }
 }
 
 pub(crate) fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
-    expr.visit_exprs(&mut replace_global_vars)
+    expr.visit_exprs(&mut replace_global_vars(FunctionSubtype::Custom))
 }
 
-fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
-    action.visit_exprs(&mut replace_global_vars)
+/// Wraps the last command of a `fail`'s expansion back in the `fail`.
+pub(crate) fn fail_last(span: Span, mut removed: Vec<ResolvedNCommand>) -> Vec<ResolvedNCommand> {
+    let last = removed
+        .pop()
+        .expect("removing globals expands every command to at least one command");
+    removed.push(GenericNCommand::Fail(span, Box::new(last)));
+    removed
 }
 
 impl GlobalRemover<'_> {
     fn remove_globals_cmd(&mut self, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
+        let mut replace = replace_global_vars(FunctionSubtype::Custom);
         match cmd {
-            GenericNCommand::CoreAction(action) => match action {
-                GenericAction::Let(span, name, expr) => {
-                    let ty = expr.output_type();
-
-                    let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
-                        name: name.name.clone(),
-                        subtype: FunctionSubtype::Custom,
-                        input: vec![],
-                        output: ty.clone(),
-                    }));
-                    let func_decl = ResolvedFunctionDecl {
-                        name: name.name,
-                        subtype: FunctionSubtype::Custom,
-                        schema: Schema {
-                            input: vec![],
-                            output: ty.name().to_owned(),
-                        },
-                        merge: None,
-                        cost: None,
-                        unextractable: true,
-                        internal_hidden: false,
-                        internal_let: true,
-                        span: span.clone(),
-                        term_constructor: None,
-                    };
-                    vec![
-                        GenericNCommand::Function(func_decl),
-                        GenericNCommand::CoreAction(GenericAction::Set(
-                            span,
-                            resolved_call,
-                            vec![],
-                            remove_globals_expr(expr),
-                        )),
-                    ]
-                }
-                _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
-            },
+            GenericNCommand::CoreAction(GenericAction::Let(span, name, expr)) => {
+                let ty = expr.output_type();
+                vec![
+                    GenericNCommand::Function(global_decl(
+                        span.clone(),
+                        name.name.clone(),
+                        FunctionSubtype::Custom,
+                        &ty,
+                    )),
+                    GenericNCommand::CoreAction(GenericAction::Set(
+                        span,
+                        global_call(name.name, FunctionSubtype::Custom, ty),
+                        vec![],
+                        expr.visit_exprs(&mut replace),
+                    )),
+                ]
+            }
             GenericNCommand::NormRule { rule } => {
                 // A map from the global variables in actions to their new names
                 // in the query.
@@ -153,19 +166,26 @@ impl GlobalRemover<'_> {
                     .map(|(old, new)| {
                         GenericFact::Eq(
                             new.span(),
-                            GenericExpr::Call(new.span(), resolved_var_to_call(old), vec![]),
+                            GenericExpr::Call(
+                                new.span(),
+                                global_call(
+                                    old.name.clone(),
+                                    FunctionSubtype::Custom,
+                                    old.sort.clone(),
+                                ),
+                                vec![],
+                            ),
                             new.clone(),
                         )
                     })
                     .collect();
 
                 let new_rule = GenericRule {
-                    span: rule.span,
                     // instrument the old facts and add the new facts to the end
                     body: rule
                         .body
                         .into_iter()
-                        .map(|fact| fact.visit_exprs(&mut replace_global_vars))
+                        .map(|fact| fact.visit_exprs(&mut replace))
                         .chain(new_facts)
                         .collect(),
                     // replace references to globals with the newly bound names
@@ -176,24 +196,13 @@ impl GlobalRemover<'_> {
                             expr
                         }
                     }),
-                    name: rule.name,
-                    ruleset: rule.ruleset,
-                    eval_mode: rule.eval_mode,
-                    no_decomp: rule.no_decomp,
-                    include_subsumed: rule.include_subsumed,
+                    ..rule
                 };
                 vec![GenericNCommand::NormRule { rule: new_rule }]
             }
             // Handle the corner case where a global command is wrap in (fail )
-            GenericNCommand::Fail(span, cmd) => {
-                let mut removed = self.remove_globals_cmd(*cmd);
-                let last = removed.pop().unwrap();
-                let boxed_last = Box::new(last);
-                let new_command = GenericNCommand::Fail(span, boxed_last);
-                removed.push(new_command);
-                removed
-            }
-            _ => vec![cmd.visit_exprs(&mut replace_global_vars)],
+            GenericNCommand::Fail(span, cmd) => fail_last(span, self.remove_globals_cmd(*cmd)),
+            cmd => vec![cmd.visit_exprs(&mut replace)],
         }
     }
 }
