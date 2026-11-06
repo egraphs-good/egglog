@@ -322,10 +322,13 @@ fn desugar_rewrite(
     subsume: bool,
     parser: &mut Parser,
 ) -> Result<NCommand, Error> {
-    let span = rewrite.span;
-    let lhs = rewrite.lhs;
-    let rhs = rewrite.rhs;
-    let conditions = rewrite.conditions;
+    let Rewrite {
+        span,
+        lhs,
+        rhs,
+        conditions,
+        ..
+    } = rewrite;
     let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
@@ -333,26 +336,19 @@ fn desugar_rewrite(
         rhs,
     ));
     if subsume {
-        match &lhs {
-            Expr::Call(_, f, args) => {
-                head.0.push(Action::Change(
-                    span.clone(),
-                    Change::Subsume,
-                    f.clone(),
-                    args.to_vec(),
-                ));
-            }
-            _ => {
-                return Err(Error::DesugarError(
-                    lhs.span(),
-                    "subsumed rewrite must have a function call on the lhs".to_string(),
-                ));
-            }
-        }
+        let Expr::Call(_, f, args) = &lhs else {
+            return Err(Error::DesugarError(
+                lhs.span(),
+                "subsumed rewrite must have a function call on the lhs".to_string(),
+            ));
+        };
+        head.0.push(Action::Change(
+            span.clone(),
+            Change::Subsume,
+            f.clone(),
+            args.clone(),
+        ));
     }
-    // make two rules- one to insert the rhs, and one to union
-    // this way, the union rule can only be fired once,
-    // which helps proofs not add too much info
     Ok(NCommand::NormRule {
         rule: Rule {
             span: span.clone(),
