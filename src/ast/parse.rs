@@ -584,81 +584,14 @@ impl Parser {
                 }
                 _ => return error!(span, "usage: (rule (<fact>*) (<action>*) <option>*)"),
             },
-            "rewrite" => match tail {
-                [lhs, rhs, rest @ ..] => {
-                    let lhs = self.parse_expr(lhs)?;
-                    let rhs = self.parse_expr(rhs)?;
-
-                    let mut ruleset = String::new();
-                    let mut conditions = Vec::new();
-                    let mut subsume = false;
-                    let mut name = String::new();
-                    for option in self.parse_options(rest)? {
-                        match option {
-                            (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
-                            (":subsume", []) => subsume = true,
-                            (":when", [w]) => {
-                                conditions = map_fallible(
-                                    w.expect_list("rewrite conditions")?,
-                                    self,
-                                    Self::parse_fact,
-                                )?
-                            }
-                            (":name", [s]) => name = s.expect_string("rule name")?,
-                            _ => return error!(span, "could not parse rewrite options"),
-                        }
-                    }
-
-                    vec![Command::Rewrite(
-                        ruleset,
-                        Rewrite {
-                            span,
-                            lhs,
-                            rhs,
-                            conditions,
-                            name,
-                        },
-                        subsume,
-                    )]
-                }
-                _ => return error!(span, "usage: (rewrite <expr> <expr> <option>*)"),
-            },
-            "birewrite" => match tail {
-                [lhs, rhs, rest @ ..] => {
-                    let lhs = self.parse_expr(lhs)?;
-                    let rhs = self.parse_expr(rhs)?;
-
-                    let mut ruleset = String::new();
-                    let mut conditions = Vec::new();
-                    let mut name = String::new();
-                    for option in self.parse_options(rest)? {
-                        match option {
-                            (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
-                            (":when", [w]) => {
-                                conditions = map_fallible(
-                                    w.expect_list("rewrite conditions")?,
-                                    self,
-                                    Self::parse_fact,
-                                )?
-                            }
-                            (":name", [s]) => name = s.expect_string("rule name")?,
-                            _ => return error!(span, "could not parse birewrite options"),
-                        }
-                    }
-
-                    vec![Command::BiRewrite(
-                        ruleset,
-                        Rewrite {
-                            span,
-                            lhs,
-                            rhs,
-                            conditions,
-                            name,
-                        },
-                    )]
-                }
-                _ => return error!(span, "usage: (birewrite <expr> <expr> <option>*)"),
-            },
+            "rewrite" => {
+                let (ruleset, rewrite, subsume) = self.parse_rewrite(head, tail, span, true)?;
+                vec![Command::Rewrite(ruleset, rewrite, subsume)]
+            }
+            "birewrite" => {
+                let (ruleset, rewrite, _) = self.parse_rewrite(head, tail, span, false)?;
+                vec![Command::BiRewrite(ruleset, rewrite)]
+            }
             "run" => {
                 if tail.is_empty() {
                     return error!(span, "usage: (run <ruleset>? <uint> <:until (<fact>*)>?)");
@@ -848,6 +781,51 @@ impl Parser {
                 .map(Command::Action)
                 .collect(),
         })
+    }
+
+    /// Parses the tail of a `rewrite` or `birewrite` (named by `head`) into its ruleset,
+    /// rewrite and `:subsume` flag; `:subsume` is an option only where `subsumable`.
+    fn parse_rewrite(
+        &mut self,
+        head: &str,
+        tail: &[Sexp<'_>],
+        span: Span,
+        subsumable: bool,
+    ) -> Result<(String, Rewrite, bool), ParseError> {
+        let [lhs, rhs, rest @ ..] = tail else {
+            return error!(span, "usage: ({head} <expr> <expr> <option>*)");
+        };
+        let lhs = self.parse_expr(lhs)?;
+        let rhs = self.parse_expr(rhs)?;
+
+        let mut ruleset = String::new();
+        let mut conditions = Vec::new();
+        let mut subsume = false;
+        let mut name = String::new();
+        for option in self.parse_options(rest)? {
+            match option {
+                (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                (":subsume", []) if subsumable => subsume = true,
+                (":when", [w]) => {
+                    conditions =
+                        map_fallible(w.expect_list("rewrite conditions")?, self, Self::parse_fact)?
+                }
+                (":name", [s]) => name = s.expect_string("rule name")?,
+                _ => return error!(span, "could not parse {head} options"),
+            }
+        }
+
+        Ok((
+            ruleset,
+            Rewrite {
+                span,
+                lhs,
+                rhs,
+                conditions,
+                name,
+            },
+            subsume,
+        ))
     }
 
     pub fn parse_schedule(&mut self, sexp: &Sexp<'_>) -> Result<Schedule, ParseError> {
