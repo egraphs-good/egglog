@@ -291,16 +291,6 @@ impl Parser {
                 // (sort <name> :internal-proof-func <internal-proof-func-name>)
                 // (sort <name> (<container sort> <argument sort>*))
                 match tail {
-                    [name] => vec![Command::Sort {
-                        span,
-                        name: name.expect_atom("sort name")?,
-                        presort_and_args: None,
-                        uf: None,
-                        proof_func: None,
-                        container_rebuild: None,
-                        proof_constructors: None,
-                        unionable: true,
-                    }],
                     [name, call @ Sexp::List(..), rest @ ..] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
                         // Container sorts may carry :internal-proof-func (their
