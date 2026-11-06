@@ -159,18 +159,13 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self {
-            span: self.span,
             head: self.head.visit_exprs(f),
             body: self
                 .body
                 .into_iter()
                 .map(|bexpr| bexpr.visit_exprs(f))
                 .collect(),
-            name: self.name,
-            ruleset: self.ruleset,
-            eval_mode: self.eval_mode,
-            no_decomp: self.no_decomp,
-            include_subsumed: self.include_subsumed,
+            ..self
         }
     }
 
@@ -180,14 +175,8 @@ where
         f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
     ) -> Self {
         Self {
-            span: self.span,
             head: self.head.visit_actions(f),
-            body: self.body,
-            name: self.name,
-            ruleset: self.ruleset,
-            eval_mode: self.eval_mode,
-            no_decomp: self.no_decomp,
-            include_subsumed: self.include_subsumed,
+            ..self
         }
     }
 
@@ -611,27 +600,14 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
     /// Search for the first node matching a predicate, returning early once found.
     /// Traverses the tree in pre-order (top-down).
     pub fn find<Out>(&self, f: &mut impl FnMut(&Self) -> Option<Out>) -> Option<Out> {
-        // Check current node first
-        if let Some(result) = f(self) {
-            return Some(result);
-        }
-
-        // Then check children
-        for child in self.children().iter() {
-            if let Some(result) = child.find(f) {
-                return Some(result);
-            }
-        }
-
-        None
+        f(self).or_else(|| self.children().iter().find_map(|child| child.find(f)))
     }
 
     /// Applys `f` to all sub-expressions (including `self`)
     /// bottom-up, collecting the results.
     pub fn visit_exprs(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
-            GenericExpr::Lit(..) => f(self),
-            GenericExpr::Var(..) => f(self),
+            GenericExpr::Lit(..) | GenericExpr::Var(..) => f(self),
             GenericExpr::Call(span, op, children) => {
                 let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
                 f(GenericExpr::Call(span, op, children))
