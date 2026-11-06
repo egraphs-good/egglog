@@ -252,7 +252,7 @@ where
         }
     }
 
-    /// Applies `f` to
+    /// Applies `f` to every query in the command.
     pub fn visit_queries(
         self,
         f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
@@ -413,10 +413,9 @@ where
                     }
                 }
 
-                match flattened.len() {
-                    0 => GenericSchedule::Sequence(span, flattened),
-                    1 => flattened.into_iter().next().unwrap(),
-                    _ => GenericSchedule::Sequence(span, flattened),
+                match <[_; 1]>::try_from(flattened) {
+                    Ok([only]) => only,
+                    Err(flattened) => GenericSchedule::Sequence(span, flattened),
                 }
             }
         }
@@ -1238,11 +1237,7 @@ where
     }
 }
 
-impl<Head: Display, Leaf: Display> Display for GenericRunConfig<Head, Leaf>
-where
-    Head: Display,
-    Leaf: Display,
-{
+impl<Head: Display, Leaf: Display> Display for GenericRunConfig<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "(run")?;
         if !self.ruleset.is_empty() {
@@ -1405,16 +1400,8 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> GenericFunctionDecl<Head, Leaf> {
         GenericFunctionDecl {
-            name: self.name,
-            subtype: self.subtype,
-            schema: self.schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
-            cost: self.cost,
-            unextractable: self.unextractable,
-            internal_hidden: self.internal_hidden,
-            internal_let: self.internal_let,
-            span: self.span,
-            term_constructor: self.term_constructor,
+            ..self
         }
     }
 }
