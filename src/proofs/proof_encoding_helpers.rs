@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::{
     EGraph, ExecutionOrigin, TypeInfo,
     ast::{
-        Command, Expr, Fact, GenericCommand, Literal, ResolvedAction, ResolvedCommand,
+        Action, Command, Expr, Fact, GenericCommand, Literal, ResolvedAction, ResolvedCommand,
         ResolvedExpr, ResolvedExprExt, ResolvedFact, Schedule,
     },
     core::ResolvedCall,
@@ -135,12 +135,17 @@ impl ProofInstrumentor<'_> {
         token
     }
 
-    fn restore_literal(&self, expr: Expr) -> Expr {
+    fn restore_expression(&self, expr: Expr) -> Expr {
         match expr {
-            Expr::Var(span, name) => match self.literal_bindings.get(&name) {
-                Some(literal) => Expr::Lit(span, literal.clone()),
-                None => Expr::Var(span, name),
-            },
+            Expr::Var(span, name) => {
+                if let Some(expr) = self.expression_bindings.get(&name) {
+                    expr.clone()
+                } else if let Some(literal) = self.literal_bindings.get(&name) {
+                    Expr::Lit(span, literal.clone())
+                } else {
+                    Expr::Var(span, name)
+                }
+            }
             expr => expr,
         }
     }
@@ -154,7 +159,19 @@ impl ProofInstrumentor<'_> {
         // failure is an egglog bug rather than a user error.
         res.expect("internally generated term-encoding program must parse")
             .into_iter()
-            .map(|command| command.visit_exprs(&mut |expr| self.restore_literal(expr)))
+            .map(|command| {
+                command
+                    .visit_exprs(&mut |expr| self.restore_expression(expr))
+                    .visit_actions(&mut |mut action| {
+                        if let Action::Let(span, name, Expr::Call(expr_span, ..)) = &mut action
+                            && let Some(origin) = self.action_spans.get(name)
+                        {
+                            *span = origin.clone();
+                            *expr_span = origin.clone();
+                        }
+                        action
+                    })
+            })
             .collect()
     }
 
@@ -201,7 +218,7 @@ impl ProofInstrumentor<'_> {
         let command = Command::RunSchedule(
             schedule.expect("internally generated term-encoding schedule must parse"),
         )
-        .visit_exprs(&mut |expr| self.restore_literal(expr));
+        .visit_exprs(&mut |expr| self.restore_expression(expr));
         let Command::RunSchedule(schedule) = command else {
             unreachable!("literal substitution preserves command variants")
         };
@@ -222,7 +239,7 @@ impl ProofInstrumentor<'_> {
             .collect();
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res.into_iter()
-            .map(|fact: Fact| fact.visit_exprs(&mut |expr| self.restore_literal(expr)))
+            .map(|fact: Fact| fact.visit_exprs(&mut |expr| self.restore_expression(expr)))
             .collect()
     }
 
@@ -232,7 +249,7 @@ impl ProofInstrumentor<'_> {
         let res = self.egraph.parser.get_expr_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res.expect("internally generated term-encoding expression must parse")
-            .visit_exprs(&mut |expr| self.restore_literal(expr))
+            .visit_exprs(&mut |expr| self.restore_expression(expr))
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.

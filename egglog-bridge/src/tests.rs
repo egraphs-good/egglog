@@ -117,11 +117,11 @@ fn scoped_action_fallbacks_release_on_every_exit() {
         let result = graph.run_scoped_rule("temporary fallbacks", case != 0, None, |mut rule| {
             rule.lookup(table, &[], move || {
                 let _token = lookup_token;
-                "lookup failure".into()
+                "lookup failure".to_owned()
             });
             rule.call_external_func(primitive, &[], ColumnTy::Base(int), move || {
                 let _token = primitive_token;
-                "primitive failure".into()
+                "primitive failure".to_owned()
             });
             if case == 2 {
                 anyhow::bail!("compile failure");
@@ -338,7 +338,7 @@ fn typed_class_inventory_compiled_prefix_and_constructor_dedup() {
     let next_key = graph.base_value_constant(1i64);
     let rule = {
         let mut rb = graph.new_rule("prefix", true);
-        rb.lookup(f, &[next_key], || "missing constructor".into());
+        rb.lookup(f, &[next_key], || "missing constructor".to_owned());
         rb.panic("completed-prefix".into());
         rb.build()
     };
@@ -2071,7 +2071,10 @@ fn panic_functions_trigger_early_stop() {
     );
 
     let channel: crate::SideChannel<super::PanicError> = Default::default();
-    let lazy = Lazy::new(|| "lazy panic".to_string());
+    let lazy = Lazy::new(|| super::PanicError {
+        message: "lazy panic".into(),
+        source: None,
+    });
     let panic_fn = super::LazyPanic(Arc::new(lazy), channel.clone());
     let stopped = db.with_execution_state(None, |state| {
         assert!(!state.should_stop());

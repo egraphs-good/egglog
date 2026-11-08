@@ -241,7 +241,10 @@ impl RuleBuilder<'_> {
     /// message rather than the calling thread unwinding.
     ///
     /// [`call_external_func`]: Self::call_external_func
-    pub fn new_panic(&mut self, message: String) -> crate::ExternalFunctionId {
+    pub fn new_panic(
+        &mut self,
+        message: impl Into<crate::PanicError>,
+    ) -> crate::ExternalFunctionId {
         self.egraph.new_panic(message)
     }
 
@@ -453,12 +456,12 @@ impl RuleBuilder<'_> {
         res
     }
 
-    pub fn call_external_func(
+    pub fn call_external_func<E: Into<crate::PanicError>>(
         &mut self,
         func: ExternalFunctionId,
         args: &[QueryEntry],
         ret_ty: ColumnTy,
-        panic_msg: impl FnOnce() -> String + 'static + Send,
+        panic_msg: impl FnOnce() -> E + 'static + Send,
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
@@ -473,9 +476,9 @@ impl RuleBuilder<'_> {
         res
     }
 
-    fn new_panic_lazy(
+    fn new_panic_lazy<E: Into<crate::PanicError>>(
         &mut self,
-        message: impl FnOnce() -> String + Send + 'static,
+        message: impl FnOnce() -> E + Send + 'static,
     ) -> ExternalFunctionId {
         let function = self.egraph.new_panic_lazy(message);
         if let Some(scoped) = &mut self.scoped {
@@ -631,12 +634,12 @@ impl RuleBuilder<'_> {
         });
     }
 
-    pub(crate) fn lookup_with_subsumed(
+    pub(crate) fn lookup_with_subsumed<E: Into<crate::PanicError>>(
         &mut self,
         func: FunctionId,
         entries: &[QueryEntry],
         subsumed: QueryEntry,
-        panic_msg: impl FnOnce() -> String + Send + 'static,
+        panic_msg: impl FnOnce() -> E + Send + 'static,
     ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
@@ -715,11 +718,11 @@ impl RuleBuilder<'_> {
     ///
     /// For functions configured with [`DefaultVal::Fail`], failing lookups will use `panic_msg` in
     /// the panic output.
-    pub fn lookup(
+    pub fn lookup<E: Into<crate::PanicError>>(
         &mut self,
         func: FunctionId,
         entries: &[QueryEntry],
-        panic_msg: impl FnOnce() -> String + Send + 'static,
+        panic_msg: impl FnOnce() -> E + Send + 'static,
     ) -> Variable {
         self.lookup_with_subsumed(
             func,

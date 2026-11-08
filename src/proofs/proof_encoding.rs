@@ -59,6 +59,10 @@ impl EncodingState {
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
     pub(crate) literal_bindings: HashMap<String, Literal>,
+    /// Authored expressions that remain inline at their original demand point.
+    pub(crate) expression_bindings: HashMap<String, Expr>,
+    /// Authored origins of expression results bound to unique generated locals.
+    pub(crate) action_spans: HashMap<String, Span>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -70,6 +74,8 @@ impl<'a> ProofInstrumentor<'a> {
         Self {
             egraph,
             literal_bindings: HashMap::default(),
+            expression_bindings: HashMap::default(),
+            action_spans: HashMap::default(),
         }
         .add_term_encoding_helper(program)
     }
@@ -541,7 +547,7 @@ impl<'a> ProofInstrumentor<'a> {
         let view_decl = format!(
             "(function {view_name} ({view_sorts}) {proof_type} :merge old :internal-term-constructor {name}{view_flags})"
         );
-        self.parse_program(&format!(
+        let mut commands = self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
@@ -552,7 +558,22 @@ impl<'a> ProofInstrumentor<'a> {
             {proof_constructors}
             {merge_rule}
             {delete_rule}",
-        ))
+        ));
+        if let Some((current, _)) = self.egraph.proof_state.merge_current.get(name) {
+            for command in &mut commands {
+                if let Command::Function {
+                    span, name, merge, ..
+                } = command
+                    && name.as_str() == current.as_str()
+                {
+                    *span = fdecl.span.clone();
+                    *merge = fdecl.merge.clone().map(|expr| {
+                        expr.map_symbols(&mut |head| head.name().to_owned(), &mut |leaf| leaf.name)
+                    });
+                }
+            }
+        }
+        commands
     }
 
     fn proof_functions(&mut self, _fdecl: &ResolvedFunctionDecl, _view_sorts: &str) -> String {
@@ -1357,7 +1378,7 @@ impl<'a> ProofInstrumentor<'a> {
         match expr {
             ResolvedExpr::Lit(_, lit) => self.quote_literal(lit),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
-            ResolvedExpr::Call(_, resolved_call, args) => {
+            ResolvedExpr::Call(span, resolved_call, args) => {
                 let args = args
                     .iter()
                     .map(|arg| self.instrument_action_expr(arg, res, proof))
@@ -1365,7 +1386,7 @@ impl<'a> ProofInstrumentor<'a> {
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
-                            if self
+                            let name = if self
                                 .egraph
                                 .type_info
                                 .mutable_bindings
@@ -1378,21 +1399,30 @@ impl<'a> ProofInstrumentor<'a> {
                                     .get(&func_type.name)
                                     .expect("mutable binding has merge-current storage");
                                 assert_eq!(*arity, 0);
-                                return format!("({current})");
+                                current.clone()
                             }
                             // Globals are desugared to no-arg functions (in non-proof mode)
                             // They're allowed, in proof mode they are constructors.
-                            if self
+                            else if self
                                 .egraph
                                 .type_info
                                 .native_global_functions
                                 .contains(&func_type.name)
                             {
-                                return format!("({} {})", func_type.name, ListDisplay(&args, " "));
-                            }
-                            panic!(
-                                "Found a function lookup in actions, should have been prevented by typechecking"
+                                func_type.name.clone()
+                            } else {
+                                panic!(
+                                    "Found a function lookup in actions, should have been prevented by typechecking"
+                                );
+                            };
+                            let expr = Expr::Call(
+                                span.clone(),
+                                name,
+                                args.iter().map(|arg| self.parse_expr(arg)).collect(),
                             );
+                            let token = self.fresh_var();
+                            self.expression_bindings.insert(token.clone(), expr);
+                            return token;
                         }
                         let (add_code, fv) = self.add_term_and_view(func_type, &args, proof);
                         res.extend(add_code);
@@ -1401,6 +1431,7 @@ impl<'a> ProofInstrumentor<'a> {
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         let fv = self.fresh_var();
+                        self.action_spans.insert(fv.clone(), span.clone());
                         res.push(format!(
                             "(let {} ({} {}))",
                             fv,
@@ -1913,6 +1944,8 @@ impl<'a> ProofInstrumentor<'a> {
         let mut instrumentor = Self {
             egraph,
             literal_bindings: HashMap::default(),
+            expression_bindings: HashMap::default(),
+            action_spans: HashMap::default(),
         };
         (
             instrumentor.command_header(),

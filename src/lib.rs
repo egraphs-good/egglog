@@ -1178,17 +1178,23 @@ impl EGraph {
                 // NB: type-checking should already catch unbound variables here.
                 _ => Err(TypeError::Unbound(resolved_var.name.clone(), span.clone()).into()),
             },
-            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+            GenericExpr::Call(span, ResolvedCall::Func(f), args) => {
                 let translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(egglog_bridge::MergeFn::Function(
-                    self.functions[&f.name].backend_id,
-                    translated_args,
-                ))
+                Ok(egglog_bridge::MergeFn::WithSource {
+                    merge: Box::new(egglog_bridge::MergeFn::Function(
+                        self.functions[&f.name].backend_id,
+                        translated_args,
+                    )),
+                    source: Arc::new(RuntimeOrigin {
+                        span: span.clone(),
+                        rule: None,
+                    }),
+                })
             }
-            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+            GenericExpr::Call(span, ResolvedCall::Primitive(p), args) => {
                 let mut translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
@@ -1217,10 +1223,16 @@ impl EGraph {
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
                 }
-                Ok(egglog_bridge::MergeFn::Primitive(
-                    p.external_id(crate::Context::Write),
-                    translated_args,
-                ))
+                Ok(egglog_bridge::MergeFn::WithSource {
+                    merge: Box::new(egglog_bridge::MergeFn::Primitive(
+                        p.external_id(crate::Context::Write),
+                        translated_args,
+                    )),
+                    source: Arc::new(RuntimeOrigin {
+                        span: span.clone(),
+                        rule: None,
+                    }),
+                })
             }
         }
     }
@@ -1324,7 +1336,13 @@ impl EGraph {
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
                 FunctionSubtype::Custom => match &decl.merge {
-                    None => MergeFn::AssertEq,
+                    None => MergeFn::WithSource {
+                        merge: Box::new(MergeFn::AssertEq),
+                        source: Arc::new(RuntimeOrigin {
+                            span: decl.span.clone(),
+                            rule: None,
+                        }),
+                    },
                     Some(expr) => self.translate_expr_to_mergefn(expr)?,
                 },
             },
@@ -2585,7 +2603,20 @@ impl EGraph {
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
-            Error::BackendError(format!("Failed to evaluate expression '{expr}': {e}"))
+            let message = format!("Failed to evaluate expression '{expr}': {e}");
+            match Error::from_backend(e.as_ref()) {
+                Error::Runtime { span, rule, .. } => Error::Runtime {
+                    message,
+                    span,
+                    rule,
+                },
+                Error::Panic { span, rule, .. } => Error::Panic {
+                    message,
+                    span,
+                    rule,
+                },
+                _ => Error::BackendError(message),
+            }
         })?;
 
         let result = result.lock().unwrap().unwrap();
@@ -2953,6 +2984,8 @@ impl EGraph {
                 let mut instrument = ProofInstrumentor {
                     egraph: self,
                     literal_bindings: HashMap::default(),
+                    expression_bindings: HashMap::default(),
+                    action_spans: HashMap::default(),
                 };
                 let (proof_store, proof_id) =
                     instrument
@@ -3624,6 +3657,13 @@ impl EGraph {
                                                     error = match error {
                                                         Error::Panic { span, rule, .. } => {
                                                             Error::Panic {
+                                                                message,
+                                                                span,
+                                                                rule,
+                                                            }
+                                                        }
+                                                        Error::Runtime { span, rule, .. } => {
+                                                            Error::Runtime {
                                                                 message,
                                                                 span,
                                                                 rule,
@@ -4719,8 +4759,10 @@ impl<'a> BackendRule<'a> {
                             let f = self.func(f);
                             let args = self.args(args);
                             let span = span.clone();
-                            self.rb.lookup(f, &args, move || {
-                                format!("{span}: lookup of function {name} failed")
+                            let rule = self.rule.clone();
+                            self.rb.lookup(f, &args, move || egglog_bridge::PanicError {
+                                message: format!("{span}: lookup of function {name} failed"),
+                                source: Some(Arc::new(RuntimeOrigin { span, rule })),
                             })
                         }
                         ResolvedCall::Primitive(p) => {
@@ -4728,8 +4770,12 @@ impl<'a> BackendRule<'a> {
                             let ctx = self.action_context();
                             let (p, args, ty) = self.prim(p, args, ctx)?;
                             let span = span.clone();
+                            let rule = self.rule.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
-                                format!("{span}: call of primitive {name} failed")
+                                egglog_bridge::PanicError {
+                                    message: format!("{span}: call of primitive {name} failed"),
+                                    source: Some(Arc::new(RuntimeOrigin { span, rule })),
+                                }
                             })
                         }
                     };
@@ -4931,6 +4977,13 @@ struct PanicOrigin {
 }
 
 #[derive(Debug, Error)]
+#[error("runtime expression source")]
+struct RuntimeOrigin {
+    span: Span,
+    rule: Option<String>,
+}
+
+#[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     ParseError(#[from] ParseError),
@@ -4960,6 +5013,14 @@ pub enum Error {
         /// Exact authored action location, never generated helper text.
         span: Span,
         /// Exact compiled native rule identity, absent for direct actions.
+        rule: Option<String>,
+    },
+    /// A failed runtime expression or merge, with its authored source metadata.
+    #[error("{message}")]
+    Runtime {
+        message: String,
+        span: Span,
+        /// The compiled native rule, absent for direct actions and merges.
         rule: Option<String>,
     },
     #[error("{0}\nTried to pop too much")]
@@ -5017,6 +5078,14 @@ impl Error {
             .find_map(|cause| cause.downcast_ref::<PanicOrigin>())
         {
             Self::Panic {
+                message: error.to_string(),
+                span: origin.span.clone(),
+                rule: origin.rule.clone(),
+            }
+        } else if let Some(origin) = std::iter::successors(Some(error), |cause| cause.source())
+            .find_map(|cause| cause.downcast_ref::<RuntimeOrigin>())
+        {
+            Self::Runtime {
                 message: error.to_string(),
                 span: origin.span.clone(),
                 rule: origin.rule.clone(),
@@ -5170,6 +5239,107 @@ mod tests {
             assert_eq!(&span.file.contents[span.i..span.j], "(panic \"direct π\")");
             assert_eq!(span.i, direct.find("(panic \"direct π\")").unwrap());
             assert_eq!(span.file.name.as_deref(), Some("direct-origin.egg"));
+        }
+    }
+
+    #[test]
+    fn external_runtime_sources_survive_lowering_and_cloning() {
+        use egglog_ast::span::ExternalSpan;
+
+        for mode in 0..4 {
+            for explicit_panic in [false, true] {
+                let mut graph = match mode {
+                    0 => EGraph::default(),
+                    1 => EGraph::new_with_term_encoding(),
+                    2 => EGraph::new_with_proofs(),
+                    _ => EGraph::new_with_proofs().with_proof_testing(),
+                }
+                .with_num_threads(2);
+                let text = if explicit_panic {
+                    "(relation Prefix ()) (relation Tail ()) (rule () ((Prefix) (panic \"stop\") (Tail)) :name \"opaque rule\")"
+                } else {
+                    "(relation Prefix ()) (relation Tail ()) (rule () ((Prefix) (/ 1 0) (Tail)) :name \"opaque rule\")"
+                };
+                let token = Arc::new(("installed rule", mode, explicit_panic));
+                let expected = Span::External(Arc::new(ExternalSpan(token.clone())));
+                let mut program = graph.parser.get_program_from_string(None, text).unwrap();
+                let Command::Rule { rule } = &mut program[2] else {
+                    panic!("rule fixture")
+                };
+                match &mut rule.head.0[1] {
+                    Action::Panic(span, _) => *span = expected.clone(),
+                    Action::Expr(_, Expr::Call(span, _, _)) => *span = expected.clone(),
+                    _ => panic!("failing action fixture"),
+                }
+                graph.run_program(program).unwrap();
+                let mut cloned = graph.clone();
+                drop(graph);
+                let error = cloned.parse_and_run_program(None, "(run 1)").unwrap_err();
+                let (span, rule) = match &error {
+                    Error::Panic { span, rule, .. } if explicit_panic => (span, rule),
+                    Error::Runtime { span, rule, .. } if !explicit_panic => (span, rule),
+                    _ => panic!("unexpected runtime error: {error}"),
+                };
+                assert_eq!(span, &expected, "mode={mode}");
+                assert_eq!(rule.as_deref(), Some("opaque rule"));
+                let Span::External(external) = span else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    external.0.downcast_ref::<(&str, i32, bool)>(),
+                    Some(token.as_ref())
+                );
+                assert!(matches!(
+                    cloned.print_size(Some("Prefix")).unwrap(),
+                    CommandOutput::PrintFunctionSize(1)
+                ));
+                assert!(matches!(
+                    cloned.print_size(Some("Tail")).unwrap(),
+                    CommandOutput::PrintFunctionSize(0)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn external_merge_sources_survive_deferred_rebuilds() {
+        use egglog_ast::span::ExternalSpan;
+
+        for custom_merge in [false, true] {
+            let mut graph = EGraph::new(2);
+            let text = if custom_merge {
+                "(datatype T (A) (B)) (function slot (T) i64 :merge (/ old new))"
+            } else {
+                "(datatype T (A) (B)) (function slot (T) i64 :no-merge)"
+            };
+            let token = Arc::new(("installed merge", custom_merge));
+            let expected = Span::External(Arc::new(ExternalSpan(token.clone())));
+            let mut program = graph.parser.get_program_from_string(None, text).unwrap();
+            let Command::Function { span, merge, .. } = &mut program[1] else {
+                panic!("function fixture")
+            };
+            if let Some(Expr::Call(merge_span, _, _)) = merge {
+                *merge_span = expected.clone();
+            } else {
+                *span = expected.clone();
+            }
+            graph.run_program(program).unwrap();
+            graph
+                .parse_and_run_program(None, "(set (slot (A)) 1) (set (slot (B)) 0)")
+                .unwrap();
+            let mut cloned = graph.clone();
+            drop(graph);
+            let error = cloned
+                .parse_and_run_program(None, "(union (A) (B))")
+                .unwrap_err();
+            let Error::Runtime { span, rule, .. } = error else {
+                panic!("structured merge failure: {error}")
+            };
+            assert_eq!(span, expected);
+            assert!(rule.is_none(), "a deferred merge has no unique firing rule");
+            cloned
+                .parse_and_run_program(None, "(check (= (A) (B)))")
+                .unwrap();
         }
     }
 

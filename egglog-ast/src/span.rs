@@ -1,4 +1,6 @@
+use std::any::Any;
 use std::fmt::{self, Debug, Display};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -6,6 +8,29 @@ pub enum Span {
     Panic,
     Egglog(Arc<EgglogSpan>),
     Rust(Arc<RustSpan>),
+    /// A caller-owned source location, retained without interpreting its payload.
+    External(Arc<ExternalSpan>),
+}
+
+/// Opaque source metadata shared by cloned programs and runtime diagnostics.
+///
+/// Equality and hashing use allocation identity; two separately allocated
+/// locations remain distinct even when their payloads contain equal values.
+#[derive(Clone)]
+pub struct ExternalSpan(pub Arc<dyn Any + Send + Sync>);
+
+impl PartialEq for ExternalSpan {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ExternalSpan {}
+
+impl Hash for ExternalSpan {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).cast::<()>().hash(state);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -52,6 +77,7 @@ impl Span {
         match self {
             Span::Panic => panic!("Span::Panic in Span::string"),
             Span::Rust(_) => panic!("Span::Rust cannot track end position"),
+            Span::External(_) => panic!("Span::External has no source text"),
             Span::Egglog(span) => &span.file.contents[span.i..span.j],
         }
     }
@@ -68,6 +94,7 @@ impl Display for Span {
         match self {
             Span::Panic => panic!("Span::Panic in impl Display"),
             Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
+            Span::External(_) => f.write_str("At external source"),
             Span::Egglog(span) => {
                 let (start_line, start_col) = span.file.get_location(span.i);
                 let (end_line, end_col) = span
@@ -99,6 +126,35 @@ impl Display for Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_spans_retain_payload_and_allocation_identity() {
+        assert_eq!(
+            std::mem::size_of::<Span>(),
+            2 * std::mem::size_of::<usize>()
+        );
+        let origin = Arc::new(String::from("authored site"));
+        let span = Span::External(Arc::new(ExternalSpan(origin.clone())));
+        let cloned = span.clone();
+        let distinct = Span::External(Arc::new(ExternalSpan(Arc::new(String::from(
+            "authored site",
+        )))));
+        assert_eq!(span, cloned);
+        assert_ne!(span, distinct);
+        let mut original_hash = std::collections::hash_map::DefaultHasher::new();
+        span.hash(&mut original_hash);
+        let mut cloned_hash = std::collections::hash_map::DefaultHasher::new();
+        cloned.hash(&mut cloned_hash);
+        assert_eq!(original_hash.finish(), cloned_hash.finish());
+        let Span::External(external) = cloned else {
+            unreachable!()
+        };
+        assert_eq!(external.0.downcast_ref::<String>(), Some(origin.as_ref()));
+        assert_eq!(
+            format!("{:?}", Span::External(external)),
+            "At external source"
+        );
+    }
 
     #[test]
     fn egglog_span_display_preserves_full_path() {

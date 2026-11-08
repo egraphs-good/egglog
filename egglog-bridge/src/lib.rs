@@ -1315,6 +1315,11 @@ pub enum DefaultVal {
 
 /// How to resolve FD conflicts for a table.
 pub enum MergeFn {
+    /// Retain the authored source of failures, including deferred rebuilds.
+    WithSource {
+        merge: Box<MergeFn>,
+        source: Arc<dyn std::error::Error + Send + Sync>,
+    },
     /// Panic if the old and new values don't match.
     AssertEq,
     /// Use congruence to resolve FD conflicts.
@@ -1344,6 +1349,7 @@ impl MergeFn {
     ) {
         use MergeFn::*;
         match self {
+            WithSource { merge, .. } => merge.fill_deps(egraph, read_deps, write_deps),
             Primitive(_, args) => {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
@@ -1369,7 +1375,7 @@ impl MergeFn {
         output_sort: Option<Arc<str>>,
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
-        let resolved = self.resolve(function_name, egraph);
+        let resolved = self.resolve(function_name, egraph, None);
 
         Box::new(move |state, cur, new, out| {
             let timestamp = new[schema_math.ts_col()];
@@ -1410,15 +1416,24 @@ impl MergeFn {
         })
     }
 
-    fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> ResolvedMergeFn {
+    fn resolve(
+        &self,
+        function_name: &str,
+        egraph: &mut EGraph,
+        source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+    ) -> ResolvedMergeFn {
         match self {
+            MergeFn::WithSource { merge, source } => {
+                merge.resolve(function_name, egraph, Some(source.clone()))
+            }
             MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
             MergeFn::Old => ResolvedMergeFn::Old,
             MergeFn::New => ResolvedMergeFn::New,
             MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
-                panic: egraph.new_panic(format!(
-                    "Illegal merge attempted for function {function_name}"
-                )),
+                panic: egraph.new_panic(PanicError {
+                    message: format!("Illegal merge attempted for function {function_name}"),
+                    source,
+                }),
             },
             MergeFn::UnionId => ResolvedMergeFn::UnionId {
                 uf_table: egraph.uf_table,
@@ -1431,11 +1446,12 @@ impl MergeFn {
                 prim: *prim,
                 args: args
                     .iter()
-                    .map(|arg| arg.resolve(function_name, egraph))
+                    .map(|arg| arg.resolve(function_name, egraph, source.clone()))
                     .collect::<Vec<_>>(),
-                panic: egraph.new_panic(format!(
-                    "Merge function for {function_name} primitive call failed"
-                )),
+                panic: egraph.new_panic(PanicError {
+                    message: format!("Merge function for {function_name} primitive call failed"),
+                    source,
+                }),
             },
             MergeFn::Function(func, args) => {
                 let func_info = &egraph.funcs[*func];
@@ -1447,13 +1463,16 @@ impl MergeFn {
                 );
                 ResolvedMergeFn::Function {
                     func: TableAction::new(egraph, *func),
-                    panic: egraph.new_panic(format!(
-                        "Lookup on {} failed in the merge function for {function_name}",
-                        func_info.name
-                    )),
+                    panic: egraph.new_panic(PanicError {
+                        message: format!(
+                            "Lookup on {} failed in the merge function for {function_name}",
+                            func_info.name
+                        ),
+                        source: source.clone(),
+                    }),
                     args: args
                         .iter()
-                        .map(|arg| arg.resolve(function_name, egraph))
+                        .map(|arg| arg.resolve(function_name, egraph, source.clone()))
                         .collect::<Vec<_>>(),
                 }
             }
@@ -1877,18 +1896,15 @@ pub type SideChannel<T> = Arc<Mutex<Option<T>>>;
 /// The downside of this, and why we do not use it everywhere, is that there's no natural "key"
 /// that we can use to cache duplicate panic messages. We would need a more complex API to support
 /// both and fully replace our use of `Panic`.
-struct LazyPanic<F>(Arc<Lazy<String, F>>, SideChannel<PanicError>);
+struct LazyPanic<F>(Arc<Lazy<PanicError, F>>, SideChannel<PanicError>);
 
-impl<F: FnOnce() -> String + Send> ExternalFunction for LazyPanic<F> {
+impl<F: FnOnce() -> PanicError + Send> ExternalFunction for LazyPanic<F> {
     fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
         assert!(args.is_empty());
         state.trigger_early_stop();
         let mut guard = self.1.lock().unwrap();
         if guard.is_none() {
-            *guard = Some(PanicError {
-                message: Lazy::force(&self.0).clone(),
-                source: None,
-            });
+            *guard = Some(Lazy::force(&self.0).clone());
         }
         None
     }
@@ -1909,27 +1925,27 @@ struct Panic(PanicError, SideChannel<PanicError>);
 
 impl EGraph {
     /// Create a new `ExternalFunction` that panics with the given message.
-    pub fn new_panic(&mut self, message: String) -> ExternalFunctionId {
+    pub fn new_panic(&mut self, message: impl Into<PanicError>) -> ExternalFunctionId {
+        let error = message.into();
+        if error.source.is_some() {
+            return self
+                .db
+                .add_external_function(Box::new(Panic(error, self.panic_message.clone())));
+        }
         *self
             .panic_funcs
-            .entry(message.to_string())
+            .entry(error.message.clone())
             .or_insert_with(|| {
-                let panic = Panic(
-                    PanicError {
-                        message,
-                        source: None,
-                    },
-                    self.panic_message.clone(),
-                );
+                let panic = Panic(error, self.panic_message.clone());
                 self.db.add_external_function(Box::new(panic))
             })
     }
 
-    pub fn new_panic_lazy(
+    pub fn new_panic_lazy<E: Into<PanicError>>(
         &mut self,
-        message: impl FnOnce() -> String + Send + 'static,
+        message: impl FnOnce() -> E + Send + 'static,
     ) -> ExternalFunctionId {
-        let lazy = Lazy::new(message);
+        let lazy = Lazy::new(move || message().into());
         let panic = LazyPanic(Arc::new(lazy), self.panic_message.clone());
         self.db.add_external_function(Box::new(panic))
     }
@@ -2058,10 +2074,20 @@ impl SchemaMath {
     }
 }
 
+/// A catchable runtime diagnostic and its optional structured authored source.
 #[derive(Clone, Debug)]
-struct PanicError {
-    message: String,
-    source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+pub struct PanicError {
+    pub message: String,
+    pub source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+}
+
+impl From<String> for PanicError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            source: None,
+        }
+    }
 }
 
 impl std::fmt::Display for PanicError {
