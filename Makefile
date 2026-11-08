@@ -46,11 +46,14 @@ fixnits:
 	cargo clippy --fix --tests --workspace --allow-dirty
 
 docs:
+	# Clear cached staging output so the copy below cannot create docs/doc.
+	rm -rf "${WWW}"
 	mkdir -p ${WWW}/
 	cargo doc --no-deps --all-features --workspace
 	touch target/doc/.nojekyll # prevent github from trying to run jekyll
 	cp www/index.html ${WWW}/index.html
 	cp -r target/doc ${WWW}/docs
+	test -f "${WWW}/docs/egglog/index.html"
 
 graphs: $(patsubst %.egg,%.svg,$(filter-out $(wildcard tests/repro-*.egg),$(wildcard tests/*.egg)))
 
