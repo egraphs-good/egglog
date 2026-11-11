@@ -160,15 +160,15 @@ pub(crate) fn desugar_command(
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
         Command::RunSchedule(sched) => {
-            vec![NCommand::RunSchedule(sched.clone())]
+            vec![NCommand::RunSchedule(sched)]
         }
         Command::PrintOverallStatistics(span, file) => {
-            vec![NCommand::PrintOverallStatistics(span, file.clone())]
+            vec![NCommand::PrintOverallStatistics(span, file)]
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => {
             if proof_testing {
-                desugar_prove(parser, span.clone(), facts.clone())
+                desugar_prove(parser, span, facts)
             } else {
                 vec![NCommand::Check(span, facts)]
             }
@@ -189,7 +189,7 @@ pub(crate) fn desugar_command(
         Command::Fail(span, cmd) => {
             if let Command::Include(..) = *cmd {
                 return Err(Error::DesugarError(
-                    span.clone(),
+                    span,
                     "include is not allowed inside (fail ...)".to_string(),
                 ));
             }
@@ -197,7 +197,7 @@ pub(crate) fn desugar_command(
 
             let Some(last) = desugared.pop() else {
                 return Err(Error::DesugarError(
-                    span.clone(),
+                    span,
                     "the command inside (fail ...) expands to no commands".to_string(),
                 ));
             };
