@@ -75,7 +75,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        runner: ${{ fromJSON(github.event_name == 'push' && '["codspeed-macro", "ubuntu-latest"]' || github.event_name == 'issue_comment' && '["codspeed-macro"]' || '["ubuntu-latest"]') }}
+        runner: ${{ fromJSON(github.event_name == 'push' && '["codspeed-macro", "ubuntu-24.04"]' || github.event_name == 'issue_comment' && '["codspeed-macro"]' || '["ubuntu-24.04"]') }}
         benchmark:
           - math-microbenchmark
           - cykjson
@@ -119,7 +119,7 @@ jobs:
       - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run ${{ matrix.benchmark }}
-          mode: ${{ matrix.runner == 'ubuntu-latest' && 'simulation' || 'walltime' }}
+          mode: ${{ matrix.runner == 'ubuntu-24.04' && 'simulation' || 'walltime' }}
   wasm:
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
