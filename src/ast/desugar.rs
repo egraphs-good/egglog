@@ -28,8 +28,6 @@ pub(crate) fn desugar_command(
             // extractable unless explicitly marked unextractable
             if fdecl.term_constructor.is_some() {
                 fdecl.unextractable = unextractable;
-            } else if unextractable {
-                fdecl.unextractable = true;
             }
             // For regular functions without term_constructor, keep the default
             // unextractable=true from FunctionDecl::function()
