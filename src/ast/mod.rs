@@ -293,38 +293,22 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericNCommand::Sort {
-                span,
-                name,
-                presort_and_args,
-                uf,
-                proof_func,
-                container_rebuild,
-                proof_constructors,
-                unionable,
-            } => GenericNCommand::Sort {
-                span,
-                name,
-                presort_and_args,
-                uf,
-                proof_func,
-                container_rebuild,
-                proof_constructors,
-                unionable,
-            },
+            GenericNCommand::Sort { .. }
+            | GenericNCommand::AddRuleset(..)
+            | GenericNCommand::UnstableCombinedRuleset(..)
+            | GenericNCommand::PrintOverallStatistics(..)
+            | GenericNCommand::PrintFunction(..)
+            | GenericNCommand::ProveExists(..)
+            | GenericNCommand::PrintSize(..)
+            | GenericNCommand::Push(..)
+            | GenericNCommand::Pop(..)
+            | GenericNCommand::Input { .. } => self,
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
-            GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
-            GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
-                GenericNCommand::UnstableCombinedRuleset(span, name, rulesets)
-            }
             GenericNCommand::NormRule { rule } => GenericNCommand::NormRule {
                 rule: rule.visit_exprs(f),
             },
             GenericNCommand::RunSchedule(schedule) => {
                 GenericNCommand::RunSchedule(schedule.visit_exprs(f))
-            }
-            GenericNCommand::PrintOverallStatistics(span, file) => {
-                GenericNCommand::PrintOverallStatistics(span, file)
             }
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
@@ -336,25 +320,13 @@ where
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
-            GenericNCommand::PrintFunction(span, name, n, file, mode) => {
-                GenericNCommand::PrintFunction(span, name, n, file, mode)
-            }
-            GenericNCommand::ProveExists(span, constructor) => {
-                GenericNCommand::ProveExists(span, constructor)
-            }
-            GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
                 span,
                 file,
                 exprs: exprs.into_iter().map(f).collect(),
             },
-            GenericNCommand::Push(n) => GenericNCommand::Push(n),
-            GenericNCommand::Pop(span, n) => GenericNCommand::Pop(span, n),
             GenericNCommand::Fail(span, cmd) => {
                 GenericNCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
-            }
-            GenericNCommand::Input { span, name, file } => {
-                GenericNCommand::Input { span, name, file }
             }
             GenericNCommand::UserDefined(span, name, exprs) => {
                 // We can't map `f` over UserDefined because UserDefined always assumes plain `Expr`s
