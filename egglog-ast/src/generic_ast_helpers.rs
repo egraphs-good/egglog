@@ -194,18 +194,13 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self {
-            span: self.span,
             head: self.head.visit_exprs(f),
             body: self
                 .body
                 .into_iter()
                 .map(|bexpr| bexpr.visit_exprs(f))
                 .collect(),
-            name: self.name,
-            ruleset: self.ruleset,
-            eval_mode: self.eval_mode,
-            no_decomp: self.no_decomp,
-            include_subsumed: self.include_subsumed,
+            ..self
         }
     }
 
@@ -215,14 +210,8 @@ where
         f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
     ) -> Self {
         Self {
-            span: self.span,
             head: self.head.visit_actions(f),
-            body: self.body,
-            name: self.name,
-            ruleset: self.ruleset,
-            eval_mode: self.eval_mode,
-            no_decomp: self.no_decomp,
-            include_subsumed: self.include_subsumed,
+            ..self
         }
     }
 
