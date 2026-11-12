@@ -1016,6 +1016,26 @@ pub fn add_container_sort(
     egraph.add_sort(ContainerSortImpl(container_sort), span)
 }
 
+pub(crate) fn is_builtin_sort(sort: &ArcSort) -> bool {
+    use crate::sort::*;
+    [
+        TypeId::of::<EqSort>(),
+        TypeId::of::<BaseSortImpl<UnitSort>>(),
+        TypeId::of::<BaseSortImpl<BoolSort>>(),
+        TypeId::of::<BaseSortImpl<I64Sort>>(),
+        TypeId::of::<BaseSortImpl<F64Sort>>(),
+        TypeId::of::<BaseSortImpl<StringSort>>(),
+        TypeId::of::<BaseSortImpl<BigIntSort>>(),
+        TypeId::of::<BaseSortImpl<BigRatSort>>(),
+        TypeId::of::<ContainerSortImpl<VecSort>>(),
+        TypeId::of::<ContainerSortImpl<SetSort>>(),
+        TypeId::of::<ContainerSortImpl<MultiSetSort>>(),
+        TypeId::of::<ContainerSortImpl<MapSort>>(),
+        TypeId::of::<ContainerSortImpl<PairSort>>(),
+    ]
+    .contains(&(**sort).type_id())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

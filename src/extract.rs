@@ -12,11 +12,14 @@
 //! its selected child costs. [`DEFAULT_COST_MODEL`] is the default additive
 //! tree model.
 
+use crate::prelude::is_builtin_sort;
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
 use numeric_id::NumericId;
+use std::any::Any;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 /// A value that can be used to rank extraction candidates.
 pub trait Cost: Clone + Ord {}
@@ -162,7 +165,7 @@ impl<C: Cost, M: TreeCostModel<C>> TreeExtractorCostModel<C> for M {
 }
 
 /// Adapts a [`DagCostModel`] to tree extraction by combining marginal costs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TreeCostModelFromDag<M>(pub M);
 
 impl<C: MonoidCost, M: DagCostModel<C>> TreeCostModel<C> for TreeCostModelFromDag<M> {
@@ -201,7 +204,7 @@ pub type DefaultCost = u64;
 ///
 /// With [`DefaultCost`], constructor `:cost` declarations override `node_cost`
 /// and selected child costs are combined with each constructor's cost.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AdditiveCostModel {
     /// The fallback cost for primitive values and constructors without `:cost`.
     pub node_cost: DefaultCost,
@@ -280,12 +283,32 @@ pub struct TreeExtractor<'g, C: Cost> {
     sort_ids: HashMap<String, usize>,
     costs: Vec<HashMap<Value, RankedCost<C>>>,
     parent_edge: Vec<HashMap<Value, (usize, Vec<Value>)>>,
+    builtin_sorts_only: bool,
 }
 
 /// Every successful relaxation updates the cost and chronological rank together.
 struct RankedCost<C> {
     cost: C,
     rank: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct ExtractorCache(Mutex<Option<CachedCosts>>);
+
+impl Clone for ExtractorCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+struct CachedCosts {
+    cost_model: Box<dyn Any + Send>,
+    rootsorts: Vec<ArcSort>,
+    versions: Vec<(core_relations::TableVersion, usize)>,
+    funcs: Vec<String>,
+    sort_ids: HashMap<String, usize>,
+    costs: Vec<HashMap<Value, RankedCost<DefaultCost>>>,
+    parent_edge: Vec<HashMap<Value, (usize, Vec<Value>)>>,
 }
 
 /// How extraction treats one child column of a function, resolved once so the
@@ -475,7 +498,9 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         // Do a BFS to find reachable tables
         let mut q: VecDeque<ArcSort> = VecDeque::new();
         let mut seen: HashSet<String> = Default::default();
+        let mut builtin_sorts_only = true;
         for rootsort in rootsorts.iter() {
+            builtin_sorts_only &= is_builtin_sort(rootsort);
             if seen.insert(rootsort.name().to_owned()) {
                 q.push_back(rootsort.clone());
             }
@@ -488,6 +513,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             if sort.is_container_sort() {
                 let inner_sorts = sort.inner_sorts();
                 for s in inner_sorts {
+                    builtin_sorts_only &= is_builtin_sort(&s);
                     if !seen.contains(s.name()) {
                         q.push_back(s.clone());
                         seen.insert(s.name().to_owned());
@@ -502,6 +528,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         // For view tables, children are all but the last input (which is the e-class)
                         let num_children = func.extraction_num_children();
                         for ch in func.func_type.input.iter().take(num_children) {
+                            builtin_sorts_only &= is_builtin_sort(ch);
                             let ch_name = ch.name();
                             if !seen.contains(ch_name) {
                                 q.push_back(ch.clone());
@@ -534,6 +561,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             sort_ids,
             costs: (0..n_sorts).map(|_| Default::default()).collect(),
             parent_edge: (0..n_sorts).map(|_| Default::default()).collect(),
+            builtin_sorts_only,
         };
 
         extractor.bellman_ford(egraph);
@@ -1147,7 +1175,7 @@ impl EGraph {
         &self,
         roots: Vec<(ArcSort, Value)>,
     ) -> Result<ExtractedTerms<DefaultCost>, Error> {
-        self.extract_best_with_cost_model(roots, DEFAULT_COST_MODEL)
+        Ok(self.extract_best_cached(roots, DEFAULT_COST_MODEL))
     }
 
     /// Extracts the best tree term for each requested `(sort, value)` root.
@@ -1185,7 +1213,7 @@ impl EGraph {
         roots: Vec<(ArcSort, Value)>,
         nvariants: usize,
     ) -> Result<ExtractedTermVariants<DefaultCost>, Error> {
-        self.extract_variants_with_cost_model(roots, nvariants, DEFAULT_COST_MODEL)
+        Ok(self.extract_variants_cached(roots, nvariants, DEFAULT_COST_MODEL))
     }
 
     /// Extracts up to `nvariants` tree root variants for each requested root.
@@ -1217,6 +1245,108 @@ impl EGraph {
             .collect();
 
         Ok(ExtractedTermVariants { termdag, variants })
+    }
+
+    /// [`EGraph::extract_best_with_cost_model`], reusing costs while the tables,
+    /// root sorts and cost model are unchanged. `cost_model` may read only the
+    /// e-graph's tables and its own fields, and equal models, including one
+    /// passed to an earlier call, must compute equal costs. Nothing is cached
+    /// when a function sort or a sort implemented outside egglog is reachable.
+    pub fn extract_best_cached(
+        &self,
+        roots: Vec<(ArcSort, Value)>,
+        cost_model: impl TreeCostModel<DefaultCost> + Clone + PartialEq + Send + 'static,
+    ) -> ExtractedTerms<DefaultCost> {
+        self.with_cached_extractor(roots, cost_model, |extractor, roots| {
+            let mut termdag = TermDag::default();
+            let mut cache = Default::default();
+            let terms = roots
+                .into_iter()
+                .map(|(sort, value)| {
+                    extractor.extract_best_with_sort_cached(&mut termdag, &mut cache, value, sort)
+                })
+                .collect();
+            ExtractedTerms { termdag, terms }
+        })
+    }
+
+    /// [`EGraph::extract_variants_with_cost_model`] under the reuse rules of
+    /// [`EGraph::extract_best_cached`].
+    pub fn extract_variants_cached(
+        &self,
+        roots: Vec<(ArcSort, Value)>,
+        nvariants: usize,
+        cost_model: impl TreeCostModel<DefaultCost> + Clone + PartialEq + Send + 'static,
+    ) -> ExtractedTermVariants<DefaultCost> {
+        if nvariants == 0 {
+            return ExtractedTermVariants {
+                termdag: TermDag::default(),
+                variants: roots.iter().map(|_| Vec::new()).collect(),
+            };
+        }
+        self.with_cached_extractor(roots, cost_model, |extractor, roots| {
+            let mut termdag = TermDag::default();
+            let variants = roots
+                .into_iter()
+                .map(|(sort, value)| {
+                    extractor.extract_variants_with_sort(&mut termdag, value, nvariants, sort)
+                })
+                .collect();
+            ExtractedTermVariants { termdag, variants }
+        })
+    }
+
+    fn with_cached_extractor<M, R>(
+        &self,
+        roots: Vec<(ArcSort, Value)>,
+        cost_model: M,
+        f: impl FnOnce(&TreeExtractor<'_, DefaultCost>, Vec<(ArcSort, Value)>) -> R,
+    ) -> R
+    where
+        M: TreeCostModel<DefaultCost> + Clone + PartialEq + Send + 'static,
+    {
+        let rootsorts: Vec<ArcSort> = roots.iter().map(|(sort, _)| sort.clone()).collect();
+        let versions = self.backend.table_versions();
+        // The lock is never held while the cost model's code runs.
+        let cached = self.extractor_cache.0.lock().unwrap().take();
+        let extractor = match cached.filter(|c| {
+            c.cost_model.downcast_ref() == Some(&cost_model)
+                && c.versions == versions
+                && c.rootsorts.len() == rootsorts.len()
+                && c.rootsorts
+                    .iter()
+                    .zip(&rootsorts)
+                    .all(|(a, b)| Arc::ptr_eq(a, b))
+        }) {
+            Some(c) => TreeExtractor {
+                egraph: self,
+                funcs: c.funcs,
+                cost_model: Box::new(cost_model.clone()),
+                sort_ids: c.sort_ids,
+                costs: c.costs,
+                parent_edge: c.parent_edge,
+                builtin_sorts_only: true,
+            },
+            None => TreeExtractor::compute_costs_from_rootsorts(
+                Some(rootsorts.clone()),
+                self,
+                cost_model.clone(),
+            ),
+        };
+        let output = f(&extractor, roots);
+        if extractor.builtin_sorts_only {
+            let replaced = self.extractor_cache.0.lock().unwrap().replace(CachedCosts {
+                cost_model: Box::new(cost_model),
+                rootsorts,
+                versions,
+                funcs: extractor.funcs,
+                sort_ids: extractor.sort_ids,
+                costs: extractor.costs,
+                parent_edge: extractor.parent_edge,
+            });
+            drop(replaced);
+        }
+        output
     }
 
     /// Extracts the best term for one value using the default additive cost model.
@@ -1368,5 +1498,48 @@ mod tests {
         assert_eq!(rows.pop_from(0), Some(0));
         assert_eq!(rows.pop_from(1), Some(63));
         assert_eq!(rows.count, 0);
+    }
+
+    #[test]
+    fn extraction_reuses_the_costs_of_an_equal_model() {
+        let mut egraph = EGraph::default();
+        let program = "(datatype T (A i64) (B T)) (sort Ts (Vec T)) (datatype U (Wrap Ts)) (let w (Wrap (vec-of (B (A 1)))))";
+        egraph.parse_and_run_program(None, program).unwrap();
+        let (sort, w) = egraph.eval_expr(&var!("w")).unwrap();
+        let cost = egraph.extract_value(&sort, w).unwrap().2;
+        assert_eq!(egraph.extract_value(&sort, w).unwrap().2, cost);
+        let mut cache = egraph.extractor_cache.0.lock().unwrap();
+        for costs in &mut cache.as_mut().unwrap().costs {
+            costs.values_mut().for_each(|ranked| ranked.cost += 40);
+        }
+        drop(cache);
+        let model = TreeCostModelFromDag(AdditiveCostModel { node_cost: 2 });
+        let none = egraph.extract_variants_cached(vec![(sort.clone(), w)], 0, model.clone());
+        assert!(none.variants[0].is_empty());
+        assert_eq!(egraph.extract_value(&sort, w).unwrap().2, cost + 40);
+        let fresh =
+            egraph.extract_variants_with_cost_model(vec![(sort.clone(), w)], 1, model.clone());
+        let cached = egraph.extract_variants_cached(vec![(sort, w)], 1, model);
+        assert_eq!(
+            cached.variants[0][0].cost,
+            fresh.unwrap().variants[0][0].cost
+        );
+    }
+
+    #[test]
+    fn extraction_skips_the_cache_when_a_function_sort_is_reachable() {
+        let mut egraph = EGraph::default();
+        let program = "(sort F (UnstableFn (i64) i64)) (sort Fs (Vec F)) (datatype T (Wrap F) (Alt)) (extract (Alt))";
+        egraph.parse_and_run_program(None, program).unwrap();
+        assert!(egraph.extractor_cache.0.lock().unwrap().is_none());
+        for name in ["F", "Fs"] {
+            let sort = egraph.get_sort_by_name(name).unwrap().clone();
+            let extractor = TreeExtractor::compute_costs_from_rootsorts(
+                Some(vec![sort]),
+                &egraph,
+                DEFAULT_COST_MODEL,
+            );
+            assert!(!extractor.builtin_sorts_only);
+        }
     }
 }

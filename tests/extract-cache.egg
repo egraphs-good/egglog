@@ -1,0 +1,14 @@
+; Each extract after a change, or of another root sort, must match a fresh extractor.
+
+(datatype S (SA) (SB) (SC S))
+(union (SC (SA)) (SB))
+(extract (SC (SA)))
+(subsume (SB))
+(extract (SC (SA)))
+
+(datatype D (DA) (DB) (DC D))
+(union (DC (DA)) (DB))
+(extract (DC (DA)))
+(delete (DB))
+(extract (DC (DA)))
+(extract (SC (SA)))
