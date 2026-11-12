@@ -14,6 +14,8 @@ struct Run {
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
     threads: usize,
+    /// Plans queries with tree decomposition, which the default e-graph skips.
+    decomp: bool,
 }
 
 impl Run {
@@ -57,6 +59,7 @@ impl Run {
                 proofs: false,
                 proof_testing: false,
                 threads: self.threads,
+                decomp: self.decomp,
             };
             let proof_check_prog = if self.proof_testing {
                 program.clone()
@@ -110,7 +113,9 @@ impl Run {
         } else {
             EGraph::default()
         };
-        egraph.with_num_threads(self.threads)
+        let mut egraph = egraph.with_num_threads(self.threads);
+        egraph.no_decomp = !self.decomp;
+        egraph
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs
@@ -238,6 +243,9 @@ impl Run {
                 if self.0.threads > 1 {
                     write!(f, "_{}threads", self.0.threads)?;
                 }
+                if self.0.decomp {
+                    write!(f, "_decomp")?;
+                }
 
                 Ok(())
             }
@@ -314,6 +322,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             proofs: false,
             proof_testing: false,
             threads: 1,
+            decomp: false,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
@@ -350,6 +359,11 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         if !requires_proofs && !should_fail {
             push_trial(Run {
                 desugar: true,
+                ..run.clone()
+            });
+
+            push_trial(Run {
+                decomp: true,
                 ..run.clone()
             });
         }

@@ -317,6 +317,7 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    /// Plans every query as a single bag, skipping tree decomposition. On by default.
     pub no_decomp: bool,
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
@@ -417,7 +418,7 @@ impl Default for EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
-            no_decomp: false,
+            no_decomp: true,
             overall_run_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -1194,9 +1195,9 @@ impl EGraph {
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
         let seminaive = self.seminaive && !rule.eval_mode.is_naive();
-        // The `:no-decomp` rule option (and the global `--no-decomp`
-        // flag) skips tree-decomposition in query planning, forcing
-        // the single-bag fast path.
+        // Queries skip tree decomposition unless the e-graph turns it on
+        // (the CLI's `--decomp`); the `:no-decomp` rule option keeps a rule
+        // on the single-bag fast path either way.
         let no_decomp = self.no_decomp || rule.no_decomp;
         let requires_read_context = !seminaive
             || matches!(
