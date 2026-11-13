@@ -1,0 +1,12 @@
+; Both costs saturate, so `$parent` keeps its cost when `$child` improves
+; through `Wrap` after `$parent` was costed. Extraction must still find `$parent`.
+(datatype T
+  (Big :cost 9223372036854775807)
+  (Pair T T)
+  (Wrap T))
+(let $big (Big))
+(let $child (Pair $big $big))
+(union $child (Wrap $big))
+(let $parent (Pair $child $big))
+(extract $parent)
+(extract $child)

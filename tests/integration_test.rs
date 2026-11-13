@@ -907,6 +907,43 @@ fn tree_extractor_preserves_tied_parent_after_delayed_child_improvement() {
 }
 
 #[test]
+fn tree_extractor_rejects_a_cycle_through_a_cheaper_parent() {
+    // `Cut` costs less than its subterm, as `TreeCostModel` allows. Giving `a` the
+    // row `(Cut b)` beside `b`'s `(Step a)` would be a cycle, and reconstructing a
+    // cycle overflows the stack.
+    struct Cheaper;
+    impl TreeCostModel<DefaultCost> for Cheaper {
+        type EnodeCost = String;
+        type ContainerCost = ();
+        fn base_value_cost(&self, _: &EGraph, _: &ArcSort, _: Value) -> DefaultCost {
+            0
+        }
+        fn enode_cost(&self, _: &EGraph, f: &Function, _: &Enode<'_>) -> String {
+            f.name().to_owned()
+        }
+        fn container_cost(&self, _: &EGraph, _: &ArcSort, _: Value) {}
+        fn fold_enode_cost(&self, name: String, children: &[DefaultCost]) -> DefaultCost {
+            match name.as_str() {
+                "Start" => 10,
+                "Step" => children[0].saturating_add(1),
+                _ => 0,
+            }
+        }
+        fn fold_container_cost(&self, (): (), _: &[DefaultCost]) -> DefaultCost {
+            0
+        }
+    }
+    let (graph, [a]) = dependency_graph(
+        "(datatype T (Start) (Cut T) (Step T))
+        (let b (Start)) (let a (Cut b)) (union b (Step a))",
+        ["a"],
+    );
+    let ex = TreeExtractor::compute_costs_from_rootsorts(Some(vec![a.0.clone()]), &graph, Cheaper);
+    // Extraction may fail with a panic, which unwinds; it must not abort.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| trees(&ex, &a)));
+}
+
+#[test]
 fn tree_extractor_signed_cost_matches_reconstructed_tree() {
     fn weight(name: &str) -> i64 {
         match name {

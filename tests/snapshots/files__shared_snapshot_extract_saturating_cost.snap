@@ -1,0 +1,9 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(extraction-costs 18446744073709551615)
+(extraction-costs 9223372036854775808)
+((Big 1)
+ (Pair 2)
+ (Wrap 1))
