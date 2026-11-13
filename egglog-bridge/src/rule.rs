@@ -106,9 +106,6 @@ pub(crate) struct Query {
     /// looks like the high-level rule, passing along an environment that keeps
     /// track of the mappings between low and high-level variables.
     add_rule: Vec<BuildRuleCallback>,
-    /// If set, execute a single rule (rather than O(atoms.len()) rules) during
-    /// seminaive, with the given atom as the focus.
-    sole_focus: Option<usize>,
     seminaive: bool,
     plan_strategy: PlanStrategy,
     /// If `true`, skip tree-decomposition during query planning. See
@@ -139,7 +136,6 @@ impl EGraph {
                 ts_counter,
                 rule_id,
                 seminaive,
-                sole_focus: None,
                 vars: Default::default(),
                 atoms: Default::default(),
                 add_rule: Default::default(),
@@ -179,95 +175,12 @@ impl RuleBuilder<'_> {
         self.egraph.new_panic(message)
     }
 
-    pub(crate) fn set_plan_strategy(&mut self, strategy: PlanStrategy) {
-        self.query.plan_strategy = strategy;
-    }
-
     /// If `true`, the query planner will skip tree-decomposition for
     /// this rule. Mirrors
     /// [`core_relations::QueryBuilder::set_no_decomp`]; set from the
     /// `:no-decomp` rule option or the egglog `--no-decomp` CLI flag.
     pub fn set_no_decomp(&mut self, no_decomp: bool) {
         self.query.no_decomp = no_decomp;
-    }
-
-    /// Get the canonical value of an id in the union-find. An internal-only
-    /// routine used to implement rebuilding.
-    ///
-    /// Note, calling this with a non-Id entry can cause errors at rule runtime
-    /// (The derived rules will not compile).
-    pub(crate) fn lookup_uf(&mut self, entry: QueryEntry) -> Result<Variable> {
-        let res = self.new_var(ColumnTy::Id);
-        let uf_table = self.query.uf_table;
-        self.assert_has_ty(&entry, ColumnTy::Id)
-            .context("lookup_uf: ")?;
-        self.add_callback(move |inner, rb| {
-            let entry = inner.convert(&entry);
-            let res_inner = rb.lookup_with_default(uf_table, &[entry], entry, ColumnId::new(1))?;
-            inner.mapping.insert(res.id, res_inner.into());
-            Ok(())
-        });
-        Ok(res)
-    }
-
-    /// A low-level routine used in rebuilding. Halts execution if `lhs` and
-    /// `rhs` are equal (pointwise).
-    ///
-    /// Note, calling this with invalid arguments (e.g. different lengths for
-    /// `lhs` and `rhs`) can cause errors at rule runtime.
-    pub(crate) fn check_for_update(
-        &mut self,
-        lhs: &[QueryEntry],
-        rhs: &[QueryEntry],
-    ) -> Result<()> {
-        let lhs = SmallVec::<[QueryEntry; 4]>::from_iter(lhs.iter().cloned());
-        let rhs = SmallVec::<[QueryEntry; 4]>::from_iter(rhs.iter().cloned());
-        if lhs.len() != rhs.len() {
-            return Err(RuleBuilderError::ArityMismatch {
-                expected: lhs.len(),
-                got: rhs.len(),
-            }
-            .into());
-        }
-        lhs.iter().zip(rhs.iter()).try_for_each(|(l, r)| {
-            self.assert_same_ty(l, r).with_context(|| {
-                format!("check_for_update: {lhs:?} and {rhs:?}, mismatch between {l:?} and {r:?}")
-            })
-        })?;
-
-        self.add_callback(move |inner, rb| {
-            let lhs = inner.convert_all(&lhs);
-            let rhs = inner.convert_all(&rhs);
-            rb.assert_any_ne(&lhs, &rhs).context("check_for_update")
-        });
-        Ok(())
-    }
-
-    fn assert_same_ty(
-        &self,
-        l: &QueryEntry,
-        r: &QueryEntry,
-    ) -> std::result::Result<(), RuleBuilderError> {
-        match (l, r) {
-            (
-                QueryEntry::Var(Variable { id: v1, .. }),
-                QueryEntry::Var(Variable { id: v2, .. }),
-            ) => {
-                let ty1 = self.query.vars[*v1].ty;
-                let ty2 = self.query.vars[*v2].ty;
-                if ty1 != ty2 {
-                    return Err(RuleBuilderError::TypeMismatch {
-                        expected: ty1,
-                        got: ty2,
-                    });
-                }
-            }
-            // constants can be untyped
-            (QueryEntry::Const { .. }, QueryEntry::Const { .. })
-            | (QueryEntry::Var { .. }, QueryEntry::Const { .. })
-            | (QueryEntry::Const { .. }, QueryEntry::Var { .. }) => {}
-        }
-        Ok(())
     }
 
     fn assert_has_ty(
@@ -304,10 +217,6 @@ impl RuleBuilder<'_> {
         res
     }
 
-    pub(crate) fn set_focus(&mut self, focus: usize) {
-        self.query.sole_focus = Some(focus);
-    }
-
     /// Bind a new variable of the given type in the query.
     pub fn new_var(&mut self, ty: ColumnTy) -> Variable {
         let res = self.query.vars.next_id();
@@ -338,32 +247,24 @@ impl RuleBuilder<'_> {
 
     /// A low-level way to add an atom to a query.
     ///
-    /// The atom is added directly to `table`. If `func` is supplied, then metadata about the
-    /// function is used for schema validation. If `subsume_entry` is
-    /// supplied and the supplied function is enabled for subsumption, then the given
-    /// [`QueryEntry`] is used to populated the subsumption column for the table. This allows
+    /// The atom is added to the table of `func`, whose schema validates `entries`. If
+    /// `subsume_entry` is supplied and the function is enabled for subsumption, then the given
+    /// [`QueryEntry`] is used to populate the subsumption column for the table. This allows
     /// higher-level routines to constrain the subsumption column or use it for other purposes.
     pub(crate) fn add_atom_with_timestamp_and_func(
         &mut self,
-        table: TableId,
-        func: Option<FunctionId>,
+        func: FunctionId,
         subsume_entry: Option<QueryEntry>,
         entries: &[QueryEntry],
     ) -> AtomId {
-        let mut atom = entries.to_vec();
-        let schema_math = if let Some(func) = func {
-            let info = &self.egraph.funcs[func];
-            assert_eq!(info.schema.len(), entries.len());
-            SchemaMath {
-                subsume: info.can_subsume,
-                func_cols: info.schema.len(),
-            }
-        } else {
-            SchemaMath {
-                subsume: subsume_entry.is_some(),
-                func_cols: entries.len(),
-            }
+        let info = &self.egraph.funcs[func];
+        assert_eq!(info.schema.len(), entries.len());
+        let table = info.table;
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
         };
+        let mut atom = entries.to_vec();
         schema_math.write_table_row(
             &mut atom,
             RowVals {
@@ -427,8 +328,7 @@ impl RuleBuilder<'_> {
                     .with_context(|| format!("query_table: mismatch between {entry:?} and {ty:?}"))
             })?;
         Ok(self.add_atom_with_timestamp_and_func(
-            info.table,
-            Some(func),
+            func,
             is_subsumed.map(|b| QueryEntry::Const {
                 val: match b {
                     true => SUBSUMED,
@@ -619,44 +519,8 @@ impl RuleBuilder<'_> {
         }));
     }
 
-    /// This method is equivalent to `remove(table, before); set(table, after)`,
-    /// optionally propagating subsumption to the next row.
-    pub(crate) fn rebuild_row(
-        &mut self,
-        func: FunctionId,
-        before: &[QueryEntry],
-        after: &[QueryEntry],
-        // If subsumption is enabled for this function, we can optionally propagate it to the next
-        // row.
-        subsume_var: Option<Variable>,
-    ) {
-        assert_eq!(before.len(), after.len());
-        self.remove(func, &before[..before.len() - 1]);
-        if let Some(subsume_var) = subsume_var {
-            self.set_with_subsume(func, after, QueryEntry::Var(subsume_var));
-        } else {
-            self.set(func, after);
-        }
-    }
-
     /// Set the value of a function in the database.
     pub fn set(&mut self, func: FunctionId, entries: &[QueryEntry]) {
-        self.set_with_subsume(
-            func,
-            entries,
-            QueryEntry::Const {
-                val: NOT_SUBSUMED,
-                ty: ColumnTy::Id,
-            },
-        );
-    }
-
-    pub(crate) fn set_with_subsume(
-        &mut self,
-        func: FunctionId,
-        entries: &[QueryEntry],
-        subsume_entry: QueryEntry,
-    ) {
         let info = &self.egraph.funcs[func];
         let table = info.table;
         let entries = entries.to_vec();
@@ -670,7 +534,7 @@ impl RuleBuilder<'_> {
                 &mut dst_vars,
                 RowVals {
                     timestamp: inner.next_ts(),
-                    subsume: schema_math.subsume.then(|| inner.convert(&subsume_entry)),
+                    subsume: schema_math.subsume.then_some(DstVar::Const(NOT_SUBSUMED)),
                     ret_val: None, // already filled in
                 },
             );
@@ -773,22 +637,6 @@ impl Query {
         // directly.
         if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
             let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
-            return;
-        }
-        if let Some(focus_atom) = self.sole_focus {
-            // There is a single "focus" atom that we will constrain to look at new values.
-            let (_, _, schema_info) = &self.atoms[focus_atom];
-            let ts_col = ColumnId::from_usize(schema_info.ts_col());
-            let _ = rsb.add_rule_from_cached_plan(
-                &cached_plan.plan,
-                &[(
-                    cached_plan.atom_mapping[focus_atom],
-                    Constraint::GeConst {
-                        col: ts_col,
-                        val: mid_ts.to_value(),
-                    },
-                )],
-            );
             return;
         }
         // Use the cached plan atoms.len() times with different constraints on each atom.

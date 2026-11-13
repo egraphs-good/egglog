@@ -17,9 +17,9 @@ use std::{
 };
 
 use crate::core_relations::{
-    BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
-    CounterId, Database, DisplacedTable, ExecutionState, ExternalContext, ExternalFunction,
-    ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TableIdentity,
+    BaseValue, BaseValueId, BaseValues, ColumnId, ContainerValue, ContainerValues, CounterId,
+    Database, DisplacedTable, ExecutionState, ExternalContext, ExternalFunction,
+    ExternalFunctionId, MergeVal, Offset, SortedWritesTable, TableId, TableIdentity,
     TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
@@ -631,18 +631,11 @@ impl EGraph {
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
-            incremental_rebuild_rules: Default::default(),
-            nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
             can_subsume,
             name,
         });
         debug_assert_eq!(res, next_func_id);
-        let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
-        let nonincremental_rebuild_rule = self.nonincremental_rebuild(res, &schema);
-        let info = &mut self.funcs[res];
-        info.incremental_rebuild_rules = incremental_rebuild_rules;
-        info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
         let action = TableAction::new(self, res);
         let table_name = self.funcs[res].name.to_string();
         self.action_registry
@@ -808,309 +801,58 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        let do_parallel = egglog_concurrency::current_num_threads() > 1;
-        if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
-            // The UF implementation supports "native"  rebuilding.
-            let mut tables = Vec::with_capacity(self.funcs.next_id().index());
-            for (_, func) in self.funcs.iter() {
-                tables.push(func.table);
-            }
-            loop {
-                // Order matters here: we need to rebuild containers first and then rebuild the
-                // tables. Why?
-                //
-                // Say we have a sort that can map to and from a vector containing only itself:
-                // (sort X)
-                // (function to-vec (X) (Vec X) :no-merge)
-                // (constructor from-vec (Vec X) X)
-                // (constructor Num (i64) X)
-                // (constructor Add (X X) X)
-                //
-                // Along with rules:
-                // (rule ((= x (Num i))) ((set (to-vec x) (vec-of x))))
-                // (rule ((= x (Add i j))) ((set (to-vec x) (vec-of x))))
-                // (rule ((= x (from-vec v))) ((set (to-vec x) v))
-                // (rewrite (Add (Num i) (Num j)) (Num (+ i j)))
-                //
-                // These rules, while redundant, should be safe. However, if we rebuild tables
-                // before containers some schedules can cause us to violate the `:no-merge`
-                // directive, which asserts that all values written for a key are equal.
-                //
-                // Suppose we start off with x1=(Num 1), x2=(Num 3), and x3=(Add (Num 1) (Num 2)) as
-                // expressions, with `to-vec` and `from-vec` entries for all three expressions.
-                // We'll call (to-vec xi) vi for all i.
-                //
-                // Now suppose we run the `rewrite` above: now, x3 = x2. But v3 will only equal v2
-                // _after_ we rebuild the `Vec` container. That means that if we rebuild `to-vec`
-                // we will collapse the the rows for x3 and x2, but then fail to merge v3 and v2
-                // because they are not (yet) equal.
-                //
-                // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
-                // the rules can proceed.
-                let container_rebuild = self.db.rebuild_containers(self.uf_table);
-                let next_ts = self.next_ts().to_value();
-                let table_rebuild = self.db.apply_rebuild(self.uf_table, &tables, next_ts);
-                // Container rebuild can make a parent row newly matchable without
-                // changing the row's stored id. Re-timestamp those parents so
-                // seminaive sees the newly enabled match on the next pass.
-                let dirty_ids: Vec<Value> = container_rebuild.dirty_ids().iter().copied().collect();
-                let refreshed_rows = self
-                    .db
-                    .refresh_rows_for_values(&tables, &dirty_ids, next_ts);
-                self.inc_ts();
-                if !table_rebuild && !refreshed_rows && !container_rebuild.changed() {
-                    break;
-                }
-            }
-            return Ok(());
+        let mut tables = Vec::with_capacity(self.funcs.next_id().index());
+        for (_, func) in self.funcs.iter() {
+            tables.push(func.table);
         }
-        if do_parallel {
-            return self.rebuild_parallel();
-        }
-        let start = Instant::now();
-
-        // The database changed. Rebuild. New entries should land after the given rules.
-        let mut changed = true;
-        while changed {
-            changed = false;
-            // We need to iterate rebuilding to a fixed point. Future scans
-            // should look only at the latest updates.
+        loop {
+            // Order matters here: we need to rebuild containers first and then rebuild the
+            // tables. Why?
+            //
+            // Say we have a sort that can map to and from a vector containing only itself:
+            // (sort X)
+            // (function to-vec (X) (Vec X) :no-merge)
+            // (constructor from-vec (Vec X) X)
+            // (constructor Num (i64) X)
+            // (constructor Add (X X) X)
+            //
+            // Along with rules:
+            // (rule ((= x (Num i))) ((set (to-vec x) (vec-of x))))
+            // (rule ((= x (Add i j))) ((set (to-vec x) (vec-of x))))
+            // (rule ((= x (from-vec v))) ((set (to-vec x) v))
+            // (rewrite (Add (Num i) (Num j)) (Num (+ i j)))
+            //
+            // These rules, while redundant, should be safe. However, if we rebuild tables
+            // before containers some schedules can cause us to violate the `:no-merge`
+            // directive, which asserts that all values written for a key are equal.
+            //
+            // Suppose we start off with x1=(Num 1), x2=(Num 3), and x3=(Add (Num 1) (Num 2)) as
+            // expressions, with `to-vec` and `from-vec` entries for all three expressions.
+            // We'll call (to-vec xi) vi for all i.
+            //
+            // Now suppose we run the `rewrite` above: now, x3 = x2. But v3 will only equal v2
+            // _after_ we rebuild the `Vec` container. That means that if we rebuild `to-vec`
+            // we will collapse the the rows for x3 and x2, but then fail to merge v3 and v2
+            // because they are not (yet) equal.
+            //
+            // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
+            // the rules can proceed.
+            let container_rebuild = self.db.rebuild_containers(self.uf_table);
+            let next_ts = self.next_ts().to_value();
+            let table_rebuild = self.db.apply_rebuild(self.uf_table, &tables, next_ts);
+            // Container rebuild can make a parent row newly matchable without
+            // changing the row's stored id. Re-timestamp those parents so
+            // seminaive sees the newly enabled match on the next pass.
+            let dirty_ids: Vec<Value> = container_rebuild.dirty_ids().iter().copied().collect();
+            let refreshed_rows = self
+                .db
+                .refresh_rows_for_values(&tables, &dirty_ids, next_ts);
             self.inc_ts();
-            let ts = self.next_ts();
-            for (_, info) in self.funcs.iter_mut() {
-                let last_rebuilt_at = self.rules[info.nonincremental_rebuild_rule].last_run_at;
-                let table_size = self.db.estimate_size(info.table, None);
-                let uf_size = self.db.estimate_size(
-                    self.uf_table,
-                    Some(Constraint::GeConst {
-                        col: ColumnId::new(2),
-                        val: last_rebuilt_at.to_value(),
-                    }),
-                );
-                if incremental_rebuild(uf_size, table_size, false) {
-                    marker_incremental_rebuild(|| -> Result<()> {
-                        // Run each of the incremental rules serially.
-                        //
-                        // This is to avoid recanonicalizing the same row multiple
-                        // times.
-                        for rule in &info.incremental_rebuild_rules {
-                            changed |= run_rules_impl(
-                                &mut self.db,
-                                &mut self.rules,
-                                &[*rule],
-                                ts,
-                                ReportLevel::TimeOnly,
-                                None,
-                            )?
-                            .changed;
-                        }
-                        // Reset the rule we did not run. These two should be equivalent.
-                        self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
-                        Ok(())
-                    })?;
-                } else {
-                    marker_nonincremental_rebuild(|| -> Result<()> {
-                        changed |= run_rules_impl(
-                            &mut self.db,
-                            &mut self.rules,
-                            &[info.nonincremental_rebuild_rule],
-                            ts,
-                            ReportLevel::TimeOnly,
-                            None,
-                        )?
-                        .changed;
-                        for rule in &info.incremental_rebuild_rules {
-                            self.rules[*rule].last_run_at = ts;
-                        }
-                        Ok(())
-                    })?;
-                }
+            if !table_rebuild && !refreshed_rows && !container_rebuild.changed() {
+                break;
             }
         }
-        log::info!("rebuild took {:?}", start.elapsed());
         Ok(())
-    }
-
-    /// A variant of `rebuild` that attempts to combine rebuild rules into
-    /// larger rulesets to increase parallelism. This kind of preprocessing can
-    /// slow processing down in a single-threaded setting, so it is only used
-    /// when the number of active threads is greater than 1.
-    fn rebuild_parallel(&mut self) -> Result<()> {
-        let start = Instant::now();
-        #[derive(Default)]
-        struct RebuildState {
-            nonincremental: Vec<FunctionId>,
-            incremental: DenseIdMap<usize, SmallVec<[FunctionId; 2]>>,
-        }
-
-        impl RebuildState {
-            fn clear(&mut self) {
-                self.nonincremental.clear();
-                self.incremental.iter_mut().for_each(|(_, v)| v.clear());
-            }
-        }
-
-        let mut changed = true;
-        let mut state = RebuildState::default();
-        let mut scratch = Vec::new();
-        while changed {
-            changed = false;
-            state.clear();
-            self.inc_ts();
-            // First, figure out which functions will be rebuilt nonincrementally,
-            // vs. incrementally. Group them together.
-            for (func, info) in self.funcs.iter_mut() {
-                let last_rebuilt_at = self.rules[info.nonincremental_rebuild_rule].last_run_at;
-                let table_size = self.db.estimate_size(info.table, None);
-                let uf_size = self.db.estimate_size(
-                    self.uf_table,
-                    Some(Constraint::GeConst {
-                        col: ColumnId::new(2),
-                        val: last_rebuilt_at.to_value(),
-                    }),
-                );
-                if incremental_rebuild(uf_size, table_size, true) {
-                    for (i, _) in info.incremental_rebuild_rules.iter().enumerate() {
-                        state.incremental.get_or_default(i).push(func);
-                    }
-                } else {
-                    state.nonincremental.push(func);
-                }
-            }
-            let ts = self.next_ts();
-            for func in state.nonincremental.iter().copied() {
-                scratch.push(self.funcs[func].nonincremental_rebuild_rule);
-                for rule in &self.funcs[func].incremental_rebuild_rules {
-                    self.rules[*rule].last_run_at = ts;
-                }
-            }
-            changed |= run_rules_impl(
-                &mut self.db,
-                &mut self.rules,
-                &scratch,
-                ts,
-                ReportLevel::TimeOnly,
-                None,
-            )?
-            .changed;
-            scratch.clear();
-            let ts = self.next_ts();
-            for (i, funcs) in state.incremental.iter() {
-                for func in funcs.iter().copied() {
-                    let info = &mut self.funcs[func];
-                    scratch.push(info.incremental_rebuild_rules[i]);
-                    self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
-                }
-                changed |= run_rules_impl(
-                    &mut self.db,
-                    &mut self.rules,
-                    &scratch,
-                    ts,
-                    ReportLevel::TimeOnly,
-                    None,
-                )?
-                .changed;
-                scratch.clear();
-            }
-        }
-        log::info!("rebuild took {:?}", start.elapsed());
-        Ok(())
-    }
-
-    fn incremental_rebuild_rules(&mut self, table: FunctionId, schema: &[ColumnTy]) -> Vec<RuleId> {
-        schema
-            .iter()
-            .enumerate()
-            .filter_map(|(i, ty)| match ty {
-                ColumnTy::Id => {
-                    Some(self.incremental_rebuild_rule(table, schema, ColumnId::from_usize(i)))
-                }
-                ColumnTy::Base(_) => None,
-            })
-            .collect()
-    }
-
-    fn incremental_rebuild_rule(
-        &mut self,
-        table: FunctionId,
-        schema: &[ColumnTy],
-        col: ColumnId,
-    ) -> RuleId {
-        let subsume = self.funcs[table].can_subsume;
-        let table_id = self.funcs[table].table;
-        let uf_table = self.uf_table;
-        // Two atoms, one binding a whole tuple, one binding a displaced column
-        let mut rb = self.new_rule(&format!("incremental rebuild {table:?}, {col:?}"), true);
-        rb.set_plan_strategy(PlanStrategy::MinCover);
-        let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
-        for ty in schema {
-            vars.push(rb.new_var(*ty).into());
-        }
-        let canon_val: QueryEntry = rb.new_var(ColumnTy::Id).into();
-        let subsume_var = subsume.then(|| rb.new_var(ColumnTy::Id));
-        rb.add_atom_with_timestamp_and_func(
-            table_id,
-            Some(table),
-            subsume_var.clone().map(QueryEntry::from),
-            &vars,
-        );
-        rb.add_atom_with_timestamp_and_func(
-            uf_table,
-            None,
-            None,
-            &[vars[col.index()].clone(), canon_val.clone()],
-        );
-        rb.set_focus(1); // Set the uf atom as the sole focus.
-
-        // Now canonicalize the entire row.
-        let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());
-        for (i, (var, ty)) in vars.iter().zip(schema.iter()).enumerate() {
-            canon.push(if i == col.index() {
-                canon_val.clone()
-            } else if let ColumnTy::Id = ty {
-                rb.lookup_uf(var.clone()).unwrap().into()
-            } else {
-                var.clone()
-            })
-        }
-
-        // Remove the old row and insert the new one.
-        rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build()
-    }
-
-    fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
-        let can_subsume = self.funcs[table].can_subsume;
-        let table_id = self.funcs[table].table;
-        let mut rb = self.new_rule(&format!("nonincremental rebuild {table:?}"), false);
-        rb.set_plan_strategy(PlanStrategy::MinCover);
-        let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
-        for ty in schema {
-            vars.push(rb.new_var(*ty).into());
-        }
-        let subsume_var = can_subsume.then(|| rb.new_var(ColumnTy::Id));
-        rb.add_atom_with_timestamp_and_func(
-            table_id,
-            Some(table),
-            subsume_var.clone().map(QueryEntry::from),
-            &vars,
-        );
-        let mut lhs = SmallVec::<[QueryEntry; 4]>::new();
-        let mut rhs = SmallVec::<[QueryEntry; 4]>::new();
-        let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());
-        for (var, ty) in vars.iter().zip(schema.iter()) {
-            canon.push(if let ColumnTy::Id = ty {
-                lhs.push(var.clone());
-                let canon_var = QueryEntry::from(rb.lookup_uf(var.clone()).unwrap());
-                rhs.push(canon_var.clone());
-                canon_var
-            } else {
-                var.clone()
-            })
-        }
-        rb.check_for_update(&lhs, &rhs).unwrap();
-        rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build()
     }
 
     /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates
@@ -1197,8 +939,6 @@ struct CachedPlanInfo {
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
-    incremental_rebuild_rules: Vec<RuleId>,
-    nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
     can_subsume: bool,
     name: Arc<str>,
@@ -1749,19 +1489,6 @@ fn run_rules_impl(
     Ok(db.run_rule_set(&ruleset, report_level, context))
 }
 
-// These markers are just used to make it easy to distinguish time spent in
-// incremental vs. nonincremental rebuilds in time-based profiles.
-
-#[inline(never)]
-fn marker_incremental_rebuild<R>(f: impl FnOnce() -> R) -> R {
-    f()
-}
-
-#[inline(never)]
-fn marker_nonincremental_rebuild<R>(f: impl FnOnce() -> R) -> R {
-    f()
-}
-
 /// A useful type definition for external functions that need to pass data
 /// to outside code, such as `Panic`.
 pub type SideChannel<T> = Arc<Mutex<Option<T>>>;
@@ -1841,16 +1568,6 @@ impl ExternalFunction for Panic {
             *guard = Some(self.0.clone());
         }
         None
-    }
-}
-
-/// Heuristic for deciding whether to do an incremental or nonincremental
-/// rebuild for a given table.
-fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> bool {
-    if parallel {
-        uf_size <= (table_size / 16)
-    } else {
-        uf_size <= (table_size / 8)
     }
 }
 
