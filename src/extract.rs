@@ -384,7 +384,7 @@ impl ChildIndex {
     }
 }
 
-/// Dirty rows are visited in sweep order.
+/// Dirty rows, or the tables holding them, are visited in sweep order.
 struct DirtyRows {
     words: Vec<u64>,
     count: usize,
@@ -399,13 +399,16 @@ impl DirtyRows {
         Self { words, count: len }
     }
 
-    fn insert(&mut self, row: usize) {
+    /// Marks `row`, returning whether it is the only marked row.
+    fn insert(&mut self, row: usize) -> bool {
         let bit = 1 << (row % 64);
         let word = &mut self.words[row / 64];
-        if *word & bit == 0 {
-            *word |= bit;
-            self.count += 1;
+        if *word & bit != 0 {
+            return false;
         }
+        *word |= bit;
+        self.count += 1;
+        self.count == 1
     }
 
     fn pop_from(&mut self, cursor: usize) -> Option<usize> {
@@ -849,15 +852,17 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             .iter()
             .map(|f| DirtyRows::full(f.rows.len() / f.arity))
             .collect();
+        // A sweep visits only the tables with dirty rows, in table order. A table's
+        // mark is set when its first row is marked, or after its own visit leaves
+        // rows marked.
+        let mut dirty_tables = DirtyRows::full(func_data.len());
 
         let mut ch_costs: Vec<C> = Vec::new();
-        loop {
-            let mut any = false;
-            for (fi, f) in func_data.iter().enumerate() {
-                if dirty[fi].count == 0 {
-                    continue;
-                }
-                any = true;
+        while dirty_tables.count > 0 {
+            let mut table_cursor = 0;
+            while let Some(fi) = dirty_tables.pop_from(table_cursor) {
+                table_cursor = fi + 1;
+                let f = &func_data[fi];
                 // Marks set at or behind the sweep cursor (including a row
                 // re-marking itself) stay for the next sweep; marks ahead of it
                 // are picked up in this one, matching the naive pass exactly.
@@ -887,17 +892,19 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         row: f.first_row + ri as u32,
                     });
                     for &(dfi, dri) in child_index.readers(target) {
-                        dirty[dfi as usize].insert(dri as usize);
+                        if dirty[dfi as usize].insert(dri as usize) {
+                            dirty_tables.insert(dfi as usize);
+                        }
                     }
                 }
-            }
-            if !any {
-                break;
+                if dirty[fi].count > 0 {
+                    dirty_tables.insert(fi);
+                }
             }
         }
 
         // Free the scheduler's state before the parent edges allocate.
-        drop((child_index, dirty));
+        drop((child_index, dirty, dirty_tables));
 
         // Save the edges for reconstruction
         for (parents, costs) in self.parent_edge.iter_mut().zip(&self.costs) {
