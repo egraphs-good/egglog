@@ -282,10 +282,12 @@ pub struct TreeExtractor<'g, C: Cost> {
     parent_edge: Vec<HashMap<Value, (usize, Vec<Value>)>>,
 }
 
-/// Every successful relaxation updates the cost and chronological rank together.
+/// Every successful relaxation updates the cost, chronological rank and row together.
 struct RankedCost<C> {
     cost: C,
-    rank: usize,
+    rank: u32,
+    /// The row that set the cost, numbered across the solve's function data in order.
+    row: u32,
 }
 
 /// How extraction treats one child column of a function, resolved once so the
@@ -311,6 +313,8 @@ struct FuncData<'a> {
     output_sort_id: usize,
     child_kinds: Vec<ChildKind>,
     rows: Vec<Value>,
+    /// The id of the first row in `rows`, numbering the rows of every table in order.
+    first_row: u32,
 }
 
 /// The rows reading each eq value as a child, directly or inside a container.
@@ -380,7 +384,7 @@ impl ChildIndex {
     }
 }
 
-/// Dirty rows are visited in sweep order.
+/// Dirty rows, or the tables holding them, are visited in sweep order.
 struct DirtyRows {
     words: Vec<u64>,
     count: usize,
@@ -395,13 +399,16 @@ impl DirtyRows {
         Self { words, count: len }
     }
 
-    fn insert(&mut self, row: usize) {
+    /// Marks `row`, returning whether it is the only marked row.
+    fn insert(&mut self, row: usize) -> bool {
         let bit = 1 << (row % 64);
         let word = &mut self.words[row / 64];
-        if *word & bit == 0 {
-            *word |= bit;
-            self.count += 1;
+        if *word & bit != 0 {
+            return false;
         }
+        *word |= bit;
+        self.count += 1;
+        self.count == 1
     }
 
     fn pop_from(&mut self, cursor: usize) -> Option<usize> {
@@ -609,7 +616,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             if let Some(id) = self.sort_ids.get(sort.name()) {
                 self.costs[*id]
                     .get(&value)
-                    .map_or(usize::MAX, |entry| entry.rank)
+                    .map_or(usize::MAX, |entry| entry.rank as usize)
             } else {
                 usize::MAX
             }
@@ -653,21 +660,21 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         match kind {
             ChildKind::EqSort(Some(id)) => self.costs[*id]
                 .get(&value)
-                .map_or(usize::MAX, |entry| entry.rank),
+                .map_or(usize::MAX, |entry| entry.rank as usize),
             ChildKind::EqSort(None) => usize::MAX,
             ChildKind::Container(sort) => self.compute_topo_rnk_node(egraph, value, sort),
             ChildKind::Base(_) => 0,
         }
     }
 
-    /// Report every eq value a container value's cost depends on, found by
-    /// recursing through nested container values.
+    /// Report every eq value a container value's cost depends on, with its sort's
+    /// dense id, found by recursing through nested container values.
     fn register_container_deps(
         &self,
         egraph: &EGraph,
         sort: &ArcSort,
         value: Value,
-        register: &mut impl FnMut(Value),
+        register: &mut impl FnMut(usize, Value),
     ) {
         if sort.is_container_sort() {
             for (inner_sort, inner_value) in
@@ -675,9 +682,51 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             {
                 self.register_container_deps(egraph, &inner_sort, inner_value, register);
             }
-        } else if sort.is_eq_sort() && self.sort_ids.contains_key(sort.name()) {
-            register(value);
+        } else if sort.is_eq_sort()
+            && let Some(&id) = self.sort_ids.get(sort.name())
+        {
+            register(id, value);
         }
+    }
+
+    /// Pushes the `(sort id, value)` of every eq class one row of `func` reads,
+    /// directly or inside a container, onto `out`.
+    fn push_children(
+        &self,
+        egraph: &EGraph,
+        func: &Function,
+        row: &[Value],
+        out: &mut Vec<(usize, Value)>,
+    ) {
+        let num_children = func.extraction_num_children();
+        for (sort, &value) in func.func_type.input[..num_children].iter().zip(row) {
+            self.register_container_deps(egraph, sort, value, &mut |id, v| out.push((id, v)));
+        }
+    }
+
+    /// Whether the parent edges chosen so far lead from a child of `row`, a row
+    /// of `self.funcs[fi]`, back to `class`.
+    fn edges_reach(
+        &self,
+        egraph: &EGraph,
+        fi: usize,
+        row: &[Value],
+        class: (usize, Value),
+    ) -> bool {
+        let mut stack = Vec::new();
+        self.push_children(egraph, &egraph.functions[&self.funcs[fi]], row, &mut stack);
+        let mut seen: HashSet<(usize, Value)> = Default::default();
+        while let Some(child) = stack.pop() {
+            if child == class {
+                return true;
+            }
+            if seen.insert(child)
+                && let Some((fi, row)) = self.parent_edge[child.0].get(&child.1)
+            {
+                self.push_children(egraph, &egraph.functions[&self.funcs[*fi]], row, &mut stack);
+            }
+        }
+        false
     }
 
     /// Builds the [`ChildIndex`] of `func_data`.
@@ -695,7 +744,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
                 for (kind, value) in f.child_kinds.iter().zip(row) {
                     if let ChildKind::Container(sort) = kind {
-                        self.register_container_deps(egraph, sort, *value, &mut |v| {
+                        self.register_container_deps(egraph, sort, *value, &mut |_, v| {
                             container_reads.push((v, fi as u32, ri as u32))
                         });
                     }
@@ -731,13 +780,17 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
     /// In this hypergraph, the nodes corresponde to eclasses, the distances are the costs to extract a term of those eclasses,
     /// and each enode is a hyperedge that goes from the set of children eclasses to the enode's eclass.
     /// The sources are the eclasses with known costs from the cost model.
-    /// Additionally, to avoid cycles in the extraction even when the cost model can assign an equal cost to a term and its subterm.
-    /// It computes a topological rank for each eclass
-    /// and only allows each eclass to have children of classes of strictly smaller ranks in the extraction.
+    /// To keep extracted terms acyclic even when the cost model can assign an equal cost to a term and its subterm,
+    /// it records a chronological rank for each eclass and selects, where one exists,
+    /// a row at the eclass's cost whose children all have strictly smaller ranks.
+    /// An eclass without such a row takes the row that last lowered its cost,
+    /// unless the selected rows lead from that row back to the eclass.
+    /// The selected rows never form a cycle.
     fn bellman_ford(&mut self, egraph: &EGraph) {
         // Materialize each function's non-subsumed rows once, so the relaxation
         // passes below iterate plain memory instead of re-scanning every table.
-        let func_data: Vec<FuncData> = self
+        let mut next_row = 0;
+        let mut func_data: Vec<FuncData> = self
             .funcs
             .iter()
             .map(|func_name| {
@@ -768,6 +821,8 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                         rows.extend_from_slice(row.vals);
                     }
                 });
+                let first_row = next_row;
+                next_row += (rows.len() / arity) as u32;
                 FuncData {
                     func,
                     cost_func: func
@@ -781,13 +836,14 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     output_sort_id: self.sort_ids[func.extraction_output_sort().name()],
                     child_kinds,
                     rows,
+                    first_row,
                 }
             })
             .collect();
 
         let child_index = self.child_index(egraph, &func_data);
 
-        let mut topo_rnk_cnt = 0usize;
+        let mut topo_rnk_cnt = 0u32;
         // Semi-naive relaxation: a row recomputes exactly the same cost against a
         // never-increasing target unless one of its child (sort, value) costs
         // changed since the row was last evaluated, so only such "dirty" rows are
@@ -796,15 +852,17 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             .iter()
             .map(|f| DirtyRows::full(f.rows.len() / f.arity))
             .collect();
+        // A sweep visits only the tables with dirty rows, in table order. A table's
+        // mark is set when its first row is marked, or after its own visit leaves
+        // rows marked.
+        let mut dirty_tables = DirtyRows::full(func_data.len());
 
         let mut ch_costs: Vec<C> = Vec::new();
-        loop {
-            let mut any = false;
-            for (fi, f) in func_data.iter().enumerate() {
-                if dirty[fi].count == 0 {
-                    continue;
-                }
-                any = true;
+        while dirty_tables.count > 0 {
+            let mut table_cursor = 0;
+            while let Some(fi) = dirty_tables.pop_from(table_cursor) {
+                table_cursor = fi + 1;
+                let f = &func_data[fi];
                 // Marks set at or behind the sweep cursor (including a row
                 // re-marking itself) stay for the next sweep; marks ahead of it
                 // are picked up in this one, matching the naive pass exactly.
@@ -825,36 +883,45 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     // record the chronological order of the updates
                     // which serves as a topological order that avoids cycles
                     // even when a term has a cost equal to its subterms
-                    topo_rnk_cnt += 1;
+                    topo_rnk_cnt = topo_rnk_cnt
+                        .checked_add(1)
+                        .expect("fewer than 2^32 successful relaxations");
                     entry.insert(RankedCost {
                         cost: new_cost,
                         rank: topo_rnk_cnt,
+                        row: f.first_row + ri as u32,
                     });
                     for &(dfi, dri) in child_index.readers(target) {
-                        dirty[dfi as usize].insert(dri as usize);
+                        if dirty[dfi as usize].insert(dri as usize) {
+                            dirty_tables.insert(dfi as usize);
+                        }
                     }
                 }
-            }
-            if !any {
-                break;
+                if dirty[fi].count > 0 {
+                    dirty_tables.insert(fi);
+                }
             }
         }
 
         // Free the scheduler's state before the parent edges allocate.
-        drop((child_index, dirty));
+        drop((child_index, dirty, dirty_tables));
 
         // Save the edges for reconstruction
         for (parents, costs) in self.parent_edge.iter_mut().zip(&self.costs) {
             parents.reserve(costs.len());
         }
-        for (fi, f) in func_data.into_iter().enumerate() {
-            for row in f.rows.chunks_exact(f.arity) {
+        // A class has no such edge when a child improved after it without changing
+        // its cost, as a saturating cost allows; the row that last lowered its cost
+        // is kept for it here, while its table is live.
+        let mut fallback: Vec<(u32, usize, Value, usize, Vec<Value>)> = Vec::new();
+        for (fi, f) in func_data.iter_mut().enumerate() {
+            for (ri, row) in f.rows.chunks_exact(f.arity).enumerate() {
                 let target = row[f.output_idx];
                 let Some(best) = self.costs[f.output_sort_id].get(&target) else {
                     continue;
                 };
                 // one of the possible best parent edges
-                if self.row_cost(egraph, &f, row, &mut ch_costs).as_ref() != Some(&best.cost) {
+                if self.row_cost(egraph, f, row, &mut ch_costs).as_ref() != Some(&best.cost) {
                     continue;
                 }
                 let edge_rank = f
@@ -865,11 +932,25 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     .max()
                     .unwrap_or(0);
                 // one of the parent edges that avoids cycles
-                if best.rank > edge_rank
+                if best.rank as usize > edge_rank
                     && let HEntry::Vacant(e) = self.parent_edge[f.output_sort_id].entry(target)
                 {
                     e.insert((fi, row.to_vec()));
+                } else if best.rank as usize <= edge_rank && best.row == f.first_row + ri as u32 {
+                    fallback.push((best.rank, f.output_sort_id, target, fi, row.to_vec()));
                 }
+            }
+            (f.rows, f.child_kinds) = Default::default();
+        }
+        // That row still costs the class's cost. A class without an edge takes it,
+        // in rank order, unless the edges chosen so far lead from it back to the
+        // class; such a class stays without an edge.
+        fallback.sort_unstable_by_key(|&(rank, ..)| rank);
+        for (_, sort, class, fi, row) in fallback {
+            if !self.parent_edge[sort].contains_key(&class)
+                && !self.edges_reach(egraph, fi, &row, (sort, class))
+            {
+                self.parent_edge[sort].insert(class, (fi, row));
             }
         }
     }
