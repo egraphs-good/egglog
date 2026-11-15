@@ -21,7 +21,7 @@ use crate::{
     hash_index::{ColumnIndex, Index, IndexPosition, TupleIndex},
     numeric_id::{DenseIdMap, NumericId, define_id},
     query::Atom,
-    table_spec::ColumnId,
+    table_spec::{ColumnId, Constraint},
 };
 
 use super::{
@@ -388,14 +388,20 @@ impl<'a> PreparedIndexRef<'a> {
     ///
     /// The catalog helper refreshes the index before its handle is retained.
     /// Later calls borrow the same index without another catalog lookup or
-    /// `Arc` clone. `info` and `column` must identify the same logical access
-    /// on every call; the returned borrow is tied to this execution's state.
+    /// `Arc` clone. `info`, `column`, and the fast `constraints` must identify
+    /// the same logical access on every call; the returned borrow is tied to
+    /// this execution's state.
     /// Panics if this access was not prepared for a column catalog index.
     #[inline]
-    pub(super) fn column_index(self, info: &TableInfo, column: ColumnId) -> &'a Index<ColumnIndex> {
+    pub(super) fn column_index(
+        self,
+        info: &TableInfo,
+        column: ColumnId,
+        constraints: &[Constraint],
+    ) -> &'a Index<ColumnIndex> {
         debug_assert_eq!(self.kind, PreparedIndexKind::Column);
         let PreparedRootIndex::Column(index) = self.state.root.get_or_init(|| {
-            PreparedRootIndex::Column(get_column_index_from_tableinfo(info, column))
+            PreparedRootIndex::Column(get_column_index_from_tableinfo(info, column, constraints))
         }) else {
             unreachable!("a root cannot change its index representation during execution")
         };
@@ -408,21 +414,21 @@ impl<'a> PreparedIndexRef<'a> {
     ///
     /// The catalog helper refreshes the index before its handle is retained.
     /// Later calls borrow the same index without another catalog lookup or
-    /// `Arc` clone. `info` and the ordered `columns` must identify the same
-    /// logical access on every call; the borrow is tied to this execution's
-    /// state. Panics if this access was not prepared for a tuple catalog index.
+    /// `Arc` clone. `info`, the ordered `columns`, and the fast `constraints`
+    /// must identify the same logical access on every call; the borrow is
+    /// tied to this execution's state. Panics if this access was not prepared
+    /// for a tuple catalog index.
     #[inline]
     pub(super) fn tuple_index(
         self,
         info: &TableInfo,
         columns: &[ColumnId],
+        constraints: &[Constraint],
     ) -> &'a Index<TupleIndex> {
         debug_assert_eq!(self.kind, PreparedIndexKind::Tuple);
-        let PreparedRootIndex::Tuple(index) = self
-            .state
-            .root
-            .get_or_init(|| PreparedRootIndex::Tuple(get_index_from_tableinfo(info, columns)))
-        else {
+        let PreparedRootIndex::Tuple(index) = self.state.root.get_or_init(|| {
+            PreparedRootIndex::Tuple(get_index_from_tableinfo(info, columns, constraints))
+        }) else {
             unreachable!("a root cannot change its index representation during execution")
         };
         index

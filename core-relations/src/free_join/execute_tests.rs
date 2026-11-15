@@ -107,11 +107,13 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
         drop(get_column_index_from_tableinfo(
             db.get_table_info(*facts),
             columns[0],
+            &[],
         ));
     } else {
         drop(get_index_from_tableinfo(
             db.get_table_info(*facts),
             &columns,
+            &[],
         ));
     }
     if stale {
@@ -128,10 +130,10 @@ fn terminal_catalog_filter_case(stale: bool, arity: usize) {
     // The index still has a candidate for key 0, but that candidate must not
     // establish existence: its row is stale or fails the remaining constraint.
     if arity == 1 {
-        let index = get_column_index_from_tableinfo(db.get_table_info(*facts), columns[0]);
+        let index = get_column_index_from_tableinfo(db.get_table_info(*facts), columns[0], &[]);
         assert!(index.get().unwrap().get_subset(&v(0)).is_some());
     } else {
-        let index = get_index_from_tableinfo(db.get_table_info(*facts), &columns);
+        let index = get_index_from_tableinfo(db.get_table_info(*facts), &columns, &[]);
         assert!(index.get().unwrap().get_subset(key(0).as_slice()).is_some());
     }
 

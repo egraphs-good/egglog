@@ -334,8 +334,8 @@ impl CatalogFilter<'_> {
 /// reusable table index is valid.
 pub(super) enum ProbeIndex<'ctx, 'rows, 'exec> {
     /// A persistent, fully refreshed multi-column table index. This is used for
-    /// a large dense root with cacheable columns. `intersect_outer` clips
-    /// results when the root is a dense subrange rather than the whole table,
+    /// a large root with cacheable columns, optionally restricted by fast
+    /// predicates. `intersect_outer` clips results to a dense header range,
     /// and `filter` applies the checks the stored groups cannot encode.
     CachedTuple {
         intersect_outer: Option<OffsetRange>,
