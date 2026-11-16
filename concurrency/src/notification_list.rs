@@ -11,7 +11,7 @@
 //! someone is notifying a table that has already been notified by a different thread.
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crate::ConcurrentVec;
@@ -33,6 +33,13 @@ impl<K: NumericId> Default for NotificationList<K> {
 }
 
 impl<K: NumericId> NotificationList<K> {
+    /// A shared generation for invalidating local notification caches after a reset.
+    ///
+    /// This does not synchronize concurrent calls to `reset` and `notify`.
+    pub fn generation(&self) -> usize {
+        self.inner.generation.load(Ordering::Acquire)
+    }
+
     /// Notify a given item.
     ///
     /// It is expected that the space of `item`s is fairly dense: this implementation will use O(n)
@@ -71,6 +78,7 @@ impl<K: NumericId> NotificationList<K> {
         for &item in &notified {
             handle[item.index()].reset();
         }
+        self.inner.generation.fetch_add(1, Ordering::Release);
         notified
     }
 }
@@ -78,6 +86,7 @@ impl<K: NumericId> NotificationList<K> {
 struct Inner<K: NumericId> {
     notified: Mutex<SmallVec<[K; 4]>>,
     states: ConcurrentVec<NotificationState>,
+    generation: AtomicUsize,
 }
 
 impl<K: NumericId> Default for Inner<K> {
@@ -85,6 +94,7 @@ impl<K: NumericId> Default for Inner<K> {
         Self {
             notified: Default::default(),
             states: Default::default(),
+            generation: AtomicUsize::new(0),
         }
     }
 }
