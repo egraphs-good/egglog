@@ -11,8 +11,8 @@ clap = { workspace = true, features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-egglog-numeric-id.workspace = true
 hashbrown.workspace = true
 rustc-hash.workspace = true
-smallvec.workspace = true
+smallvec = { workspace = true, features = ["serde"] }
+egglog-numeric-id.workspace = true
 fixedbitset.workspace = true
