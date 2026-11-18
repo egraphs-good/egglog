@@ -3,6 +3,7 @@ use crate::{Database, Error, Function, FunctionKind, HashMap};
 use egglog_numeric_id::NumericId;
 use serde::Serialize;
 use smallvec::SmallVec;
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Comparison {
@@ -40,6 +41,7 @@ pub(crate) struct Graph<'a> {
     pub nodes: Vec<Vec<Node>>,
     /// Sorted, unique output IDs. Mark once per row instead of tree insertion.
     pub roots: Vec<ClassId>,
+    pub index: HashMap<&'a str, ClassId>,
 }
 
 impl<'a> Graph<'a> {
@@ -98,6 +100,7 @@ impl<'a> Graph<'a> {
                 .enumerate()
                 .filter_map(|(i, root)| root.then_some(ClassId::from_usize(i + offset)))
                 .collect(),
+            index,
         }
     }
 }
@@ -106,7 +109,6 @@ pub(crate) struct Partition<'a> {
     pub left: Graph<'a>,
     pub right: Graph<'a>,
     pub blocks: Vec<BlockId>,
-    #[cfg(test)]
     pub rounds: usize,
 }
 
@@ -137,7 +139,6 @@ impl<'a> Partition<'a> {
             left,
             right,
             blocks,
-            #[cfg(test)]
             rounds: 0,
         }
     }
@@ -169,9 +170,7 @@ impl<'a> Partition<'a> {
         signatures.intern(self.blocks[id.index()], nodes)
     }
 
-    // The synchronous reference also supplies depth-bounded certificate replay
-    // in the subsequent certificate layer. Worklist steps are not term depths.
-    #[cfg(test)]
+    // Certificates use synchronous depth, independently of comparison worklist steps.
     pub fn step(&mut self) -> bool {
         let mut signatures = crate::signatures::Signatures::default();
         let mut nodes = Vec::new();
@@ -184,9 +183,16 @@ impl<'a> Partition<'a> {
         changed
     }
 
-    #[cfg(test)]
     pub fn finish(&mut self) {
         while self.step() {}
+    }
+
+    pub fn root_blocks(&self, graph: &Graph<'_>) -> BTreeSet<BlockId> {
+        graph
+            .roots
+            .iter()
+            .map(|&id| self.blocks[id.index()])
+            .collect()
     }
 
     pub fn terms_equal(&self) -> bool {
