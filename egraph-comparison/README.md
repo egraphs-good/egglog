@@ -180,3 +180,8 @@ Container support needs variable-arity observations with element sorts and
 container kind in the label. Ordered sequences, unordered sets, multiplicities,
 and map key/value pairing must be preserved when comparing child blocks. The
 current fixed-arity ordered `Function` schema cannot express all these cases.
+
+## Snapshot infrastructure
+
+[The snapshot evaluation](SNAPSHOTS.md) describes the saved-database pilot,
+verified failure certificates, and the requirements for broader adoption.

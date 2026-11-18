@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "classes": {
+    "Math-0": {
+      "sort": "Math"
+    },
+    "Math-1": {
+      "sort": "Math"
+    },
+    "Math-2": {
+      "sort": "Math"
+    },
+    "Math-3": {
+      "sort": "Math"
+    },
+    "Math-4": {
+      "sort": "Math"
+    },
+    "Math-5": {
+      "sort": "Math"
+    },
+    "Math-6": {
+      "sort": "Math"
+    },
+    "String-0": {
+      "sort": "String",
+      "literal": "\"x\""
+    },
+    "i64-2": {
+      "sort": "i64",
+      "literal": "2"
+    },
+    "i64-3": {
+      "sort": "i64",
+      "literal": "3"
+    },
+    "i64-6": {
+      "sort": "i64",
+      "literal": "6"
+    }
+  },
+  "functions": {
+    "Add": {
+      "kind": "constructor",
+      "inputs": [
+        "Math",
+        "Math"
+      ],
+      "output": "Math"
+    },
+    "Mul": {
+      "kind": "constructor",
+      "inputs": [
+        "Math",
+        "Math"
+      ],
+      "output": "Math"
+    },
+    "Num": {
+      "kind": "constructor",
+      "inputs": [
+        "i64"
+      ],
+      "output": "Math"
+    },
+    "Var": {
+      "kind": "constructor",
+      "inputs": [
+        "String"
+      ],
+      "output": "Math"
+    }
+  },
+  "rows": [
+    {
+      "function": "Num",
+      "inputs": [
+        "i64-2"
+      ],
+      "output": "Math-0",
+      "subsumed": false
+    },
+    {
+      "function": "Num",
+      "inputs": [
+        "i64-3"
+      ],
+      "output": "Math-2",
+      "subsumed": false
+    },
+    {
+      "function": "Num",
+      "inputs": [
+        "i64-6"
+      ],
+      "output": "Math-5",
+      "subsumed": false
+    },
+    {
+      "function": "Var",
+      "inputs": [
+        "String-0"
+      ],
+      "output": "Math-1",
+      "subsumed": false
+    },
+    {
+      "function": "Add",
+      "inputs": [
+        "Math-1",
+        "Math-2"
+      ],
+      "output": "Math-3",
+      "subsumed": false
+    },
+    {
+      "function": "Add",
+      "inputs": [
+        "Math-2",
+        "Math-1"
+      ],
+      "output": "Math-3",
+      "subsumed": false
+    },
+    {
+      "function": "Add",
+      "inputs": [
+        "Math-6",
+        "Math-5"
+      ],
+      "output": "Math-4",
+      "subsumed": false
+    },
+    {
+      "function": "Add",
+      "inputs": [
+        "Math-5",
+        "Math-6"
+      ],
+      "output": "Math-4",
+      "subsumed": false
+    },
+    {
+      "function": "Mul",
+      "inputs": [
+        "Math-0",
+        "Math-3"
+      ],
+      "output": "Math-4",
+      "subsumed": false
+    },
+    {
+      "function": "Mul",
+      "inputs": [
+        "Math-0",
+        "Math-1"
+      ],
+      "output": "Math-6",
+      "subsumed": false
+    },
+    {
+      "function": "Mul",
+      "inputs": [
+        "Math-0",
+        "Math-2"
+      ],
+      "output": "Math-5",
+      "subsumed": false
+    }
+  ]
+}
