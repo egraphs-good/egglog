@@ -313,5 +313,5 @@ fn propagates_a_difference_through_a_long_chain() {
     let mut right = left.clone();
     right.rows.last_mut().unwrap().output = "78".into();
     assert!(!compare(&left, &right).unwrap().terms_equal);
-    assert!(compare(&left, &left).unwrap().refinement_rounds >= 79);
+    assert!(compare(&left, &left).unwrap().refinement_steps >= 79);
 }
