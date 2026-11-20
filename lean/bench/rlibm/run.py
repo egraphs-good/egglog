@@ -101,7 +101,8 @@ def prepare(args, directory):
         "flags": FLAGS, "platform": platform.platform(), "cpu": cpu, "logical_cpus": os.cpu_count(),
         "lean_version": capture(["lake", "env", "lean", "--version"], cwd=LEAN),
         "sweeps_per_sample": args.sweeps, "warmup_sweeps_per_process": 8,
-        "native_lean_sweeps_per_sample": args.lean_sweeps,
+        "native_lean_sweeps_per_sample": args.lean_sweeps, "word_sweeps_per_sample": args.word_sweeps,
+        "comparison_groups": args.group,
         "balanced_blocks": args.blocks, "c_clock": "std::chrono::steady_clock",
         "lean_clock": "IO.monoNanosNow",
         "generated_sha256": {p.name: digest(p) for p in (generated, directory / "rlibm_coefficients.h", manifest)},
@@ -110,7 +111,7 @@ def prepare(args, directory):
     return worker, per_function
 
 
-def validate_lean(args, native, build, variants):
+def validate_lean(args, native, build, variants, comparison):
     with (args.out / "validation.csv").open() as source:
         expected = {row["function"]: row for row in csv.DictReader(source) if row["schedule"] == "upstream"}
     with (args.out / "validation.csv").open("a", newline="") as out:
@@ -122,19 +123,20 @@ def validate_lean(args, native, build, variants):
                 # The worker checks each individual word before printing its hash.
                 digest = int(capture([native, "validate", fn, name, build / f"oracle_{fn}.bin"]))
                 report = expected[fn].copy()
-                report.update(schedule="lean_" + name, result_hash=f"{digest:016x}")
+                report.update(schedule=comparison + "_" + name, result_hash=f"{digest:016x}")
                 if report["result_hash"] != report["oracle_hash"]:
                     raise ValueError(f"native Lean checksum mismatch: {fn}/{name}")
                 writer.writerow(report)
 
 
 def sample(worker, native, fn, name, kind, sweeps, env):
-    if not name.startswith("lean_"):
+    comparison, _, variant = name.partition("_")
+    if comparison not in native:
         output = capture([worker, fn, name, kind, str(sweeps)], env=env)
         elapsed, calls, checksum = map(int, output.split(","))
         return elapsed, calls, checksum, ""
     inputs = worker.parent / f"inputs_{kind}.bin"
-    output = capture([native, "time", fn, name[5:], inputs, kind, str(sweeps)], env=env)
+    output = capture([native[comparison], "time", fn, variant, inputs, kind, str(sweeps)], env=env)
     return tuple(map(int, output.split(",")))
 
 
@@ -148,10 +150,14 @@ def measure(args, worker, native, variants):
         writer = csv.DictWriter(out, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         for fn, c_variants in variants.items():
-            lean_variants = ["upstream"] + ["lean_" + n for n in c_variants if n != "upstream"]
+            def group(name):
+                if name == "c":
+                    return name, c_variants, args.sweeps
+                names = ["upstream"] + [name + "_" + n for n in c_variants if n != "upstream"]
+                sweeps = args.lean_sweeps if name == "lean" else args.word_sweeps
+                return name, names, sweeps
             for kind in KINDS:
-                comparisons = [("c", c_variants, args.sweeps), ("lean", lean_variants, args.lean_sweeps)]
-                for comparison, names, sweeps in comparisons:
+                for comparison, names, sweeps in map(group, args.group):
                     for block in range(args.blocks):
                         for offset in range(len(names)):
                             idle = check_load()
@@ -177,7 +183,7 @@ def measure(args, worker, native, variants):
     with (args.out / "summary.csv").open("w", newline="") as out:
         writer = csv.writer(out, lineterminator="\n")
         writer.writerow(fields)
-        for comparison in ("c", "lean"):
+        for comparison in args.group:
             for fn in variants:
                 for kind in KINDS:
                     samples = {}
@@ -199,21 +205,28 @@ def main():
     parser.add_argument("--blocks", type=int, default=2, help="balanced rotations per distribution")
     parser.add_argument("--sweeps", type=int, default=32, help="timed full-domain sweeps per sample")
     parser.add_argument("--lean-sweeps", type=int, default=4, help="native Lean sweeps per sample")
+    parser.add_argument("--word-sweeps", type=int, default=32, help="native machine-word sweeps per sample")
+    parser.add_argument("--group", action="append", choices=["c", "lean", "word"],
+                        help="measure this comparison against Rutgers (repeatable, defaults to all three)")
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     args = parser.parse_args()
-    if args.blocks < 1 or not all(1 <= s <= 65535 for s in (args.sweeps, args.lean_sweeps)):
+    args.group = list(dict.fromkeys(args.group or ["c", "lean", "word"]))
+    if args.blocks < 1 or not all(1 <= s <= 65535 for s in (args.sweeps, args.lean_sweeps, args.word_sweeps)):
         parser.error("blocks must be positive and sweeps must be between 1 and 65535")
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
     directory = args.out / "build"
     directory.mkdir()
-    subprocess.run(["lake", "build", "rlibm-bench", "Egglog.Examples.Rlibm.Emit"], cwd=LEAN, check=True)
-    native = LEAN / ".lake/build/bin/rlibm-bench"
+    targets = {"lean": "rlibm-bench", "word": "rlibm-word-bench"}
+    native = {k: LEAN / ".lake/build/bin" / t for k, t in targets.items() if k in args.group}
+    subprocess.run(["lake", "build", "Egglog.Examples.Rlibm.Emit", "Egglog.Examples.Rlibm.Cells",
+                    "Egglog.Examples.Rlibm.Coefficients", *(p.name for p in native.values())], cwd=LEAN, check=True)
     worker, variants = prepare(args, directory)
     with (args.out / "validation.csv").open("w") as out:
         subprocess.run([worker, "validate", directory], stdout=out, check=True)
-    validate_lean(args, native, directory, variants)
+    for comparison, path in native.items():
+        validate_lean(args, path, directory, variants, comparison)
     print("Exhaustive MPFR comparison passed.", flush=True)
     if not args.verify_only:
         measure(args, worker, native, variants)

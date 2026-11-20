@@ -1,4 +1,6 @@
 import Egglog.Examples.Rlibm.Cells
+import Egglog.Examples.Rlibm.LPSound
+import Egglog.Examples.Rlibm.NativeWordCertificate
 import Egglog.Examples.Rlibm.VerifiedSchedules
 import Egglog.Examples.Rlibm.UpstreamCertificate
 
