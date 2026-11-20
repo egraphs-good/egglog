@@ -4,7 +4,7 @@ The comparison uses Rutgers' original bfloat16 implementations of `log2` and `lo
 
 ## Results
 
-On an Apple M4 Max, MPFR 4.2.2 agreed on every returned word for both functions, the five generated schedules, their native Lean evaluations and the upstream implementations. The tables give median nanoseconds per call over 12 timed samples per cell. CPU idle samples before each rotation ranged from 79.4% to 92.8%.
+On an Apple M4 Max, MPFR 4.2.2 agreed on every returned word for both functions, the five generated schedules, their native Lean evaluations and the upstream implementations. The tables give median nanoseconds per call over 12 timed samples per cell. For the C and integer-evaluator tables, CPU idle before each rotation ranged from 79.4% to 92.8%.
 
 ### Emitted C and Rutgers
 
@@ -21,7 +21,7 @@ The fastest emitted kernels for positive finite throughput were log2 cells at 0.
 
 Apple Clang 17 emitted identical AArch64 instruction bytes and coefficient-table relocations for source, Estrin and split on log2, and for source and Estrin on log10. Small timing differences between those kernels reflect measurement variability. The quadratic uses a different table and two dependent polynomial multiply-adds in place of three. The generated object can be inspected with `otool -tv build/schedules.o` and `otool -rv build/schedules.o` from the output directory.
 
-### Native Lean and Rutgers
+### Lean integer evaluator and Rutgers
 
 | Implementation | log2 positive | log2 all | log2 chain | log10 positive | log10 all | log10 chain |
 |---|---:|---:|---:|---:|---:|---:|
@@ -32,19 +32,39 @@ Apple Clang 17 emitted identical AArch64 instruction bytes and coefficient-table
 | split | 911.30 | 456.95 | 915.11 | 891.10 | 453.75 | 899.72 |
 | cells | 581.24 | 295.06 | 578.51 | 549.92 | 287.33 | 559.80 |
 
-Across the native extracted workers, median time to run equality saturation and prepare the reusable evaluator was 49.1 µs. Preparation was outside all per-call samples. Native Lean includes the cost of its integer representation and runtime expression traversal. [Preparation and execution samples](results/samples.csv)
+Across the native extracted workers, median time to run equality saturation and prepare the reusable evaluator was 49.1 µs. Preparation was outside all per-call samples. These integer-evaluator timings include the cost of Lean integer arithmetic and, for the extracted ASTs, runtime expression traversal. [Preparation and execution samples](results/samples.csv)
+
+### Native Lean machine words and Rutgers
+
+These routines accept and return `UInt16` and use machine-word arithmetic in the kernel. This comparison measures each schedule against a fresh Rutgers reference with 32 timed sweeps for every participant. It adds 432 single-threaded samples, covering all three distributions. Overall CPU idle before each rotation ranged from 77.4% to 86.5%. [Word backend](../../Egglog/Examples/Rlibm/NativeWord.lean) · [Word-backend timing ledger](results/word/samples.csv) · [Word-backend medians](results/word/summary.csv) · [Machine and flags](results/word/machine.json)
+
+| Implementation | log2 positive | log2 all | log2 chain | log10 positive | log10 all | log10 chain |
+|---|---:|---:|---:|---:|---:|---:|
+| Rutgers | 16.70 | 10.72 | 20.63 | 18.66 | 11.50 | 23.00 |
+| source | 5.98 | 7.03 | 22.21 | 5.95 | 7.04 | 22.12 |
+| horner | 6.01 | 6.99 | 22.20 | 5.92 | 7.10 | 22.13 |
+| estrin | 5.97 | 7.04 | 22.37 | 5.94 | 7.02 | 22.07 |
+| split | 6.05 | 7.18 | 22.17 | 5.95 | 7.03 | 22.09 |
+| cells | 5.78 | 7.08 | 21.08 | 5.70 | 6.99 | 21.31 |
+
+On positive finite inputs, native Lean’s quadratic processed log2 2.89× and log10 3.28× as fast as Rutgers. Dependent log2 calls took 2.1% longer than Rutgers, and dependent log10 calls took 7.4% less time. All ten native machine-word implementations agreed with MPFR on every bfloat16 encoding. [Word-by-word validation](results/word/validation.csv)
+
+The initial native-word backend measured 197.15 and 197.60 ns/call for positive log2 and log10 on the source cubic. Lifting the exponent-compensation constants, specializing dispatch, and replacing the iterative word logarithm with a fixed sequence of probes made that path 33.0× and 33.2× faster. Both runs used the same per-group protocol. [Initial source](https://github.com/egraphs-good/egglog/blob/b690a406e7220ad07e404d8ecf164146ff4f1ffd/lean/Egglog/Examples/Rlibm/NativeWord.lean) · [Initial medians](results/word-baseline/summary.csv) · [Initial samples](results/word-baseline/samples.csv)
 
 ## Reproduction
+
+To replay the mathematical guarantees, run `(cd lean && lake build Egglog.Examples.Rlibm.Results)` from the repository root. The benchmark separately checks the executable return values against MPFR. [Proofs and scope](../../rlibm/README.md)
 
 Install the pinned Lean toolchain, Python 3, GCC or Clang with C11 and C++17 support, pkg-config, MPFR and GMP. The C kernels use count-leading-zero builtins. The CPU load sampler supports Darwin and Linux. Supply a fresh output directory. On a Mac with a conflicting SDK on the library path, use `env -u LIBRARY_PATH` before the Python command.
 
 ```sh
 git clone https://github.com/rutgers-apl/rlibm.git /tmp/rlibm-upstream
 git -C /tmp/rlibm-upstream checkout --detach 8533ec0db38b2f3ab55c1b296ddaec80d578e251
-python3 lean/bench/rlibm/run.py /tmp/rlibm-upstream /tmp/rlibm-bench
+python3 lean/bench/rlibm/run.py /tmp/rlibm-upstream /tmp/rlibm-bench --group c --group lean
+python3 lean/bench/rlibm/run.py /tmp/rlibm-upstream /tmp/rlibm-word-bench --group word
 ```
 
-Add `--verify-only` to build the same executables and skip timings. The harness runs both Lean emitters, compiles the emitted C and the two unchanged Rutgers C++ sources as separate translation units with the same optimization flags, and builds the native Lean evaluation worker. It retains the actual generated source, coefficient header, schedule manifest, oracle words and measured executable in the output directory's `build/` folder. [Harness](run.py) · [Driver and MPFR oracle](driver.cpp) · [Native Lean worker](../../RlibmBench.lean)
+Omit the group flags to run all three comparisons into one fresh directory. Add `--verify-only` to build the same executables and skip timings. The harness runs both Lean emitters, compiles the emitted C and the two unchanged Rutgers C++ sources as separate translation units with the same optimization flags, and builds the selected native Lean evaluation workers. It retains the actual generated source, coefficient header, schedule manifest, oracle words and measured executable in the output directory's `build/` folder. [Harness](run.py) · [Driver and MPFR oracle](driver.cpp) · [Lean integer worker](../../RlibmBench.lean) · [Lean machine-word worker](../../RlibmWordBench.lean)
 
 ## Exhaustive validation
 
@@ -58,6 +78,6 @@ Every implementation is checked word by word for all 65,536 encodings, including
 - **All-encoding throughput** shuffles all 65,536 words. Roughly half take a special-value path.
 - **Dependent positive-input chain** uses the preceding output and a changing offset to select the next positive finite argument. It measures serial dependence including the next input's address calculation and load. The throughput and chain workloads therefore measure different costs.
 
-All three distributions run for both execution paths. The C and native Lean workers read the same input sequence. C reads an array of 16-bit words, and the Lean API reads an `Array Nat` of the same words. The native Lean `source` calls the original integer kernel. The other Lean workers interpret the selected AST using the compiled Lean implementation. Each worker prepares its function once. The ledger reports preparation separately from evaluation.
+All three distributions run for each execution path. C reads the inputs as packed 16-bit words. The Lean integer worker reads the same sequence as an `Array Nat` and the Lean machine-word worker as an `Array UInt16`. The integer `source` calls the original fixed-point definition. Its extracted variants interpret the selected AST. The machine-word worker calls the specialized compiled Lean functions. For this backend equality saturation and lowering happen during Lean elaboration, and the setup column measures only runtime kernel selection. Each worker prepares its evaluator once before per-call timing.
 
-All timing workers run in fresh single-threaded processes. Each performs eight untimed warm-up sweeps on its chosen input distribution. The measured section covers only function calls, input reads and output accumulation. Builds, e-graph search, oracle evaluation, input construction, validation and process startup are outside that section. Checksums must agree across schedules for each function and workload. Each distribution has a C group and a native Lean group. Each group measures Rutgers as its own reference, using the same sweep count as its candidates. In each block every candidate occupies every start position once. The second block reverses the initial ordering. Before each rotation the harness samples overall CPU idle for one second and stops below 60%. [Every sample](results/samples.csv) · [Machine and flags](results/machine.json) · [All medians](results/summary.csv)
+All timing workers run in fresh single-threaded processes. Each performs eight untimed warm-up sweeps on its chosen input distribution. The measured section covers only function calls, input reads and output accumulation. Builds, e-graph search, oracle evaluation, input construction, validation and process startup are outside that section. Checksums must agree across schedules for each function and workload. Each distribution has three independently balanced groups for emitted C, Lean integer evaluation and native Lean machine-word evaluation. Each group measures Rutgers as its own reference, using the same sweep count as its candidates. In each block every candidate occupies every start position once. The second block reverses the initial ordering. Before each rotation the harness samples overall CPU idle for one second and stops below 60%. [C and integer-evaluator samples](results/samples.csv) · [Machine and flags](results/machine.json) · [C and integer-evaluator medians](results/summary.csv)
