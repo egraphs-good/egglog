@@ -1,0 +1,32 @@
+{
+  "rutgers_rlibm_commit": "8533ec0db38b2f3ab55c1b296ddaec80d578e251",
+  "rutgers_sources": [
+    "source/bfloat16/log2.cpp",
+    "source/bfloat16/log10.cpp",
+    "include/bfloat16.hpp",
+    "include/bfloat16_math.hpp"
+  ],
+  "mpfr_version": "4.2.2",
+  "c_compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
+  "cxx_compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
+  "flags": [
+    "-O3",
+    "-fno-fast-math",
+    "-ffp-contract=off"
+  ],
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "cpu": "Apple M4 Max",
+  "logical_cpus": 16,
+  "lean_version": "Lean (version 4.33.1, arm64-apple-darwin24.6.0, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
+  "sweeps_per_sample": 32,
+  "warmup_sweeps_per_process": 8,
+  "native_lean_sweeps_per_sample": 4,
+  "balanced_blocks": 2,
+  "c_clock": "std::chrono::steady_clock",
+  "lean_clock": "IO.monoNanosNow",
+  "generated_sha256": {
+    "schedules.c": "0fdebc413ff9c507d4f917612a7103d32a94a41b7a1bab1cefaff138289a7721",
+    "rlibm_coefficients.h": "4d8547aaec247c73871d960cd1ad6cfd0afede77864859d42cd8b7d442abf8f2",
+    "schedules.csv": "86c025f28b2e2106af10f8c1feb624b1aae88061ccacd99509dfddf10303f1ab"
+  }
+}
