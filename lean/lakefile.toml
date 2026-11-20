@@ -28,3 +28,7 @@ root = "EggCCMain"
 [[lean_exe]]
 name = "luminal-certified"
 root = "LuminalMain"
+
+[[lean_exe]]
+name = "rlibm-bench"
+root = "RlibmBench"
