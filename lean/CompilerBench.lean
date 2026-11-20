@@ -1,4 +1,5 @@
 import Egglog.Examples.Boolean
+import Egglog.Examples.BoundsCheck
 import Egglog.Examples.StrengthReduction
 import Egglog.Parser
 
@@ -43,9 +44,48 @@ private def timePass [BEq α] (read : SExpr → Except String α) (pass : α →
   unless (← ref.get) == want do throw (IO.userError "unexpected optimized IR")
   IO.println s!"compiler_ns={after - before}"
 
+namespace BoundsSchedule
+
+open BoundsCheck
+
+private def sample (i : Nat) : Pat × Pat × Pat :=
+  let x := Pat.var (2*i)
+  let y := Pat.var (2*i+1)
+  let k := Ops.maximum x y
+  let n := Ops.next (Ops.copy k)
+  (Ops.inBounds x n, n, k)
+
+/-- Time only the shared certified schedule on a preseeded graph, then check
+    the equality for every source check and the result of every function merge. -/
+def measure (size : Nat) : IO Unit := do
+  let mut g := Certified.Session.empty ir.model
+  let (s, yes) := g.add Ops.yes
+  g := s
+  for i in [:size] do
+    let (expr, _, _) := sample i
+    g := (g.add expr).1
+  let state ← IO.mkRef g
+  let start ← IO.monoNanosNow
+  state.modify (·.run phases)
+  let stop ← IO.monoNanosNow
+  let mut result ← state.get
+  for i in [:size] do
+    let (check, n, k) := sample i
+    let (s, root) := result.add check
+    result := s
+    unless (result.equivalent? root yes).isSome do throw (IO.userError s!"check {i} survived")
+    unless (result.getCell? (F.lower n).name [n]).map Subtype.val == some k do
+      throw (IO.userError s!"wrong merged bound for check {i}")
+  IO.println s!"schedule_ns={stop-start}"
+
+end BoundsSchedule
+
 def main (args : List String) : IO Unit :=
   match args with
+  | ["bounds-schedule", size] => do
+    let some n := size.toNat? | throw (IO.userError "expected a natural root count")
+    BoundsSchedule.measure n
   | ["boolean", input, expected] => timePass readBool BooleanPass.optimize input expected
   | ["strength", input, expected] =>
     timePass readNat (fun e => (StrengthReduction.optimize e).output) input expected
-  | _ => throw (IO.userError "expected boolean|strength INPUT EXPECTED")
+  | _ => throw (IO.userError "expected boolean|strength INPUT EXPECTED or bounds-schedule ROOTS")

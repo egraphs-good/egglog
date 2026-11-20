@@ -5,22 +5,6 @@ import Egglog.Examples.ParaBitDecision
 open Egglog
 namespace ParaBit
 
-mutual
-  private theorem eval_closed (p : Pat) (h : p.variables = []) (m : Model α) (e f : Nat → α) :
-      p.eval m e = p.eval m f := by
-    cases p with
-    | var => simp [Pat.variables] at h
-    | app op args => exact congrArg (m.interp op) (evalArgs_closed args h m e f)
-  private theorem evalArgs_closed (ps : List Pat) (h : Pat.argsVariables ps = []) (m : Model α) (e f : Nat → α) :
-      Pat.evalArgs ps m e = Pat.evalArgs ps m f := by
-    cases ps with
-    | nil => rfl
-    | cons p ps =>
-      simp only [Pat.argsVariables, List.append_eq_nil_iff] at h
-      change _ :: _ = _ :: _
-      rw [eval_closed p h.1 m e f, evalArgs_closed ps h.2 m e f]
-end
-
 private theorem truth_eq {P : Prop} [Decidable P] : truth P = 1 ↔ P := by
   by_cases h : P <;> simp [truth, h]
 
@@ -684,7 +668,7 @@ private def importPremises (q : Query) (ps : Array {p // p ∈ q.assumptions})
       let (s, b) := s.add Op.one
       s.merge? a b (fun assignment => by
         funext e
-        rw [eval_point, eval_closed h hg _ _ (fun _ => 0)]
+        rw [eval_point, Pat.eval_closed h hg _ _ (fun _ => 0)]
         exact e.property h hh)
     else none
 

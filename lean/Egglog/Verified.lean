@@ -108,6 +108,22 @@ mutual
     | p :: ps => p.variables ++ Pat.argsVariables ps
 end
 
+mutual
+  theorem Pat.eval_closed (p : Pat) (h : p.variables = []) (m : Model α) (e f : Nat → α) :
+      p.eval m e = p.eval m f := by
+    cases p with
+    | var => simp [Pat.variables] at h
+    | app op args => exact congrArg (m.interp op) (evalArgs_closed args h m e f)
+  theorem Pat.evalArgs_closed (ps : List Pat) (h : Pat.argsVariables ps = []) (m : Model α) (e f : Nat → α) :
+      Pat.evalArgs ps m e = Pat.evalArgs ps m f := by
+    cases ps with
+    | nil => rfl
+    | cons p ps =>
+      simp only [Pat.argsVariables, List.append_eq_nil_iff] at h
+      change _ :: _ = _ :: _
+      rw [eval_closed p h.1 m e f, evalArgs_closed ps h.2 m e f]
+end
+
 structure Rewrite where
   lhs : Pat
   rhs : Pat

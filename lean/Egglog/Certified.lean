@@ -261,6 +261,7 @@ private structure Graph (m : Model α) where
   touched : Array Nat := #[]
   cursors : List Cursor := []
   relations : Std.HashMap String (Std.HashMap (List Nat) (RelRow m)) := {}
+  congruentRows : Bool := false
   relationsDirty : Bool := false
   functions : Std.HashMap String (CellTable m) := {}
   functionsDirty : Bool := false
@@ -280,13 +281,19 @@ private def classId (g : @& Graph m) (r : @& Ref) : Nat :=
   | .root => r.id
   | .link _ target => target.ref.id
 
-private def canonicalArgs (g : Graph m) : (rs : List Ref) →
+private def rebuildArgs (g : Graph m) : (rs : List Ref) →
     { ts : List Ref // ∀ e, Pat.evalArgs (ts.map Ref.term) m e = Pat.evalArgs (rs.map Ref.term) m e }
   | [] => ⟨[], fun _ => rfl⟩
   | r :: rs =>
     let x := root g r
-    let xs := canonicalArgs g rs
+    let xs := rebuildArgs g rs
     ⟨x.ref :: xs.val, fun e => cons_congr (x.valid e) (xs.property e)⟩
+
+/-- Most operands already refer to their canonical class. Reuse the list until
+    a union changes a representative. -/
+private def canonicalArgs (g : Graph m) (rs : List Ref) :
+    { ts : List Ref // ∀ e, Pat.evalArgs (ts.map Ref.term) m e = Pat.evalArgs (rs.map Ref.term) m e } :=
+  if rs.any (fun r => classId g r != r.id) then rebuildArgs g rs else ⟨rs, fun _ => rfl⟩
 
 private def canonical (g : Graph m) : (s : Shape) → { t : Shape // Same m t.term s.term }
   | .var i => ⟨.var i, fun _ => rfl⟩
@@ -369,6 +376,7 @@ private def repair (g : Graph m) (id : Nat) : Graph m := Id.run do
   have eqv : Same m row.ref.term key.val.term :=
     fun e => (congrArg (fun t : Pat => t.eval m e) row.valid).trans (key.property e).symm
   if let some old := lookup g.rows g.table key.val h then
+    let g := if old.ref.id == row.ref.id then g else { g with congruentRows := true }
     return merge g row.ref old.ref (fun e => (eqv e).trans (old.valid e).symm)
   return { g with table := put g.table key.val h ⟨row.ref, eqv⟩ }
 
@@ -512,6 +520,21 @@ private def wrapApp (hit : ArgsHit m σ ps rs) (r : Ref)
   ⟨hit.bindings, hit.fresh, hit.extendsEnv,
    fun e η fit => (same e).trans (congrArg (m.interp op) (hit.valid e η fit))⟩
 
+/-- A constructor with only variable children yields at most one substitution.
+    Match it directly, including repeated variables and the projection skip. -/
+private def matchVarArgs (g : Graph m) (fresh : Bool) (skip : Option (Nat × Nat))
+    (ps : List Pat) (rs : List Ref) (σ : Bindings) : Option (ArgsHit m σ ps rs) :=
+  match ps, rs with
+  | [], [] => some ⟨σ, fresh, fun _ _ fit => fit, fun _ _ _ => rfl⟩
+  | .var i :: ps, r :: rs => do
+    let key := root g r
+    guard (!skip.any (fun (v, id) => i == v && key.ref.id == id))
+    let x ← matchVar key i σ fresh
+    let xs ← matchVarArgs g fresh skip ps rs x.bindings
+    return ⟨xs.bindings, fresh, fun e η fit => x.extendsEnv e η (xs.extendsEnv e η fit),
+      fun e η fit => cons_congr (x.valid e η (xs.extendsEnv e η fit)) (xs.valid e η fit)⟩
+  | _, _ => none
+
 mutual
   private def matchClass (g : Graph m) (cutoff : Nat) (p : Pat) (r : Ref) (σ : Bindings) (fresh : Bool) (skip : Option (Nat × Nat) := none) (needDelta := false) :
       Array (PatternHit m σ p r) :=
@@ -528,7 +551,8 @@ mutual
         | .app f args =>
           if label : f = op then
             let changed := fresh || g.touched.getD id 0 > cutoff
-            if needDelta && !changed && ps.all (fun | .var _ => true | _ => false) then return #[]
+            let onlyVars := ps.all (fun | .var _ => true | _ => false)
+            if needDelta && !changed && onlyVars then return #[]
             let parent := root g row.ref
             match equalTerm parent.ref.term key.ref.term with
             | isFalse _ => return #[]
@@ -536,6 +560,9 @@ mutual
               have equiv : Same m r.term (.app op (args.map Ref.term)) := fun e =>
                 (key.valid e).symm.trans ((congrArg (fun t : Pat => t.eval m e) common.symm).trans
                   ((parent.valid e).trans (congrArg (fun t : Pat => t.eval m e) (by simpa [shape, Shape.term, label] using row.valid))))
+              if onlyVars then
+                let some hit := matchVarArgs g changed skip ps args σ | return #[]
+                return #[wrapApp hit r equiv]
               let hits := matchArgs g cutoff ps args σ changed skip needDelta
               return hits.map (fun hit => wrapApp hit r equiv)
           else return #[]
@@ -566,36 +593,54 @@ private def emitRhs (g : Graph m) (p : Pat) (σ : Bindings) (lhs : Ref)
   merge g lhs r.ref (fun e =>
     (valid e).trans ((eval_subst p (assignment σ) e).symm.trans (r.valid e).symm))
 
-private def applyHit (g : Graph m) (rule : VerifiedRule m) (σ : Bindings) (lhs : Ref)
-    (valid : OpenMatch m rule.lhs σ lhs) : Graph m :=
-  emitRhs g rule.rhs σ lhs (fun e => (closeMatch valid e).trans (rule.sound _))
-
-/- Probe a fully substituted term in the snapshot. Premises only match
-    existing rows. Each successful probe returns its semantic witness. -/
+/- Probe a fully bound term in the snapshot. Its witness holds at every
+   valuation compatible with the bindings, including later extensions. -/
 mutual
-  private def probePat (g : Graph m) (σ : Bindings) (p : Pat) :
-      Option (Located m (subst (assignment σ) p)) :=
+  private def probeOpenPat (g : Graph m) (σ : Bindings) (p : Pat) :
+      Option { r : Ref // OpenMatch m p σ r } :=
     match p with
     | .var i =>
       match h : σ.lookup i with
       | none => none
-      | some r => some ⟨r, by simp [subst, assignment, h, Same]⟩
+      | some r => some ⟨r, fun _ _ fit => (fit i r h).symm⟩
     | .app op ps => do
-      let ⟨rs, equiv⟩ ← probeArgs g σ ps
+      let ⟨rs, equiv⟩ ← probeOpenArgs g σ ps
       let key := canonical g (.app op rs)
       let found ← lookup g.rows g.table key.val (shapeHash key.val)
-      return ⟨found.ref, fun e => (found.valid e).trans
-        ((key.property e).trans (congrArg (m.interp op) (equiv e)))⟩
-  private def probeArgs (g : Graph m) (σ : Bindings) (ps : List Pat) :
-      Option { rs : List Ref // ∀ e, Pat.evalArgs (rs.map Ref.term) m e =
-        Pat.evalArgs (substArgs (assignment σ) ps) m e } :=
+      return ⟨found.ref, fun e η fit => (found.valid e).trans
+        ((key.property e).trans (congrArg (m.interp op) (equiv e η fit)))⟩
+  private def probeOpenArgs (g : Graph m) (σ : Bindings) (ps : List Pat) :
+      Option { rs : List Ref // ∀ e η, Fits m σ e η →
+        Pat.evalArgs (rs.map Ref.term) m e = Pat.evalArgs ps m η } :=
     match ps with
-    | [] => some ⟨[], fun _ => rfl⟩
+    | [] => some ⟨[], fun _ _ _ => rfl⟩
     | p :: ps => do
-      let x ← probePat g σ p
-      let xs ← probeArgs g σ ps
-      return ⟨x.ref :: xs.val, fun e => cons_congr (x.valid e) (xs.property e)⟩
+      let x ← probeOpenPat g σ p
+      let xs ← probeOpenArgs g σ ps
+      return ⟨x.val :: xs.val, fun e η fit => cons_congr (x.property e η fit) (xs.property e η fit)⟩
 end
+
+@[inline] private def probePat (g : Graph m) (σ : Bindings) (p : Pat) :
+    Option (Located m (subst (assignment σ) p)) := do
+  let ⟨r, ok⟩ ← probeOpenPat g σ p
+  return ⟨r, fun e => (closeMatch ok e).trans (eval_subst p (assignment σ) e).symm⟩
+
+@[inline] private def probeArgs (g : Graph m) (σ : Bindings) (ps : List Pat) :
+    Option { rs : List Ref // ∀ e, Pat.evalArgs (rs.map Ref.term) m e =
+      Pat.evalArgs (substArgs (assignment σ) ps) m e } := do
+  let ⟨rs, ok⟩ ← probeOpenArgs g σ ps
+  return ⟨rs, fun e => (ok e _ (fitsAssignment m σ e)).trans (eval_substArgs ps (assignment σ) e).symm⟩
+
+/-- Resolve a closed rewrite destination once per rule if it is already present.
+    An absent term is still created only after a successful match. -/
+private def prepareRhs (initial : Graph m) (rhs : Pat) :
+    Graph m → (σ : Bindings) → (lhs : Ref) → Matched m rhs σ lhs → Graph m := Id.run do
+  if closed : rhs.variables = [] then
+    if let some target := probePat initial [] rhs then
+      return fun graph _ lhs valid => merge graph lhs target.ref (fun e =>
+        (valid e).trans ((Pat.eval_closed rhs closed m _ _).trans
+          ((eval_subst rhs (assignment []) e).symm.trans (target.valid e).symm)))
+  return fun graph => emitRhs graph rhs
 
 private def equalAt? (g : Graph m) (σ : Bindings) (a b : Pat) :
     Option (PLift (∀ e, a.eval m (fun i => (assignment σ i).eval m e) =
@@ -687,8 +732,8 @@ private def matchFlat (g : Graph m) (plan : Flat m ps) (rs : List Ref) (σ : Bin
       fun e η fit => cons_congr (a.valid e η (rest.extendsEnv e η fit)) (rest.valid e η fit)⟩
   | _, _ => none
 
-@[specialize] private def scanLhs (initial : Graph m) (cutoff : Nat) (lhs : Pat) (g : Graph m)
-    (apply : Graph m → (σ : Bindings) → (ref : Ref) → OpenMatch m lhs σ ref → Graph m) (rhsVar : Option Nat := none) : Graph m := Id.run do
+@[specialize] private def scanLhs (initial : Graph m) (cutoff : Nat) (lhs : Pat) (g : β)
+    (apply : β → (σ : Bindings) → (ref : Ref) → OpenMatch m lhs σ ref → β) (rhsVar : Option Nat := none) : β := Id.run do
   if cutoff >= initial.version then return g
   let mut g := g
   match expr : lhs with
@@ -709,7 +754,7 @@ private def matchFlat (g : Graph m) (plan : Flat m ps) (rs : List Ref) (σ : Bin
               if classId initial child == classId initial row.ref then continue
           have same : Same m row.ref.term (.app op (args.map Ref.term)) := fun e =>
             congrArg (fun t : Pat => t.eval m e) (by simpa [shape, Shape.term, label] using row.valid)
-          let fire := fun (g : Graph m) (hit : ArgsHit m [] ps args) =>
+          let fire := fun (g : β) (hit : ArgsHit m [] ps args) =>
             apply g hit.bindings row.ref (by
               rw [expr]
               intro e η fit
@@ -742,24 +787,32 @@ private def advance (g : Graph m) (r : Rewrite) (ps : List (Pat × Pat)) (v : Na
 
 /-- Canonical tuple keys are shared by indexed lookup, deduplication and join
     matching. On a merge, moved arguments give their row a new delta stamp. -/
-private def normalizeRow (g : Graph m) (row : RelRow m) : RelRow m :=
+private def normalizeRow (g : Graph m) (row : RelRow m) (changed : Bool) : RelRow m :=
   let canonical := canonicalArgs g row.args
-  let stamp := row.args.foldl (fun n r => max n (g.touched.getD r.id 0)) row.stamp
+  let stamp := if changed then row.args.foldl (fun n r => max n (g.touched.getD r.id 0)) row.stamp
+    else row.stamp
   ⟨row.name, canonical.val, stamp, fun env => (canonical.property env).symm ▸ row.sound env⟩
 
 private def relKey (args : List Ref) : List Nat := args.map Ref.id
 
 private def indexRelations (g : Graph m) : Graph m := Id.run do
   if !g.relationsDirty then return g
-  let mut tables := {}
+  let mut tables := g.relations
   for (name, table) in g.relations do
-    let mut index : Std.HashMap (List Nat) (RelRow m) := {}
-    for (_, row) in table do
-      let row := normalizeRow g row
-      let key := relKey row.args
-      -- A collision after union has both proofs; retain the most recent stamp.
-      if (index[key]?.map RelRow.stamp).getD 0 ≤ row.stamp then index := index.insert key row
-    tables := tables.insert name index
+    -- Unions can move a few keys in a much larger table. The existing keys
+    -- still have their proof and timestamp if their representatives survived.
+    let mut moved := #[]
+    for (key, row) in table do
+      if row.args.any (fun r => classId g r != r.id) then moved := moved.push (key, row)
+    unless moved.isEmpty do
+      let mut index := table
+      for (old, row) in moved do
+        index := index.erase old
+        let row := normalizeRow g row true
+        let key := relKey row.args
+        -- A collision after union has both proofs; retain the most recent stamp.
+        if (index[key]?.map RelRow.stamp).getD 0 ≤ row.stamp then index := index.insert key row
+      tables := tables.insert name index
   return { g with relations := tables, relationsDirty := false }
 
 /-- The join planner reads the same canonical table used for witness lookup. -/
@@ -772,14 +825,16 @@ private def relationRows (g : Graph m) (name : String) (arity : Nat) : Array (Na
 
 private def storeRow (g : Graph m) (row : RelRow m) : Graph m :=
   let g := indexRelations g
-  let row := normalizeRow g row
+  let row := normalizeRow g row false
   let key := relKey row.args
-  let table := g.relations.getD row.name {}
-  if table.contains key then g
+  if (g.relations[row.name]?).any (·.contains key) then g
   else
     let stamp := g.version + 1
-    { g with version := stamp,
-             relations := g.relations.insert row.name (table.insert key {row with stamp}) }
+    -- Taking the inner map out of its bucket first gives its next update
+    -- exclusive ownership. A lookup followed by nested inserts copies it.
+    let relations := g.relations.alter row.name fun table =>
+      some ((table.getD {}).insert key {row with stamp})
+    { g with version := stamp, relations }
 
 /-- Even a faulty join index cannot establish a predicate: compare the name
     and witnessed arguments of the stored tuple before using its proof. -/
@@ -795,11 +850,11 @@ private def rowAt? (g : Graph m) (name : String) (rs : List Ref) :
       exact row.sound env⟩
   else none
 
-private def normalizeCell (g : Graph m) (row : CellRow m) : CellRow m :=
+private def normalizeCell (g : Graph m) (row : CellRow m) (changed : Bool) : CellRow m :=
   let keys := canonicalArgs g row.keys
   let value := root g row.value
-  let stamp := row.keys.foldl (fun n r => max n (g.touched.getD r.id 0))
-    (max row.stamp (g.touched.getD row.value.id 0))
+  let stamp := if changed then row.keys.foldl (fun n r => max n (g.touched.getD r.id 0))
+    (max row.stamp (g.touched.getD row.value.id 0)) else row.stamp
   ⟨row.name, keys.val, value.ref, stamp, fun e => by
     rw [keys.property e, value.valid e]
     exact row.sound e⟩
@@ -811,6 +866,39 @@ private def cellEvidence? (row : CellRow m) (name : String) (keys : List Ref) :
     return ⟨fun e => by rw [← same, ← h]; exact row.sound e⟩
   else none
 
+private def operand? (a b : Ref) (p : Pat) : Option (SynRef p) :=
+  match equalTerm a.term p with
+  | isTrue h => some ⟨a, h⟩
+  | isFalse _ =>
+    match equalTerm b.term p with
+    | isTrue h => some ⟨b, h⟩
+    | isFalse _ => none
+
+private def operands? (a b : Ref) (ps : List Pat) : Option {rs : List Ref // rs.map Ref.term = ps} :=
+  match ps with
+  | [] => some ⟨[], rfl⟩
+  | p :: ps => do
+    let ⟨r, h⟩ ← operand? a b p
+    let ⟨rs, hs⟩ ← operands? a b ps
+    return ⟨r :: rs, cons_congr h hs⟩
+
+/-- Common merges select an existing operand or construct one node from the
+    operands. Their stored references avoid re-interning whole operand trees.
+    A user-defined merge can also compute arbitrary fresh syntax. -/
+private def realizeMerge (g : Graph m) (a b : Ref) (term : Pat) : Graph m × Located m term := Id.run do
+  if let some ⟨r, h⟩ := operand? a b term then
+    return (g, ⟨r, fun e => congrArg (fun p : Pat => p.eval m e) h⟩)
+  match node : term with
+  | .var _ => pure ()
+  | .app op ps =>
+    if let some ⟨rs, h⟩ := operands? a b ps then
+      let (next, result) := add g (.app op rs)
+      return (next, ⟨result.ref, fun e => by
+        rw [node]
+        exact (result.valid e).trans (congrArg (fun xs : List Pat => (Pat.app op xs).eval m e) h)⟩)
+  let (g, r) := realize g [] term
+  return (g, ⟨r.ref, fun e => (r.valid e).trans (eval_subst term (assignment []) e)⟩)
+
 /-- Realize the user-defined merge as an ordinary term. The proof of the
     invariant follows from the two stored proofs and the declared merge law. -/
 private def mergeCell (g : Graph m) (old new : CellRow m) : Graph m × CellRow m := Id.run do
@@ -820,14 +908,14 @@ private def mergeCell (g : Graph m) (old new : CellRow m) : Graph m × CellRow m
   | none => return (g, old)
   | some spec =>
     let term := spec.merge old.value.term new.value.term
-    let (g, merged) := realize g [] term
+    let (g, merged) := realizeMerge g old.value new.value term
     let value := locTrans merged (root g merged.ref)
     return (g, ⟨new.name, new.keys, value.ref, max old.stamp new.stamp, fun e => by
       have left := prior e
       have right := new.sound e
       simp only [Model.CellHolds, h] at left right ⊢
       refine ⟨right.1, ?_⟩
-      rw [value.valid e, eval_subst]
+      rw [value.valid e]
       change spec.invariant _ (term.eval m e)
       rw [← Pat.denote_eq_eval]
       apply spec.merge_sound
@@ -835,30 +923,36 @@ private def mergeCell (g : Graph m) (old new : CellRow m) : Graph m × CellRow m
       · simpa only [Pat.denote_eq_eval] using right.2⟩)
 
 private def writeCell (g : Graph m) (new : CellRow m) (asserting : Bool) : Graph m := Id.run do
-  let table := g.functions.getD new.name {}
   let key := relKey new.keys
-  let mut order := table.order
+  let old := g.functions[new.name]?.bind (fun t => t.entries[key]?)
   let mut (g, row) := (g, new)
-  if let some old := table.entries[key]? then
+  if let some old := old then
     let (updated, merged) := mergeCell g old new
     g := updated
     if old.value.id == merged.value.id && asserting then return g
     row := {merged with stamp := max merged.stamp new.stamp}
-  else order := order.push key
   let version := if asserting then g.version + 1 else g.version
   if asserting then row := {row with stamp := version}
-  return {g with version, functions := g.functions.insert new.name ⟨table.entries.insert key row, order⟩}
+  let fresh := old.isNone
+  let functions := g.functions.alter new.name fun current =>
+    let table := current.getD {}
+    let order := if fresh then table.order.push key else table.order
+    some ⟨table.entries.insert key row, order⟩
+  return {g with version, functions}
 
 /-- Re-key on e-class unions. Preserve resident rows as the old side of a
     merge, then replay moved keys in insertion order for noncommutative merges. -/
 private def indexFunctions (g : Graph m) : Graph m := Id.run do
   if !g.functionsDirty then return g
-  let mut out := {g with functions := {}, functionsDirty := false}
-  for (_, table) in g.functions do
+  let mut out := {g with functionsDirty := false}
+  for (name, table) in g.functions do
+    if !table.entries.any (fun _ row => classId g row.value != row.value.id ||
+        row.keys.any (fun r => classId g r != r.id)) then continue
+    out := {out with functions := out.functions.erase name}
     let mut moved := #[]
     for key in table.order do
       let some old := table.entries[key]? | continue
-      let row := normalizeCell g old
+      let row := normalizeCell g old true
       if key == relKey row.keys then out := writeCell out row false else moved := moved.push row
     for row in moved do out := writeCell out row false
   return out
@@ -1160,7 +1254,86 @@ private def assertHead (g : Graph m) (σ : Bindings) (head : RelAtom)
     let row : CellRow m := ⟨name, rs, v.ref, 0, fun e => by
       rw [valid e, eval_substArgs, v.valid e, eval_subst]
       exact proved e⟩
-    writeCell g (normalizeCell g row) true
+    writeCell g (normalizeCell g row false) true
+
+private structure KeyLookup where
+  name : String
+  keys : List Pat
+  valueVar : Nat
+
+private def KeyLookup.atom (q : KeyLookup) := RelAtom.cell q.name q.keys (.var q.valueVar)
+
+/-- A constructor scan binds the rewrite's operands. Each functional lookup
+    may bind one more variable once its key is known. If these bindings cover
+    every premise, relations and remaining equalities need only point probes. -/
+private def lookupPlan? (anchor : Pat) (body : List RelAtom) : Option (List KeyLookup) := do
+  let needed := body.flatMap RelAtom.variables
+  let mut known := anchor.variables
+  let mut lookups := []
+  for _ in [:body.length + 1] do
+    if needed.all known.contains then return lookups.reverse
+    let next ← body.findSome? fun atom => match atom with
+      | .cell name keys (.var v) =>
+        if !known.contains v && (Pat.argsVariables keys).all known.contains then
+          some (KeyLookup.mk name keys v)
+        else none
+      | _ => none
+    lookups := next :: lookups
+    known := next.valueVar :: known
+  none
+
+private def extendWithCells (g : Graph m) (σ : Bindings) : (lookups : List KeyLookup) →
+    Option { full : Bindings // ∀ e η, Fits m full e η →
+      Fits m σ e η ∧ ∀ a ∈ lookups.map KeyLookup.atom, a.Holds m η }
+  | [] => some ⟨σ, fun _ _ fit => ⟨fit, by simp⟩⟩
+  | q :: rest => do
+    if fresh : σ.lookup q.valueVar = none then
+      let ⟨keys, keyMatch⟩ ← probeOpenArgs g σ q.keys
+      let canonical := canonicalArgs g keys
+      let table ← g.functions[q.name]?
+      let row ← table.entries[relKey canonical.val]?
+      let ⟨evidence⟩ ← cellEvidence? row q.name canonical.val
+      let ⟨full, ok⟩ ← extendWithCells g ((q.valueVar, row.value) :: σ) rest
+      return ⟨full, fun e η fit => by
+        obtain ⟨extended, later⟩ := ok e η fit
+        have base := fitsTail fresh extended
+        refine ⟨base, ?_⟩
+        intro a ha
+        rcases List.mem_cons.mp ha with rfl | tail
+        · change m.CellHolds q.name (Pat.evalArgs q.keys m η) (η q.valueVar)
+          rw [extended _ _ (lookupHead ..), ← keyMatch e η base, ← canonical.property e]
+          exact evidence e
+        · exact later a tail⟩
+    else none  -- Only fresh outputs are selected by lookupPlan?.
+
+/-- On its first round, an equality-producing rule may drive the match from
+    its source constructor and read its guard tables by key. Later rounds
+    use delta joins because a new guard row can enable an old source. -/
+private def applyKeyedRewrite? (initial g : Graph m) (r : RelRule m) : Option (Graph m) :=
+  match shape : r.head with
+  | .eq lhs rhs => do
+    guard r.extra.isEmpty
+    guard ((match lhs with | .app .. => true | _ => false) == true)
+    guard (r.body.contains (.eq lhs lhs))
+    guard (r.body.any fun | .cell .. | .row .. => true | _ => false)
+    let lookups ← lookupPlan? lhs r.body
+    let covered := RelAtom.eq lhs lhs :: lookups.map KeyLookup.atom
+    let guards := r.body.filter (fun a => decide (a ∉ covered))
+    let emit := prepareRhs initial rhs
+    return scanLhs initial 0 lhs g fun next σ ref source => Id.run do
+      let some ⟨full, ok⟩ := extendWithCells initial σ lookups | return next
+      let some ⟨hs⟩ := holdsBody? initial full guards | return next
+      have matched : OpenMatch m lhs full ref := fun e η fit => source e η (ok e η fit).1
+      return emit next full ref fun e => (closeMatch matched e).trans (by
+        have sound := r.sound (fun i => (assignment full i).eval m e) (by
+          intro a ha
+          by_cases hit : a ∈ covered
+          · rcases List.mem_cons.mp hit with rfl | cell
+            · rfl
+            · exact (ok e _ (fitsAssignment m full e)).2 a cell
+          · exact hs e a (List.mem_filter.mpr ⟨ha, by simpa using hit⟩))
+        rwa [shape] at sound)
+  | _ => none
 
 private def relationalMatches (g : Graph m) (body : List RelAtom) (cutoff : Nat) : Array Bindings :=
   if body.isEmpty then #[[]]
@@ -1168,7 +1341,99 @@ private def relationalMatches (g : Graph m) (body : List RelAtom) (cutoff : Nat)
     let eqs := body.filterMap fun | .eq l r => some (l, r) | _ => none
     let tables := body.filterMap fun | .row n args => some (n, args) | _ => none
     let cells := body.filterMap fun | .cell n keys value => some (n, keys ++ [value]) | _ => none
-    joinBindings g none eqs (body.flatMap RelAtom.variables) cutoff tables cells
+    let assignments := joinBindings g none eqs (body.flatMap RelAtom.variables) cutoff tables cells
+    if cutoff == 0 || !g.congruentRows then assignments
+    else Id.run do
+      -- An old physical row and a recently rebuilt row may now denote one
+      -- canonical tuple. In that case even different delta variants can emit
+      -- the same assignment. A non-idempotent function merge observes repeats.
+      let mut seen : Std.HashSet (List Nat) := {}
+      let mut unique := #[]
+      for σ in assignments do
+        let key := σ.map (fun (_, r) => r.id)
+        let (present, updated) := seen.containsThenInsert key
+        seen := updated
+        unless present do unique := unique.push σ
+      return unique
+
+private def fireRelHeads (g : Graph m) (σ : Bindings) (rule : RelRule m)
+    (premises : ∀ e, ∀ a ∈ rule.body, a.Holds m (fun i => (assignment σ i).eval m e)) : Graph m :=
+  rule.extra.foldl (fun graph action => assertHead graph σ action.head (fun e => action.sound _ (premises e)))
+    (assertHead g σ rule.head (fun e => rule.sound _ (premises e)))
+
+/-- For a body consisting of one constructor equality, the constructor index
+    supplies both operands and result. Reuse the match proof for all head
+    actions. Physical rows that became congruent may give the same binding. -/
+@[specialize] private def foldRelEquality (initial : Graph m) (rule : RelRule m) (cutoff output : Nat)
+    (pattern : Pat) (sufficesFor : ∀ η : Nat → _, η output = pattern.eval m η →
+      ∀ a ∈ rule.body, a.Holds m η) (start : β) (dedup : Bool)
+    (emit : β → (σ : Bindings) →
+      (∀ e, ∀ a ∈ rule.body, a.Holds m (fun i => (assignment σ i).eval m e)) → β) : β := Id.run do
+  let visit := fun (state : β × Std.HashSet (List Nat)) (σ : Bindings) (ref : Ref)
+      (valid : OpenMatch m pattern σ ref) => Id.run do
+    if h : σ.lookup output = none then
+      let result := root initial ref
+      let extended := (output, result.ref) :: σ
+      let (acc, seen) := state
+      let mut seen := seen
+      -- Distinct physical rows can match the same assignment after rebuild
+      -- discovers that their constructor keys have become congruent.
+      if dedup && initial.congruentRows then
+        let key := extended.map (fun (_, r) => r.id)
+        let (present, updated) := seen.containsThenInsert key
+        if present then return (acc, updated)
+        seen := updated
+      let next := emit acc extended (fun env => by
+        let fit := fitsAssignment m extended env
+        exact sufficesFor _ ((fit _ _ (lookupHead output result.ref σ)).trans
+          ((result.valid env).trans (valid env _ (fitsTail h fit)))))
+      return (next, seen)
+    return state
+  return (scanLhs initial cutoff pattern (start, {}) visit).1
+
+private def scanRelEquality (initial g : Graph m) (rule : RelRule m) (cutoff output : Nat)
+    (pattern : Pat) (sufficesFor : ∀ η : Nat → _, η output = pattern.eval m η →
+      ∀ a ∈ rule.body, a.Holds m η) : Graph m := Id.run do
+  match shape : rule.head with
+  | .row name args =>
+    let variables := output :: pattern.variables
+    if rule.extra.isEmpty && args.all (fun | .var i => variables.contains i | _ => false) then
+      -- Only the target table and clock change during this scan. Canonicalize
+      -- against the working graph because an earlier rule may have merged keys.
+      let g := indexRelations g
+      let rows := (g.relations[name]?).getD {}
+      let (stamp, rows) := foldRelEquality initial rule cutoff output pattern sufficesFor
+        (g.version, rows) false fun (stamp, rows) σ premises => Id.run do
+          let some ⟨refs, valid⟩ := probeArgs g σ args | return (stamp, rows)
+          let canonical := canonicalArgs g refs
+          let row : RelRow m := ⟨name, canonical.val, stamp + 1, fun e => by
+            rw [canonical.property e, valid e, eval_substArgs]
+            have h := rule.sound _ (premises e)
+            rwa [shape] at h⟩
+          let (present, rows) := rows.containsThenInsertIfNew (relKey row.args) row
+          return (if present then stamp else stamp + 1, rows)
+      if stamp == g.version then return g
+      return { g with version := stamp, relations := g.relations.insert name rows }
+  | _ => pure ()
+  return foldRelEquality initial rule cutoff output pattern sufficesFor g true
+    (fun graph σ => fireRelHeads graph σ rule)
+
+private def applySingleEquality? (initial g : Graph m) (rule : RelRule m) (cutoff : Nat) :
+    Option (Graph m) := do
+  match body : rule.body with
+  | [.eq (.var i) (.app op args)] =>
+    guard (!(Pat.app op args).variables.contains i)
+    return scanRelEquality initial g rule cutoff i (.app op args) fun _ h a ha => by
+      rw [body, List.mem_singleton] at ha
+      subst a
+      exact h
+  | [.eq (.app op args) (.var i)] =>
+    guard (!(Pat.app op args).variables.contains i)
+    return scanRelEquality initial g rule cutoff i (.app op args) fun _ h a ha => by
+      rw [body, List.mem_singleton] at ha
+      subst a
+      exact h.symm
+  | _ => none
 
 private def relationalRound (initial : Graph m) (rules : Array (RelRule m)) : Graph m := Id.run do
   let initial := indexFunctions (indexRelations initial)
@@ -1179,11 +1444,12 @@ private def relationalRound (initial : Graph m) (rules : Array (RelRule m)) : Gr
     let last := g.relCursors.find? sameRule
     if last.any (fun c => rule.body.isEmpty || c.version == initial.version) then continue
     let cutoff := (last.map RelCursor.version).getD 0
-    for σ in relationalMatches initial rule.body cutoff do
-      if let some ⟨premises⟩ := holdsBody? initial σ rule.body then
-        g := assertHead g σ rule.head (fun e => rule.sound _ (premises e))
-        for action in rule.extra do
-          g := assertHead g σ action.head (fun e => action.sound _ (premises e))
+    if let some next := applySingleEquality? initial g rule cutoff then g := next
+    else if let some next := if last.isNone then applyKeyedRewrite? initial g rule else none then g := next
+    else
+      for σ in relationalMatches initial rule.body cutoff do
+        if let some ⟨premises⟩ := holdsBody? initial σ rule.body then
+          g := fireRelHeads g σ rule premises
     g := { g with relCursors := ⟨rule.name, rule.body, heads, initial.version⟩ :: g.relCursors.eraseP sameRule }
   return rebuild (g.rows.size + 1) g
 
@@ -1194,7 +1460,9 @@ private def round (initial : Graph m) (rules : Array (VerifiedRule m)) : Graph m
     if cutoff >= initial.version then g
     else
       let rhsVar := match rule.rhs with | .var i => some i | _ => none
-      advance (scanLhs initial cutoff rule.lhs g (fun g σ => applyHit g rule σ) rhsVar)
+      let emit := prepareRhs initial rule.rhs
+      advance (scanLhs initial cutoff rule.lhs g (fun g σ lhs valid =>
+        emit g σ lhs (fun e => (closeMatch valid e).trans (rule.sound _))) rhsVar)
         rule.toRewrite [] initial.version) initial
   rebuild (g.rows.size + 1) g
 

@@ -89,6 +89,29 @@ The Boolean and guarded strength-reduction compiler passes time insertion of a n
 
 The largest Boolean input had 720,895 constructor occurrences and the largest strength-reduction input had 327,678. Both engines returned the expected AST in every run. At 65,536 leaves, median peak RSS was 384/376 MiB for Boolean and 253/216 MiB for strength reduction (Lean/Rust). The final run used one warmup and five measured trials with both engines interleaved. CPU idle checks were 85.1–94.9%. [All compiler trials](results/large-compiler.csv)
 
+### Certified bounds-check analysis
+
+Each root checks `x < next(copy(maximum(x,y)))` with a fresh pair of symbolic registers. Lean uses free variables for the registers and Rust uses a `Reg(i64)` constructor. The native Lean compiler runs its four-stage schedule on all roots in one certified e-graph. The single-threaded Rust egglog baseline runs the corresponding rules for range facts, copy propagation, two writes that merge with `Maximum`, and bounds-check elimination. Both timers start after graph seeding and stop when the last stage returns. Each runner then checks the equality with `Yes` and the merged lower bound for every root. Extraction and code generation are outside this timer. [Verified rules and schedule](../Egglog/Examples/BoundsCheck.lean) · [Native Lean worker](../CompilerBench.lean) · [Rust rule definitions and harness](bounds.py)
+
+Each measurement uses one warm-up pair followed by timed pairs in fresh processes, alternating which engine runs first. The initial version used five measured pairs. The final version uses eight, four in each order. The harness samples aggregate CPU idle before every pair. At the initial implementation (`ee0537ed`), single-threaded medians on the M4 Max were 49.607 ms in Lean and 3.218 ms in Rust at 2,048 roots (15.42×), and 874.797 ms and 9.829 ms at 8,192 roots (89.01×). Host idle ranged from 86.1% to 97.5%. [Initial paired samples](results/bounds-before.csv)
+
+In the revised engine each relation and function table can update in place. A constructor match can project straight into a relation or use its bound keys to probe a function. Other multipatterns use Generic Join with dynamic variable ordering. Previously run multipattern rules search for matches involving changed rows. Aggregate CPU idle ranged from 88.0% to 97.9% for this measurement. [Final paired samples](results/bounds.csv)
+
+| Source checks | Certified Lean | Rust egglog | Lean/Rust | Lean speedup over initial implementation |
+|---:|---:|---:|---:|---:|
+| 2,048 | 4.398 ms | 3.052 ms | 1.44× | 11.3× |
+| 8,192 | 21.984 ms | 9.740 ms | 2.26× | 39.8× |
+
+At 2,048 checks, engine order affected the result. Comparing medians within each order gave 2.21× when Lean ran first and 1.21× when Rust ran first. The table weights both orders equally. Both overall medians exceed the 1.30× target.
+
+Run from the repository root, supplying a fresh filename for the sample ledger.
+
+```sh
+cargo build --release --locked --example lean_comparison
+(cd lean && env -u LIBRARY_PATH lake build compiler-bench)
+python3 lean/bench/bounds.py --roots 2048 8192 --trials 8 --csv bounds.csv
+```
+
 ## Relational queries and calculus saturation
 
 The graph harness checks both table cardinalities and membership witnesses. Dense triangles use a directed tripartite graph. Each triple of vertices produces three ordered answers. The skewed input consists of triangles sharing a hub, with just six ordered answers per blade. JSON parsing uses the repository's complete grammar and original token streams. The adapter identifies spans by their endpoints so that the split position is a join key. Both engines receive the same program, with CSV rows loaded before timing. [Graph harness](large_graph.py) · [JSON adapter](cyk.py)
