@@ -1,0 +1,13 @@
+case,mode,trial,status,wall_ms,solver_ms,runner_ms,detail
+guarded-assoc/bwlang/guarded-assoc-0004-negative.bwlang,lean-cert,1,unproved,3747.928,3725.842125,,
+guarded-assoc/bwlang/guarded-assoc-0004-negative.bwlang,egg-explain,1,timeout,5024.134,,,
+guarded-assoc/bwlang/guarded-assoc-0004-negative.bwlang,lean-rel,1,round-limit,55.183,14.091334,,
+guarded-assoc/bwlang/guarded-assoc-0004-negative.bwlang,egg-track,1,timeout,5020.112,,,
+mirror-add/bwlang/mirror-add-0004-negative.bwlang,lean-cert,1,unproved,3894.37,3853.467667,,
+mirror-add/bwlang/mirror-add-0004-negative.bwlang,lean-rel,1,round-limit,27.048,4.199,,
+mirror-add/bwlang/mirror-add-0004-negative.bwlang,egg-track,1,timeout,5013.647,,,
+mirror-add/bwlang/mirror-add-0004-negative.bwlang,egg-explain,1,timeout,5015.158,,,
+mux-add/bwlang/mux-add-0004-negative.bwlang,egg-explain,1,timeout,5012.14,,,
+mux-add/bwlang/mux-add-0004-negative.bwlang,lean-cert,1,timeout,5008.544,,,
+mux-add/bwlang/mux-add-0004-negative.bwlang,lean-rel,1,round-limit,36.392,10.634416,,
+mux-add/bwlang/mux-add-0004-negative.bwlang,egg-track,1,timeout,5013.402,,,

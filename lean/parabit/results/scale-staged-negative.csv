@@ -1,0 +1,4 @@
+case,mode,trial,status,wall_ms,solver_ms,runner_ms,detail
+guarded-assoc/bwlang/guarded-assoc-0004-negative.bwlang,lean-staged,1,unproved,3867.303,3838.796958,,
+mirror-add/bwlang/mirror-add-0004-negative.bwlang,lean-staged,1,unproved,3763.317,3737.280916,,
+mux-add/bwlang/mux-add-0004-negative.bwlang,lean-staged,1,timeout,5011.402,,,

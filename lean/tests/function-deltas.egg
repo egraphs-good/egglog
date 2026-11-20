@@ -1,0 +1,30 @@
+(datatype E (Lit i64) (Box E))
+(function value (i64) i64 :merge (max old new))
+(relation seen (i64 i64))
+(relation ready ())
+(relation boxed (i64))
+
+(set (value 1) 2)
+; In one round, change an existing result and append a different key.
+(rule ((= v (value 1))) ((ready)))
+(rule ((ready)) ((set (value 1) 5) (set (value 8) 13)))
+(rule ((= v (value k))) ((seen k v)))
+; A constructor introduced after the first round must drive this join too.
+(rule ((seen k v)) ((Box (Lit v))))
+(rule ((= e (Box (Lit v))) (seen k v)) ((boxed k)))
+(run 6)
+(check (seen 1 2) (seen 1 5) (seen 8 13) (boxed 1) (boxed 8))
+
+(function copy (i64) i64 :merge new)
+(rule ((= v (value k))) ((set (copy k) v)))
+(run 2)
+(check (= (copy 1) 5) (= (copy 8) 13))
+
+; Evaluate nested i64 expressions under constructors and on function keys.
+(relation seed (i64))
+(ruleset nested)
+(rule ((seed x)) ((Box (Lit (+ (* x 3) (- x 1))))
+                  (set (copy (+ x 2)) (+ (* x x) 1))) :ruleset nested)
+(seed 4)
+(run nested 1)
+(check (Box (Lit 15)) (= (copy 6) 17))

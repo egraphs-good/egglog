@@ -1,0 +1,10 @@
+case,rounds,replay_rounds,hint,status,attempts,emit_ms,kernel_ms,detail
+guarded-assoc/bwlang/guarded-assoc-0004.bwlang,12,3,ground,checked,1,1010.235,11701.142,
+guarded-assoc/bwlang/guarded-assoc-0016.bwlang,12,3,ground,memory-limit,1,1375.926,17746.615,
+guarded-assoc/bwlang/guarded-assoc-0064.bwlang,12,3,ground,memory-limit,1,18617.743,17444.213,
+guarded-assoc/bwlang/guarded-assoc-0256.bwlang,12,,,export-timeout,0,30002.764,0.000,
+mirror-add/bwlang/mirror-add-0004.bwlang,12,1,ground,checked,1,23.357,1011.407,
+mirror-add/bwlang/mirror-add-0016.bwlang,12,1,ground,checked,1,46.660,9377.664,
+mirror-add/bwlang/mirror-add-0064.bwlang,12,1,ground,memory-limit,1,112.946,15433.267,
+mirror-add/bwlang/mirror-add-0256.bwlang,12,1,ground,memory-limit,1,1811.837,18050.661,
+mux-add/bwlang/mux-add-0004.bwlang,12,3,ground,checked,1,136.960,8506.052,
