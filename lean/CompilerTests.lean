@@ -4,6 +4,44 @@ import Egglog.Examples.StrengthReduction
 
 open Egglog Egglog.Compiler
 
+namespace DerivedCodecTest
+
+inductive Tree where
+  | tip
+  | fork (left right : Tree)
+  deriving DecidableEq
+
+-- The signature order differs from the AST order. The codec uses named operators.
+egg_signature Nodes : Nat where
+  | fork x y => x + y
+  | tip => 1
+  otherwise 0
+
+egg_codec encode, decode : Tree using Nodes
+
+example : encode (.fork .tip .tip) = Nodes.fork Nodes.tip Nodes.tip := rfl
+#guard (decode (Nodes.fork Nodes.tip Nodes.tip)).map Subtype.val == some (.fork .tip .tip)
+#guard (decode (.app 0 [Nodes.tip])).isNone
+
+inductive Block (α : Type) where
+  | tip (data : α)
+  | fork (left right : Block α)
+  | named (child : Block α) (tag : Nat)
+  deriving DecidableEq
+
+-- Specialize the parameter and override a mixed constructor. The payload moves
+-- to the first operand and its recursive sibling is encoded and decoded once.
+egg_codec pack, unpack : Block Nat using Nodes where
+  | tip n <=> .var n
+  | named x n <=> .app 2 [.var n, x]
+
+example : pack (.named (.fork (.tip 5) (.tip 9)) 7) =
+    .app 2 [.var 7, Nodes.fork (.var 5) (.var 9)] := rfl
+#guard (unpack (.app 2 [.var 7, .var 5])).map Subtype.val == some (.named (.tip 5) 7)
+#guard (unpack (.app 2 [Nodes.tip, .var 5])).isNone
+
+end DerivedCodecTest
+
 namespace BooleanPass
 
 def exampleIR : Expr := .mux (.neg (.neg (.reg 7))) (.conj (.reg 3) (.lit true))

@@ -187,6 +187,77 @@ macro_rules
     let d ← `(command| def $dec : Egglog.Compiler.Decoder $enc := fun p => match p with $decAlts:matchAlt*)
     return mkNullNode #[e.raw, d.raw]
 
+declare_syntax_cat eggCodecOverride
+syntax "|" ident term:arg* "<=>" term : eggCodecOverride
+
+/-- Derive the codec from the constructors of a non-indexed inductive. Ordinary
+    constructors correspond to operators of the same name in the given signature.
+    Override a constructor to map a payload, change operators, or split literals.
+    The recursive fields are inferred in both default and overridden clauses. -/
+syntax "egg_codec " ident "," ident " : " term " using " ident
+  (" where " eggCodecOverride+)? : command
+
+open Lean Meta Elab Command in
+private def codecConstructors (carrier : Term) : CommandElabM (List (Name × Array Bool)) :=
+  liftTermElabM do
+    let type ← whnf (← Term.elabType carrier)
+    let .const name levels := type.getAppFn
+      | throwErrorAt carrier "expected an inductive type"
+    let .inductInfo info ← getConstInfo name
+      | throwErrorAt carrier "expected an inductive type"
+    unless info.numIndices == 0 && info.all.length == 1 do
+      throwErrorAt carrier "automatic codecs require a non-indexed, non-mutual inductive"
+    info.ctors.mapM fun ctor => do
+      let ctorType ← inferType (mkAppN (mkConst ctor levels) type.getAppArgs)
+      forallTelescopeReducing ctorType fun fields _ => do
+        let recursive ← fields.mapM fun field => do
+          let decl ← field.fvarId!.getDecl
+          unless decl.binderInfo.isExplicit do
+            throwErrorAt carrier "automatic codecs require explicit constructor fields in '{ctor}'"
+          isDefEq decl.type type
+        return (ctor, recursive)
+
+open Lean Elab Command in
+elab_rules : command
+  | `(egg_codec $enc:ident, $dec:ident : $carrier using $sig:ident $[where $cases:eggCodecOverride*]?) => do
+    let ctors ← codecConstructors carrier
+    let mut overrides : NameMap (Array (Array Term × Term)) := {}
+    for c in cases.getD #[] do
+      let `(eggCodecOverride| | $name:ident $args* <=> $pat) := c | throwUnsupportedSyntax
+      unless ctors.any (fun (ctor, _) => ctor.getString! == name.getId.toString) do
+        throwErrorAt name "unknown constructor '{name}' in codec for {carrier}"
+      overrides := overrides.insert name.getId ((overrides.find? name.getId).getD #[] |>.push (args, pat))
+    let mut asts := #[]
+    let mut pats := #[]
+    let mut kids := #[]
+    for (ctor, recursive) in ctors do
+      let ctorId := mkIdent ctor
+      let name := Name.mkSimple ctor.getString!
+      let clauses ← match overrides.find? name with
+        | some cs => pure cs
+        | none => do
+          unless recursive.all id do
+            throwErrorAt carrier "constructor '{ctor}' has a payload; supply a codec override for '{name}'"
+          let args : Array Term ← recursive.mapM fun _ => do
+            let arg := mkIdent (← liftCoreM (mkFreshUserName `child))
+            `($arg:ident)
+          let op := mkIdentFrom sig (sig.getId ++ name)
+          pure #[(args, ← `($op:ident $args*))]
+      for (args, pat) in clauses do
+        unless args.size == recursive.size do
+          throwErrorAt pat "constructor '{ctor}' expects {recursive.size} fields"
+        let mut children : Array Ident := #[]
+        for (arg, recField) in args.zip recursive do
+          if recField then
+            unless arg.raw.isIdent do
+              throwErrorAt arg "expected a variable for this recursive field of '{ctor}'"
+            children := children.push ⟨arg.raw⟩
+        asts := asts.push (← `($ctorId:ident $args*))
+        pats := pats.push pat
+        kids := kids.push (Syntax.TSepArray.ofElems children)
+    elabCommand (← `(egg_codec $enc, $dec : $carrier where
+      $[| [$kids:ident,*] $asts:term <=> $pats:term]*))
+
 /-- Connect an existing compiler IR and its semantics to the rewrite engine.
 The environment can give arbitrary meanings to free object-language variables.
 The semantic carrier may itself be a function, relation, or dependent package. -/

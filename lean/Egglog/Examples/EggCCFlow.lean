@@ -47,14 +47,9 @@ egg_signature ControlOps : Process where
 
 namespace Control
 
-egg_codec encode, decode : Control Nat where
-  | [] .atom n <=> .var n
-  | [] .identity <=> ControlOps.identity
-  | [a,b] .seq a b <=> ControlOps.seq a b
-  | [a,b] .letVal a b <=> ControlOps.letVal a b
-  | [y,n] .branch p y n <=> ControlOps.branch (.var p) y n
-  | [b] .loop b <=> ControlOps.loop b
-  | [b] .withFalseExit b <=> ControlOps.withFalseExit b
+egg_codec encode, decode : Control Nat using ControlOps where
+  | atom n <=> .var n
+  | branch p y n <=> ControlOps.branch (.var p) y n
 
 def eval (env : α → Process) : Control α → Process
   | .atom x => env x

@@ -32,13 +32,8 @@ egg_signature Ops : Nat where
 
 namespace Expr
 
-egg_codec encode, decode : Expr where
-  | [] .arg i <=> .var i
-  | [] .one <=> Ops.one
-  | [a, b] .plus a b <=> Ops.plus a b
-  | [a, b] .times a b <=> Ops.times a b
-  | [n] .pow2 n <=> Ops.pow2 n
-  | [a, n] .shl a n <=> Ops.shl a n
+egg_codec encode, decode : Expr using Ops where
+  | arg i <=> .var i
 
 end Expr
 

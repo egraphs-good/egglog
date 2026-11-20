@@ -33,14 +33,10 @@ egg_signature Ops : Bool where
 
 namespace Expr
 
-egg_codec encode, decode : Expr where
-  | [] .reg i <=> .var i
-  | [] .lit true <=> Ops.yes
-  | [] .lit false <=> Ops.no
-  | [x] .neg x <=> Ops.neg x
-  | [a, b] .conj a b <=> Ops.conj a b
-  | [a, b] .disj a b <=> Ops.disj a b
-  | [c, a, b] .mux c a b <=> Ops.mux c a b
+egg_codec encode, decode : Expr using Ops where
+  | reg i <=> .var i
+  | lit true <=> Ops.yes
+  | lit false <=> Ops.no
 
 end Expr
 

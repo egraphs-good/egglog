@@ -117,26 +117,8 @@ egg_signature Ops : Region where
   otherwise fun _ => .invalid
 
 namespace Expr
-egg_codec encode, decode : Expr where
-  | [] .arg <=> Ops.arg
-  | [] .nil <=> Ops.nil
-  | [] .num i <=> Ops.num (.var i)
-  | [] .yes <=> Ops.yes
-  | [] .no <=> Ops.no
-  | [a,b] .pair a b <=> Ops.pair a b
-  | [a] .head a <=> Ops.head a
-  | [a] .tail a <=> Ops.tail a
-  | [a,b] .add a b <=> Ops.add a b
-  | [a,b] .sub a b <=> Ops.sub a b
-  | [a,b] .mul a b <=> Ops.mul a b
-  | [a,b] .lt a b <=> Ops.lt a b
-  | [a,b] .le a b <=> Ops.le a b
-  | [a,b] .eq a b <=> Ops.eq a b
-  | [a] .neg a <=> Ops.neg a
-  | [p,i,a,b] .branch p i a b <=> Ops.branch p i a b
-  | [p,a,b] .select p a b <=> Ops.select p a b
-  | [i,a] .bindArg i a <=> Ops.bindArg i a
-  | [a,b] .output a b <=> Ops.output a b
+egg_codec encode, decode : Expr using Ops where
+  | num i <=> Ops.num (.var i)
 end Expr
 
 def language : Language Expr Region where
