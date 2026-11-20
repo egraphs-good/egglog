@@ -1,0 +1,44 @@
+(datatype Expr (A) (B) (C) (F Expr) (G Expr))
+(relation seed (Expr))
+(relation lowered (Expr))
+(relation seen (Expr))
+(function score (Expr) i64 :merge (max old new))
+(ruleset lower)
+(ruleset inject)
+(ruleset observe)
+(ruleset hide)
+
+(rule ((seed x)) ((let fresh (F x)) (union x fresh) (set (score fresh) 3))
+      :ruleset lower)
+(rule ((= y (F x)) (= n (score y))) ((lowered x)) :ruleset lower)
+(rule ((lowered x)) ((union x (G x))) :ruleset lower)
+(rule ((= x (A))) ((seed x)) :ruleset inject)
+(rule ((= y (G x))) ((seen x)) :ruleset observe)
+(rule ((= y (G x))) ((subsume (G x))) :ruleset hide)
+
+(A)
+(run-schedule (saturate lower) (saturate lower) inject
+              (saturate (run lower :until (lowered (A)))) observe)
+(check (lowered (A)))
+(fail (check (seen (A))))
+; The early stop above still leaves one dirty lowering round.
+(run-schedule (saturate lower) observe)
+(check (seen (A)) (= (G (A)) (A)) (= (score (F (A))) 3))
+
+; A hit on an existing constructor merges its old class and rekeys dependents.
+(let $b (B))
+(let $fb (F (B)))
+(set (score $fb) 9)
+(seed $b)
+(run-schedule (saturate lower) observe)
+(check (= $fb $b) (= (score $b) 9) (seen $b))
+
+; Cache validity ends with the current command, including when the next
+; command adds a rule. Later stages also observe changes in row visibility.
+(relation live (Expr))
+(rule ((G x)) ((live x)) :ruleset observe)
+(let $c (C))
+(let $gc (G $c))
+(run-schedule hide (saturate observe))
+(fail (check (live $c)))
+(check (= $gc (G $c)))

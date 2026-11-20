@@ -1,0 +1,30 @@
+name = "lean-egglog"
+version = "0.1.0"
+defaultTargets = ["Egglog", "lean-egglog"]
+
+[[lean_lib]]
+name = "Egglog"
+
+[[lean_exe]]
+name = "lean-egglog"
+root = "Main"
+
+[[lean_exe]]
+name = "compiler-bench"
+root = "CompilerBench"
+
+[[lean_exe]]
+name = "parabit-relational"
+root = "ParaBitMain"
+
+[[lean_exe]]
+name = "parabit-certified"
+root = "ParaBitCertMain"
+
+[[lean_exe]]
+name = "eggcc-certified"
+root = "EggCCMain"
+
+[[lean_exe]]
+name = "luminal-certified"
+root = "LuminalMain"
